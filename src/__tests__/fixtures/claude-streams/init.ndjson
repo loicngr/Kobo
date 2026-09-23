@@ -1,0 +1,1 @@
+{"type":"system","subtype":"init","session_id":"abc-123-def","model":"claude-sonnet-4-6","cwd":"/tmp/worktree","tools":["Bash","Read","Edit"],"slash_commands":["kobo-check-progress","brainstorm","commit"]}

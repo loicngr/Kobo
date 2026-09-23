@@ -1,0 +1,493 @@
+# Changelog
+
+All notable changes to Kōbō are documented here. The format is based on
+[Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
+section — the in-app "What's new" dialog reads this file.
+
+## 2.1.0
+
+- chore(deps): update dependencies
+
+## 2.0.0
+
+- feat(public-readiness): prepare Kobo for public use
+
+## 1.11.45
+
+- fix(sessions): harden handoff recovery and highlight transfer progress
+- feat(sessions): add fresh sessions with optional handoffs
+
+## 1.11.44
+
+- chore(deps): update packages and node to 24.21.0
+- fix(auto-loop): preserve mission intent until verified completion
+- feat(review): configure review LLM and return to original session
+
+## 1.11.43
+
+- fix(workspaces): refine watchdog stops and deletion confirmation
+
+## 1.11.42
+
+- feat(workspaces): refine settings and session controls
+
+## 1.11.41
+
+- feat(attachments): support documents in workspace creation and chat
+
+## 1.11.40
+
+- feat(workspaces): add external MCP access and harden workspace flows
+
+## 1.11.39
+
+- fix(deps): require Claude SDK with Fable 5.1 support
+
+## 1.11.38
+
+- feat(workspaces): show compaction status and block chat sends
+
+## 1.11.37
+
+- fix(kobo): harden workspace lifecycle and comparison navigation
+
+## 1.11.36
+
+- fix(agent): resume quota waits and scheduled background checks
+- ✨ feat(quota): Améliorer la détection et récupération des erreurs de limite de quota
+
+## 1.11.35
+
+- feat(workspaces): add split view, activity digest and compact toolbar
+
+## 1.11.34
+
+- feat(workspaces): restore purged workspaces and improve startup display
+
+## 1.11.33
+
+- fix(onboarding): quitting a tour marks it seen for good
+
+## 1.11.32
+
+- chore(deps): npm update in the server and client trees
+- fix(git): refuse push during a rebase and prefill workspaces from a PR
+
+## 1.11.31
+
+- feat(onboarding): per-zone guided tours with a help menu
+
+## 1.11.30
+
+- feat: workspace templates, duplication and per-engine default models
+- feat(codex): add GPT-6 Astra to the model catalogue
+
+## 1.11.29
+
+- feat(comparison): task progress, activity stats and CSV export
+
+## 1.11.28
+
+- feat: lifecycle hooks, reminders, engine comparison and audit follow-ups
+- fix(security): trust the page we served, not a guessed port list
+- fix(security): close browser-driven access paths and credential leaks
+
+## 1.11.27
+
+- fix: session watchdog false-positives, sync drain, and terminal leaks, audit npm
+
+## 1.11.26
+
+- fix(client): resume the interrupted session on manual quota resume
+
+## 1.11.25
+
+- fix: quota-status transitions, name overflow, and quota mislabeling
+
+## 1.11.24
+
+- docs: redesign README as a landing page, document PR/MR import
+
+## 1.11.23
+
+- fix(test): configure git identity on the pr-checkout temp repo
+- feat: create workspaces from an existing PR/MR
+
+## 1.11.21
+
+- fix: refine session liveness and interface feedback
+- fix(client): restore outline accent
+- feat(settings): compose custom skill prompts
+
+## 1.11.20
+
+- fix(client): clarify automatic recovery
+
+## 1.11.19
+
+- fix(client): improve workspace activity controls
+
+## 1.11.18
+
+- fix(workspaces): reject an option-shaped branch name at creation
+
+## 1.11.17
+
+- feat(client): render in the design system's own type, palette and tokens (#34)
+- perf(client): stop re-rendering frozen content and racing stale requests (#33)
+- fix(client): make the review path usable and stop lying about navigation state (#32)
+- fix(git,db): serialize git writes, bound event history, verify irreversible ops (#31)
+- feat(client,server): tell the truth while working and when it fails (#30)
+- fix(agent): stop reporting a running agent when none exists (#29)
+
+## 1.11.16
+
+- feat(client): responsive mobile layout for drawer, settings nav and workspace toolbar (#28)
+
+## 1.11.15
+
+- feat(agent): harden autonomous session lifecycle
+
+## 1.11.14
+
+- ⬆️ develop - refactor(deps): Bump SDKs + refactor shutdown + hardening sécurité
+
+## 1.11.13
+
+- fix(engines): unstick agent sessions that never emit session:ended
+
+## 1.11.12
+
+- ✨ develop - feat(engines): Garder les sessions ouvertes pour les subagents en arrière-plan
+
+## 1.11.11
+
+- feat(settings): add ECC as a skill suite option (#27)
+
+## 1.11.10
+
+- docs: update setup guide
+- fix: improve app reliability
+
+## 1.11.9
+
+- fix: address 19 bugs found by parallel codebase audit
+
+## 1.11.8
+
+- fix(whip): preserve delivery and shortcut handling (#24)
+
+## 1.11.7
+
+- feat: add opt-in interactive whip (#23)
+
+## 1.11.6
+
+- fix(git): continue paused operations
+
+## 1.11.5
+
+- fix(pwa): stabilize notifications and chat layout
+
+## 1.11.4
+
+- feat(workspace): switch agent engines within a workspace
+
+## 1.11.3
+
+- feat(forge): add bitbucket community support
+
+## 1.11.2
+
+- feat(integrations): let Notion and Sentry be enabled independently, keep
+  their settings isolated, hide inactive project overrides, and add detailed
+  **Test connection** feedback.
+- feat(chat): stream Claude output token-by-token like Codex, consolidate agent
+  reasoning into one live panel above the composer, and add a visibility
+  preference for reasoning and verbose system messages.
+- feat(chat): add `Ctrl+J` for a new line, `Ctrl+Enter` to force a queued
+  message while an agent is busy, and keep the shortcuts visible below chat.
+- feat(chat): add session-aware `Ctrl+F` workspace-history search, scrolling to
+  the selected result; global search now opens the same exact message.
+- feat(chat): add a `Ctrl+K` workspace command palette for common actions.
+- feat(chat): make worktree-relative paths and Edit/Write cards open the
+  corresponding file in the Git diff viewer.
+- feat(git): add workspace commits with either a user-written message or an
+  agent request; add confirmed PR/MR merging and an optional remote-branch
+  deletion after merge.
+- feat(auto-loop): retry quota, rate-limit, and temporary upstream failures;
+  add a configurable maximum retry count.
+- feat(notifications): add `basic-notification.mp3`, event-level sound
+  inheritance, an agent-error sound, browser-permission diagnostics, and more
+  reliable playback while Kobo is in a background tab.
+- feat(settings): extend the project color palette and improve save-state
+  handling for activity-feed preferences.
+- feat(observability): enrich the session timeline with tools, tokens, and
+  errors; keep it fresh during an active run and retain diagnostic export.
+- feat(pwa): show install, offline, update, and WebSocket-reconnection states;
+  preserve the visible chat area when the status banner is displayed.
+- fix(websocket): avoid reconnecting after an explicit disconnect and resume
+  safely after network connectivity returns.
+
+## 1.11.1
+
+- feat(workspace): improve workspace actions
+- feat(workspace): Forge merge button
+- feat(workspace): Commit button
+
+## 1.11.0
+
+- feat(pwa): ship the production client as an installable Progressive Web App.
+- feat(chat): add `Ctrl+J` for a new line and `Ctrl+Enter` to force delivery of
+  a queued message while an agent is active.
+- feat(chat): move the latest Claude/Codex reasoning into one live panel above
+  the chat input, with a global visibility preference.
+- feat(integrations): independently enable or disable Notion and Sentry from
+  Settings while preserving their configuration.
+- feat(integrations): add **Test connection** checks for the configured Notion
+  and Sentry MCP servers, with actionable status and elapsed time.
+- feat(chat): add `Ctrl+F` workspace-history search with readable results;
+  opening a result loads the matching session, scrolls to its message, and
+  highlights it. Global search now deep-links to the same location.
+- feat(git): let Edit and Write cards open their exact worktree-relative file
+  in the Git diff viewer.
+- feat(observability): add a session timeline panel and downloadable redacted
+  workspace diagnostic JSON.
+- feat(pwa): show offline and update-ready states, with explicit update reload
+  instead of interrupting an active page.
+- fix(chat): consume one-shot search deep-link parameters after use so a page
+  refresh does not jump back to an old result.
+- feat(permissions): remember workspace-scoped tool or exact-operation
+  approvals across sessions.
+
+## 1.10.3
+
+- feat(notifications): add configurable PR state sounds (#22)
+
+## 1.10.2
+
+- feat(notifications): add workspace creation sound (#21)
+- fix(questions): isolate other responses (#20)
+- fix(claude): recover idle terminal streams (#19)
+
+## 1.10.1
+
+- fix(auto-loop): recover from interrupted sessions (#18)
+
+## 1.10.0
+
+- fix(agent): make Claude sessions recover cleanly from a stuck post-result
+  stream, prevent native wakeups from leaving orphaned questions, and keep
+  live sessions out of the `idle` state
+- feat(chat): keep queued messages scoped to the selected workspace session,
+  restore them after a rejected send, and confirm delivery only after the
+  engine accepts it
+- feat(chat): send a queued message immediately to an active Claude session
+  or steer an active Codex turn; serialise concurrent Codex steer requests
+  against the current turn id
+- feat(questions): support inline free-form answers for **Other**, option
+  previews, structured Codex question ids, missing option arrays, secret
+  answers, and stale-question-panel recovery
+- fix(codex): map `request_user_input` and its auto-resolution metadata to the
+  shared question UI, and document that structured Codex questions require
+  `plan` mode
+- docs: document live steering, interactive-question limitations, and the
+  updated Q&A experience in README and CONFIGURATION
+
+## 1.9.6
+
+- feat(chat): inject a queued message into a running Claude session, with a
+  session-scoped queue and explicit server acceptance
+- feat(sessions): persist the model used by each agent session and display it
+  when it differs from the workspace default
+- fix(auto-loop): apply the brainstorming model before the initial session
+  starts; add a separate brainstorming reasoning-effort selector
+- feat(mcp): let agents read paginated user/agent conversation history across
+  workspace sessions as CSV, with optional session filtering
+- fix(chat): start a fresh session automatically when a historical session
+  cannot be resumed
+- ui(create): clarify auto-loop, session-mode, brainstorming, model and
+  reasoning-effort controls; remember reasoning effort per model locally
+- docs: document the Claude queued-message behavior
+
+## 1.9.5
+
+- fix(tests): make macOS tests portable (#16)
+
+## 1.9.4
+
+- fix(codex): allow git writes in bypass mode (#15)
+
+## 1.9.3
+
+- build(deps): bump claude-agent-sdk, mcp sdk, and codex
+
+## 1.9.2
+
+- feat: fall back to local source branch when origin is unreachable (#14)
+
+## 1.9.1
+
+- fix: exempt /api/health from network-auth and add local Docker compose stacks
+
+## 1.9.0
+
+- feat: opt out a workspace from PR-watch (skip forge polling, keep local git stats)
+- feat: official Docker image, with an example Traefik reverse-proxy stack
+- feat: reverse-proxy-safe auth mode + env-var network-access bootstrap
+- feat: workspace toolbar polish (aligned model badges, copy engine session ID)
+- docs: document reverse-proxy mode, Docker deployment, and Codex maturity
+
+## 1.8.9
+
+- docs: sync README/AGENTS.md with recent changes, dedupe CHANGELOG
+
+## 1.8.8
+
+- fix: resolve npm audit findings and scope client audit to prod deps
+
+## 1.8.7
+
+- feat: add auto-loop brainstorming model override and Claude Opus 5
+
+## 1.8.6
+
+- feat: add auto-loop session modes and global MCP workspace tools
+
+## 1.8.5
+
+- feat: add gpt-5.6 codex model family and gpt-5.2 to catalogue
+- docs: overhaul README and split contributor guide into CONTRIBUTING.md
+
+## 1.8.4
+
+- feat: add Claude Sonnet 5 to the model catalogue
+
+## 1.8.3
+
+- fix: prevent git-stats revert and queued-image loss, improve project picker
+
+## 1.8.2
+
+- feat: PR badge, usage date, toast and auto-loop UX fixes
+
+## 1.8.1
+
+- feat: opt-in LAN network access plus UX and workspace fixes (#13)
+- chore(docs): update CHANGELOG
+
+## 1.8.0
+
+- feat(schedule): manual wakeup & cron management per workspace
+- feat(agent): enforce wakeup at turn-end + keep background work alive
+- feat(workspace): warn when viewing a non-latest session outside auto-loop
+
+## 1.7.34
+
+- chore(npm): update claude sdk
+
+## 1.7.33
+
+- chore(npm): update claude sdk
+
+## 1.7.32
+
+- feat: CI recap card, compaction indicator, Claude Task tools, deps upgrade, npm audit fix
+
+## 1.7.31
+
+- feat: ready-to-merge status, open-pr fix, new models, dep audit
+
+## 1.7.30
+
+- feat: open-in-terminal button + git creation/purge fixes
+
+## 1.7.29
+
+- feat: git working-tree tooling, template reset, diff label
+
+## 1.7.28
+
+- feat: commit diff review, workspace rename tool, macOS usage keychain
+
+## 1.7.27
+
+- feat(git): add dirty-worktree recovery for rebase/merge
+
+## 1.7.26
+
+- fix(claude-code-engine): migrate compaction reminder to SessionStart hook
+
+## 1.7.25
+
+- feat(models): add Claude Opus 4.8 and make it the default
+
+## 1.7.24
+
+- refactor: prune redundant comments from worktree-purge work
+- docs: replace stray French UI labels with their English equivalents
+- docs(changelog): drop stale Unreleased section duplicated by v1.7.23
+
+## 1.7.23
+
+- docs: document worktree purge, auto-restore, and permission recovery
+- feat(client): onboarding highlights changelog and auto-purge toggle
+- feat(pr-watcher): auto-restore manually-recreated worktrees
+- feat(workspace): worktree purge with auto-archive and restore metadata
+- feat(templates): add /kobo-context slash command (you need to re-import default templates)
+
+## 1.7.22
+
+- feat(client): accept the new app.notion.com URL format
+
+## 1.7.21
+
+- feat: assorted workspace polish and PR-watcher reliability
+
+## 1.7.20
+
+- feat: open worktree in the user's file manager
+- fix(client): make archived workspace cards clickable
+
+## 1.7.19
+
+- feat(client): archived banner, Fix-CI button, changelog page, prompt-retry banner (Open archived workspace)
+- feat(server): workspace lifecycle, CI failure UX, collision-safe creation (error in setup script)
+- feat(client): disable mutating actions on archived workspaces
+- feat(pr-watcher): mark workspace unread on attention transitions (ci request changes)
+- chore(deps): npm audit fix
+- chore(CHANGELOG): update
+
+## 1.7.18
+
+- chore(audit): fix npm audit
+- feat(client): collapsible ask-user-question panel
+
+## 1.7.17
+
+- feat: per-workspace chat history + inline file editing in the diff viewer
+- feat: multi-forge, change source branch, pr-watcher
+
+## 1.7.16
+
+- feat(engine): handle user interruptions as clean stops
+
+## 1.7.15
+
+- docs: document new settings and features
+- build(release): generate changelog section in version bump
+- feat(onboarding): guided tour and what's-new dialog
+- feat(settings): scripts, branch prefixes and project cards
+- feat(workspaces): bulk-delete archived workspaces and fix flat sort
+- feat(create): per-project task prompt template
+- feat(health): show schema and settings migration versions
+- feat(chat): dedicated script cards in the conversation feed
+- feat(chat): @-mention file autocomplete with fuzzy matching
+- feat(export): CSV export of workspace session events
+- feat(server): lifecycle scripts, bulk delete and migration safety
+
+## 1.7.14
+
+- Show the Kōbō version in the Health page Environment card.
+- Document the `SERVER_PORT` / `PORT` overrides and fix the default port.
+- Split the configuration reference into a dedicated `CONFIGURATION.md`.

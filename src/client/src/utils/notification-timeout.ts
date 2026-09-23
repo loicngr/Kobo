@@ -1,0 +1,1 @@
+export const DEFAULT_TOAST_TIMEOUT_MS = 6_000

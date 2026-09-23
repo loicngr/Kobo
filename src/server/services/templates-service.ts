@@ -1,0 +1,409 @@
+import { createHash } from 'node:crypto'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import path from 'node:path'
+import { getTemplatesPath } from '../utils/paths.js'
+
+/** A single user prompt template. Stored without the leading "/" in slug. */
+export interface Template {
+  slug: string
+  description: string
+  content: string
+  createdAt: string
+  updatedAt: string
+}
+
+interface TemplatesFile {
+  version: number
+  templates: Template[]
+  /** Default slugs ever seeded into this install. Drives the seed-once migration. */
+  seededDefaultSlugs?: string[]
+}
+
+const LEGACY_DEFAULT_CONTENT_HASHES: Record<string, string> = {
+  'kobo-context': 'ee29ebb56186ce9537e682c25d9d7737ff8d824ab6f29c095c925b27eed70552',
+  'pr-review-comments': '67dfc29fb0c566349a72d9375e314269f061fd184d3a73c9a6bf00451a0f4d9e',
+  'ci-status': 'a96fc75efa7c1f11b58163d8a0d2912f9b22d980087ed224341979c08c250bc8',
+}
+
+const CURRENT_FILE_VERSION = 2
+const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/
+const MAX_CONTENT_LENGTH = 4096
+const MAX_DESCRIPTION_LENGTH = 120
+
+/**
+ * Read the templates list from disk. Seeds with defaults if the file does
+ * not exist yet. Returns an empty array (with a logged error) on corruption.
+ */
+export function listTemplates(): Template[] {
+  const filePath = getTemplatesPath()
+  if (!existsSync(filePath)) {
+    seedTemplates()
+  }
+  try {
+    const raw = readFileSync(filePath, 'utf-8')
+    const parsed = JSON.parse(raw) as TemplatesFile
+    if (parsed.version !== CURRENT_FILE_VERSION) {
+      console.warn(
+        `[templates-service] templates.json has version ${parsed.version}, expected ${CURRENT_FILE_VERSION}. Reading best-effort.`,
+      )
+    }
+    const templates = Array.isArray(parsed.templates) ? parsed.templates : []
+    let changed = false
+    for (const template of templates) {
+      const previousHash = LEGACY_DEFAULT_CONTENT_HASHES[template.slug]
+      if (!previousHash || typeof template.content !== 'string') continue
+      if (createHash('sha256').update(template.content).digest('hex') !== previousHash) continue
+      const next = DEFAULT_TEMPLATES.find((value) => value.slug === template.slug)
+      if (!next || next.content === template.content) continue
+      template.content = next.content
+      template.updatedAt = new Date().toISOString()
+      changed = true
+    }
+    if (changed) writeTemplates(templates, parsed.seededDefaultSlugs)
+    return templates
+  } catch (err) {
+    console.error('[templates-service] Failed to read templates.json:', err)
+    return []
+  }
+}
+
+/** Create a new template. Throws on invalid input or duplicate slug. */
+export function createTemplate(input: { slug: string; description: string; content: string }): Template {
+  validateTemplateInput(input)
+  const templates = listTemplates()
+  if (templates.some((t) => t.slug === input.slug)) {
+    throw new Error(`Template '${input.slug}' already exists`)
+  }
+  const now = new Date().toISOString()
+  const template: Template = {
+    slug: input.slug,
+    description: input.description,
+    content: input.content,
+    createdAt: now,
+    updatedAt: now,
+  }
+  writeTemplates([...templates, template])
+  return template
+}
+
+/** Update an existing template. Returns null if slug not found. */
+export function updateTemplate(slug: string, updates: { description?: string; content?: string }): Template | null {
+  const templates = listTemplates()
+  const idx = templates.findIndex((t) => t.slug === slug)
+  if (idx < 0) return null
+  const current = templates[idx]
+  const next: Template = {
+    ...current,
+    description: updates.description ?? current.description,
+    content: updates.content ?? current.content,
+    updatedAt: new Date().toISOString(),
+  }
+  validateTemplateInput({ slug: next.slug, description: next.description, content: next.content })
+  templates[idx] = next
+  writeTemplates(templates)
+  return next
+}
+
+/** Delete a template. Returns true if deleted, false if not found. */
+export function deleteTemplate(slug: string): boolean {
+  const templates = listTemplates()
+  const next = templates.filter((t) => t.slug !== slug)
+  if (next.length === templates.length) return false
+  writeTemplates(next)
+  return true
+}
+
+/** Slugs of every built-in default template (used to show the reset action). */
+export function getDefaultTemplateSlugs(): string[] {
+  return DEFAULT_TEMPLATES.map((t) => t.slug)
+}
+
+/**
+ * Reset a default template back to its built-in content/description. Returns the
+ * updated template, or null if `slug` is not a default template. Recreates the
+ * row if it had been deleted.
+ */
+export function resetTemplateToDefault(slug: string): Template | null {
+  const def = DEFAULT_TEMPLATES.find((d) => d.slug === slug)
+  if (!def) return null
+  const templates = listTemplates()
+  const now = new Date().toISOString()
+  const idx = templates.findIndex((t) => t.slug === slug)
+  let result: Template
+  if (idx >= 0) {
+    result = { ...templates[idx], description: def.description, content: def.content, updatedAt: now }
+    templates[idx] = result
+  } else {
+    result = { ...def, createdAt: now, updatedAt: now }
+    templates.push(result)
+  }
+  writeTemplates(templates)
+  return result
+}
+
+// ── Internals ──────────────────────────────────────────────────────────────
+
+function validateTemplateInput(input: { slug: string; description: string; content: string }): void {
+  if (!SLUG_PATTERN.test(input.slug)) {
+    throw new Error(
+      `Invalid slug '${input.slug}': must match ${SLUG_PATTERN} (lowercase letters, digits, hyphens; 1–64 chars)`,
+    )
+  }
+  // Consistent rule for both description and content:
+  //  - reject if empty after trim (all-whitespace is not valid)
+  //  - reject if raw length exceeds the max (trailing whitespace still counts)
+  const rawDescription = input.description ?? ''
+  if (rawDescription.trim().length === 0 || rawDescription.length > MAX_DESCRIPTION_LENGTH) {
+    throw new Error(`Invalid description: must be 1..${MAX_DESCRIPTION_LENGTH} chars`)
+  }
+  const rawContent = input.content ?? ''
+  if (rawContent.trim().length === 0 || rawContent.length > MAX_CONTENT_LENGTH) {
+    throw new Error(`Invalid content: must be 1..${MAX_CONTENT_LENGTH} chars`)
+  }
+}
+
+function readSeededSlugs(): string[] | undefined {
+  const filePath = getTemplatesPath()
+  if (!existsSync(filePath)) return undefined
+  try {
+    const parsed = JSON.parse(readFileSync(filePath, 'utf-8')) as TemplatesFile
+    return Array.isArray(parsed.seededDefaultSlugs) ? parsed.seededDefaultSlugs : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function writeTemplates(templates: Template[], seededDefaultSlugs?: string[]): void {
+  const filePath = getTemplatesPath()
+  mkdirSync(path.dirname(filePath), { recursive: true })
+  const seeded = seededDefaultSlugs ?? readSeededSlugs() ?? [...LEGACY_DEFAULT_SLUGS]
+  const file: TemplatesFile = { version: CURRENT_FILE_VERSION, templates, seededDefaultSlugs: seeded }
+  writeFileSync(filePath, JSON.stringify(file, null, 2), 'utf-8')
+}
+
+/**
+ * Replace the entire templates list atomically. Validates each entry and
+ * rejects the whole write on any invalid row — do not partially accept.
+ * Used by config import.
+ */
+export function replaceAllTemplates(templates: unknown[]): void {
+  if (!Array.isArray(templates)) {
+    throw new Error('Invalid templates payload: expected an array')
+  }
+  const now = new Date().toISOString()
+  const validated: Template[] = []
+  const seenSlugs = new Set<string>()
+  for (let i = 0; i < templates.length; i++) {
+    const t = templates[i] as Record<string, unknown> | null
+    if (!t || typeof t !== 'object') {
+      throw new Error(`Invalid template at index ${i}: not an object`)
+    }
+    const slug = typeof t.slug === 'string' ? t.slug : ''
+    const description = typeof t.description === 'string' ? t.description : ''
+    const content = typeof t.content === 'string' ? t.content : ''
+    validateTemplateInput({ slug, description, content })
+    if (seenSlugs.has(slug)) {
+      throw new Error(`Duplicate template slug: '${slug}'`)
+    }
+    seenSlugs.add(slug)
+    const createdAt = typeof t.createdAt === 'string' ? t.createdAt : now
+    const updatedAt = typeof t.updatedAt === 'string' ? t.updatedAt : now
+    validated.push({ slug, description, content, createdAt, updatedAt })
+  }
+  writeTemplates(validated)
+}
+
+export interface DefaultTemplate {
+  slug: string
+  description: string
+  content: string
+}
+
+/**
+ * The default slugs that existed BEFORE the seededDefaultSlugs watermark shipped.
+ * Bootstraps the watermark for pre-watermark installs so a default the user deleted
+ * earlier is not re-added on the first boot. Frozen historical snapshot; never change it.
+ */
+const LEGACY_DEFAULT_SLUGS: readonly string[] = [
+  'kobo-context',
+  'review-quality',
+  'add-tests',
+  'explain',
+  'refactor',
+  'plan-tasks',
+  'show-tasks',
+  'mark-done',
+  'sync-tasks',
+  'pr-review-comments',
+  'ci-status',
+]
+
+export const DEFAULT_TEMPLATES: readonly DefaultTemplate[] = [
+  {
+    slug: 'kobo-context',
+    description: "Onboard the agent on Kōbō's core concepts and tools",
+    content:
+      `You are working inside a Kōbō workspace (workspace "{workspace_name}", branch \`{working_branch}\`).\n\n` +
+      `# What Kōbō is\n` +
+      `Kōbō orchestrates multiple coding agents in parallel. Each "workspace" is a self-contained mission with:\n` +
+      `- An isolated git worktree (your current working directory)\n` +
+      `- A dedicated branch (\`{working_branch}\`), targeting a source branch\n` +
+      `- Its own session history and task list, persisted in Kōbō's SQLite DB\n` +
+      `- A dedicated MCP server (\`kobo-tasks\`) exposing tools to read/write workspace state\n\n` +
+      `# Lifecycle\n` +
+      `1. **Brainstorming** — you scope the work, output a plan, end with the literal marker \`[BRAINSTORM_COMPLETE]\`\n` +
+      `2. **Executing** — you implement and verify the plan locally; commit, push and publication require explicit authorization\n` +
+      `3. **Auto-loop (opt-in)** — Kōbō runs iterations using the configured session mode, with durable tasks and instructions\n` +
+      `4. **Completed / Archived** — completion records lifecycle state; archiving hides the workspace without making its worktree read-only\n\n` +
+      `# Kōbō MCP tools (always namespaced \`kobo__…\`)\n` +
+      `These are the main tools — the full \`kobo__\` set is larger and is listed in your available tools; consult that list for the rest (dev-server, search_codebase, documents, settings, session usage…).\n` +
+      `- \`kobo__list_tasks\` / \`create_task\` / \`update_task\` / \`mark_task_done\` / \`delete_task\` — manage the visible task list\n` +
+      `- \`kobo__set_workspace_agent_description\` — short one-line summary shown in the sidebar; keep it current\n` +
+      `- \`kobo__set_workspace_name\` — rename this workspace (the sidebar title); ONLY when the user explicitly asks for a rename, never on your own\n` +
+      `- \`kobo__get_workspace_info\` / \`kobo__get_git_info\` — read workspace metadata + git state\n` +
+      `- \`kobo__read_workspace_events_csv\` — read paginated user/agent history from this workspace across sessions when prior context is useful; use \`limit\` + \`offset\` rather than loading everything\n` +
+      `- \`kobo__cron_create\` / \`cron_delete\` / \`cron_list\` — schedule recurring or one-shot triggers on THIS workspace\n` +
+      `- \`kobo__schedule_wakeup\` / \`cancel_wakeup\` — pause now and resume this same session after a one-off delay\n` +
+      `- \`kobo__mark_auto_loop_ready\` — flip the loop into auto-execution after grooming\n\n` +
+      `# Foreground & waking yourself\n` +
+      `- You run in the FOREGROUND of an interactive session — do your work within the current turn\n` +
+      `- When a turn ends the workspace goes idle; automatic continuation depends on enabled auto-loop, schedules and lifecycle settings. A background task or detached process finishing does NOT wake you\n` +
+      `- To wait and continue later (CI, long build, scheduled check), schedule your own wake-up: \`kobo__schedule_wakeup\` (one-off delay) or \`kobo__cron_create\` (recurring), then end the turn\n\n` +
+      `# Conventions\n` +
+      `- \`CLAUDE.md\` / \`AGENTS.md\` at the project root override default behavior — read them first\n` +
+      `- \`.ai/.git-conventions.md\` (when present) defines per-project commit / branch rules — apply them on every git op\n` +
+      `- \`.ai/thoughts/\` is your persistent scratch (Notion imports, Sentry context, planning notes) — write freely\n` +
+      `- Never use \`--no-verify\` or skip CI hooks unless explicitly asked\n` +
+      `- Always target \`origin/<source_branch>\` for diffs and PRs, not the local branch\n\n` +
+      `# Boundaries\n` +
+      `- The user owns the \`description\` field of the workspace — never write it; you only own \`agent_description\`\n` +
+      `- The user can interrupt you at any time via the chat; treat their messages as authoritative redirections\n` +
+      `- Auto-loop is automatically disabled if the user sends a chat message during a loop — they'll re-enable it manually after\n` +
+      `\n# Decision support\n` +
+      `For a high-stakes engineering decision with no obvious answer (architecture choice, risky refactor, a real tradeoff), run a "council": the \`/council\` template spawns 5 sub-agent advisors with distinct lenses, peer-reviews them, and synthesises a verdict into \`.ai/thoughts/\`. It costs ~11 sub-agent calls, so use it sparingly.\n`,
+  },
+  {
+    slug: 'review-quality',
+    description: 'Code quality review',
+    content:
+      'Review the recently modified code in {working_branch} for:\n- Logic bugs\n- Missing error handling\n- Style issues\n\nReport only high-confidence findings.',
+  },
+  {
+    slug: 'add-tests',
+    description: 'Add unit tests following existing patterns',
+    content:
+      'Add unit tests for the recently modified code. Follow the existing test patterns in this project. Focus on:\n- Happy paths\n- Edge cases\n- Error handling',
+  },
+  {
+    slug: 'explain',
+    description: 'Explain the recent changes',
+    content: 'Explain what the recently modified code does in {working_branch}, focusing on the non-obvious parts.',
+  },
+  {
+    slug: 'refactor',
+    description: 'Safe refactoring',
+    content:
+      'Refactor the selected code to improve readability without changing its behavior. Explain your reasoning as you go.',
+  },
+  {
+    slug: 'plan-tasks',
+    description: 'Break work into kobo tasks',
+    content:
+      'Break down the work for this workspace ({workspace_name}) into concrete tasks. Use the kobo-tasks MCP tool `create_task` to register each one with a short, actionable title. Start with a high-level analysis of what needs to happen.',
+  },
+  {
+    slug: 'show-tasks',
+    description: 'List current kobo tasks',
+    content:
+      'List the current tasks for this workspace using the kobo-tasks MCP tool `list_tasks`. Show their status and highlight what is still pending.',
+  },
+  {
+    slug: 'mark-done',
+    description: 'Mark completed kobo tasks',
+    content:
+      'Review the work completed so far. Identify which tasks from the kobo-tasks list are now done, and mark them using the `mark_task_done` MCP tool.',
+  },
+  {
+    slug: 'sync-tasks',
+    description: 'Sync kobo tasks with the codebase',
+    content:
+      'Compare the current state of the codebase against the kobo-tasks list. Create missing tasks with `create_task`, mark completed ones with `mark_task_done`, and delete stale ones with `delete_task`. Explain each change before making it.',
+  },
+  {
+    slug: 'pr-review-comments',
+    description: 'List PR review comments requesting changes',
+    content:
+      'Check if a pull request exists for branch {working_branch}.\n\nIf a PR exists (PR {pr_url}):\n1. Use the configured forge tools or CLI to fetch the PR reviews and comments\n2. Filter for reviews with status "CHANGES_REQUESTED"\n3. List each review comment with:\n   - The reviewer name\n   - The file and line referenced\n   - The comment body\n   - Whether it has been resolved\n4. Summarize the outstanding requested changes that still need to be addressed\n\nIf no PR exists, report that no PR/MR exists; do not push or publish without authorization.',
+  },
+  {
+    slug: 'ci-status',
+    description: 'Check CI status on the configured forge',
+    content:
+      'Check the CI/CD status for the pull request on branch {working_branch}.\n\nIf a PR exists (PR {pr_url}):\n1. Use the configured forge tools or CLI to list the check runs / status checks on the latest commit of the PR\n2. For each check, report:\n   - Check name\n   - Status (queued, in_progress, completed)\n   - Conclusion (success, failure, neutral, skipped, etc.)\n   - Duration if available\n3. If any checks failed, fetch the logs or annotations and summarize what went wrong\n4. Give an overall summary: all green, some failing, or still running\n\nIf no PR exists, report that no PR/MR exists; do not create one without authorization.',
+  },
+  {
+    slug: 'council',
+    description: 'Pressure-test a high-stakes decision with 5 sub-agent advisors',
+    content:
+      `Run a "council" to pressure-test a high-stakes decision for this workspace ("{workspace_name}").\n\n` +
+      `The decision: take what the user described in this message. If they gave none, ask for it in one line and stop.\n\n` +
+      `You orchestrate this with your own sub-agents:\n\n` +
+      `1. Spawn 5 sub-agents IN PARALLEL, one per lens. Each answers the decision independently in 150-300 words, fully in its lens, no hedging, no false balance:\n` +
+      `   - Contrarian: hunt the fatal flaw; what fails, what's missing.\n` +
+      `   - First Principles: ignore the surface question; what are we really solving? Is this even the right question?\n` +
+      `   - Expansionist: the upside everyone misses; what if it works better than expected?\n` +
+      `   - Outsider: zero context; react only to what's stated; catch the curse of knowledge.\n` +
+      `   - Executor: can it be done, and what's the fastest first step Monday morning?\n\n` +
+      `2. Anonymise the 5 answers as A-E (randomised). Spawn 5 reviewer sub-agents; each names the strongest answer, the biggest blind spot, and what ALL of them missed. Under 200 words each.\n\n` +
+      `3. Synthesise the verdict yourself:\n` +
+      `   - Where the council agrees (high-confidence signals).\n` +
+      `   - Where it clashes (present both sides honestly).\n` +
+      `   - Blind spots the review caught.\n` +
+      `   - One clear recommendation, not "it depends".\n` +
+      `   - The one thing to do first.\n\n` +
+      `4. Post the verdict in chat, and save the full transcript (decision, 5 answers, 5 reviews, verdict) to \`.ai/thoughts/council-<short-topic-slug>.md\`.\n\n` +
+      `Cost: this runs ~11 sub-agent calls. Use it only for decisions that are expensive to get wrong, not routine choices.\n`,
+  },
+] as const
+
+function seedTemplates(): void {
+  const now = new Date().toISOString()
+  const seed: Template[] = DEFAULT_TEMPLATES.map((t) => ({ ...t, createdAt: now, updatedAt: now }))
+  writeTemplates(
+    seed,
+    DEFAULT_TEMPLATES.map((t) => t.slug),
+  )
+}
+
+/**
+ * Add any default whose slug was never seeded into this install AND is not already
+ * present. Each default seeds at most once (tracked in `seededDefaultSlugs`), so a
+ * default the user deleted does not come back. Never overwrites an existing template.
+ */
+export function reloadDefaultTemplates(): { added: string[]; kept: string[] } {
+  const existing = listTemplates()
+  const existingBySlug = new Set(existing.map((t) => t.slug))
+  const rawSeeded = readSeededSlugs()
+  const seeded = new Set<string>(rawSeeded ?? LEGACY_DEFAULT_SLUGS)
+  const now = new Date().toISOString()
+  const added: string[] = []
+  const kept: string[] = []
+  const next: Template[] = [...existing]
+  for (const def of DEFAULT_TEMPLATES) {
+    if (seeded.has(def.slug)) {
+      kept.push(def.slug)
+      continue
+    }
+    if (existingBySlug.has(def.slug)) {
+      kept.push(def.slug)
+    } else {
+      next.push({ ...def, createdAt: now, updatedAt: now })
+      added.push(def.slug)
+    }
+    seeded.add(def.slug)
+  }
+  if (added.length > 0 || rawSeeded === undefined) {
+    writeTemplates(next, [...seeded])
+  }
+  return { added, kept }
+}

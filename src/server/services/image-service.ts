@@ -1,0 +1,135 @@
+import { randomUUID } from 'node:crypto'
+import fs from 'node:fs'
+import path from 'node:path'
+import { nanoid } from 'nanoid'
+import { ensureDirectoryInside } from '../utils/safe-path.js'
+
+/** Result of saving an image to a worktree. */
+export interface SavedImage {
+  uid: string
+  relativePath: string
+}
+
+/** An entry in the per-worktree image index (`.ai/images/index.json`). */
+export interface ImageIndexEntry {
+  uid: string
+  originalName: string
+  createdAt: string
+}
+
+const ALLOWED_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp'])
+const IMAGES_DIR = '.ai/images'
+const INDEX_FILE = 'index.json'
+
+// Per-worktree lock to serialize index.json writes
+const locks = new Map<string, Promise<void>>()
+
+function ensureRealImagesDirectory(worktreePath: string): string {
+  return ensureDirectoryInside(worktreePath, '.ai/images')
+}
+
+function withLock<T>(worktreePath: string, fn: () => T): Promise<T> {
+  const prev = locks.get(worktreePath) ?? Promise.resolve()
+  // The second argument to .then() means: even if the previous operation in the
+  // queue rejected, still run fn — one failure must not block the whole queue.
+  const next = prev.then(fn, fn)
+  locks.set(
+    worktreePath,
+    next.then(
+      () => {},
+      () => {},
+    ),
+  )
+  return next
+}
+
+function readIndex(imagesDir: string): ImageIndexEntry[] {
+  const indexPath = path.join(imagesDir, INDEX_FILE)
+  if (!fs.existsSync(indexPath)) return []
+  if (fs.lstatSync(indexPath).isSymbolicLink()) throw new Error('Symbolic links are not allowed for image index')
+  try {
+    return JSON.parse(fs.readFileSync(indexPath, 'utf-8'))
+  } catch (err) {
+    console.error(`[image-service] Failed to parse ${indexPath}, treating as empty index:`, err)
+    return []
+  }
+}
+
+function writeIndex(imagesDir: string, entries: ImageIndexEntry[]): void {
+  const indexPath = path.join(imagesDir, INDEX_FILE)
+  if (fs.existsSync(indexPath) && fs.lstatSync(indexPath).isSymbolicLink()) {
+    throw new Error('Symbolic links are not allowed for image index')
+  }
+  const tempPath = path.join(imagesDir, `.index-${randomUUID()}.tmp`)
+  const descriptor = fs.openSync(tempPath, 'wx', 0o600)
+  try {
+    try {
+      fs.writeFileSync(descriptor, JSON.stringify(entries, null, 2))
+    } finally {
+      fs.closeSync(descriptor)
+    }
+    fs.renameSync(tempPath, indexPath)
+  } finally {
+    if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath)
+  }
+}
+
+/** Save an image buffer to `.ai/images/` and update the index. Returns the UID and relative path. */
+export async function saveImage(worktreePath: string, fileBuffer: Buffer, originalName: string): Promise<SavedImage> {
+  const ext = path.extname(originalName).toLowerCase().replace('.', '')
+  if (!ext) {
+    throw new Error(`File has no extension. Allowed: ${[...ALLOWED_EXTENSIONS].join(', ')}`)
+  }
+  if (!ALLOWED_EXTENSIONS.has(ext)) {
+    throw new Error(`Unsupported image extension: '${ext}'. Allowed: ${[...ALLOWED_EXTENSIONS].join(', ')}`)
+  }
+
+  const uid = nanoid(10)
+  const imagesDir = ensureRealImagesDirectory(worktreePath)
+
+  const filename = `${uid}.${ext}`
+
+  await withLock(worktreePath, () => {
+    // Serialize image/index writes and clean up incomplete writes on failure.
+    const imagePath = path.join(imagesDir, filename)
+    const descriptor = fs.openSync(imagePath, 'wx', 0o600)
+    try {
+      try {
+        fs.writeFileSync(descriptor, fileBuffer)
+      } finally {
+        fs.closeSync(descriptor)
+      }
+      const entries = readIndex(imagesDir)
+      entries.push({ uid, originalName, createdAt: new Date().toISOString() })
+      writeIndex(imagesDir, entries)
+    } catch (err) {
+      fs.unlinkSync(imagePath)
+      throw err
+    }
+  })
+
+  return { uid, relativePath: `${IMAGES_DIR}/${filename}` }
+}
+
+/** Delete an image by UID from disk and the index. */
+export async function deleteImage(worktreePath: string, uid: string): Promise<void> {
+  const imagesDir = ensureRealImagesDirectory(worktreePath)
+
+  await withLock(worktreePath, () => {
+    const entries = readIndex(imagesDir)
+    const idx = entries.findIndex((e) => e.uid === uid)
+    if (idx === -1) {
+      throw new Error(`Image '${uid}' not found in index`)
+    }
+
+    // Find the file on disk (we need the extension)
+    const files = fs.existsSync(imagesDir) ? fs.readdirSync(imagesDir) : []
+    const imageFile = files.find((f) => f.startsWith(`${uid}.`))
+    if (imageFile) {
+      fs.unlinkSync(path.join(imagesDir, imageFile))
+    }
+
+    entries.splice(idx, 1)
+    writeIndex(imagesDir, entries)
+  })
+}

@@ -1,0 +1,1633 @@
+import { execFile as execFileCb, execFileSync } from 'node:child_process'
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { join, relative, resolve } from 'node:path'
+import { promisify } from 'node:util'
+import { resolvePathInside } from './safe-path.js'
+
+const execFileAsync = promisify(execFileCb)
+const READ_ONLY_GIT_TIMEOUT_MS = 15_000
+
+/** Plafond partagé par les appels git synchrones. Le défaut de Node (1 Mo)
+ *  transforme les gros diffs et les gros fichiers en `ENOBUFS`, erreur
+ *  ensuite avalée par les `catch` de ce fichier — un fichier de 2 Mo
+ *  s'affichait donc vide dans le visualiseur de diff. */
+const GIT_MAX_BUFFER_BYTES = 64 * 1024 * 1024
+
+/** Un git synchrone qui pend bloque TOUTE la boucle d'événements Node : plus
+ *  de HTTP, plus de WebSocket, plus d'événements agent. Les opérations
+ *  réseau (`fetch`, `push`, `pull`) sont les seules réellement exposées ;
+ *  60 s leur laissent de la marge sur un gros dépôt tout en garantissant que
+ *  le serveur repart. */
+const SYNC_GIT_TIMEOUT_MS = 60_000
+
+/** Empêche git d'ouvrir une invite de mot de passe : sans cela, un dépôt
+ *  privé sans identifiants en cache fait pendre le process indéfiniment.
+ *  Exported as a function (not a plain module-level object) so tests can
+ *  mutate `process.env.GIT_SSH_COMMAND` and observe the effect — the
+ *  constant below is evaluated once at import time and would not reflect
+ *  a later mutation. */
+export function buildNonInteractiveGitEnv(): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    GIT_TERMINAL_PROMPT: '0',
+    GIT_ASKPASS: 'echo',
+    // Several callers parse git's human-readable output ("Everything
+    // up-to-date", "already exists", "N files changed"). Pin the C locale so a
+    // translated git never silently defeats those checks.
+    LC_ALL: 'C',
+    // `GIT_ASKPASS` only covers HTTP(S) credential prompts. A passphrase-
+    // protected SSH key with no running agent still blocks `ssh` on
+    // `/dev/tty`; `BatchMode=yes` makes that interactive auth fail in ~1s
+    // instead of hanging until the 60s sync-git timeout above catches it.
+    // Preserve a user-provided `GIT_SSH_COMMAND` (custom identity, host alias,
+    // non-standard port) and only append the non-interactive flag. ssh resolves
+    // each option to its FIRST occurrence, so an explicit `BatchMode` set by the
+    // user still wins — their intent is respected, and the 60 s timeout remains
+    // the backstop.
+    GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND
+      ? `${process.env.GIT_SSH_COMMAND} -o BatchMode=yes`
+      : 'ssh -o BatchMode=yes',
+  }
+}
+
+const NON_INTERACTIVE_GIT_ENV = buildNonInteractiveGitEnv()
+
+function git(repoPath: string, args: string[]): string {
+  // `trimEnd` (not `trim`): some git outputs are column-aligned and the LEADING
+  // space carries information. The classic case is `git status --porcelain`,
+  // where each line is `XY filename` and X is " " when the index has no
+  // change. Stripping that leading space silently shifts every column by one
+  // and makes `line.substring(3)` chop the first character of the filename
+  // (e.g. `front/foo` → `ront/foo`). Trailing whitespace (the final `\n` git
+  // always appends) still goes — that's what every caller expects.
+  return execFileSync('git', args, {
+    cwd: repoPath,
+    encoding: 'utf-8',
+    timeout: SYNC_GIT_TIMEOUT_MS,
+    maxBuffer: GIT_MAX_BUFFER_BYTES,
+    env: NON_INTERACTIVE_GIT_ENV,
+  }).trimEnd()
+}
+
+async function gitAsync(repoPath: string, args: string[], timeout = READ_ONLY_GIT_TIMEOUT_MS): Promise<string> {
+  const { stdout } = await execFileAsync('git', args, {
+    cwd: repoPath,
+    encoding: 'utf-8',
+    timeout,
+    maxBuffer: 10 * 1024 * 1024,
+  })
+  return stdout.trimEnd()
+}
+
+/**
+ * Async counterpart of `git()` for the operations that talk to a remote.
+ *
+ * Same 60 s budget and, crucially, the same non-interactive environment: a
+ * credential or passphrase prompt on a background process would hang for the
+ * whole timeout with nobody to answer it. `gitAsync` above omits that env
+ * because it was written for local read-only commands.
+ *
+ * These run on HTTP handlers, and `execFileSync` there blocks the single
+ * thread that also serves the WebSocket streams and the agent events: one push
+ * over a slow link froze the entire app for up to a minute, heartbeat included.
+ */
+async function gitNetworkAsync(repoPath: string, args: string[]): Promise<string> {
+  const { stdout } = await gitNetworkAsyncFull(repoPath, args)
+  return stdout
+}
+
+/**
+ * Same as `gitNetworkAsync` but also hands back stderr: git prints push
+ * progress and the "Everything up-to-date" notice there, not on stdout, and a
+ * caller that wants to distinguish a no-op push from a real one needs it.
+ */
+async function gitNetworkAsyncFull(repoPath: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
+  const { stdout, stderr } = await execFileAsync('git', args, {
+    cwd: repoPath,
+    encoding: 'utf-8',
+    timeout: SYNC_GIT_TIMEOUT_MS,
+    maxBuffer: GIT_MAX_BUFFER_BYTES,
+    env: NON_INTERACTIVE_GIT_ENV,
+  })
+  return { stdout: stdout.trimEnd(), stderr: stderr.trimEnd() }
+}
+
+/** Raised when a stale `index.lock` blocks every write on a worktree. */
+export class GitIndexLockError extends Error {
+  readonly lockPath: string
+
+  constructor(lockPath: string) {
+    super(
+      `The git index of this worktree is locked by '${lockPath}'. A previous git command was killed before it ` +
+        `could release it — typically a setup or cleanup script that hit its timeout and was SIGKILLed mid-commit. ` +
+        `If no git process is running on this worktree, remove the file: rm -f '${lockPath}'`,
+    )
+    this.name = 'GitIndexLockError'
+    this.lockPath = lockPath
+  }
+}
+
+/**
+ * Absolute path of this worktree's `index.lock` when it exists, else `null`.
+ *
+ * The lock lives in the worktree's OWN git dir (`--absolute-git-dir`), not in
+ * the common dir shared with the other worktrees: each worktree has its own
+ * index. Returns `null` rather than throwing outside a repository — callers use
+ * this to produce a better error, never to decide whether git is usable.
+ */
+export function getIndexLockPath(repoPath: string): string | null {
+  let gitDir: string
+  try {
+    gitDir = git(repoPath, ['rev-parse', '--absolute-git-dir'])
+  } catch {
+    return null
+  }
+  const lockPath = join(gitDir, 'index.lock')
+  return existsSync(lockPath) ? lockPath : null
+}
+
+/** Throw `GitIndexLockError` when a stale index lock would make every write fail. */
+export function assertNoIndexLock(repoPath: string): void {
+  const lockPath = getIndexLockPath(repoPath)
+  if (lockPath) throw new GitIndexLockError(lockPath)
+}
+
+/** Return the name of the currently checked-out branch. */
+export function getCurrentBranch(repoPath: string): string {
+  return git(repoPath, ['rev-parse', '--abbrev-ref', 'HEAD'])
+}
+
+/** List all local branch names in the repository. */
+export function listBranches(repoPath: string): string[] {
+  const output = git(repoPath, ['branch', '--format=%(refname:short)'])
+  return output
+    .split('\n')
+    .map((b) => b.trim())
+    .filter(Boolean)
+}
+
+/** Thrown when attempting to create a branch that already exists. */
+export class BranchAlreadyExistsError extends Error {
+  constructor(branchName: string) {
+    super(`Branch '${branchName}' already exists`)
+    this.name = 'BranchAlreadyExistsError'
+  }
+}
+
+/** Detect "branch already exists" git error messages across locales (EN, FR, RU). */
+export function isGitBranchExistsError(message: string): boolean {
+  const lower = message.toLowerCase()
+  return lower.includes('already exists') || lower.includes('existe') || lower.includes('существует')
+}
+
+/** Create a new local branch from the given source branch. */
+export function createBranch(repoPath: string, branchName: string, sourceBranch: string): void {
+  try {
+    git(repoPath, ['branch', branchName, sourceBranch])
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (isGitBranchExistsError(message)) {
+      throw new BranchAlreadyExistsError(branchName)
+    }
+    throw new Error(`Failed to create branch '${branchName}' from '${sourceBranch}': ${message}`)
+  }
+}
+
+/** Return shortstat diff stats for staged (cached) changes. */
+export function getDiffStats(repoPath: string): {
+  filesChanged: number
+  insertions: number
+  deletions: number
+} {
+  try {
+    const output = git(repoPath, ['diff', '--cached', '--shortstat'])
+    return parseDiffShortstat(output)
+  } catch {
+    return { filesChanged: 0, insertions: 0, deletions: 0 }
+  }
+}
+
+function parseDiffShortstat(output: string): {
+  filesChanged: number
+  insertions: number
+  deletions: number
+} {
+  if (!output.trim()) {
+    return { filesChanged: 0, insertions: 0, deletions: 0 }
+  }
+
+  const filesMatch = output.match(/(\d+) file/)
+  const insertMatch = output.match(/(\d+) insertion/)
+  const deleteMatch = output.match(/(\d+) deletion/)
+
+  return {
+    filesChanged: filesMatch ? parseInt(filesMatch[1], 10) : 0,
+    insertions: insertMatch ? parseInt(insertMatch[1], 10) : 0,
+    deletions: deleteMatch ? parseInt(deleteMatch[1], 10) : 0,
+  }
+}
+
+/** List remote-tracking branch names. Returns empty array on failure. */
+export function listRemoteBranches(repoPath: string): string[] {
+  try {
+    const output = git(repoPath, ['branch', '-r', '--format=%(refname:short)'])
+    return output
+      .split('\n')
+      .map((b) => b.trim())
+      .filter(Boolean)
+  } catch {
+    return []
+  }
+}
+
+/** Force-delete a local branch (`git branch -D`). */
+export function deleteLocalBranch(repoPath: string, branchName: string): void {
+  try {
+    git(repoPath, ['branch', '-D', branchName])
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    throw new Error(`Failed to delete local branch '${branchName}': ${message}`)
+  }
+}
+
+/** Delete a branch on the remote (`git push --delete`). */
+export function deleteRemoteBranch(repoPath: string, branchName: string, remote = 'origin'): void {
+  try {
+    git(repoPath, ['push', remote, '--delete', branchName])
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    throw new Error(`Failed to delete remote branch '${remote}/${branchName}': ${message}`)
+  }
+}
+
+/**
+ * Push a branch to the remote with upstream tracking (`git push -u`).
+ * When `options.force` is true, adds `--force-with-lease` (safer than `--force`:
+ * the push is rejected if the remote has commits the local copy hasn't seen).
+ */
+export function pushBranch(
+  repoPath: string,
+  branchName: string,
+  options: { remote?: string; force?: boolean } = {},
+): void {
+  const remote = options.remote ?? 'origin'
+  const args = ['push', '-u']
+  if (options.force) args.push('--force-with-lease')
+  args.push(remote, branchName)
+  try {
+    git(repoPath, args)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    throw new Error(`Failed to push branch '${branchName}' to '${remote}': ${message}`)
+  }
+}
+
+/**
+ * Fetch a single branch from the remote. Throws if the fetch fails (no remote,
+ * branch absent on remote, network error, etc.). Call this before creating a
+ * worktree to ensure `origin/<sourceBranch>` is up to date.
+ */
+export function fetchSourceBranch(repoPath: string, sourceBranch: string, remote = 'origin'): void {
+  try {
+    git(repoPath, ['fetch', remote, sourceBranch])
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    throw new Error(`Failed to fetch '${sourceBranch}' from '${remote}': ${message}`)
+  }
+}
+
+/**
+ * Fetch every branch from the remote (`git fetch <remote>` with no refspec).
+ * Throws if the fetch fails. Call this before computing branch divergence so
+ * all `origin/*` refs are current.
+ */
+export function fetchAllBranches(repoPath: string, remote = 'origin'): void {
+  try {
+    git(repoPath, ['fetch', remote])
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    throw new Error(`Failed to fetch from '${remote}': ${message}`)
+  }
+}
+
+/** Pull the current branch from the remote using fast-forward only.
+ *  With `opts.autostash`, dirty changes are stashed/re-applied automatically.
+ *  Without it, a dirty tree (staged or modified tracked files) is refused up-front
+ *  with a `DirtyWorktreeError` — same recovery path rebase/merge offer — instead of
+ *  letting git fail with a localized message. Detected locale-independently. */
+export function pullBranch(
+  repoPath: string,
+  branchName: string,
+  remote = 'origin',
+  opts?: { autostash?: boolean },
+): void {
+  if (!opts?.autostash) {
+    const status = getWorkingTreeStatus(repoPath)
+    if (status.staged > 0 || status.modified > 0) {
+      throw new DirtyWorktreeError('pull', status)
+    }
+  }
+  try {
+    const args = ['pull', '--ff-only']
+    if (opts?.autostash) args.push('--autostash')
+    args.push(remote, branchName)
+    git(repoPath, args)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    throw new Error(`Failed to pull branch '${branchName}' from '${remote}': ${message}`)
+  }
+}
+
+/** Thrown when a rebase, merge or cherry-pick produces conflicts. Leaves the repo in the
+ *  mid-operation state so the caller can decide between abort and agent-assisted resolution. */
+export class GitConflictError extends Error {
+  readonly operation: 'rebase' | 'merge' | 'cherry-pick'
+  readonly files: string[]
+  constructor(operation: 'rebase' | 'merge' | 'cherry-pick', files: string[]) {
+    super(`${operation} produced ${files.length} conflicted file(s)`)
+    this.name = 'GitConflictError'
+    this.operation = operation
+    this.files = files
+  }
+}
+
+/** Thrown when a rebase or merge is refused because the working tree has
+ *  uncommitted changes (staged or modified tracked files). Detected
+ *  locale-independently from the working-tree status, never from git's
+ *  localized error text. */
+export class DirtyWorktreeError extends Error {
+  readonly operation: 'rebase' | 'merge' | 'pull'
+  readonly status: WorkingTreeStatus
+  constructor(operation: 'rebase' | 'merge' | 'pull', status: WorkingTreeStatus) {
+    super(`${operation} blocked by uncommitted changes`)
+    this.name = 'DirtyWorktreeError'
+    this.operation = operation
+    this.status = status
+  }
+}
+
+/** List files currently in a conflicted state (unmerged paths). */
+export function getConflictedFiles(repoPath: string): string[] {
+  try {
+    const output = git(repoPath, ['diff', '--name-only', '--diff-filter=U'])
+    return output
+      .split('\n')
+      .map((f) => f.trim())
+      .filter(Boolean)
+  } catch {
+    return []
+  }
+}
+
+/** Detect whether a merge, rebase or cherry-pick is currently in progress in the worktree. */
+export function getOngoingGitOperation(repoPath: string): 'merge' | 'rebase' | 'cherry-pick' | null {
+  try {
+    const gitDir = git(repoPath, ['rev-parse', '--git-dir'])
+    const dir = gitDir.startsWith('/') ? gitDir : join(repoPath, gitDir)
+    if (existsSync(join(dir, 'MERGE_HEAD'))) return 'merge'
+    if (existsSync(join(dir, 'rebase-merge')) || existsSync(join(dir, 'rebase-apply'))) return 'rebase'
+    if (existsSync(join(dir, 'CHERRY_PICK_HEAD')) || existsSync(join(dir, 'sequencer'))) return 'cherry-pick'
+    return null
+  } catch {
+    return null
+  }
+}
+
+/** Rebase the current branch onto the given base branch. Fetches origin first.
+ *  With `opts.autostash`, dirty changes are stashed/re-applied automatically.
+ *  Leaves conflicts in place. */
+export function rebaseBranch(repoPath: string, baseBranch: string, opts?: { autostash?: boolean }): void {
+  try {
+    git(repoPath, ['fetch', 'origin', baseBranch])
+  } catch {
+    // fetch may fail if offline — continue with local ref
+  }
+  try {
+    const args = ['rebase']
+    if (opts?.autostash) args.push('--autostash')
+    args.push(`origin/${baseBranch}`)
+    git(repoPath, args)
+  } catch (err) {
+    const conflicted = getConflictedFiles(repoPath)
+    if (conflicted.length > 0 || getOngoingGitOperation(repoPath) === 'rebase') {
+      // Leave the rebase in progress so the caller can abort or request agent-assisted resolution.
+      throw new GitConflictError('rebase', conflicted)
+    }
+    const status = getWorkingTreeStatus(repoPath)
+    if (status.staged > 0 || status.modified > 0) {
+      // git refused before touching anything because the tree is dirty.
+      throw new DirtyWorktreeError('rebase', status)
+    }
+    const message = err instanceof Error ? err.message : String(err)
+    throw new Error(`Rebase onto '${baseBranch}' failed: ${message}`)
+  }
+}
+
+/** Merge `origin/<baseBranch>` into the current branch. Fetches first.
+ *  With `opts.autostash`, dirty changes are stashed/re-applied automatically.
+ *  Leaves conflicts in place. */
+export function mergeBranch(repoPath: string, baseBranch: string, opts?: { autostash?: boolean }): void {
+  try {
+    git(repoPath, ['fetch', 'origin', baseBranch])
+  } catch {
+    // offline — continue with local ref
+  }
+  try {
+    const args = ['merge', '--no-ff', '--no-edit']
+    if (opts?.autostash) args.push('--autostash')
+    args.push(`origin/${baseBranch}`)
+    git(repoPath, args)
+  } catch (err) {
+    const conflicted = getConflictedFiles(repoPath)
+    if (conflicted.length > 0 || getOngoingGitOperation(repoPath) === 'merge') {
+      throw new GitConflictError('merge', conflicted)
+    }
+    const status = getWorkingTreeStatus(repoPath)
+    if (status.staged > 0 || status.modified > 0) {
+      throw new DirtyWorktreeError('merge', status)
+    }
+    const message = err instanceof Error ? err.message : String(err)
+    throw new Error(`Merge of 'origin/${baseBranch}' failed: ${message}`)
+  }
+}
+
+/**
+ * Read `git push --porcelain` stdout. Each ref line is `<flag>\t<from>:<to>\t<summary>`
+ * where the flag is `=` (up to date), ` ` (fast-forward), `+` (forced), `*`
+ * (new ref), `-` (deleted) or `!` (rejected). Returns `true` when every ref is
+ * up to date, `false` when at least one moved, `null` when there is no ref
+ * line at all so the caller can fall back to another signal. Exported for tests.
+ */
+export function parsePushPorcelain(stdout: string): boolean | null {
+  const flags = stdout
+    .split('\n')
+    .filter((line) => /^[=+*\-! ]\t/.test(line))
+    .map((line) => line[0])
+  if (flags.length === 0) return null
+  return flags.every((flag) => flag === '=')
+}
+
+/**
+ * Async variants of the network operations, for the HTTP handlers.
+ *
+ * They mirror their synchronous twins one for one — same arguments, same
+ * errors, same conflict and dirty-tree detection — so a caller only swaps the
+ * name and adds `await`. Only the remote round-trip is async: the error paths
+ * below read local state (conflicted files, ongoing operation, working tree),
+ * which is fast and stays synchronous.
+ */
+export async function pushBranchAsync(
+  repoPath: string,
+  branchName: string,
+  options: { remote?: string; force?: boolean } = {},
+): Promise<{ upToDate: boolean }> {
+  const remote = options.remote ?? 'origin'
+  const args = ['push', '-u', '--porcelain']
+  if (options.force) args.push('--force-with-lease')
+  args.push(remote, branchName)
+  try {
+    const { stdout, stderr } = await gitNetworkAsyncFull(repoPath, args)
+    // `git push` exits 0 either way. `--porcelain` gives a locale-independent
+    // per-ref status line on stdout; the stderr notice is only a fallback for
+    // a git old enough to print nothing parseable.
+    const upToDate = parsePushPorcelain(stdout) ?? stderr.includes('Everything up-to-date')
+    return { upToDate }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    throw new Error(`Failed to push branch '${branchName}' to '${remote}': ${message}`)
+  }
+}
+
+export async function fetchAllBranchesAsync(repoPath: string, remote = 'origin'): Promise<void> {
+  try {
+    await gitNetworkAsync(repoPath, ['fetch', remote])
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    throw new Error(`Failed to fetch from '${remote}': ${message}`)
+  }
+}
+
+export async function pullBranchAsync(
+  repoPath: string,
+  branchName: string,
+  remote = 'origin',
+  opts?: { autostash?: boolean },
+): Promise<void> {
+  if (!opts?.autostash) {
+    const status = getWorkingTreeStatus(repoPath)
+    if (status.staged > 0 || status.modified > 0) {
+      throw new DirtyWorktreeError('pull', status)
+    }
+  }
+  try {
+    const args = ['pull', '--ff-only']
+    if (opts?.autostash) args.push('--autostash')
+    args.push(remote, branchName)
+    await gitNetworkAsync(repoPath, args)
+  } catch (err) {
+    if (err instanceof DirtyWorktreeError) throw err
+    const message = err instanceof Error ? err.message : String(err)
+    throw new Error(`Failed to pull branch '${branchName}' from '${remote}': ${message}`)
+  }
+}
+
+export async function rebaseBranchAsync(
+  repoPath: string,
+  baseBranch: string,
+  opts?: { autostash?: boolean },
+): Promise<void> {
+  try {
+    await gitNetworkAsync(repoPath, ['fetch', 'origin', baseBranch])
+  } catch {
+    // fetch may fail if offline — continue with local ref
+  }
+  try {
+    const args = ['rebase']
+    if (opts?.autostash) args.push('--autostash')
+    args.push(`origin/${baseBranch}`)
+    await gitNetworkAsync(repoPath, args)
+  } catch (err) {
+    const conflicted = getConflictedFiles(repoPath)
+    if (conflicted.length > 0 || getOngoingGitOperation(repoPath) === 'rebase') {
+      // Leave the rebase in progress so the caller can abort or request agent-assisted resolution.
+      throw new GitConflictError('rebase', conflicted)
+    }
+    const status = getWorkingTreeStatus(repoPath)
+    if (status.staged > 0 || status.modified > 0) {
+      throw new DirtyWorktreeError('rebase', status)
+    }
+    const message = err instanceof Error ? err.message : String(err)
+    throw new Error(`Rebase onto '${baseBranch}' failed: ${message}`)
+  }
+}
+
+export async function mergeBranchAsync(
+  repoPath: string,
+  baseBranch: string,
+  opts?: { autostash?: boolean },
+): Promise<void> {
+  try {
+    await gitNetworkAsync(repoPath, ['fetch', 'origin', baseBranch])
+  } catch {
+    // offline — continue with local ref
+  }
+  try {
+    const args = ['merge', '--no-ff', '--no-edit']
+    if (opts?.autostash) args.push('--autostash')
+    args.push(`origin/${baseBranch}`)
+    await gitNetworkAsync(repoPath, args)
+  } catch (err) {
+    const conflicted = getConflictedFiles(repoPath)
+    if (conflicted.length > 0 || getOngoingGitOperation(repoPath) === 'merge') {
+      throw new GitConflictError('merge', conflicted)
+    }
+    const status = getWorkingTreeStatus(repoPath)
+    if (status.staged > 0 || status.modified > 0) {
+      throw new DirtyWorktreeError('merge', status)
+    }
+    const message = err instanceof Error ? err.message : String(err)
+    throw new Error(`Merge of 'origin/${baseBranch}' failed: ${message}`)
+  }
+}
+
+/** Abort an in-progress merge, rebase or cherry-pick. No-op if nothing is in progress. */
+export function abortOngoingGitOperation(repoPath: string): 'merge' | 'rebase' | 'cherry-pick' | null {
+  const op = getOngoingGitOperation(repoPath)
+  if (op === 'merge') {
+    git(repoPath, ['merge', '--abort'])
+  } else if (op === 'rebase') {
+    git(repoPath, ['rebase', '--abort'])
+  } else if (op === 'cherry-pick') {
+    git(repoPath, ['cherry-pick', '--abort'])
+  }
+  return op
+}
+
+/** Continue an in-progress merge, rebase or cherry-pick after its resolution. */
+export function continueOngoingGitOperation(repoPath: string): 'merge' | 'rebase' | 'cherry-pick' | null {
+  const op = getOngoingGitOperation(repoPath)
+  if (op === 'merge') {
+    git(repoPath, ['merge', '--continue'])
+  } else if (op === 'rebase') {
+    git(repoPath, ['rebase', '--continue'])
+  } else if (op === 'cherry-pick') {
+    git(repoPath, ['cherry-pick', '--continue'])
+  }
+  return op
+}
+
+/** Try a git command with `base`, falling back to `origin/base` if the local ref is missing. */
+function resolveBase(repoPath: string, base: string): string {
+  // Prefer `origin/<base>` when it exists: local <base> can lag behind origin
+  // (e.g. a squash-merge happened upstream that the user hasn't pulled), and
+  // worktrees are created off `origin/<sourceBranch>` anyway — so comparing
+  // against stale local <base> would surface upstream commits as "on this
+  // branch". Fall back to local only when the remote ref isn't reachable
+  // (offline, no remote configured, etc.).
+  try {
+    git(repoPath, ['rev-parse', '--verify', `origin/${base}`])
+    return `origin/${base}`
+  } catch {
+    try {
+      git(repoPath, ['rev-parse', '--verify', base])
+      return base
+    } catch {
+      return base
+    }
+  }
+}
+
+/** Count commits between base and head (`git rev-list --count`). Returns 0 on failure. */
+export function getCommitCount(repoPath: string, base: string, head: string): number {
+  try {
+    const ref = resolveBase(repoPath, base)
+    const output = git(repoPath, ['rev-list', '--count', `${ref}..${head}`])
+    return parseInt(output, 10) || 0
+  } catch {
+    return 0
+  }
+}
+
+/**
+ * Count commits in `base` that are not in `head` — i.e. how far `head` lags
+ * behind `base`. Mirrors `getCommitCount` but in reverse direction.
+ * Returns 0 on failure.
+ */
+export function getCommitsBehind(repoPath: string, base: string, head: string): number {
+  try {
+    const ref = resolveBase(repoPath, base)
+    const output = git(repoPath, ['rev-list', '--count', `${head}..${ref}`])
+    const n = parseInt(output.trim(), 10)
+    return Number.isFinite(n) ? n : 0
+  } catch {
+    return 0
+  }
+}
+
+/**
+ * List the commits that belong to `workingBranch` itself — reachable from it
+ * but present in neither `newBase` nor `oldBase`. This is the set to replay
+ * onto the new base. Returned oldest-first (ready for sequential cherry-pick).
+ *
+ * Both `origin/<base>` and the bare `<base>` are excluded when they exist, so
+ * the result is correct whether the caller fetched the base or not.
+ */
+export function listProperCommits(repoPath: string, workingBranch: string, newBase: string, oldBase: string): string[] {
+  const excludes: string[] = []
+  for (const base of [newBase, oldBase]) {
+    for (const ref of [`origin/${base}`, base]) {
+      try {
+        git(repoPath, ['rev-parse', '--verify', '--quiet', ref])
+        excludes.push(`^${ref}`)
+      } catch {
+        // ref absent — skip
+      }
+    }
+  }
+  const output = git(repoPath, ['log', '--reverse', '--format=%H', workingBranch, ...excludes])
+  return output
+    .split('\n')
+    .map((s) => s.trim())
+    .filter(Boolean)
+}
+
+/**
+ * Rebuild `workingBranch` on top of the new base by cherry-picking the given
+ * commits (oldest-first). Creates a backup branch at the current tip first and
+ * returns its name. On a cherry-pick conflict, leaves the operation in progress
+ * and throws `GitConflictError`.
+ *
+ * The base is resolved as `origin/<newBase>` when that ref exists, else the
+ * bare `<newBase>` (so it works both with a fetched remote and a local-only
+ * base). The caller must ensure the worktree is clean for the conflict path.
+ * An empty `commits` array performs the reset only — the "already aligned"
+ * fast path.
+ *
+ * IMPORTANT: this function resets the branch CURRENTLY checked out in
+ * `repoPath`. The caller (and the Kōbō worktree orchestrator) must ensure
+ * `workingBranch` is the active branch — do NOT add a `git checkout` here.
+ */
+export function assertCurrentBranch(repoPath: string, expected: string): void {
+  const actual = getCurrentBranch(repoPath)
+  if (actual !== expected) throw new Error(`Expected checkout '${expected}', found '${actual || 'detached HEAD'}'`)
+}
+
+export function reconstructBranchOnto(
+  repoPath: string,
+  workingBranch: string,
+  newBase: string,
+  commits: readonly string[],
+): string {
+  assertCurrentBranch(repoPath, workingBranch)
+  const baseRef = resolveBase(repoPath, newBase)
+  const backupBranch = `kobo-backup/${workingBranch}-${Date.now()}`
+  git(repoPath, ['branch', backupBranch, workingBranch])
+  git(repoPath, ['reset', '--hard', baseRef])
+  if (commits.length > 0) {
+    try {
+      git(repoPath, ['cherry-pick', ...commits])
+    } catch (err) {
+      const conflicted = getConflictedFiles(repoPath)
+      if (conflicted.length > 0 || getOngoingGitOperation(repoPath) === 'cherry-pick') {
+        throw new GitConflictError('cherry-pick', conflicted)
+      }
+      const message = err instanceof Error ? err.message : String(err)
+      throw new Error(`Cherry-pick onto '${newBase}' failed: ${message}`)
+    }
+  }
+  return backupBranch
+}
+
+/** List `kobo-backup/<workingBranch>-<ts>` branches, newest timestamp first.
+ *
+ *  THROWS on a git failure instead of returning an empty list: an empty list is
+ *  the caller's signal that no rollback exists, and swallowing an inherited
+ *  lock or a buffer overflow here made the cancel route answer "automatic
+ *  restore impossible" while the backup branch was sitting right there. */
+export function listBackupBranches(repoPath: string, workingBranch: string): string[] {
+  const prefix = `kobo-backup/${workingBranch}-`
+  let out: string
+  try {
+    out = git(repoPath, ['branch', '--list', `${prefix}*`, '--format=%(refname:short)'])
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    throw new Error(`Failed to list backup branches for '${workingBranch}': ${message}`)
+  }
+  return out
+    .split('\n')
+    .map((s) => s.trim())
+    .filter((b) => b.startsWith(prefix) && /^\d+$/.test(b.slice(prefix.length)))
+    .sort((a, b) => Number(b.slice(prefix.length)) - Number(a.slice(prefix.length)))
+}
+
+/** Keep the `keep` newest backup branches of `workingBranch`, delete the rest.
+ *
+ *  Each backup branch pins every commit of a previous version of the branch, so
+ *  git's garbage collector can never reclaim them: without rotation the
+ *  repository grows by one full branch history per source-branch change, for
+ *  ever. Best-effort — a failure to delete one branch must not fail the
+ *  operation that just succeeded.
+ *
+ *  Never throws, but never stays silent either: "nothing to rotate" and "the
+ *  rotation could not run" are two different answers, and reporting the second
+ *  as the first turns a persistent git failure into unbounded growth that only
+ *  a server log would ever have revealed. */
+export function pruneBackupBranches(
+  repoPath: string,
+  workingBranch: string,
+  keep = 3,
+): { removed: string[]; warnings: string[] } {
+  const warnings: string[] = []
+  let branches: string[]
+  try {
+    branches = listBackupBranches(repoPath, workingBranch)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    warnings.push(`Backup branch rotation skipped for '${workingBranch}': ${message}`)
+    return { removed: [], warnings }
+  }
+  const removed: string[] = []
+  for (const branch of branches.slice(keep)) {
+    try {
+      git(repoPath, ['branch', '-D', branch])
+      removed.push(branch)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      warnings.push(`Failed to delete backup branch '${branch}': ${message}`)
+    }
+  }
+  return { removed, warnings }
+}
+
+/** Abort any in-progress operation, then hard-reset `workingBranch` to a backup branch. */
+export function restoreBranchFromBackup(repoPath: string, workingBranch: string, backupBranch: string): void {
+  assertCurrentBranch(repoPath, workingBranch)
+  abortOngoingGitOperation(repoPath)
+  assertCurrentBranch(repoPath, workingBranch)
+  git(repoPath, ['reset', '--hard', backupBranch])
+}
+
+/** Return structured diff shortstat between two refs (three-dot merge base). */
+export function getStructuredDiffStatsBetween(
+  repoPath: string,
+  base: string,
+  head: string,
+): { filesChanged: number; insertions: number; deletions: number } {
+  try {
+    const ref = resolveBase(repoPath, base)
+    const output = git(repoPath, ['diff', '--shortstat', `${ref}...${head}`])
+    return parseDiffShortstat(output)
+  } catch {
+    return { filesChanged: 0, insertions: 0, deletions: 0 }
+  }
+}
+
+/** Return a formatted list of commit subjects between base and head. */
+export function getCommitsBetween(repoPath: string, base: string, head: string): string {
+  try {
+    const ref = resolveBase(repoPath, base)
+    return git(repoPath, ['log', `${ref}..${head}`, '--pretty=format:- %s (%h)', '--no-merges'])
+  } catch {
+    return ''
+  }
+}
+
+/** A single commit on the working branch, with its push state. */
+export interface BranchCommit {
+  sha: string
+  shortSha: string
+  subject: string
+  author: string
+  date: string
+  isPushed: boolean
+}
+
+/**
+ * A bare commit row — same shape as `BranchCommit` minus the `isPushed`
+ * flag. Declared as a sibling type (not a parent of `BranchCommit`) to keep
+ * the blast radius small: existing callers of `BranchCommit` are unaffected.
+ */
+export interface Commit {
+  sha: string
+  shortSha: string
+  subject: string
+  author: string
+  date: string
+}
+
+/**
+ * List commits between the source branch and HEAD, each flagged with whether
+ * it's already present on `origin/<workingBranch>`. Used by the Git panel
+ * to surface "commits waiting to be pushed" vs "commits already pushed".
+ * Up to `limit` commits (most recent first).
+ */
+export function listBranchCommits(
+  repoPath: string,
+  sourceBranch: string,
+  workingBranch: string,
+  limit = 50,
+  remote = 'origin',
+): BranchCommit[] {
+  const sourceRef = resolveBase(repoPath, sourceBranch)
+  const remoteRef = `${remote}/${workingBranch}`
+
+  // NUL-delimited format: sha \0 shortSha \0 subject \0 author \0 iso date \n
+  const FORMAT = '--pretty=format:%H%x00%h%x00%s%x00%an%x00%aI'
+
+  let raw: string
+  try {
+    raw = git(repoPath, ['log', `${sourceRef}..HEAD`, `--max-count=${limit}`, FORMAT])
+  } catch {
+    return []
+  }
+  if (!raw) return []
+
+  // Figure out which commits are already on the remote — bail out quietly if
+  // the remote ref doesn't exist (branch never pushed → every commit is unpushed).
+  const pushedShas = new Set<string>()
+  try {
+    git(repoPath, ['rev-parse', '--verify', remoteRef])
+    const pushedRaw = git(repoPath, ['log', `${sourceRef}..${remoteRef}`, '--pretty=format:%H'])
+    for (const line of pushedRaw.split('\n')) {
+      if (line) pushedShas.add(line.trim())
+    }
+  } catch {
+    // remote ref unknown → leave pushedShas empty
+  }
+
+  const commits: BranchCommit[] = []
+  for (const line of raw.split('\n')) {
+    if (!line) continue
+    const [sha, shortSha, subject, author, date] = line.split('\x00')
+    if (!sha) continue
+    commits.push({
+      sha,
+      shortSha: shortSha ?? '',
+      subject: subject ?? '',
+      author: author ?? '',
+      date: date ?? '',
+      isPushed: pushedShas.has(sha),
+    })
+  }
+  return commits
+}
+
+/**
+ * List commits on `sourceBranch` that are NOT yet on `workingBranch` —
+ * i.e. commits the working branch is "behind" by. Mirror of `listBranchCommits`
+ * in the opposite direction. Up to `limit` commits, most recent first.
+ */
+export function listCommitsBehind(repoPath: string, sourceBranch: string, workingBranch: string, limit = 50): Commit[] {
+  const sourceRef = resolveBase(repoPath, sourceBranch)
+  const FORMAT = '--pretty=format:%H%x00%h%x00%s%x00%an%x00%aI'
+
+  let raw: string
+  try {
+    raw = git(repoPath, ['log', `${workingBranch}..${sourceRef}`, `--max-count=${limit}`, FORMAT])
+  } catch {
+    return []
+  }
+  if (!raw) return []
+
+  const commits: Commit[] = []
+  for (const line of raw.split('\n')) {
+    if (!line) continue
+    const [sha, shortSha, subject, author, date] = line.split('\x00')
+    if (!sha) continue
+    commits.push({
+      sha,
+      shortSha: shortSha ?? '',
+      subject: subject ?? '',
+      author: author ?? '',
+      date: date ?? '',
+    })
+  }
+  return commits
+}
+
+/**
+ * Rename a branch in-place (`git branch -m <old> <new>`). Must be run inside
+ * the worktree (or any directory tracking the repo) — the new name replaces
+ * the old one locally. The remote still has the old name; the caller is
+ * responsible for pushing the renamed branch if needed.
+ */
+export function renameBranch(repoPath: string, oldName: string, newName: string): void {
+  git(repoPath, ['branch', '-m', oldName, newName])
+}
+
+/**
+ * Check whether a branch name is already in use — either as a local branch
+ * or a remote tracking branch on the given remote. Used before renaming a
+ * branch to fail early with a clear error instead of letting git throw a
+ * generic "already exists" message.
+ */
+export function branchExists(repoPath: string, name: string, remote = 'origin'): boolean {
+  try {
+    git(repoPath, ['rev-parse', '--verify', '--quiet', `refs/heads/${name}`])
+    return true
+  } catch {
+    // not a local branch
+  }
+  try {
+    git(repoPath, ['rev-parse', '--verify', '--quiet', `refs/remotes/${remote}/${name}`])
+    return true
+  } catch {
+    // not a remote branch either
+  }
+  return false
+}
+
+/**
+ * Check whether a branch name exists as a LOCAL branch (refs/heads only,
+ * ignoring remote-tracking refs). Used to decide whether worktree creation can
+ * fall back to the local source branch when `origin` is unreachable.
+ */
+export function localBranchExists(repoPath: string, name: string): boolean {
+  try {
+    git(repoPath, ['rev-parse', '--verify', '--quiet', `refs/heads/${name}`])
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Move a worktree directory on disk via `git worktree move`. Both the
+ * filesystem layout and the `worktrees` metadata file are updated atomically.
+ * Throws if the destination exists, the worktree is dirty, or the source
+ * is the main working tree.
+ */
+export function moveWorktree(projectPath: string, oldPath: string, newPath: string): void {
+  git(projectPath, ['worktree', 'move', oldPath, newPath])
+}
+
+/** A file entry in a diff with its path and change status. */
+export interface DiffFile {
+  path: string
+  status: 'added' | 'modified' | 'deleted' | 'renamed' | 'untracked'
+}
+
+/** Git -z never quotes filenames; renames have a second source record. */
+function parsePorcelain(output: string): { path: string; x: string; y: string }[] {
+  const records = output.split('\0')
+  const entries: { path: string; x: string; y: string }[] = []
+  for (let i = 0; i < records.length; i++) {
+    const record = records[i]!
+    if (!record) continue
+    const x = record[0]!
+    const y = record[1]!
+    entries.push({ path: record.slice(3), x, y })
+    if (x === 'R' || x === 'C' || y === 'R' || y === 'C') i++
+  }
+  return entries
+}
+
+function parseNameStatus(output: string): DiffFile[] {
+  const records = output.split('\0')
+  const files: DiffFile[] = []
+  for (let i = 0; i < records.length - 1; ) {
+    const code = records[i++]!
+    let filePath = records[i++]!
+    if (code.startsWith('R') || code.startsWith('C')) filePath = records[i++]!
+    if (!filePath) continue
+    const status = code.startsWith('R')
+      ? 'renamed'
+      : code.startsWith('A')
+        ? 'added'
+        : code.startsWith('D')
+          ? 'deleted'
+          : 'modified'
+    files.push({ path: filePath, status })
+  }
+  return files
+}
+
+/** List files changed between base and HEAD (committed), plus working tree changes. */
+/**
+ * List the worktree's files — tracked plus untracked-but-not-git-ignored.
+ * Excludes `.git`, `node_modules`, and anything covered by `.gitignore`.
+ * Capped at `limit` entries to stay responsive on large monorepos.
+ * Returns [] on error (e.g. not a git repo).
+ */
+export function listWorktreeFiles(worktreePath: string, limit = 5000): string[] {
+  try {
+    const out = git(worktreePath, ['ls-files', '-z', '--cached', '--others', '--exclude-standard'])
+    if (!out) return []
+    const files = out.split('\0').filter((line) => line.length > 0)
+    return files.length > limit ? files.slice(0, limit) : files
+  } catch {
+    return []
+  }
+}
+
+/**
+ * True when the worktree has any uncommitted change — modified, added, deleted
+ * or untracked files. Returns false on error (e.g. not a git repo).
+ */
+export function worktreeHasChanges(worktreePath: string): boolean {
+  try {
+    return git(worktreePath, ['status', '--porcelain', '-z']).length > 0
+  } catch {
+    return false
+  }
+}
+
+/** Like `worktreeHasChanges`, but propagates the error instead of reporting
+ *  "clean". Use this on destructive paths: when we cannot determine whether
+ *  the worktree holds uncommitted work, "unknown" must never be read as
+ *  "nothing to lose". */
+export function worktreeHasChangesStrict(worktreePath: string): boolean {
+  return git(worktreePath, ['status', '--porcelain', '-z']).length > 0
+}
+
+export function getChangedFiles(repoPath: string, base: string, includeUntracked = false): DiffFile[] {
+  const ref = resolveBase(repoPath, base)
+  const files: DiffFile[] = []
+  const seen = new Set<string>()
+
+  // Committed changes (base..HEAD)
+  try {
+    files.push(...parseNameStatus(git(repoPath, ['diff', '--name-status', '-z', `${ref}...HEAD`])))
+    for (const file of files) seen.add(file.path)
+  } catch {
+    // No commits yet
+  }
+
+  // Working tree changes (uncommitted). Default to `-uno` to skip pure
+  // untracked files: they have never been `git add`-ed and won't ship in
+  // the next commit/PR, so showing them in the diff viewer is misleading.
+  // When `includeUntracked` is true (user opt-in via the diff viewer toggle)
+  // we use `-uall` and surface them with status='added'.
+  try {
+    const flag = includeUntracked ? '-uall' : '-uno'
+    const output = git(repoPath, ['status', '--porcelain', '-z', flag])
+    for (const { path: filePath, x, y } of parsePorcelain(output)) {
+      if (seen.has(filePath)) continue
+      let status: DiffFile['status'] = 'modified'
+      if (x === '?' && y === '?') status = 'untracked'
+      else if (x === 'R' || y === 'R') status = 'renamed'
+      else if (x === 'A' || y === 'A') status = 'added'
+      else if (x === 'D' || y === 'D') status = 'deleted'
+      files.push({ path: filePath, status })
+      seen.add(filePath)
+    }
+  } catch {
+    // Ignore
+  }
+
+  return files
+}
+
+/**
+ * List committed files between `origin/<branch>` and local HEAD — the set
+ * of files the next `git push` would send. Working tree changes are NOT
+ * included: uncommitted edits aren't about to be pushed. Returns an empty
+ * list if there is no remote tracking branch yet.
+ */
+export function getUnpushedChangedFiles(repoPath: string, branchName: string, remote = 'origin'): DiffFile[] {
+  const remoteRef = `${remote}/${branchName}`
+  // Bail out cleanly if the remote branch doesn't exist (branch never pushed).
+  try {
+    git(repoPath, ['rev-parse', '--verify', remoteRef])
+  } catch {
+    return []
+  }
+
+  const files: DiffFile[] = []
+  try {
+    files.push(...parseNameStatus(git(repoPath, ['diff', '--name-status', '-z', `${remoteRef}..HEAD`])))
+  } catch {
+    // Unlikely after the rev-parse check, but keep the happy path robust.
+  }
+
+  return files
+}
+
+/** Get the original content of a file at a given ref. Returns null if the file didn't exist. */
+export function getFileAtRef(repoPath: string, ref: string, filePath: string): string | null {
+  const resolvedRef = resolveBase(repoPath, ref)
+  try {
+    // Bypass the `git()` helper here: it `.trimEnd()`s the output, which would
+    // strip trailing newlines from the original file content and produce a
+    // false diff against `getFileContent`'s untrimmed `readFileSync` output
+    // (last line marked added/removed even when identical).
+    return execFileSync('git', ['show', `${resolvedRef}:${filePath}`], {
+      cwd: repoPath,
+      encoding: 'utf-8',
+      timeout: SYNC_GIT_TIMEOUT_MS,
+      maxBuffer: GIT_MAX_BUFFER_BYTES,
+      env: NON_INTERACTIVE_GIT_ENV,
+    })
+  } catch {
+    return null
+  }
+}
+
+/** Git's canonical empty-tree object. Used as the diff base for a root commit
+ *  (no parent), so it renders as all-added rather than erroring. */
+export const EMPTY_TREE_SHA = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
+
+/** True if `ref` resolves to a commit in the repo (SHA, `<sha>^`, `origin/<branch>`…). */
+export function commitExists(repoPath: string, ref: string): boolean {
+  try {
+    execFileSync('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], {
+      cwd: repoPath,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * List files changed between two commits, two-dot `fromRef..toRef` (the patch
+ * that turns `fromRef` into `toRef`). Committed history only — no working-tree
+ * or untracked entries (this is a historical diff). Same `DiffFile` shape as
+ * `getChangedFiles`. Refs are used verbatim (caller resolves/validates them).
+ */
+export function getChangedFilesBetween(repoPath: string, fromRef: string, toRef: string): DiffFile[] {
+  const files: DiffFile[] = []
+  try {
+    files.push(...parseNameStatus(git(repoPath, ['diff', '--name-status', '-z', `${fromRef}..${toRef}`])))
+  } catch {
+    // invalid refs / no diff → empty list
+  }
+  return files
+}
+
+/** Which baseline a `rollbackFile` operation reset the file to. */
+export type RollbackTarget = 'remote' | 'head' | 'deleted'
+
+/**
+ * Reset a single file in the worktree to a sensible baseline. Cascade:
+ *  1. `origin/<branchName>` if the remote ref AND the file exist there
+ *     (typical: branch is pushed, user wants to undo all local changes).
+ *  2. `HEAD` if the file exists at the last local commit (typical: branch
+ *     not yet pushed, or file was added in commits that aren't on remote
+ *     yet — discards just the uncommitted edits, keeps the commits).
+ *  3. **Delete** the file from disk when it's untracked (not on remote AND
+ *     not in HEAD): there's nothing to "rollback to", so the only sensible
+ *     undo is to remove the local-only file. Caller MUST surface this to
+ *     the user with an explicit confirmation message — the action is
+ *     permanent.
+ *
+ * Throws on filesystem errors (permission denied, etc.). Returns the
+ * target that was actually used so the caller can surface the right
+ * feedback in the UI.
+ */
+export function rollbackFile(
+  repoPath: string,
+  branchName: string,
+  filePath: string,
+  remote = 'origin',
+): RollbackTarget {
+  resolvePathInside(repoPath, filePath)
+  const absPath = resolve(repoPath, filePath)
+  filePath = relative(resolve(repoPath), absPath)
+  const remoteRef = `${remote}/${branchName}`
+  // show-ref distinguishes an absent ref from repository/IO errors. Tree
+  // inspection must succeed before absence authorizes deletion.
+  const refs = git(repoPath, ['for-each-ref', '--format=%(refname)', `refs/remotes/${remoteRef}`]).split('\n')
+  const fileExistsAt = (ref: string) =>
+    git(repoPath, ['ls-tree', '-r', '-z', '--name-only', ref, '--', `:(literal)${filePath}`])
+      .split('\0')
+      .includes(filePath)
+  if (refs.includes(`refs/remotes/${remoteRef}`) && fileExistsAt(remoteRef)) {
+    git(repoPath, ['checkout', remoteRef, '--', `:(literal)${filePath}`])
+    return 'remote'
+  }
+  if (fileExistsAt('HEAD')) {
+    git(repoPath, ['checkout', 'HEAD', '--', `:(literal)${filePath}`])
+    return 'head'
+  }
+  if (existsSync(absPath)) rmSync(absPath, { force: true })
+  return 'deleted'
+}
+
+/** @deprecated kept for backwards-compat with older imports — use `rollbackFile`. */
+export const rollbackFileToRemote = rollbackFile
+
+/** Get the current content of a file in the worktree. Returns null if the file doesn't exist. */
+export function getFileContent(repoPath: string, filePath: string): string | null {
+  try {
+    return readFileSync(resolvePathInside(repoPath, filePath), 'utf-8')
+  } catch {
+    return null
+  }
+}
+
+/** Write content to an absolute path inside a worktree. Caller validates the path. */
+export function writeFileInWorktree(absPath: string, content: string): void {
+  writeFileSync(absPath, content, 'utf-8')
+}
+
+/** Summary counts of staged, modified, and untracked files in a working tree. */
+export interface WorkingTreeStatus {
+  staged: number
+  modified: number
+  untracked: number
+}
+
+/** Parse `git status --porcelain` into counts of staged, modified, and untracked files. */
+export function getWorkingTreeStatus(repoPath: string): WorkingTreeStatus {
+  try {
+    return parseWorkingTreeStatus(git(repoPath, ['status', '--porcelain', '-z']))
+  } catch {
+    return { staged: 0, modified: 0, untracked: 0 }
+  }
+}
+
+function parseWorkingTreeStatus(output: string): WorkingTreeStatus {
+  let staged = 0
+  let modified = 0
+  let untracked = 0
+  for (const { x, y } of parsePorcelain(output)) {
+    if (x === '?' && y === '?') {
+      untracked++
+    } else {
+      if (x !== ' ' && x !== '?') staged++
+      if (y !== ' ' && y !== '?') modified++
+    }
+  }
+  return { staged, modified, untracked }
+}
+
+/** A single uncommitted working-tree entry. `staged`/`modified` can both be true (porcelain `MM`). */
+export interface WorkingTreeFile {
+  path: string
+  staged: boolean
+  modified: boolean
+  untracked: boolean
+}
+
+/**
+ * List uncommitted working-tree files with their status, parsed from
+ * `git status --porcelain`. Same classification rule as getWorkingTreeStatus.
+ * For renames (porcelain `old -> new`) the NEW path is kept. Best-effort: [] on error.
+ */
+export function getWorkingTreeFiles(repoPath: string): WorkingTreeFile[] {
+  try {
+    const output = git(repoPath, ['status', '--porcelain', '-z'])
+    const files: WorkingTreeFile[] = []
+    for (const { path: filePath, x, y } of parsePorcelain(output)) {
+      const untracked = x === '?' && y === '?'
+      files.push({
+        path: filePath,
+        staged: !untracked && x !== ' ' && x !== '?',
+        modified: !untracked && y !== ' ' && y !== '?',
+        untracked,
+      })
+    }
+    return files
+  } catch {
+    return []
+  }
+}
+
+/**
+ * True if `repoPath` is the root of a valid git work tree — a real repo (`.git`
+ * directory) or a linked worktree (`.git` file). A purge leftover (no `.git`, or
+ * a dead `.git` link pointing at a pruned gitdir) returns false, so it is never
+ * mistaken for a manually recreated worktree. Requires a LOCAL `.git` entry so a
+ * residual directory nested inside a parent repo doesn't resolve to that parent.
+ * Best-effort: false on any error.
+ */
+export function isGitWorktree(repoPath: string): boolean {
+  try {
+    if (!existsSync(join(repoPath, '.git'))) return false
+    return git(repoPath, ['rev-parse', '--is-inside-work-tree']).trim() === 'true'
+  } catch {
+    return false
+  }
+}
+
+/**
+ * True when `name` is a branch name Kōbō may hand to git.
+ *
+ * The first character MUST be alphanumeric. Without that anchor a leading `-`
+ * passes any `[A-Za-z0-9/_.-]+` check and git reads the whole argument as an
+ * OPTION — `--force`, `--exec=…` — rather than as a branch. (There is no shell
+ * injection to worry about here: every git call in this project goes through an
+ * argument array. The exposure is option injection.)
+ * The remaining rules mirror `git check-ref-format`.
+ */
+export function isValidBranchName(name: string): boolean {
+  // Guard the type too: a non-string would otherwise be coerced, and the
+  // string "undefined" happens to satisfy the pattern below.
+  if (typeof name !== 'string') return false
+  if (!/^[A-Za-z0-9][A-Za-z0-9/_.-]*$/.test(name)) return false
+  if (name.includes('..') || name.includes('//')) return false
+  if (name.endsWith('/') || name.endsWith('.') || name.endsWith('.lock')) return false
+  return true
+}
+
+/**
+ * Turn an arbitrary string into a git-ref-safe segment, capped to `maxLen`.
+ * Strips accents (é→e), collapses every run of non-alphanumeric characters
+ * (backslashes, colons, spaces, dots… — all unsafe or awkward in a ref/path)
+ * into a single hyphen, and trims leading/trailing hyphens (including one the
+ * length cap may leave). Preserves case — the caller upper/lower-cases as needed.
+ * Used to build the working branch from Notion/Sentry titles + issue IDs so an
+ * over-long or odd-charactered source can never produce an invalid worktree.
+ */
+export function slugifyBranchSegment(input: string, maxLen = 50): string {
+  return input
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^A-Za-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, maxLen)
+    .replace(/-+$/g, '')
+}
+
+/**
+ * Count commits ahead of `origin/<workingBranch>`. Returns `-1` when the remote
+ * ref does not exist (i.e. the branch has never been pushed).
+ *
+ * We deliberately use `origin/<workingBranch>` instead of the local `@{u}`
+ * upstream pointer: Kōbō creates worktrees with `git worktree add -b <new>
+ * <path> origin/<sourceBranch>`, so `@{u}` points at `origin/<sourceBranch>`,
+ * NOT at the working branch's remote sibling. Comparing HEAD with that wrong
+ * upstream silently reported "0 unpushed" for never-pushed branches that
+ * happened to be aligned with their source — surfacing as a false "Pushé"
+ * label in the GitPanel.
+ */
+export function getUnpushedCount(repoPath: string, workingBranch: string): number {
+  const remoteRef = `origin/${workingBranch}`
+  try {
+    execFileSync('git', ['rev-parse', '--verify', remoteRef], {
+      cwd: repoPath,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+  } catch {
+    return -1 // branch never pushed (no remote ref)
+  }
+  try {
+    const output = execFileSync('git', ['rev-list', `${remoteRef}..HEAD`, '--count'], {
+      cwd: repoPath,
+      encoding: 'utf-8',
+    }).trim()
+    return parseInt(output, 10) || 0
+  } catch {
+    return -1
+  }
+}
+
+/** Return raw `git diff --shortstat` output between two refs (three-dot). */
+export function getDiffStatsBetween(repoPath: string, base: string, head: string): string {
+  try {
+    return git(repoPath, ['diff', '--shortstat', `${base}...${head}`])
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * Return `git diff --stat HEAD` output (working tree vs HEAD) as a single string.
+ * Empty string if the working tree is clean or the command fails. Best-effort: never throws.
+ */
+export function getWorkingTreeDiffStats(repoPath: string): string {
+  try {
+    return execFileSync('git', ['diff', '--stat', 'HEAD'], {
+      cwd: repoPath,
+      encoding: 'utf-8',
+    })
+  } catch {
+    return ''
+  }
+}
+
+// ── Async versions ───────────────────────────────────────────────────────────
+// Non-blocking alternatives for hot paths (route handlers).
+
+async function resolveBaseAsync(repoPath: string, base: string): Promise<string> {
+  try {
+    await gitAsync(repoPath, ['rev-parse', '--verify', `origin/${base}`])
+    return `origin/${base}`
+  } catch {
+    return base
+  }
+}
+
+/** Non-blocking commit count for request and polling hot paths. */
+export async function getCommitCountAsync(repoPath: string, base: string, head: string): Promise<number> {
+  try {
+    const ref = await resolveBaseAsync(repoPath, base)
+    const output = await gitAsync(repoPath, ['rev-list', '--count', `${ref}..${head}`])
+    return parseInt(output, 10) || 0
+  } catch {
+    return 0
+  }
+}
+
+/** Non-blocking behind count for request and polling hot paths. */
+export async function getCommitsBehindAsync(repoPath: string, base: string, head: string): Promise<number> {
+  try {
+    const ref = await resolveBaseAsync(repoPath, base)
+    const output = await gitAsync(repoPath, ['rev-list', '--count', `${head}..${ref}`])
+    const count = parseInt(output, 10)
+    return Number.isFinite(count) ? count : 0
+  } catch {
+    return 0
+  }
+}
+
+/** Non-blocking diff summary for request and polling hot paths. */
+export async function getStructuredDiffStatsBetweenAsync(
+  repoPath: string,
+  base: string,
+  head: string,
+): Promise<{ filesChanged: number; insertions: number; deletions: number }> {
+  try {
+    const ref = await resolveBaseAsync(repoPath, base)
+    return parseDiffShortstat(await gitAsync(repoPath, ['diff', '--shortstat', `${ref}...${head}`]))
+  } catch {
+    return { filesChanged: 0, insertions: 0, deletions: 0 }
+  }
+}
+
+/** Non-blocking working-tree summary for request and polling hot paths. */
+export async function getWorkingTreeStatusAsync(repoPath: string): Promise<WorkingTreeStatus> {
+  try {
+    return parseWorkingTreeStatus(await gitAsync(repoPath, ['status', '--porcelain', '-z']))
+  } catch {
+    return { staged: 0, modified: 0, untracked: 0 }
+  }
+}
+
+/**
+ * Async version of `getUnpushedCount`. Same `origin/<workingBranch>` semantic:
+ * returns `-1` when the remote ref does not exist (never pushed), `0` when
+ * pushed and aligned, `>0` when pushed but ahead.
+ */
+export async function getUnpushedCountAsync(repoPath: string, workingBranch: string): Promise<number> {
+  const remoteRef = `origin/${workingBranch}`
+  try {
+    await execFileAsync('git', ['rev-parse', '--verify', remoteRef], {
+      cwd: repoPath,
+      timeout: READ_ONLY_GIT_TIMEOUT_MS,
+    })
+  } catch {
+    return -1 // branch never pushed (no remote ref)
+  }
+  try {
+    const { stdout } = await execFileAsync('git', ['rev-list', `${remoteRef}..HEAD`, '--count'], {
+      cwd: repoPath,
+      encoding: 'utf-8',
+      timeout: READ_ONLY_GIT_TIMEOUT_MS,
+    })
+    return parseInt(stdout.trim(), 10) || 0
+  } catch {
+    return -1
+  }
+}
+
+/**
+ * Best-effort async `git fetch <remote> <branch>`. Never throws — by contract,
+ * suitable for both fire-and-forget and `await` use without try/catch at the
+ * call site. Logs a warning on failure but resolves cleanly.
+ *
+ * Mirrors the sync `fetchSourceBranch` sibling, including the optional `remote`
+ * parameter (defaults to `'origin'`).
+ */
+/**
+ * Async twin of `fetchSourceBranch`: it PROPAGATES the failure.
+ *
+ * Distinct from `fetchSourceBranchAsync` right below, which swallows it — that
+ * one is the pr-watcher's best-effort refresh, where a missing remote is not
+ * worth interrupting a background sweep. Workspace creation needs the opposite:
+ * a source branch that cannot be fetched is a 422, not a workspace built on a
+ * stale ref.
+ */
+export async function fetchSourceBranchOrThrowAsync(
+  repoPath: string,
+  sourceBranch: string,
+  remote = 'origin',
+): Promise<void> {
+  try {
+    await gitNetworkAsync(repoPath, ['fetch', remote, sourceBranch])
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    throw new Error(`Failed to fetch '${sourceBranch}' from '${remote}': ${message}`)
+  }
+}
+
+export async function fetchSourceBranchAsync(repoPath: string, branch: string, remote = 'origin'): Promise<void> {
+  try {
+    // Non-interactive env like every other network call: without it a
+    // credential or passphrase prompt hangs this fetch for its whole timeout.
+    await execFileAsync('git', ['fetch', remote, branch], {
+      cwd: repoPath,
+      timeout: 30_000,
+      env: NON_INTERACTIVE_GIT_ENV,
+    })
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    console.warn(`[git-ops] fetchSourceBranchAsync(${remote}/${branch}) failed: ${msg}`)
+  }
+}
+
+/** Stash all changes (including untracked). */
+export function stashPush(repoPath: string, label: string): void {
+  git(repoPath, ['stash', 'push', '--include-untracked', '-m', label])
+}
+
+/**
+ * Index of the newest stash entry whose message contains `label`, or `null`.
+ * `%gd` is the ref (`stash@{N}`), `%gs` the reflog subject (`On <branch>: <label>`).
+ */
+export function findStashIndexByLabel(repoPath: string, label: string): number | null {
+  let out: string
+  try {
+    out = git(repoPath, ['stash', 'list', '--format=%gd%x09%gs'])
+  } catch {
+    return null
+  }
+  if (!out) return null
+  for (const line of out.split('\n')) {
+    const separator = line.indexOf('\t')
+    if (separator < 0) continue
+    const ref = line.slice(0, separator).trim()
+    const subject = line.slice(separator + 1)
+    if (!subject.includes(label)) continue
+    const match = /^stash@\{(\d+)\}$/.exec(ref)
+    if (match) return Number(match[1])
+  }
+  return null
+}
+
+/**
+ * Pop a stash entry. With `label`, pops the newest entry whose message contains
+ * it instead of blindly popping `stash@{0}`.
+ *
+ * `stashPush` has always written a label, but nothing ever read it back. The
+ * agent and the integrated terminal both stash routinely before a rebase — do
+ * that between our push and our pop and the bare `git stash pop` restores THEIR
+ * entry, burying the user's work one slot deeper where nothing surfaces it.
+ */
+export function stashPop(repoPath: string, label?: string): void {
+  if (!label) {
+    git(repoPath, ['stash', 'pop'])
+    return
+  }
+  const index = findStashIndexByLabel(repoPath, label)
+  if (index === null) {
+    throw new Error(`No stash entry labelled '${label}' to restore`)
+  }
+  git(repoPath, ['stash', 'pop', `stash@{${index}}`])
+}
+
+/** Stage every change (tracked + untracked) and commit it. Hooks run normally
+ *  (no --no-verify), per the project's commit conventions. */
+export function commitAllChanges(repoPath: string, message: string): void {
+  git(repoPath, ['add', '-A'])
+  git(repoPath, ['commit', '-m', message])
+}
+
+/** Discard staged + modified TRACKED changes (`git reset --hard HEAD`).
+ *  Untracked files are intentionally preserved — they don't block a
+ *  rebase/merge, and cleaning them would risk nuking .env / build artefacts. */
+export function discardWorkingTreeChanges(repoPath: string): void {
+  git(repoPath, ['reset', '--hard', 'HEAD'])
+}

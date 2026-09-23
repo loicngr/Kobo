@@ -1,0 +1,112 @@
+{
+  "name": "@loicngr/kobo",
+  "version": "2.1.0",
+  "description": "Kōbō — local multi-workspace orchestrator for Claude Code and OpenAI Codex, with isolated Git worktrees, live review and optional automation.",
+  "type": "module",
+  "license": "GPL-3.0-or-later",
+  "bin": {
+    "kobo": "./dist/server/index.js"
+  },
+  "files": [
+    "dist/",
+    "src/client/dist/pwa/",
+    "src/mcp-server/",
+    "AGENTS.md",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "CONFIGURATION.md",
+    "SECURITY.md",
+    "THIRD_PARTY_NOTICES.md",
+    "docs/getting-started.md",
+    "docs/troubleshooting.md",
+    "CONTRIBUTING.md",
+    "CODE_OF_CONDUCT.md",
+    "DESIGN.md",
+    "docs/release/public-readiness-evidence.md",
+    "docs/release/public-opening-checklist.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "author": {
+    "name": "loicngr",
+    "email": "loicnogier@ik.me",
+    "url": "https://github.com/loicngr"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/loicngr/kobo.git"
+  },
+  "bugs": {
+    "url": "https://github.com/loicngr/kobo/issues"
+  },
+  "homepage": "https://github.com/loicngr/kobo#readme",
+  "keywords": [
+    "claude",
+    "claude-code",
+    "agent",
+    "mcp",
+    "workspace",
+    "worktree",
+    "hono",
+    "vue",
+    "quasar"
+  ],
+  "engines": {
+    "node": ">=24.15.0"
+  },
+  "scripts": {
+    "dev": "KOBO_ENFORCE_LOCAL_HOME=1 KOBO_HOME=./data PORT=3300 KOBO_DEV_CLIENT_ORIGIN=http://localhost:8080 tsx watch src/server/index.ts",
+    "dev:client": "cd src/client && KOBO_BACKEND_PORT=3300 npx quasar dev",
+    "dev:all": "concurrently \"npm run dev\" \"npm run dev:client\"",
+    "build:client": "cd src/client && npx quasar build -m pwa",
+    "build:server": "npx tsc && chmod +x dist/server/index.js",
+    "build": "npm run build:client && npm run build:server",
+    "install-all": "npm install && cd src/client && npm install && cd src-pwa && npm install",
+    "start": "node dist/server/index.js",
+    "test": "vitest run --config vitest.config.ts --root .",
+    "test:mcp:live": "vitest run --config vitest.live.config.ts",
+    "test:watch": "vitest --config vitest.config.ts --root .",
+    "test:client": "cd src/client && npm test",
+    "test:all": "npm test && npm run test:client",
+    "typecheck:tests": "tsc -p tsconfig.test.json",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
+    "format:check": "biome format .",
+    "prepublishOnly": "npm run build",
+    "test:package": "node scripts/smoke-package.mjs",
+    "security:scan": "node scripts/scan-secrets.mjs"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.280",
+    "@emnapi/core": "^1.11.3",
+    "@emnapi/runtime": "^1.11.3",
+    "@hono/node-server": "^2.1.1",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@openai/codex": "^0.154.0",
+    "better-sqlite3": "^13.0.3",
+    "cron-parser": "^5.10.1",
+    "hono": "^4.13.8",
+    "nanoid": "^6.0.1",
+    "node-pty": "^1.1.0",
+    "ws": "^8.21.3"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.7",
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^26.6.2",
+    "@types/ws": "^8.18.1",
+    "@vitest/runner": "^4.1.11",
+    "concurrently": "^10.0.5",
+    "tsx": "^4.23.15",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.11"
+  },
+  "overrides": {
+    "@hono/node-server": "^2.1.1",
+    "shell-quote": "^1.10.0"
+  }
+}

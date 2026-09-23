@@ -1,0 +1,1733 @@
+import { defineStore } from 'pinia'
+import { Notify } from 'quasar'
+import i18n from 'src/i18n'
+import { ChatDeliveryTracker } from 'src/services/chat-delivery'
+import { disposeTerminalEntry } from 'src/services/terminal-registry'
+import { getWorkspaceQueueHost } from 'src/services/workspace-queue-bridge'
+import { useAgentStreamStore } from 'src/stores/agent-stream'
+import { useSessionHandoffStore } from 'src/stores/session-handoff'
+import { type GlobalSettings, useSettingsStore } from 'src/stores/settings'
+import { useUpdateStore } from 'src/stores/update'
+import type { AgentEvent } from 'src/types/agent-event'
+import type { ProviderId, UsageSnapshot } from 'src/types/usage'
+import { appendTokenToWsUrl, getToken } from 'src/utils/auth-token'
+import { hookSender, parseHookEventType } from 'src/utils/hook-events'
+import { openNetworkLogin } from 'src/utils/network-login-bus'
+import { resolveNotificationSoundOverride } from 'src/utils/notification-sounds'
+import { DEFAULT_TOAST_TIMEOUT_MS } from 'src/utils/notification-timeout'
+import { notify } from 'src/utils/notifications'
+import type { SessionHandoff } from '../../../shared/session-handoff'
+import { parseMessageSource } from '../utils/message-source'
+import type { DevServerStatus } from './dev-server'
+import { useDevServerStore } from './dev-server'
+import type { MigrationStatus } from './migration'
+import { useMigrationStore } from './migration'
+import type { PendingCron, Workspace } from './workspace'
+import { useWorkspaceStore } from './workspace'
+
+const t = i18n.global.t
+const chatDeliveries = new ChatDeliveryTracker()
+let nextChatDeliveryId = 0
+
+type PrNotificationEvent =
+  | 'pr:ci-failed'
+  | 'pr:ci-recovered'
+  | 'pr:changes-requested'
+  | 'pr:approved'
+  | 'pr:merge-conflict'
+  | 'pr:ready-to-merge'
+  | 'pr:merged'
+
+type PrAudioSettingKeys = {
+  soundKey: keyof GlobalSettings
+  enabledKey: keyof GlobalSettings
+  volumeKey: keyof GlobalSettings
+}
+
+const PR_AUDIO_SETTINGS_BY_EVENT = {
+  'pr:ci-failed': {
+    soundKey: 'audioPrCiFailedSound',
+    enabledKey: 'audioPrCiFailedEnabled',
+    volumeKey: 'audioPrCiFailedVolume',
+  },
+  'pr:ci-recovered': {
+    soundKey: 'audioPrCiRecoveredSound',
+    enabledKey: 'audioPrCiRecoveredEnabled',
+    volumeKey: 'audioPrCiRecoveredVolume',
+  },
+  'pr:changes-requested': {
+    soundKey: 'audioPrChangesRequestedSound',
+    enabledKey: 'audioPrChangesRequestedEnabled',
+    volumeKey: 'audioPrChangesRequestedVolume',
+  },
+  'pr:approved': {
+    soundKey: 'audioPrApprovedSound',
+    enabledKey: 'audioPrApprovedEnabled',
+    volumeKey: 'audioPrApprovedVolume',
+  },
+  'pr:merge-conflict': {
+    soundKey: 'audioPrMergeConflictSound',
+    enabledKey: 'audioPrMergeConflictEnabled',
+    volumeKey: 'audioPrMergeConflictVolume',
+  },
+  'pr:ready-to-merge': {
+    soundKey: 'audioPrReadyToMergeSound',
+    enabledKey: 'audioPrReadyToMergeEnabled',
+    volumeKey: 'audioPrReadyToMergeVolume',
+  },
+  'pr:merged': {
+    soundKey: 'audioPrMergedSound',
+    enabledKey: 'audioPrMergedEnabled',
+    volumeKey: 'audioPrMergedVolume',
+  },
+} as const satisfies Record<PrNotificationEvent, PrAudioSettingKeys>
+
+function notifyPr(message: string, workspaceId: string, event: PrNotificationEvent): void {
+  const settings = useSettingsStore().global
+  const keys = PR_AUDIO_SETTINGS_BY_EVENT[event]
+  notify(
+    message,
+    undefined,
+    workspaceId,
+    resolveNotificationSoundOverride(settings[keys.soundKey]),
+    Number(settings[keys.volumeKey]),
+    Boolean(settings[keys.enabledKey]),
+  )
+}
+
+function prToastActions(workspaceId: string, prUrl?: string): Array<Record<string, unknown>> {
+  const actions: Array<Record<string, unknown>> = []
+  if (prUrl) {
+    actions.push({
+      label: t('pr.openPr'),
+      color: 'white',
+      noDismiss: true,
+      handler: () => window.open(prUrl, '_blank'),
+    })
+  }
+  actions.push({
+    label: t('pr.openWorkspace'),
+    color: 'white',
+    noDismiss: true,
+    handler: () => {
+      window.location.hash = `#/workspace/${workspaceId}`
+    },
+  })
+  actions.push({ label: t('pr.dismiss'), color: 'white' })
+  return actions
+}
+
+// Module-level variables — must NOT be reactive (Vue Proxy breaks WebSocket)
+let _ws: WebSocket | null = null
+let _reconnectTimer: ReturnType<typeof setTimeout> | null = null
+let _reconnectAttempt = 0
+let _shouldReconnect = false
+let _networkListenersBound = false
+// Suppress notifications when the dispatcher is invoked during sync:response
+// replay. Mutated by the store's `_replaying` guard via `setReplaying`.
+let _replayingNotifications = false
+
+/** Internal: set by the store while processing `sync:response` to mute notifications. */
+export function _setReplayingForDispatch(value: boolean): void {
+  _replayingNotifications = value
+}
+
+/**
+ * Handle `session:started` side-effects: flip the local workspace status to
+ * `executing` AND switch the selected session to the one that just started.
+ *
+ * The session switch matters for auto-loop: each iteration spawns a FRESH
+ * session (resume=false), and without this switch the UI stays on the
+ * previous session's chat while streaming happens in the new one.
+ * Skipped during sync:response replay so we don't clobber the user's
+ * selection when reconnecting.
+ */
+function _handleSessionStarted(workspaceId: string, event: AgentEvent, sessionId?: string): void {
+  if (event.kind !== 'session:started') return
+  const workspaceStore = useWorkspaceStore()
+
+  // Drop the head if it belongs to THIS session (resume reuses the original
+  // agentSessionId). Siblings owned by other sessions are kept.
+  if (sessionId) {
+    workspaceStore.setActiveAgentSession(workspaceId, sessionId)
+    const head = workspaceStore.peekPending(workspaceId)
+    if (head && head.agentSessionId === sessionId) {
+      workspaceStore.dequeuePending(workspaceId)
+    }
+  }
+
+  const cur = workspaceStore.workspaces.find((w) => w.id === workspaceId)
+  if (
+    cur &&
+    (cur.status === 'completed' || cur.status === 'idle' || cur.status === 'error' || cur.status === 'quota')
+  ) {
+    workspaceStore.updateWorkspaceFromEvent(workspaceId, { status: 'executing' })
+  }
+
+  if (_replayingNotifications) return
+  if (!sessionId) return
+  if (workspaceStore.selectedWorkspaceId !== workspaceId) return
+  if (workspaceStore.selectedSessionId === sessionId) return
+
+  void workspaceStore.fetchSessions(workspaceId, sessionId).catch((err) => {
+    console.error('[websocket] fetchSessions on session:started failed:', err)
+  })
+}
+
+/**
+ * Mirror the agent's internal todo-list tool calls into the workspace store's
+ * "Agent todos" panel. Handles the legacy snapshot `TodoWrite` (still emitted by
+ * the Codex engine) and Claude Code ≥ v0.3.142's accumulating Task tools:
+ *   - `TaskCreate` input `{subject, description, activeForm}` (no id);
+ *   - the sequential `#N` arrives in the result `"Task #N created successfully"`;
+ *   - `TaskUpdate` is `{taskId, status}` where `status: 'deleted'` removes the row.
+ * Returns true when the event was a todo-tool event (caller should stop). Shared
+ * by the live dispatcher and the sync:response replay so a reload rebuilds the
+ * panel identically.
+ */
+function applyTodoToolEvent(workspaceId: string, event: AgentEvent): boolean {
+  const store = useWorkspaceStore()
+  if (event.kind === 'tool:call' && event.name === 'TodoWrite') {
+    const input = event.input as Record<string, unknown> | undefined
+    const rawTodos = input?.todos
+    if (Array.isArray(rawTodos)) {
+      store.updateAgentTodos(
+        workspaceId,
+        (rawTodos as Array<Record<string, unknown>>).map((t) => ({
+          content: typeof t.content === 'string' ? t.content : '',
+          status: typeof t.status === 'string' ? t.status : 'pending',
+          activeForm: typeof t.activeForm === 'string' ? t.activeForm : undefined,
+        })),
+      )
+    }
+    return true
+  }
+  if (event.kind === 'tool:call' && event.name === 'TaskCreate') {
+    const input = (event.input ?? {}) as Record<string, unknown>
+    store.agentTaskCreate(workspaceId, event.toolCallId, {
+      subject: typeof input.subject === 'string' ? input.subject : undefined,
+      description: typeof input.description === 'string' ? input.description : undefined,
+      activeForm: typeof input.activeForm === 'string' ? input.activeForm : undefined,
+    })
+    return true
+  }
+  if (event.kind === 'tool:result' && typeof event.output === 'string') {
+    const m = event.output.match(/^Task #(\d+) created successfully/)
+    if (m) {
+      store.agentTaskSetNumber(workspaceId, event.toolCallId, Number(m[1]))
+      return true
+    }
+  }
+  if (event.kind === 'tool:call' && event.name === 'TaskUpdate') {
+    const input = (event.input ?? {}) as Record<string, unknown>
+    const rawId = input.task_id ?? input.taskId ?? input.id
+    const taskNumber = typeof rawId === 'number' ? rawId : typeof rawId === 'string' ? Number(rawId) : Number.NaN
+    if (Number.isFinite(taskNumber)) {
+      store.agentTaskUpdate(workspaceId, taskNumber, {
+        status: typeof input.status === 'string' ? input.status : undefined,
+        content: typeof input.subject === 'string' ? input.subject : undefined,
+        activeForm: typeof input.activeForm === 'string' ? input.activeForm : undefined,
+      })
+    }
+    return true
+  }
+  return false
+}
+
+/**
+ * Central dispatcher for normalised `AgentEvent`s received via WebSocket
+ * (`agent:event` frames or `sync:response` replays).
+ *
+ * Always appends to the per-workspace event stream (consumed by ActivityFeed
+ * + sibling panels via `foldEvents`), and routes the side-effect-bearing
+ * kinds (`usage`, `rate_limit`, `subagent:progress`, `session:ended`,
+ * `error{quota}`) to the workspace store so the existing Stats / Quota /
+ * Subagents panels keep working and the user gets completion notifications.
+ *
+ * Exported so it can be tested in isolation without spinning up the WS.
+ */
+export function dispatchAgentEvent(
+  workspaceId: string,
+  event: AgentEvent,
+  timestamp?: string,
+  eventId?: string,
+  sessionId?: string | null,
+): void {
+  const agentStream = useAgentStreamStore()
+  const activeOwner = useWorkspaceStore().activeAgentSessionIds[workspaceId]
+  const isCurrentSession = !sessionId || !activeOwner || sessionId === activeOwner
+
+  // Transient compaction indicator — ephemeral, never enters the persisted feed.
+  if (event.kind === 'session:compacting') {
+    if (!_replayingNotifications && isCurrentSession) agentStream.setCompacting(workspaceId, event.active)
+    return
+  }
+
+  agentStream.append(workspaceId, event, timestamp, eventId, sessionId, !_replayingNotifications)
+
+  // Compaction is over once the boundary lands, the session ends, or the agent
+  // resumes producing output (text / tool calls) — clear the live banner.
+  if (
+    !_replayingNotifications &&
+    isCurrentSession &&
+    (event.kind === 'session:compacted' || event.kind === 'message:text' || event.kind === 'tool:call')
+  ) {
+    agentStream.setCompacting(workspaceId, false)
+  }
+
+  _handleSessionStarted(workspaceId, event, sessionId ?? undefined)
+
+  const workspaceStore = useWorkspaceStore()
+
+  if (event.kind === 'session:user-input-requested') {
+    if (event.requestKind === 'question') {
+      workspaceStore.enqueuePending(workspaceId, {
+        kind: 'question',
+        agentSessionId: sessionId ?? null,
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        input: event.payload,
+      })
+    } else {
+      workspaceStore.enqueuePending(workspaceId, {
+        kind: 'permission',
+        agentSessionId: sessionId ?? null,
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        toolInput: event.payload,
+      })
+    }
+    // A pending question or approval may arrive from a sub-agent while the
+    // parent compacts. Keep compaction authoritative until its status event
+    // restores awaiting-user; the request is still queued and notified below.
+    if (!useWebSocketStore().isCompacting(workspaceId)) {
+      workspaceStore.updateWorkspaceFromEvent(workspaceId, { status: 'awaiting-user' })
+    }
+    if (!_replayingNotifications) {
+      const wsName = workspaceStore.workspaces.find((w) => w.id === workspaceId)?.name ?? ''
+      const title =
+        event.requestKind === 'question'
+          ? t('notification.agentQuestion', { name: wsName })
+          : t('notification.agentPermissionRequest', { name: wsName })
+      // Questions get the dedicated question sound; permission requests keep the
+      // general notification sound.
+      const settings = useSettingsStore().global
+      const soundOverride = event.requestKind === 'question' ? settings.audioQuestionSound : undefined
+      const volumeOverride = event.requestKind === 'question' ? settings.audioQuestionVolume : undefined
+      notify(title, undefined, workspaceId, soundOverride, volumeOverride, settings.audioQuestionNotifications)
+    }
+    return
+  }
+
+  if (event.kind === 'subagent:progress') {
+    workspaceStore.upsertSubagent(workspaceId, {
+      toolUseId: event.toolCallId,
+      status: event.status,
+      description: event.description,
+      taskType: event.taskType,
+      lastToolName: event.lastToolName,
+      totalTokens: event.totalTokens,
+      toolUses: event.toolUses,
+      durationMs: event.durationMs,
+    })
+    return
+  }
+
+  // Agent todos panel (TodoWrite snapshot / Task* accumulation) — same handling
+  // is replayed on sync:response so a reload rebuilds the panel identically.
+  if (applyTodoToolEvent(workspaceId, event)) return
+
+  // Detect Bash tool calls that perform git operations and bump the
+  // `gitRefreshTrigger` so GitPanel re-fetches stats a few seconds after
+  // the command completes. The regex is deliberately loose — false
+  // positives just cause an extra stats refresh, whereas a miss means
+  // the panel stays stale until the user clicks refresh.
+  if (event.kind === 'tool:call' && event.name === 'Bash') {
+    const input = event.input as Record<string, unknown> | undefined
+    const cmd = `${(input?.command as string | undefined) ?? ''} ${(input?.description as string | undefined) ?? ''}`
+    if (/\bgit\b|commit|push|pull|merge|rebase|checkout|branch/i.test(cmd)) {
+      workspaceStore.triggerGitRefresh()
+    }
+    // Extra: when the agent renames the current branch in-place
+    // (`git branch -m [<old>] <new>`), the DB's `workingBranch` drifts from
+    // what git actually tracks. Fire a resync so the rest of Kōbō (push,
+    // PR, diff scopes, commits panel) stays aligned.
+    if (/\bgit\s+branch\s+-m\b/i.test(cmd)) {
+      setTimeout(() => {
+        void workspaceStore.resyncWorkspaceBranch(workspaceId).catch((err) => {
+          console.error('[websocket] Branch resync failed:', err)
+        })
+      }, 2500)
+    }
+    // Extra: `gh pr create` opens a new PR on GitHub. The generic git
+    // regex above does not match `gh`, so without this block the
+    // GitPanel would only show the new PR after the 30 s pr-watcher
+    // poll (or a manual refresh). Schedule a refresh 3 s later — long
+    // enough for the `gh` CLI to finish its round-trip to GitHub so the
+    // subsequent `gh pr view` sees the freshly created PR. The regex is
+    // deliberately loose (would also match a hypothetical
+    // `gh pr create-from-template`) — a false positive just causes an
+    // extra idempotent refresh.
+    if (/\bgh\s+pr\s+create\b/i.test(cmd)) {
+      setTimeout(() => workspaceStore.triggerGitRefresh(), 3000)
+    }
+    // Don't return — tool:call may need other side-effects in the future.
+  }
+
+  // session:started — handled separately in _handleSessionStarted (which also
+  // has access to the sessionId for auto-loop session switching). Nothing else
+  // to do here for this kind.
+  if (event.kind === 'session:started') return
+
+  // Engines emit this when a model turn has returned its terminal result but
+  // their underlying stream is still draining. It only changes the visual
+  // busy indicator; persisted workspace status remains `executing` until the
+  // authoritative session:ended event arrives.
+  if (event.kind === 'turn:completed') {
+    if (sessionId) workspaceStore.markAgentTurnSettled(workspaceId, sessionId)
+    return
+  }
+
+  // Session lifecycle: session:ended signals completion/error/kill. Refresh
+  // the workspace list so the new DB status shows up, and surface a
+  // notification if not replaying.
+  if (event.kind === 'session:ended') {
+    // Drop any pending entries owned by THIS session (sibling sessions are
+    // preserved).
+    if (sessionId) {
+      workspaceStore.clearPendingForSession(workspaceId, sessionId)
+    }
+    const activeSessionId = workspaceStore.activeAgentSessionIds[workspaceId]
+    const isSuperseded =
+      event.superseded === true ||
+      (typeof sessionId === 'string' &&
+        sessionId.length > 0 &&
+        activeSessionId !== undefined &&
+        sessionId !== activeSessionId)
+    if (isSuperseded) {
+      if (!getWorkspaceQueueHost(workspaceStore)) workspaceStore.cancelQueuedMessage(workspaceId, sessionId)
+      if (sessionId) {
+        workspaceStore.clearActiveAgentSession(workspaceId, sessionId)
+      }
+      return
+    }
+    if (!_replayingNotifications) agentStream.setCompacting(workspaceId, false)
+    if (sessionId) {
+      workspaceStore.clearActiveAgentSession(workspaceId, sessionId)
+    } else {
+      workspaceStore.clearActiveAgentSessionOwner(workspaceId)
+    }
+    const currentStatus = workspaceStore.workspaces.find((w) => w.id === workspaceId)?.status
+    const derivedStatus =
+      currentStatus === 'quota'
+        ? 'quota'
+        : event.reason === 'completed'
+          ? 'completed'
+          : event.reason === 'error'
+            ? 'error'
+            : 'idle'
+    workspaceStore.updateWorkspaceFromEvent(workspaceId, { status: derivedStatus })
+    if (sessionId && event.reason === 'completed' && !getWorkspaceQueueHost(workspaceStore)) {
+      workspaceStore.flushQueuedMessage(workspaceId, sessionId)
+    }
+    // Subagents live inside the parent session: when it ends, any still in
+    // `running` are orphaned. Flip them to `done` so AgentBusyBanner doesn't
+    // keep reporting "1 sub-agent en cours" on a completed workspace.
+    workspaceStore.finalizeRunningSubagents(workspaceId)
+    workspaceStore.fetchWorkspaces()
+    if (!_replayingNotifications && event.reason !== 'killed' && event.reason !== 'error') {
+      // During auto-loop, defer the notification to the autoloop:disabled
+      // handler — otherwise every iteration end fires a notification.
+      const autoLoopActive = workspaceStore.autoLoopStates[workspaceId]?.auto_loop === true
+      if (!autoLoopActive) {
+        const wsName = workspaceStore.workspaces.find((w) => w.id === workspaceId)?.name ?? ''
+        notify(t('notification.agentFinished', { name: wsName }), undefined, workspaceId)
+      }
+    }
+    return
+  }
+
+  if (event.kind === 'error') {
+    if (event.category === 'quota') {
+      workspaceStore.updateWorkspaceFromEvent(workspaceId, { status: 'quota' })
+      workspaceStore.fetchWorkspaces()
+    }
+    if (!_replayingNotifications) {
+      const settings = useSettingsStore().global
+      const wsName = workspaceStore.workspaces.find((w) => w.id === workspaceId)?.name ?? ''
+      notify(
+        t('notification.agentError', { name: wsName }),
+        undefined,
+        workspaceId,
+        settings.audioAgentErrorSound,
+        settings.audioAgentErrorVolume,
+        settings.audioAgentErrorNotifications,
+      )
+    }
+  }
+}
+
+export const useWebSocketStore = defineStore('websocket', {
+  state: () => ({
+    connected: false,
+    reconnecting: false,
+    reconnectAttempt: 0,
+    lastEventId: null as string | null,
+    // The server handles sync requests synchronously on one ordered WebSocket.
+    // Each terminal sync response therefore belongs to the oldest sent request,
+    // including empty responses which contain no workspace ids of their own.
+    pendingSyncRequests: [] as string[][],
+    _replaying: false,
+    // Set while a truncated-sync-response drain loop is catching up the
+    // backlog (see the `sync:response` handler below). Used to self-heal a
+    // narrow race: a subscribe() call mid-drain resets a workspace to a
+    // fresh snapshot, but a later drain-round response can still carry
+    // older events for that workspace and merge() them in afterward.
+    _drainInProgress: false,
+    _refreshAfterSync: false,
+    _workspacesToRefreshAfterDrain: new Set<string>(),
+  }),
+
+  actions: {
+    connect() {
+      if (_ws) return
+      _shouldReconnect = true
+      if (!_networkListenersBound) {
+        _networkListenersBound = true
+        window.addEventListener('online', () => {
+          if (_shouldReconnect) this.connect()
+        })
+        window.addEventListener('offline', () => {
+          this.connected = false
+          this.reconnecting = _shouldReconnect
+          this.pendingSyncRequests = []
+          // Abandon the corresponding connection too: its late responses
+          // cannot be paired with requests sent after we come back online.
+          chatDeliveries.disconnect(t('network.login.unreachable'))
+          const offlineSocket = _ws
+          _ws = null
+          offlineSocket?.close()
+          if (_reconnectTimer) {
+            clearTimeout(_reconnectTimer)
+            _reconnectTimer = null
+          }
+        })
+      }
+      if (!navigator.onLine) {
+        this.connected = false
+        this.reconnecting = true
+        this.pendingSyncRequests = []
+        return
+      }
+
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      const url = appendTokenToWsUrl(`${protocol}//${window.location.host}/ws`, getToken())
+
+      const ws = new WebSocket(url)
+      _ws = ws
+
+      ws.addEventListener('open', () => {
+        if (_ws !== ws) return
+        this.connected = true
+        void useUpdateStore().refreshSnapshot()
+        this.reconnecting = false
+        _reconnectAttempt = 0
+        this.reconnectAttempt = 0
+
+        // Re-subscribe to all known workspaces (subscriptions are lost on reconnect)
+        const workspaceStore = useWorkspaceStore()
+        const allIds = workspaceStore.workspaces.map((w) => w.id)
+        for (const wid of allIds) {
+          this._send({ type: 'subscribe', payload: { workspaceId: wid } })
+        }
+
+        this._refreshAfterSync = true
+        // Request sync to catch up on missed events
+        if (this.lastEventId) {
+          this._send({
+            type: 'sync:request',
+            payload: { lastEventId: this.lastEventId, workspaceIds: allIds },
+          })
+        } else {
+          this._refreshAfterSync = false
+          void this.refreshLiveState()
+        }
+      })
+
+      ws.addEventListener('message', (event) => {
+        if (_ws !== ws) return
+        try {
+          const msg = JSON.parse(event.data)
+          this._routeMessage(msg)
+        } catch {
+          // Ignore unparseable messages
+        }
+      })
+
+      ws.addEventListener('close', () => {
+        if (_ws !== ws) return
+        chatDeliveries.disconnect(t('network.login.unreachable'))
+        this.connected = false
+        this.pendingSyncRequests = []
+        _ws = null
+        if (_shouldReconnect) this._scheduleReconnect()
+      })
+
+      ws.addEventListener('error', () => {
+        // close event will fire after error, triggering reconnect
+      })
+    },
+
+    async refreshLiveState(): Promise<void> {
+      const workspaceStore = useWorkspaceStore()
+      const previousIds = new Set(workspaceStore.workspaces.map((workspace) => workspace.id))
+      await workspaceStore.fetchWorkspacesInfo()
+      if (!this.connected) return
+      for (const workspace of workspaceStore.workspaces) {
+        if (!previousIds.has(workspace.id)) {
+          this._refreshAfterSync = true
+          this.subscribe(workspace.id)
+        }
+      }
+      const devServers = useDevServerStore()
+      const tracked = new Set(Object.keys(devServers.statuses))
+      if (workspaceStore.selectedWorkspaceId) tracked.add(workspaceStore.selectedWorkspaceId)
+      // Queue changes are ephemeral: reconnect replay cannot restore a missed
+      // delivery transition. Each tab/pane refreshes every queue it has opened.
+      const queuedWorkspaces = new Set(Object.keys(workspaceStore.autoLoopMessages))
+      if (workspaceStore.selectedWorkspaceId) queuedWorkspaces.add(workspaceStore.selectedWorkspaceId)
+      const handoffs = useSessionHandoffStore()
+      const handoffWorkspaces = new Set(Object.keys(handoffs.current))
+      if (workspaceStore.selectedWorkspaceId) handoffWorkspaces.add(workspaceStore.selectedWorkspaceId)
+      await Promise.allSettled([
+        workspaceStore.fetchAutoLoopStates(),
+        ...[...handoffWorkspaces].map((id) => handoffs.refresh(id)),
+        ...[...queuedWorkspaces].map((id) => workspaceStore.fetchAutoLoopMessages(id)),
+        ...[...tracked].map((id) => devServers.fetchStatus(id)),
+      ])
+    },
+
+    disconnect() {
+      chatDeliveries.disconnect(t('network.login.unreachable'))
+      _shouldReconnect = false
+      this.pendingSyncRequests = []
+      if (_reconnectTimer) {
+        clearTimeout(_reconnectTimer)
+        _reconnectTimer = null
+      }
+      if (_ws) {
+        _ws.close()
+        _ws = null
+      }
+      this.connected = false
+      this.reconnecting = false
+      this.reconnectAttempt = 0
+    },
+
+    subscribe(workspaceId: string) {
+      // A global drain is in progress: a later drain-round response could
+      // still carry stale events for this workspace and merge() them in
+      // after the fresh reset below. Track it for one final targeted
+      // re-sync once the drain settles (see `sync:response` handling).
+      if (this._drainInProgress) {
+        this._workspacesToRefreshAfterDrain.add(workspaceId)
+      }
+      this._send({
+        type: 'subscribe',
+        payload: { workspaceId },
+      })
+      // Request all past events for this workspace to restore activity feed
+      this._send({
+        type: 'sync:request',
+        payload: { workspaceIds: [workspaceId] },
+      })
+    },
+
+    unsubscribe(workspaceId: string) {
+      this._send({
+        type: 'unsubscribe',
+        payload: { workspaceId },
+      })
+    },
+
+    /**
+     * Subscribe to a non-workspace broadcast channel — currently the
+     * `creationId` a POST /api/workspaces progress stream is published on.
+     * Unlike `subscribe`, this sends NO `sync:request`: the channel has no
+     * persisted history to replay (the server uses `emitEphemeral`), and
+     * asking for one would query ws_events for an id that does not exist.
+     */
+    subscribeChannel(channelId: string) {
+      this._send({
+        type: 'subscribe',
+        payload: { workspaceId: channelId },
+      })
+    },
+
+    isCompacting(workspaceId: string): boolean {
+      const store = useWorkspaceStore()
+      const workspace =
+        store.workspaces.find((item) => item.id === workspaceId) ??
+        store.archivedWorkspaces.find((item) => item.id === workspaceId)
+      return workspace?.status === 'compacting' || useAgentStreamStore().isCompacting(workspaceId)
+    },
+
+    sendChatMessage(
+      workspaceId: string,
+      content: string,
+      sessionId?: string,
+      agentPermissionModeOverride?: 'plan' | 'bypass' | 'strict' | 'interactive',
+      force = false,
+      clientMessageId?: string,
+    ): boolean {
+      if (this.isCompacting(workspaceId)) return false
+      const sent = this._send({
+        type: 'chat:message',
+        payload: { workspaceId, content, sessionId, agentPermissionModeOverride, force, clientMessageId },
+      })
+
+      if (!sent) return false
+
+      // Optimistic status update — flip to `executing` instantly if the
+      // workspace is in a terminal state so the "Agent busy" banner,
+      // typing spinner and stop button show without waiting 1-3s for the
+      // round-trip: client → WS → backend → CLI spawn → init → session:started.
+      // If the backend actually fails to start, a session:ended event will
+      // come back soon and correct the status via the existing handler.
+      const ws = useWorkspaceStore()
+      const cur = ws.workspaces.find((w) => w.id === workspaceId)
+      if (
+        cur &&
+        (cur.status === 'completed' || cur.status === 'idle' || cur.status === 'error' || cur.status === 'quota')
+      ) {
+        ws.updateWorkspaceFromEvent(workspaceId, { status: 'executing' })
+      }
+      return true
+    },
+
+    sendChatMessageConfirmed(workspaceId: string, content: string, sessionId?: string): Promise<void> {
+      // getRandomValues is available on HTTP LAN origins too (randomUUID is not).
+      const entropy = Array.from(crypto.getRandomValues(new Uint32Array(4)), (n) => n.toString(16)).join('-')
+      const clientMessageId = `${entropy}-${++nextChatDeliveryId}`
+      const pending = chatDeliveries.wait(workspaceId, clientMessageId, t('network.login.unreachable'))
+      if (!this.sendChatMessage(workspaceId, content, sessionId, undefined, false, clientMessageId)) {
+        chatDeliveries.settle(workspaceId, clientMessageId, new Error(t('network.login.unreachable')))
+      }
+      return pending
+    },
+
+    _send(data: Record<string, unknown>): boolean {
+      if (_ws && _ws.readyState === WebSocket.OPEN && navigator.onLine) {
+        try {
+          _ws.send(JSON.stringify(data))
+        } catch {
+          return false
+        }
+        if (data.type === 'sync:request') {
+          const payload = data.payload as { workspaceIds?: string[] } | undefined
+          this.pendingSyncRequests.push([...(payload?.workspaceIds ?? useWorkspaceStore().workspaces.map((w) => w.id))])
+        }
+        return true
+      }
+      return false
+    },
+
+    isSyncPending(workspaceId: string): boolean {
+      return this.pendingSyncRequests.some((workspaceIds) => workspaceIds.includes(workspaceId))
+    },
+
+    // Public surface for callers that need to know whether their `_send`-based
+    // call would actually go out (e.g. the review submit needs to surface
+    // failures to the user instead of silently dropping the payload).
+    isConnected(): boolean {
+      return _ws !== null && _ws.readyState === WebSocket.OPEN
+    },
+
+    _scheduleReconnect() {
+      if (_reconnectTimer) return
+      if (!_shouldReconnect || !navigator.onLine) {
+        this.reconnecting = _shouldReconnect
+        return
+      }
+
+      // Exponential backoff with light jitter prevents synchronized reconnect
+      // bursts when several Kōbō tabs regain network access together.
+      const baseDelay = Math.min(1000 * 2 ** _reconnectAttempt, 30000)
+      const delay = Math.round(baseDelay * (0.8 + Math.random() * 0.4))
+      _reconnectAttempt++
+      this.reconnecting = true
+      this.reconnectAttempt = _reconnectAttempt
+
+      // The browser surfaces a rejected WS upgrade (401 from the network-access
+      // guard) only as a generic close → endless silent reconnect. After a few
+      // consecutive failures while a token is stored, the token is most likely
+      // stale/invalid: surface the login dialog so realtime can recover, mirroring
+      // the HTTP 401 path. Gated on getToken() so a plain localhost server-down
+      // doesn't pop a token prompt. Fires once per failure streak (reset on open).
+      if (_reconnectAttempt === 4 && getToken()) {
+        openNetworkLogin()
+      }
+
+      _reconnectTimer = setTimeout(() => {
+        _reconnectTimer = null
+        this.connect()
+      }, delay)
+    },
+
+    _routeMessage(msg: {
+      // WsEvent format from server
+      id?: string
+      workspaceId?: string
+      type: string
+      payload?: Record<string, unknown>
+      createdAt?: string
+      sessionId?: string | null
+      replayable?: boolean
+      // Legacy/direct format
+      eventId?: string
+    }) {
+      const workspaceStore = useWorkspaceStore()
+
+      // Track event ID for sync — server sends WsEvent with 'id' field
+      if (msg.replayable !== false && msg.id) {
+        this.lastEventId = msg.id
+      } else if (msg.replayable !== false && msg.eventId) {
+        this.lastEventId = msg.eventId
+      }
+
+      const payload = msg.payload ?? {}
+
+      const wid = msg.workspaceId ?? (payload.workspaceId as string | undefined) ?? ''
+
+      // Lifecycle hooks stream like the setup / cleanup / archive scripts, but
+      // under one namespace per event, so they are matched by shape rather
+      // than by a case per event.
+      const hook = parseHookEventType(msg.type)
+      if (hook) {
+        const sender = hookSender(hook.event)
+        const timestamp = msg.createdAt ?? new Date().toISOString()
+        const phase = t('chat.hookScript', { event: hook.event })
+        const content =
+          hook.kind === 'output'
+            ? ((msg.payload?.text as string) ?? '')
+            : hook.kind === 'complete'
+              ? msg.payload?.hadOutput === false
+                ? t('chat.scriptDone')
+                : t('chat.scriptComplete', { phase })
+              : t('chat.scriptError', { phase, message: msg.payload?.message ?? t('chat.unknownError') })
+        workspaceStore.addActivityItem(wid, {
+          id: msg.id ?? `${sender}-${hook.kind}-${Date.now()}`,
+          type: 'text',
+          content,
+          timestamp,
+          meta: { sender },
+        })
+        return
+      }
+
+      switch (msg.type) {
+        case 'workspace:handoff': {
+          if (!wid || this._replaying) break
+          const handoff = payload.handoff as SessionHandoff | undefined
+          if (handoff?.workspaceId === wid && typeof handoff.id === 'string' && typeof handoff.state === 'string')
+            useSessionHandoffStore().apply(handoff)
+          break
+        }
+        case 'kobo:update-checked':
+          useUpdateStore().applySnapshot(payload)
+          break
+        case 'workspace:configuration': {
+          if (!wid || this._replaying) break
+          if (
+            typeof payload.engine !== 'string' ||
+            typeof payload.model !== 'string' ||
+            typeof payload.reasoningEffort !== 'string' ||
+            !['plan', 'bypass', 'strict', 'interactive'].includes(payload.agentPermissionMode as string)
+          )
+            break
+          workspaceStore.updateWorkspaceFromEvent(wid, {
+            engine: payload.engine,
+            model: payload.model,
+            reasoningEffort: payload.reasoningEffort,
+            agentPermissionMode: payload.agentPermissionMode as 'plan' | 'bypass' | 'strict' | 'interactive',
+          })
+          break
+        }
+        case 'workspace:status': {
+          if (!wid || this._replaying || typeof payload.status !== 'string') break
+          const owner = workspaceStore.activeAgentSessionIds[wid]
+          if (owner && typeof payload.sessionId === 'string' && owner !== payload.sessionId) break
+          workspaceStore.updateWorkspaceFromEvent(wid, { status: payload.status })
+          break
+        }
+
+        case 'chat:accepted': {
+          if (typeof payload.clientMessageId === 'string') {
+            if (wid) chatDeliveries.settle(wid, payload.clientMessageId)
+            break
+          }
+          const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId : undefined
+          if (wid && sessionId) workspaceStore.cancelQueuedMessage(wid, sessionId)
+          break
+        }
+
+        case 'chat:rejected': {
+          if (typeof payload.clientMessageId === 'string') {
+            if (wid)
+              chatDeliveries.settle(
+                wid,
+                payload.clientMessageId,
+                new Error(typeof payload.message === 'string' ? payload.message : t('network.login.unreachable')),
+              )
+            break
+          }
+          const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId : undefined
+          const content = typeof payload.content === 'string' ? payload.content : undefined
+          const message = typeof payload.message === 'string' ? payload.message : t('network.login.unreachable')
+          if (wid && content) {
+            const items = workspaceStore.activityFeeds[wid] ?? []
+            const pending = items.find(
+              (item) => item.meta?.sender === 'user' && item.meta?.pending && item.content === content,
+            )
+            if (pending) workspaceStore.removeActivityItem(wid, pending.id)
+            if (sessionId) workspaceStore.queueMessage(wid, content, sessionId)
+          }
+          Notify.create({ type: 'negative', message, position: 'top', timeout: 6000 })
+          break
+        }
+
+        case 'agent:event': {
+          if (!wid) break
+          // The payload IS the normalised AgentEvent — emitted by
+          // event-router.ts as `emit(workspaceId, 'agent:event', event)`.
+          const ts = (msg as { createdAt?: string }).createdAt
+          const evtId = msg.id ?? msg.eventId
+          const sid = (msg as { sessionId?: string | null }).sessionId ?? null
+          dispatchAgentEvent(wid, payload as unknown as AgentEvent, ts, evtId, sid)
+          break
+        }
+
+        case 'agent:progress':
+          if (payload.tasks && Array.isArray(payload.tasks)) {
+            workspaceStore.tasks = payload.tasks
+          }
+          break
+
+        case 'user:message': {
+          if (wid && typeof payload.clientMessageId === 'string') chatDeliveries.settle(wid, payload.clientMessageId)
+          if (wid && payload.content) {
+            // User messages are now represented as `message:text` events in
+            // the agent-stream, but we still surface them via the workspace
+            // store's legacy activityFeeds slot so ChatInput's "pending"
+            // resolution logic keeps working.
+            const content = payload.content as string
+            const sender = (payload.sender as string) ?? 'user'
+            const source = parseMessageSource(payload.source)
+            const sessionId = (msg as Record<string, unknown>).sessionId as string | undefined
+            const eventId = msg.id ?? msg.eventId ?? `user-${Date.now()}`
+            // `msg.createdAt` is the server's persisted timestamp (server clock —
+            // authoritative). Only fall back to the local clock when it's absent,
+            // e.g. a synthetic/legacy payload.
+            const serverTimestamp = typeof msg.createdAt === 'string' ? msg.createdAt : undefined
+            const timestamp = serverTimestamp ?? new Date().toISOString()
+            const items = workspaceStore.activityFeeds[wid] ?? []
+            const alreadyExists =
+              !source &&
+              sender === 'user' &&
+              items.some((i) => i.meta?.sender === 'user' && i.content === content && i.meta?.pending)
+            if (alreadyExists) {
+              const idx = items.findIndex((i) => i.meta?.sender === 'user' && i.content === content && i.meta?.pending)
+              if (idx >= 0) {
+                // Reconcile the optimistic entry (timestamped by the browser
+                // clock at send time) with the server's persisted timestamp so
+                // the feed sorts correctly even when the two clocks disagree
+                // (e.g. a WSL2 browser on Windows vs. the server in the Linux
+                // VM). Never fall back to `new Date()` here — that would just
+                // swap one arbitrary local clock reading for another.
+                items[idx] = {
+                  ...items[idx],
+                  id: eventId,
+                  sessionId,
+                  ...(serverTimestamp ? { timestamp: serverTimestamp } : {}),
+                }
+              }
+            } else {
+              workspaceStore.addActivityItem(wid, {
+                id: eventId,
+                type: 'text',
+                content,
+                timestamp,
+                sessionId,
+                meta: { sender, ...(source ? { source } : {}) },
+              })
+            }
+          }
+          break
+        }
+
+        case 'sync:empty':
+        case 'sync:error':
+          this.pendingSyncRequests.shift()
+          break
+
+        case 'sync:response': {
+          const pendingRequest = this.pendingSyncRequests[0]
+          // Replay persisted events — suppress notifications during replay.
+          this._replaying = true
+          _setReplayingForDispatch(true)
+          try {
+            const events =
+              (payload.events as Array<{
+                id: string
+                workspaceId: string
+                type: string
+                payload: Record<string, unknown>
+                createdAt: string
+                sessionId?: string | null
+                replayable?: boolean
+              }>) ?? []
+            const syncMode = payload.mode === 'delta' ? 'delta' : 'snapshot'
+            // Group agent:event payloads per workspace for bulk reset (O(1)
+            // reactivity instead of O(n) append notifications), then route
+            // every other event through the normal dispatcher.
+            const grouped = new Map<
+              string,
+              {
+                events: AgentEvent[]
+                timestamps: string[]
+                sessionIds: Array<string | null>
+                eventIds: Array<string | null>
+                oldestId: string | undefined
+              }
+            >()
+            for (const evt of events) {
+              if (evt.type === 'sync:response') continue
+              if (evt.type === 'agent:event' && evt.workspaceId) {
+                const bucket = grouped.get(evt.workspaceId) ?? {
+                  events: [],
+                  timestamps: [],
+                  sessionIds: [],
+                  eventIds: [],
+                  oldestId: undefined,
+                }
+                bucket.events.push(evt.payload as unknown as AgentEvent)
+                bucket.timestamps.push(evt.createdAt)
+                bucket.sessionIds.push(evt.sessionId ?? null)
+                bucket.eventIds.push(evt.id ?? null)
+                if (!bucket.oldestId) bucket.oldestId = evt.id
+                grouped.set(evt.workspaceId, bucket)
+                continue
+              }
+              this._routeMessage(evt)
+            }
+            if (grouped.size > 0) {
+              const streamStore = useAgentStreamStore()
+              for (const [
+                workspaceId,
+                { events: list, timestamps: tsList, sessionIds: sList, eventIds: eList, oldestId },
+              ] of grouped) {
+                // `hasMoreOlder` starts true optimistically — the infinite
+                // scroll fetch will learn the real answer on its first hit.
+                const replayIndexes =
+                  syncMode === 'delta'
+                    ? streamStore.merge(workspaceId, list, tsList, { sessionIds: sList, eventIds: eList })
+                    : list.map((_, index) => index)
+                if (syncMode === 'snapshot') {
+                  streamStore.reset(workspaceId, list, tsList, {
+                    oldestId,
+                    hasMoreOlder: true,
+                    sessionIds: sList,
+                    eventIds: eList,
+                  })
+                }
+                // The "Agent todos" panel is rebuilt from the replayed tool
+                // calls below — clear it first so deletions/state replay onto a
+                // clean slate (mirrors the stream reset above).
+                if (syncMode === 'snapshot') useWorkspaceStore().updateAgentTodos(workspaceId, [])
+                // Replay side-effects (usage/rate_limit/subagent/pending) in
+                // order, mirroring live-event semantics. Append was already
+                // handled by reset().
+                for (const i of replayIndexes) {
+                  const ev = list[i]
+                  if (!ev) continue
+                  const evSessionId = sList[i] ?? null
+                  if (ev.kind === 'session:user-input-requested') {
+                    if (ev.requestKind === 'question') {
+                      useWorkspaceStore().enqueuePending(workspaceId, {
+                        kind: 'question',
+                        agentSessionId: evSessionId,
+                        toolCallId: ev.toolCallId,
+                        toolName: ev.toolName,
+                        input: ev.payload,
+                      })
+                    } else {
+                      useWorkspaceStore().enqueuePending(workspaceId, {
+                        kind: 'permission',
+                        agentSessionId: evSessionId,
+                        toolCallId: ev.toolCallId,
+                        toolName: ev.toolName,
+                        toolInput: ev.payload,
+                      })
+                    }
+                    continue
+                  }
+                  if (ev.kind === 'session:started') {
+                    if (evSessionId) {
+                      const store = useWorkspaceStore()
+                      store.setActiveAgentSession(workspaceId, evSessionId)
+                      const head = store.peekPending(workspaceId)
+                      if (head && head.agentSessionId === evSessionId) {
+                        store.dequeuePending(workspaceId)
+                      }
+                    }
+                    continue
+                  }
+                  if (ev.kind === 'session:ended') {
+                    const store = useWorkspaceStore()
+                    if (evSessionId) {
+                      store.clearPendingForSession(workspaceId, evSessionId)
+                      if (!getWorkspaceQueueHost(store)) store.cancelQueuedMessage(workspaceId, evSessionId)
+                      store.clearActiveAgentSession(workspaceId, evSessionId)
+                    } else if (ev.superseded !== true) {
+                      store.clearActiveAgentSessionOwner(workspaceId)
+                    }
+                    continue
+                  }
+                  if (ev.kind === 'subagent:progress') {
+                    // reset() already pushed the event into the stream; only
+                    // route the side-effect (dispatchAgentEvent would also
+                    // append, doubling the stream entry). The conversation
+                    // view is driven by foldEvents which filters this kind
+                    // out anyway.
+                    const workspaceStore = useWorkspaceStore()
+                    workspaceStore.upsertSubagent(workspaceId, {
+                      toolUseId: ev.toolCallId,
+                      status: ev.status,
+                      description: ev.description,
+                      taskType: ev.taskType,
+                      lastToolName: ev.lastToolName,
+                      totalTokens: ev.totalTokens,
+                      toolUses: ev.toolUses,
+                      durationMs: ev.durationMs,
+                    })
+                    continue
+                  }
+                  // Rebuild the "Agent todos" panel from the replayed tool calls
+                  // (TodoWrite / Task*), matching live semantics — agentTodos was
+                  // cleared above so the rebuild starts from a clean slate.
+                  applyTodoToolEvent(workspaceId, ev)
+                }
+              }
+            }
+            const previousCursor = this.lastEventId
+            const newestReplayable = events.findLast(
+              (event) => event.replayable !== false && typeof event.id === 'string',
+            )
+            if (newestReplayable) this.lastEventId = newestReplayable.id
+            // The server hard-caps one replay message (MAX_REPLAY_EVENTS) and
+            // sets `truncated` when the backlog continues past it. Ask again
+            // from the advanced cursor until the backlog is fully drained.
+            // Guard on actual cursor PROGRESS (not just a non-empty frame) so
+            // a malformed or repeating truncated response can't loop forever.
+            if (payload.truncated === true && newestReplayable && this.lastEventId !== previousCursor) {
+              this._drainInProgress = true
+              this._send({
+                type: 'sync:request',
+                payload: {
+                  lastEventId: this.lastEventId,
+                  workspaceIds: workspaceStore.workspaces.map((w) => w.id),
+                },
+              })
+            } else if (this._drainInProgress) {
+              // This response was not truncated: the drain just completed.
+              // A workspace that got a manual subscribe()-triggered reset
+              // mid-drain might have had an older drain-round response merge
+              // stale content on top of it afterward; one final targeted
+              // re-sync for exactly those workspaces makes the client state
+              // provably consistent once the drain settles, at negligible
+              // cost.
+              this._drainInProgress = false
+              if (this._workspacesToRefreshAfterDrain.size > 0) {
+                const toRefresh = [...this._workspacesToRefreshAfterDrain]
+                this._workspacesToRefreshAfterDrain.clear()
+                this._send({
+                  type: 'sync:request',
+                  payload: { lastEventId: this.lastEventId, workspaceIds: toRefresh },
+                })
+              }
+            }
+          } finally {
+            this._replaying = false
+            _setReplayingForDispatch(false)
+            // Replaying may send a drain/follow-up request. Remove only the
+            // response's original entry, never one just added by that replay.
+            if (pendingRequest) {
+              const index = this.pendingSyncRequests.indexOf(pendingRequest)
+              if (index !== -1) this.pendingSyncRequests.splice(index, 1)
+            }
+            if (this._refreshAfterSync && this.pendingSyncRequests.length === 0) {
+              this._refreshAfterSync = false
+              void this.refreshLiveState()
+            }
+          }
+          break
+        }
+
+        case 'usage:snapshot': {
+          const p = payload as { providerId?: ProviderId; snapshot?: UsageSnapshot }
+          if (p.providerId && p.snapshot) {
+            workspaceStore.applyUsageSnapshot({ providerId: p.providerId, snapshot: p.snapshot })
+          }
+          break
+        }
+
+        case 'devserver:status': {
+          const devServerStore = useDevServerStore()
+          if (wid) {
+            devServerStore.updateFromWsEvent(wid, payload as unknown as DevServerStatus)
+          }
+          break
+        }
+
+        case 'task:updated': {
+          if (wid) {
+            workspaceStore.fetchWorkspaceDetails(wid)
+          }
+          break
+        }
+
+        case 'setup:output':
+          workspaceStore.addActivityItem(wid, {
+            id: msg.id ?? `setup-${Date.now()}`,
+            type: 'text',
+            content: (msg.payload?.text as string) ?? '',
+            timestamp: msg.createdAt ?? new Date().toISOString(),
+            meta: { sender: 'setup' },
+          })
+          break
+
+        case 'setup:complete':
+          workspaceStore.addActivityItem(wid, {
+            id: msg.id ?? `setup-complete-${Date.now()}`,
+            type: 'text',
+            content:
+              msg.payload?.hadOutput === false ? t('chat.scriptDone') : t('chat.scriptComplete', { phase: 'setup' }),
+            timestamp: msg.createdAt ?? new Date().toISOString(),
+            meta: { sender: 'setup' },
+          })
+          break
+
+        case 'setup:error':
+          workspaceStore.addActivityItem(wid, {
+            id: msg.id ?? `setup-error-${Date.now()}`,
+            type: 'text',
+            content: t('chat.scriptError', {
+              phase: 'setup',
+              message: msg.payload?.message ?? t('chat.unknownError'),
+            }),
+            timestamp: msg.createdAt ?? new Date().toISOString(),
+            meta: { sender: 'setup' },
+          })
+          break
+
+        case 'cleanup:output':
+          workspaceStore.addActivityItem(wid, {
+            id: msg.id ?? `cleanup-${Date.now()}`,
+            type: 'text',
+            content: (msg.payload?.text as string) ?? '',
+            timestamp: msg.createdAt ?? new Date().toISOString(),
+            meta: { sender: 'cleanup' },
+          })
+          break
+
+        case 'cleanup:complete':
+          workspaceStore.addActivityItem(wid, {
+            id: msg.id ?? `cleanup-complete-${Date.now()}`,
+            type: 'text',
+            content:
+              msg.payload?.hadOutput === false ? t('chat.scriptDone') : t('chat.scriptComplete', { phase: 'cleanup' }),
+            timestamp: msg.createdAt ?? new Date().toISOString(),
+            meta: { sender: 'cleanup' },
+          })
+          break
+
+        case 'cleanup:error':
+          workspaceStore.addActivityItem(wid, {
+            id: msg.id ?? `cleanup-error-${Date.now()}`,
+            type: 'text',
+            content: t('chat.scriptError', {
+              phase: 'cleanup',
+              message: msg.payload?.message ?? t('chat.unknownError'),
+            }),
+            timestamp: msg.createdAt ?? new Date().toISOString(),
+            meta: { sender: 'cleanup' },
+          })
+          break
+
+        case 'archive:output':
+          workspaceStore.addActivityItem(wid, {
+            id: msg.id ?? `archive-${Date.now()}`,
+            type: 'text',
+            content: (msg.payload?.text as string) ?? '',
+            timestamp: msg.createdAt ?? new Date().toISOString(),
+            meta: { sender: 'archive' },
+          })
+          break
+
+        case 'archive:complete':
+          workspaceStore.addActivityItem(wid, {
+            id: msg.id ?? `archive-complete-${Date.now()}`,
+            type: 'text',
+            content:
+              msg.payload?.hadOutput === false ? t('chat.scriptDone') : t('chat.scriptComplete', { phase: 'archive' }),
+            timestamp: msg.createdAt ?? new Date().toISOString(),
+            meta: { sender: 'archive' },
+          })
+          break
+
+        case 'archive:error':
+          workspaceStore.addActivityItem(wid, {
+            id: msg.id ?? `archive-error-${Date.now()}`,
+            type: 'text',
+            content: t('chat.scriptError', {
+              phase: 'archive',
+              message: msg.payload?.message ?? t('chat.unknownError'),
+            }),
+            timestamp: msg.createdAt ?? new Date().toISOString(),
+            meta: { sender: 'archive' },
+          })
+          break
+
+        case 'workspace:unread': {
+          if (wid) {
+            const hasUnread = (payload.hasUnread as boolean) ?? false
+            workspaceStore.updateWorkspaceFromEvent(wid, { hasUnread })
+          }
+          break
+        }
+
+        case 'workspace:awaiting-reminder': {
+          // Broadcast, not workspace-scoped: the point is to reach the user who
+          // is looking at another workspace, or at another tab entirely.
+          const p = payload as { workspaceId?: string; workspaceName?: string; waitingMinutes?: number }
+          if (!p.workspaceId) break
+          const settings = useSettingsStore().global
+          const message = t('notification.awaitingReminder', {
+            name: p.workspaceName ?? '',
+            minutes: p.waitingMinutes ?? 0,
+          })
+          // Reuses the question sound: this IS an unanswered question, and a
+          // second sound for it would only be one more thing to configure.
+          notify(
+            message,
+            undefined,
+            p.workspaceId,
+            settings.audioQuestionSound,
+            settings.audioQuestionVolume,
+            settings.audioQuestionNotifications,
+          )
+          // `notify` only posts a browser notification when the tab is NOT
+          // focused. The user looking at another workspace in this very tab
+          // is the case the reminder exists for, so tell them in-app too.
+          if (document.hasFocus()) {
+            const targetId = p.workspaceId
+            Notify.create({
+              type: 'info',
+              position: 'top',
+              timeout: 10000,
+              message,
+              actions: [
+                {
+                  label: t('common.open'),
+                  color: 'white',
+                  handler: () => {
+                    window.location.hash = `#/workspace/${targetId}`
+                  },
+                },
+              ],
+            })
+          }
+          break
+        }
+        case 'workspace:pr-attention-dismissed': {
+          if (wid) {
+            const kind = payload.kind as 'changes-requested' | 'ci-failed' | undefined
+            const ts = payload.prUpdatedAt as string | undefined
+            if (kind && ts) {
+              workspaceStore.updateWorkspaceFromEvent(
+                wid,
+                kind === 'changes-requested' ? { prChangesDismissedAt: ts } : { prCiFailureDismissedAt: ts },
+              )
+            }
+          }
+          break
+        }
+
+        case 'workspace:description-updated': {
+          if (!wid) break
+          const desc = (payload.description as string | null | undefined) ?? null
+          workspaceStore.updateWorkspaceFromEvent(wid, { description: desc })
+          break
+        }
+
+        case 'workspace:agent-description-updated': {
+          if (!wid) break
+          const desc = (payload.agentDescription as string | null | undefined) ?? null
+          workspaceStore.updateWorkspaceFromEvent(wid, { agentDescription: desc })
+          break
+        }
+
+        case 'cron:created': {
+          if (!wid) break
+          const cron = (payload as { cron?: PendingCron }).cron
+          if (!cron) break
+          const list = workspaceStore.crons[wid] ?? []
+          if (!list.some((c) => c.id === cron.id)) {
+            workspaceStore.crons[wid] = [...list, cron]
+          }
+          // Keep the sidebar indicator (driven by autoLoopStates[wid].crons_count)
+          // in sync without waiting for the next /auto-loop-states snapshot.
+          const status = workspaceStore.autoLoopStates[wid]
+          if (status) status.crons_count = workspaceStore.crons[wid].length
+          break
+        }
+        case 'cron:fired': {
+          if (!wid) break
+          // Server-authoritative payload: lastFiredAt = the actual fire time
+          // recorded in DB. Falling back to client-side now() only if missing
+          // for resilience against older server payloads.
+          const p = payload as { id?: string; nextFireAt?: string; lastFiredAt?: string; status?: string }
+          const list = workspaceStore.crons[wid] ?? []
+          workspaceStore.crons[wid] = list.map((c) =>
+            c.id === p.id
+              ? {
+                  ...c,
+                  nextFireAt: p.nextFireAt ?? c.nextFireAt,
+                  lastFiredAt: p.lastFiredAt ?? new Date().toISOString(),
+                }
+              : c,
+          )
+          break
+        }
+        case 'cron:cancelled': {
+          if (!wid) break
+          const id = (payload as { id?: string }).id
+          if (!id) break
+          workspaceStore.crons[wid] = (workspaceStore.crons[wid] ?? []).filter((c) => c.id !== id)
+          const status = workspaceStore.autoLoopStates[wid]
+          if (status) status.crons_count = workspaceStore.crons[wid].length
+          break
+        }
+        case 'cron:updated': {
+          if (!wid) break
+          const crons = (payload as { crons?: PendingCron[] }).crons
+          if (Array.isArray(crons)) {
+            workspaceStore.crons[wid] = crons
+            const status = workspaceStore.autoLoopStates[wid]
+            if (status) status.crons_count = crons.length
+          }
+          break
+        }
+
+        case 'workspace:archived':
+        case 'workspace:unarchived':
+        case 'workspace:worktree-restored':
+        case 'workspace:worktree-purged': {
+          const restored = (payload as { workspace?: Workspace }).workspace
+          if (msg.type === 'workspace:worktree-restored' && restored && restored.id === wid) {
+            workspaceStore.applyRestoredWorkspace(restored)
+          } else {
+            workspaceStore.invalidateWorkspaceLifecycleReads(wid)
+          }
+          if ((msg.type === 'workspace:archived' || msg.type === 'workspace:worktree-purged') && wid) {
+            disposeTerminalEntry(wid)
+          }
+          // WorkspacePage redirects home when its selectedWorkspaceId goes null,
+          // so this drops the user off the page when their workspace gets archived
+          // from any source (manual, auto-archive on PR merge, another tab).
+          if (msg.type === 'workspace:archived' && wid && workspaceStore.selectedWorkspaceId === wid) {
+            workspaceStore.selectedWorkspaceId = null
+          }
+          workspaceStore.fetchWorkspaces()
+          if (workspaceStore.archivedLoaded) {
+            workspaceStore.fetchArchivedWorkspaces()
+          }
+          break
+        }
+
+        case 'workspace:deleted': {
+          workspaceStore.invalidateWorkspaceLifecycleReads(wid)
+          // Deletion is permanent — unlike archive/worktree-purge (both
+          // reversible), so this is its own case rather than being folded
+          // into the shared archived/purged block above.
+          if (wid) disposeTerminalEntry(wid)
+          if (wid && workspaceStore.selectedWorkspaceId === wid) {
+            workspaceStore.selectedWorkspaceId = null
+          }
+          workspaceStore.fetchWorkspaces()
+          if (workspaceStore.archivedLoaded) {
+            workspaceStore.fetchArchivedWorkspaces()
+          }
+          break
+        }
+
+        case 'pr:base-changed': {
+          if (!wid) break
+          const p = payload as { oldBase?: string; newBase?: string; prUrl?: string }
+          const oldBase = p.oldBase ?? ''
+          const newBase = p.newBase ?? ''
+          // Mirror the backend update locally so the GitPanel header and
+          // diff viewer pick up the new sourceBranch without a round-trip.
+          workspaceStore.updateWorkspaceFromEvent(wid, { sourceBranch: newBase })
+          // Includes a shortcut to open the PR on GitHub and expires after the
+          // shared notification timeout.
+          Notify.create({
+            type: 'info',
+            position: 'top',
+            timeout: DEFAULT_TOAST_TIMEOUT_MS,
+            message: t('pr.baseChanged', { oldBase, newBase }),
+            actions: prToastActions(wid, p.prUrl),
+          })
+          // Also fire a system-level notification so the user sees the change
+          // when Kobo isn't the focused tab — consistent with other workspace
+          // events (agent ready, quota, etc.) that route through `notify()`.
+          notify(t('pr.baseChanged', { oldBase, newBase }), undefined, wid)
+          break
+        }
+
+        case 'pr:ci-failed':
+        case 'pr:ci-recovered':
+        case 'pr:merge-conflict':
+        case 'pr:merged': {
+          if (!wid) break
+          const eventType = msg.type as Extract<
+            PrNotificationEvent,
+            'pr:ci-failed' | 'pr:ci-recovered' | 'pr:merge-conflict' | 'pr:merged'
+          >
+          const p = payload as { prNumber?: number; prUrl?: string }
+          const prNumber = p.prNumber ?? 0
+          const presentation = {
+            'pr:ci-failed': { key: 'toast.prCiFailed', type: 'negative', timeout: 4000 },
+            'pr:ci-recovered': { key: 'toast.prCiRecovered', type: 'positive', timeout: 5000 },
+            'pr:merge-conflict': {
+              key: 'toast.prMergeConflict',
+              type: 'warning',
+              timeout: DEFAULT_TOAST_TIMEOUT_MS,
+            },
+            'pr:merged': { key: 'toast.prMerged', type: 'positive', timeout: 5000 },
+          } as const
+          const current = presentation[eventType]
+          const message = t(current.key, { n: prNumber })
+
+          Notify.create({
+            type: current.type,
+            position: 'top',
+            timeout: current.timeout,
+            message,
+            actions: prToastActions(wid, p.prUrl),
+          })
+          notifyPr(message, wid, eventType)
+          if (eventType !== 'pr:merged') {
+            void workspaceStore.refreshPrSnapshot(wid)
+          }
+          break
+        }
+
+        case 'pr:changes-requested': {
+          if (!wid) break
+          const p = payload as { prNumber?: number; prUrl?: string }
+          const prNumber = p.prNumber ?? 0
+          const message = t('toast.prChangesRequested', { n: prNumber })
+          Notify.create({
+            type: 'warning',
+            position: 'top',
+            timeout: DEFAULT_TOAST_TIMEOUT_MS,
+            message,
+            actions: prToastActions(wid, p.prUrl),
+          })
+          notifyPr(message, wid, 'pr:changes-requested')
+          // Refresh the local snapshot so the icon flips immediately without
+          // waiting for the next watcher tick to re-pull from /pr-states.
+          void workspaceStore.refreshPrSnapshot(wid)
+          break
+        }
+
+        case 'pr:approved': {
+          if (!wid) break
+          const p = payload as { prNumber?: number; prUrl?: string }
+          const prNumber = p.prNumber ?? 0
+          const message = t('toast.prApproved', { n: prNumber })
+          Notify.create({
+            type: 'positive',
+            position: 'top',
+            timeout: 5000,
+            message,
+            actions: prToastActions(wid, p.prUrl),
+          })
+          notifyPr(message, wid, 'pr:approved')
+          void workspaceStore.refreshPrSnapshot(wid)
+          break
+        }
+
+        case 'pr:ready-to-merge': {
+          if (!wid) break
+          const p = payload as { prNumber?: number; prUrl?: string }
+          const prNumber = p.prNumber ?? 0
+          const message = t('toast.prReadyToMerge', { n: prNumber })
+          Notify.create({
+            type: 'positive',
+            position: 'top',
+            timeout: 5000,
+            message,
+            actions: prToastActions(wid, p.prUrl),
+          })
+          notifyPr(message, wid, 'pr:ready-to-merge')
+          void workspaceStore.refreshPrSnapshot(wid)
+          break
+        }
+
+        case 'wakeup:scheduled': {
+          if (wid) {
+            const p = payload as { targetAt?: string; reason?: string }
+            if (typeof p.targetAt === 'string') {
+              workspaceStore.setPendingWakeup(wid, { targetAt: p.targetAt, reason: p.reason })
+            }
+          }
+          break
+        }
+
+        case 'wakeup:cancelled':
+        case 'wakeup:fired':
+        case 'wakeup:skipped': {
+          if (wid) workspaceStore.clearPendingWakeup(wid)
+          break
+        }
+
+        case 'agent:quota-recovered': {
+          if (wid) {
+            workspaceStore.clearPendingQuotaBackoff(wid)
+            workspaceStore.updateWorkspaceFromEvent(wid, { status: 'executing' })
+          }
+          break
+        }
+
+        case 'agent:quota-backoff': {
+          if (!wid) break
+          const p = payload as { targetAt?: string; resetsAt?: string | null; source?: string; reason?: string }
+          if (typeof p.targetAt === 'string' && typeof p.source === 'string') {
+            workspaceStore.setPendingQuotaBackoff(wid, {
+              targetAt: p.targetAt,
+              resetsAt: p.resetsAt ?? null,
+              source: p.source,
+              reason: p.reason === 'transient' ? 'transient' : 'quota',
+            })
+          }
+          break
+        }
+        case 'agent:quota-backoff-cancelled': {
+          if (wid) {
+            workspaceStore.clearPendingQuotaBackoff(wid)
+            // An expired quota can leave the workspace idle while it waits
+            // for capacity, with no session event to refresh its status.
+            if ((payload as { reason?: string }).reason === 'completed') {
+              void workspaceStore.fetchWorkspaces()
+            }
+          }
+          break
+        }
+
+        case 'autoloop:messages': {
+          if (wid) void workspaceStore.fetchAutoLoopMessages(wid).catch(() => {})
+          break
+        }
+        case 'autoloop:state':
+        case 'autoloop:enabled':
+        case 'autoloop:iteration-started':
+        case 'autoloop:ready-flipped': {
+          // Refresh the full state map — small payload, keeps code simple.
+          void workspaceStore.fetchAutoLoopStates()
+          break
+        }
+        case 'autoloop:permission-overridden': {
+          if (wid) {
+            const wsName = workspaceStore.workspaces.find((w) => w.id === wid)?.name ?? ''
+            notify(t('notification.autoLoopPermissionOverridden', { name: wsName }), undefined, wid)
+          }
+          break
+        }
+        case 'autoloop:waiting-for-slot': {
+          if (!wid) break
+          const p = payload as { running?: number; limit?: number }
+          const wsName = workspaceStore.workspaces.find((w) => w.id === wid)?.name ?? ''
+          Notify.create({
+            type: 'info',
+            position: 'top',
+            timeout: 6000,
+            message: t('notification.autoLoopWaitingForSlot', {
+              name: wsName,
+              running: p.running ?? 0,
+              limit: p.limit ?? 0,
+            }),
+          })
+          break
+        }
+        case 'autoloop:disabled': {
+          // Refresh state, then fire ONE notification for the whole mission
+          // (per-iteration session:ended events are silent during auto-loop).
+          void workspaceStore.fetchAutoLoopStates()
+          if (wid) {
+            const reason = (payload as { reason?: string } | null)?.reason
+            const wsName = workspaceStore.workspaces.find((w) => w.id === wid)?.name ?? ''
+            const titleKey =
+              reason === 'error'
+                ? 'notification.autoLoopError'
+                : reason === 'stall'
+                  ? 'notification.autoLoopStalled'
+                  : reason === 'completed'
+                    ? 'notification.autoLoopCompleted'
+                    : reason === 'awaiting-clarification'
+                      ? 'notification.autoLoopAwaitingClarification'
+                      : null // 'manual'/'user-action' → user disabled it themselves, don't notify
+            if (titleKey) notify(t(titleKey, { name: wsName }), undefined, wid)
+          }
+          break
+        }
+
+        case 'workspace:create-progress': {
+          const step = typeof payload.step === 'string' ? payload.step : ''
+          const creationId = typeof payload.creationId === 'string' ? payload.creationId : ''
+          if (creationId && step) {
+            workspaceStore.setCreationProgress({
+              creationId,
+              step,
+              index: typeof payload.index === 'number' ? payload.index : 0,
+              total: typeof payload.total === 'number' ? payload.total : 0,
+            })
+          }
+          break
+        }
+
+        case 'workspace:create-failed': {
+          // The step name is what makes the failure actionable — the page
+          // renders it; clearing the progress here would erase it.
+          const creationId = typeof payload.creationId === 'string' ? payload.creationId : ''
+          const step = typeof payload.step === 'string' ? payload.step : ''
+          if (creationId && step) {
+            workspaceStore.setCreationProgress({
+              creationId,
+              step,
+              index: -1,
+              total: 0,
+            })
+          }
+          break
+        }
+
+        case 'migration:progress':
+        case 'migration:error':
+          useMigrationStore().update(payload as unknown as MigrationStatus)
+          break
+      }
+    },
+  },
+})

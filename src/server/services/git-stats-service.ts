@@ -1,0 +1,72 @@
+// src/server/services/git-stats-service.ts
+import * as gitOps from '../utils/git-ops.js'
+import { getForgeProvider } from './forge/registry.js'
+import { resolveForge } from './forge/resolve.js'
+import type { ForgeAvailability, ForgeCapabilities, ForgeId, PrSnapshot } from './forge/types.js'
+
+/** The git + forge summary for one workspace branch. Matches the legacy
+ *  `GET /:id/git-stats` response shape exactly. */
+export interface GitStatsResult {
+  commitCount: number
+  behindCount: number
+  filesChanged: number
+  insertions: number
+  deletions: number
+  prUrl: string | null
+  prState: 'OPEN' | 'CLOSED' | 'MERGED' | null
+  unpushedCount: number
+  workingTree: { staged: number; modified: number; untracked: number }
+  /** Git operation left in flight on the worktree (conflict or paused
+   *  rebase). Lets the client disable push while the branch ref cannot move. */
+  ongoingOperation: 'merge' | 'rebase' | 'cherry-pick' | null
+  forge: { id: ForgeId; capabilities: ForgeCapabilities; availability: ForgeAvailability }
+  /** Epoch ms when these stats were computed (server clock). Lets the client
+   *  merge git-stats monotonically and never replace fresher on-demand stats
+   *  with an older background-poll snapshot. */
+  computedAt: number
+}
+
+/** Minimal workspace shape `computeGitStats` needs. */
+interface GitStatsWorkspace {
+  worktreePath: string
+  sourceBranch: string
+  workingBranch: string
+  projectPath: string
+}
+
+/**
+ * Compute the git + forge stats for a workspace branch. Pure read — does NOT
+ * run `fetchSourceBranchAsync`; the caller decides whether to refresh the
+ * local source ref first. `prUrl`/`prState` come from the supplied PR snapshot
+ * so this never issues its own `getPrStatus` call.
+ */
+export async function computeGitStats(
+  workspace: GitStatsWorkspace,
+  prSnapshot: Pick<PrSnapshot, 'url' | 'state'> | null,
+): Promise<GitStatsResult> {
+  const { worktreePath, sourceBranch, workingBranch, projectPath } = workspace
+  const forgeProvider = getForgeProvider(resolveForge(projectPath))
+  const [commitCount, behindCount, diffStats, unpushedCount, workingTree, availability] = await Promise.all([
+    gitOps.getCommitCountAsync(worktreePath, sourceBranch, workingBranch),
+    gitOps.getCommitsBehindAsync(worktreePath, sourceBranch, workingBranch),
+    gitOps.getStructuredDiffStatsBetweenAsync(worktreePath, sourceBranch, workingBranch),
+    gitOps.getUnpushedCountAsync(worktreePath, workingBranch),
+    gitOps.getWorkingTreeStatusAsync(worktreePath),
+    forgeProvider.isAvailable(worktreePath),
+  ])
+  return {
+    commitCount,
+    behindCount,
+    filesChanged: diffStats.filesChanged,
+    insertions: diffStats.insertions,
+    deletions: diffStats.deletions,
+    prUrl: prSnapshot?.url ?? null,
+    prState: prSnapshot?.state ?? null,
+    unpushedCount,
+    workingTree,
+    // Sync and local (a few stat calls); not worth a slot in the Promise.all.
+    ongoingOperation: gitOps.getOngoingGitOperation(worktreePath),
+    forge: { id: forgeProvider.id, capabilities: forgeProvider.capabilities, availability },
+    computedAt: Date.now(),
+  }
+}

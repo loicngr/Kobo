@@ -1,0 +1,1255 @@
+<template>
+  <div
+    class="chat-input-container column q-pa-sm"
+    data-tour="ws-input"
+    :class="{ 'chat-input-dragging': isDragging }"
+    @dragover="onDragOver"
+    @dragleave="onDragLeave"
+    @drop="onDrop"
+  >
+    <!-- Pending attachments -->
+    <div v-if="pendingAttachments.length > 0" class="row items-center q-gutter-xs q-mb-xs q-px-xs" style="flex-wrap: wrap;">
+      <div
+        v-for="img in pendingAttachments"
+        :key="img.tempId"
+        class="attachment-tag row items-center q-px-sm q-py-xs rounded-borders"
+        :class="{
+          'attachment-tag--uploading': img.status === 'uploading',
+          'attachment-tag--ready': img.status === 'ready',
+          'attachment-tag--error': img.status === 'error',
+        }"
+      >
+        <q-spinner-dots v-if="img.status === 'uploading'" size="14px" color="kobo-3" class="q-mr-xs" />
+        <q-icon v-else-if="img.status === 'ready'" :name="img.kind === 'image' ? 'image' : 'description'" size="14px" color="green-6" class="q-mr-xs" />
+        <q-icon v-else name="error" size="14px" color="red-6" class="q-mr-xs" />
+
+        <span class="text-caption attachment-tag-label">
+          {{ img.status === 'uploading' ? $t('chatInput.uploading') : img.originalName }}
+        </span>
+
+        <q-btn
+          flat
+          dense
+          round
+          size="xs"
+          icon="close"
+          class="q-ml-xs attachment-tag-close"
+          :disable="sendingMessage || isQueued"
+          :aria-label="$t('attachments.remove')"
+          @click="removeAttachment(img.tempId)"
+        >
+          <q-tooltip>{{ $t('tooltip.removeAttachment') }}</q-tooltip>
+        </q-btn>
+      </div>
+    </div>
+
+    <!-- Grouped slash autocomplete popup -->
+    <SlashSuggestionsPopup
+      v-if="showSkills && flatDropdown.length > 0"
+      class="chat-slash-popup"
+      :grouped-dropdown="groupedDropdown"
+      :flat-dropdown="flatDropdown"
+      :selected-index="selectedSkillIndex"
+      @select="selectDropdownItem"
+    />
+
+    <!-- @file mention autocomplete popup -->
+    <div v-if="showFiles && fileMatches.length > 0" class="chat-slash-popup chat-file-popup">
+      <q-list dark dense>
+        <q-item
+          v-for="(file, i) in fileMatches"
+          :key="file"
+          v-ripple
+          clickable
+          :active="i === selectedFileIndex"
+          active-class="chat-file-item--active"
+          @click="selectFile(file)"
+        >
+          <q-item-section avatar>
+            <q-icon name="insert_drive_file" size="xs" color="kobo-3" />
+          </q-item-section>
+          <q-item-section class="chat-file-path">{{ file }}</q-item-section>
+        </q-item>
+      </q-list>
+    </div>
+
+    <!-- Queued message banner -->
+    <div
+      v-if="isQueued"
+      class="queue-banner row items-center q-pa-xs q-px-sm text-caption text-amber-6"
+    >
+      <q-icon name="schedule" size="14px" color="amber-6" class="q-mr-sm" />
+      <span>{{ $t('chatInput.queueBanner') }}</span>
+    </div>
+
+    <AutoLoopStatusPanel :workspace-id="workspaceId" />
+
+    <div v-if="isHandoffBlocking" class="row items-center q-pa-xs q-px-sm text-caption text-kobo-2" role="status">
+      {{ $t(handoffs.isActive(workspaceId) ? 'handoff.progress' : 'handoff.blocked') }}
+    </div>
+
+    <div v-if="isCompacting" class="row items-center q-pa-xs q-px-sm text-caption text-kobo-2">
+      <q-spinner-dots size="14px" color="primary" class="q-mr-sm" />
+      <span>{{ $t('chatInput.compactingBanner') }}</span>
+    </div>
+
+    <!-- SDK paused on canUseTool — force the user through the panel above. -->
+    <div
+      v-if="isAwaitingUser && !isAutoLoopRunning"
+      class="awaiting-user-banner row items-center q-pa-xs q-px-sm text-caption text-amber-5"
+    >
+      <q-icon name="question_answer" size="14px" color="amber-5" class="q-mr-sm" />
+      <span>{{ $t('chatInput.awaitingUserBanner') }}</span>
+    </div>
+
+    <div class="row items-center q-gutter-sm">
+      <q-input
+        ref="chatInputRef"
+        v-model="inputMessage"
+        dense
+        dark
+        borderless
+        autogrow
+        :readonly="isQueued"
+        :placeholder="$t('chatInput.placeholder')"
+        :input-style="{ maxHeight: '200px', overflowY: 'auto' }"
+        class="chat-input col rounded-borders"
+        :disable="isDisabled || sendingMessage"
+        @keydown="onKeydown"
+        @paste="onPaste"
+      />
+
+      <!-- Hidden file input -->
+      <input
+        ref="fileInputRef"
+        type="file"
+        :accept="ATTACHMENT_ACCEPT"
+        :disabled="isDisabled || isQueued || sendingMessage"
+        multiple
+        style="display: none;"
+        @change="onFileSelected"
+      />
+
+      <q-btn
+        flat
+        dense
+        icon="attach_file"
+        color="kobo-3"
+        :disable="isDisabled || isQueued || sendingMessage"
+        :aria-label="$t('attachments.add')"
+        @click="fileInputRef?.click()"
+      >
+        <q-tooltip>{{ $t('attachments.add') }}</q-tooltip>
+      </q-btn>
+
+      <q-btn
+        flat
+        dense
+        :icon="isTranscribing ? 'hourglass_top' : isRecording ? 'mic' : 'mic_none'"
+        :color="isRecording ? 'red-5' : isTranscribing ? 'amber-6' : 'kobo-3'"
+        :disable="!voiceEnabled || isTranscribing"
+        :class="{ 'voice-btn--recording': isRecording }"
+        @mousedown.prevent="startVoiceCapture"
+        @mouseup.prevent="stopVoiceCapture"
+        @mouseleave.prevent="stopVoiceCapture"
+        @touchstart.prevent="startVoiceCapture"
+        @touchend.prevent="stopVoiceCapture"
+      >
+        <q-tooltip>
+          {{
+            isTranscribing
+              ? $t('voice.transcribing')
+              : isRecording
+                ? $t('voice.recording')
+                : $t('voice.holdToTalk')
+          }}
+        </q-tooltip>
+      </q-btn>
+
+      <q-btn
+        v-if="isQueued && canForceQueuedMessage"
+        flat
+        dense
+        icon="send"
+        color="primary"
+        :loading="forcingQueue"
+        :disable="forcingQueue"
+        @click="forceQueuedMessage"
+      >
+        <q-tooltip>{{ $t('chatInput.forceQueue') }}</q-tooltip>
+      </q-btn>
+
+      <q-btn
+        v-if="isQueued"
+        flat
+        dense
+        icon="cancel"
+        color="orange"
+        @click="cancelQueue"
+      >
+        <q-tooltip>{{ $t('chatInput.cancelQueue') }}</q-tooltip>
+      </q-btn>
+
+      <q-btn
+        v-else
+        flat
+        dense
+        icon="send"
+        color="primary"
+        :disable="isDisabled || sendingMessage || isCompacting || (!message.trim() && pendingAttachments.length === 0) || attachmentsBlocked"
+        @click="sendMessage"
+      >
+        <q-tooltip>{{ $t('tooltip.sendMessage') }}</q-tooltip>
+      </q-btn>
+    </div>
+    <div class="chat-hint row items-center no-wrap text-caption text-kobo-3">
+      <div class="chat-hint__shortcuts row items-center no-wrap">
+        <span class="chat-hint__primary"><kbd>Enter</kbd> {{ $t('common.send') }}<template v-if="!isMobile"> <span class="q-mx-xs">&middot;</span> <kbd>Shift+Enter</kbd> {{ $t('common.newLine') }}</template></span>
+        <q-btn v-if="!isMobile" flat dense round size="xs" icon="keyboard" class="q-ml-xs">
+          <q-tooltip>{{ $t('chatInput.shortcuts') }}</q-tooltip>
+          <q-menu anchor="top left" self="bottom left">
+            <q-list dense class="chat-shortcuts-menu">
+              <q-item><q-item-section><kbd>Ctrl+Enter</kbd> {{ $t('chatInput.forceQueue') }}</q-item-section></q-item>
+              <q-item><q-item-section><kbd>Ctrl+J</kbd> {{ $t('common.newLine') }}</q-item-section></q-item>
+              <q-item><q-item-section><kbd>Ctrl+K</kbd> {{ $t('chatInput.commandPalette') }}</q-item-section></q-item>
+              <q-item><q-item-section><kbd>Ctrl+F</kbd> {{ $t('chatInput.searchHistory') }}</q-item-section></q-item>
+              <q-item><q-item-section><kbd>↑↓</kbd> {{ $t('common.history') }}</q-item-section></q-item>
+              <q-item><q-item-section><kbd>@</kbd> {{ $t('chatInput.fileSearchHint') }}</q-item-section></q-item>
+            </q-list>
+          </q-menu>
+        </q-btn>
+      </div>
+      <q-space />
+      <div class="chat-hint__status row items-center no-wrap">
+        <div v-if="isTranscribing" class="row items-center text-caption text-amber-6 q-mr-sm">
+          <q-spinner-dots size="14px" color="amber-6" class="q-mr-xs" />
+          <span>{{ $t('voice.transcribing') }}</span>
+        </div>
+        <QuotaFooter v-if="quotaStatusVisible" class="q-mr-md" />
+      </div>
+      <q-btn
+        v-if="showInterrupt"
+        flat
+        dense
+        no-caps
+        size="sm"
+        color="orange-4"
+        icon="pause"
+        :label="$t('workspacePage.interrupt')"
+        :loading="interrupting"
+        :disable="interrupting || isHandoffBlocking"
+        class="chat-hint__interrupt"
+        @click="handleInterrupt"
+      >
+        <q-tooltip>{{ $t('workspacePage.interruptTooltip') }}</q-tooltip>
+      </q-btn>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import type { QInput } from 'quasar'
+import { useQuasar } from 'quasar'
+import AutoLoopStatusPanel from 'src/components/AutoLoopStatusPanel.vue'
+import QuotaFooter from 'src/components/QuotaFooter.vue'
+import SlashSuggestionsPopup from 'src/components/SlashSuggestionsPopup.vue'
+import { useChatAttachments } from 'src/composables/use-chat-attachments'
+import { useFileMention } from 'src/composables/use-file-mention'
+import { useIsMobile } from 'src/composables/use-is-mobile'
+import { type SlashDropdownItem, useSlashAutocomplete } from 'src/composables/use-slash-autocomplete'
+import { supportsLiveSteering, supportsQuotaStatus } from 'src/constants/engineFeatures'
+import { useSessionHandoffStore } from 'src/stores/session-handoff'
+import { useSettingsStore } from 'src/stores/settings'
+import { useTemplatesStore } from 'src/stores/templates'
+import { useWebSocketStore } from 'src/stores/websocket'
+import { useWorkspaceStore } from 'src/stores/workspace'
+import { buildTemplateVars, expandTemplate } from 'src/utils/expand-template'
+import { KOBO_COMMANDS } from 'src/utils/kobo-commands'
+import { registerUnsavedScope, unregisterUnsavedScope } from 'src/utils/unsaved-guard'
+import { isBusyStatus } from 'src/utils/workspace-status'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { ATTACHMENT_ACCEPT } from '../../../shared/attachments'
+
+const props = defineProps<{
+  workspaceId: string
+}>()
+
+const { t } = useI18n()
+const $q = useQuasar()
+const { isMobile } = useIsMobile()
+const store = useWorkspaceStore()
+const settingsStore = useSettingsStore()
+const wsStore = useWebSocketStore()
+const templatesStore = useTemplatesStore()
+const message = ref('')
+const sendingMessage = ref(false)
+const interrupting = ref(false)
+const forcingQueue = ref(false)
+
+const showInterrupt = computed(() => isBusyStatus(store.selectedWorkspace?.status))
+
+// QuotaFooter is rendered only when the workspace's engine emits structured
+// rate-limit info Kōbō can display. Codex SDK doesn't surface it → hiding the
+// footer instead of leaving it stuck on "Loading…" forever.
+const quotaStatusVisible = computed(() => supportsQuotaStatus(store.selectedWorkspace?.engine))
+
+async function handleInterrupt() {
+  if (!props.workspaceId || isHandoffBlocking.value) return
+  interrupting.value = true
+  try {
+    await store.interruptAgent(props.workspaceId)
+    $q.notify({ type: 'info', message: t('workspacePage.interrupted'), position: 'top', timeout: 3000 })
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : t('workspacePage.interruptFailed')
+    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+  } finally {
+    interrupting.value = false
+  }
+}
+
+const isAgentBusy = computed(() => isBusyStatus(store.selectedWorkspace?.status))
+const isCompacting = computed(() => wsStore.isCompacting(props.workspaceId))
+const handoffs = useSessionHandoffStore()
+const isHandoffBlocking = computed(() => handoffs.isBlocking(props.workspaceId))
+
+const queuedSessionId = computed(() => store.selectedSessionId)
+const queuedMessage = computed(() => store.getQueuedMessage(props.workspaceId, queuedSessionId.value))
+const isQueued = computed(() => !!queuedMessage.value)
+// A shared queue is displayed without overwriting a draft in another pane.
+const inputMessage = computed({
+  get: () => queuedMessage.value?.content ?? message.value,
+  set: (value: string | number | null) => {
+    message.value = String(value ?? '')
+  },
+})
+
+const canForceQueuedMessage = computed(() => {
+  const workspace =
+    store.workspaces.find((item) => item.id === props.workspaceId) ??
+    store.archivedWorkspaces.find((item) => item.id === props.workspaceId)
+  return supportsLiveSteering(workspace?.engine) && isAgentBusy.value && !isCompacting.value && !isHandoffBlocking.value
+})
+
+// Chat input element ref (for caret position access)
+const chatInputRef = ref<InstanceType<typeof QInput> | null>(null)
+
+/**
+ * Returns the underlying `<textarea>` (or `<input>`) element of the chat
+ * input, using Quasar's public API. Returns null before the component has
+ * mounted or if the input hasn't been rendered yet.
+ */
+function getChatInputEl(): HTMLTextAreaElement | HTMLInputElement | null {
+  const inst = chatInputRef.value
+  if (!inst) return null
+  // getNativeElement() is the documented Quasar v2 method — returns the
+  // underlying DOM element held by the component.
+  const el = inst.getNativeElement?.()
+  return (el as HTMLTextAreaElement | HTMLInputElement | null) ?? null
+}
+
+function focus(): void {
+  getChatInputEl()?.focus()
+}
+
+defineExpose({ focus })
+
+// Route changes reuse this component; focus only after the new input state renders.
+onMounted(focus)
+watch(() => props.workspaceId, focus, { flush: 'post' })
+
+// Slash autocomplete — state + computed lists handled by the composable.
+// Selection logic (template expansion, kobo auto-send, …) stays here because
+// it needs the workspace context which the composable can't see.
+const {
+  showSkills,
+  skillFilter,
+  selectedSkillIndex,
+  groupedDropdown,
+  flatDropdown,
+  fetchSkills,
+  detectSlashFragment,
+  replaceFragmentWith,
+  closeDropdown,
+} = useSlashAutocomplete(message, () => getChatInputEl())
+
+// `@<file>` mention autocomplete — fuzzy-ranked over the worktree's files.
+const {
+  showFiles,
+  fileMatches,
+  selectedFileIndex,
+  detectMentionFragment,
+  replaceFragmentWith: replaceMentionWith,
+  closeDropdown: closeFileDropdown,
+} = useFileMention(
+  message,
+  () => getChatInputEl(),
+  () => store.workspaces.find((w) => w.id === props.workspaceId)?.worktreePath ?? null,
+)
+
+function selectFile(file: string | undefined) {
+  if (!file) return
+  replaceMentionWith(file)
+  void nextTick(() => getChatInputEl()?.focus())
+}
+
+// Attachment state owns uploads and their cleanup independently of chat delivery.
+const attachments = useChatAttachments({
+  message,
+  workspaceId: () => props.workspaceId,
+  locked: () => isDisabled.value || isQueued.value || sendingMessage.value,
+  insert: insertTextAtCaret,
+  uploadingLabel: () => t('chatInput.uploading'),
+  notify: (error) => $q.notify({ type: 'negative', message: t(`attachments.error.${error}`), position: 'top' }),
+})
+const { pending: pendingAttachments, blocked: attachmentsBlocked, remove: removeAttachment } = attachments
+
+const fileInputRef = ref<HTMLInputElement | null>(null)
+const isDragging = ref(false)
+const isRecording = ref(false)
+const isTranscribing = ref(false)
+const mediaRecorderRef = ref<MediaRecorder | null>(null)
+const mediaStreamRef = ref<MediaStream | null>(null)
+const chunksRef = ref<BlobPart[]>([])
+const recordTimeoutRef = ref<ReturnType<typeof setTimeout> | null>(null)
+const MAX_RECORDING_MS = 60_000
+
+function insertTextAtCaret(text: string) {
+  const el = getChatInputEl()
+  const caret = el?.selectionStart ?? message.value.length
+  const before = message.value.slice(0, caret)
+  const after = message.value.slice(caret)
+  message.value = before + text + after
+  nextTick(() => {
+    if (el) {
+      const newPos = caret + text.length
+      el.focus()
+      el.setSelectionRange(newPos, newPos)
+    }
+  })
+}
+
+function onPaste(event: ClipboardEvent) {
+  const data = event.clipboardData
+  if (!data) return
+  const files = Array.from(data.items)
+    .filter((item) => item.kind === 'file')
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => file !== null)
+  if (files.length === 0) return
+  if (!data.getData('text/plain')) event.preventDefault()
+  void attachments.addFiles(files)
+}
+
+function onDrop(event: DragEvent) {
+  event.preventDefault()
+  isDragging.value = false
+  void attachments.addFiles(Array.from(event.dataTransfer?.files ?? []))
+}
+
+function onDragOver(event: DragEvent) {
+  if (!event.dataTransfer?.types.includes('Files')) return
+  event.preventDefault()
+  isDragging.value = !isDisabled.value && !isQueued.value && !sendingMessage.value
+}
+
+function onDragLeave() {
+  isDragging.value = false
+}
+
+function onFileSelected(event: Event) {
+  const input = event.target as HTMLInputElement
+  void attachments.addFiles(Array.from(input.files ?? []))
+  input.value = ''
+}
+
+const currentSession = computed(() => store.sessions.find((s) => s.id === store.selectedSessionId) ?? null)
+
+// Pre-fetch the skills catalogue so the dropdown opens instantly on the
+// first `/`. Throttling lives inside the composable.
+void fetchSkills()
+
+// Watch for chatDraft changes (e.g. from DiffViewer "Add to chat")
+watch(
+  () => store.chatDraft,
+  (draft) => {
+    if (draft) {
+      message.value = message.value ? `${message.value}\n${draft}` : draft
+      store.chatDraft = ''
+    }
+  },
+)
+
+// When queue is consumed by auto-send, clear the textarea.
+// cancelQueue does NOT trigger this because it preserves the text.
+let cancelledManually = false
+
+function cancelQueue() {
+  if (!message.value.trim() && queuedMessage.value) message.value = queuedMessage.value.content
+  cancelledManually = true
+  store.cancelQueuedMessage(props.workspaceId, queuedSessionId.value)
+}
+
+function forceQueuedMessage() {
+  const queued = queuedMessage.value
+  if (!queued || !canForceQueuedMessage.value) return
+  forcingQueue.value = true
+  if (!wsStore.sendChatMessage(props.workspaceId, queued.content, queued.sessionId, undefined, true)) {
+    forcingQueue.value = false
+    $q.notify({ type: 'negative', message: t('network.login.unreachable'), position: 'top', timeout: 6000 })
+  }
+}
+
+watch(queuedMessage, (queued, previous) => {
+  if (!queued) forcingQueue.value = false
+  if (previous && !queued && !cancelledManually && message.value.trim() === previous.content.trim()) {
+    message.value = ''
+    // A dispatched message owns its attachments. Clearing the draft must
+    // never remove files the agent still needs to read.
+    attachments.take()
+  }
+  cancelledManually = false
+})
+
+watch([() => props.workspaceId, () => store.selectedSessionId], () => {
+  attachments.discard()
+  message.value = ''
+  if (isRecording.value) void stopVoiceCapture()
+})
+
+// Reconcile removed attachment references after updating autocomplete.
+watch(message, async () => {
+  await nextTick()
+  await detectSlashFragment()
+  await detectMentionFragment()
+
+  attachments.reconcile()
+})
+
+// Keyboard push-to-talk has no tactile effect on phones (no physical
+// keyboard) — skip registration on mobile. The touch mic button
+// (@touchstart/@touchend) keeps working via startVoiceCapture/stopVoiceCapture.
+if (!isMobile.value) {
+  window.addEventListener('keydown', onWindowKeyDown)
+  window.addEventListener('keyup', onWindowKeyUp)
+  window.addEventListener('blur', onWindowBlur)
+  document.addEventListener('visibilitychange', onVisibilityChange)
+}
+onUnmounted(() => {
+  attachments.discard()
+  window.removeEventListener('keydown', onWindowKeyDown)
+  window.removeEventListener('keyup', onWindowKeyUp)
+  window.removeEventListener('blur', onWindowBlur)
+  document.removeEventListener('visibilitychange', onVisibilityChange)
+  if (recordTimeoutRef.value) {
+    clearTimeout(recordTimeoutRef.value)
+    recordTimeoutRef.value = null
+  }
+  if (isRecording.value) void stopVoiceCapture()
+})
+
+function selectDropdownItem(item: SlashDropdownItem | undefined) {
+  if (!item) return
+
+  if (item.type === 'template') {
+    const template = templatesStore.templates.find((t) => t.slug === item.name)
+    if (!template) return
+
+    // Gather variables from the workspace store.
+    const workspace = store.workspaces.find((w) => w.id === props.workspaceId) ?? null
+    const gitStats = store.gitStatsCache[props.workspaceId] ?? null
+
+    // Compute the session display name matching what WorkspacePage shows:
+    // sessions are displayed in startedAt-ASC order and labelled "Session #N"
+    // where N = store.sessions.length - index (so the newest gets the highest
+    // number). See pages/WorkspacePage.vue sessionOptions computed.
+    const currentSessionVal = store.sessions.find((s) => s.id === store.selectedSessionId) ?? null
+    let sessionName: string | null = null
+    if (currentSessionVal) {
+      if (currentSessionVal.name) {
+        sessionName = currentSessionVal.name
+      } else {
+        const idx = store.sessions.findIndex((s) => s.id === currentSessionVal.id)
+        sessionName = t('workspacePage.session', { n: store.sessions.length - idx })
+      }
+    }
+
+    // GitStats from the server does NOT include `prNumber` — we derive it from
+    // `prUrl` (format: https://host/org/repo/pull/<N>) to avoid a backend change.
+    let prNumber: number | undefined
+    if (gitStats?.prUrl) {
+      const match = gitStats.prUrl.match(/\/pull\/(\d+)/)
+      if (match) prNumber = parseInt(match[1], 10)
+    }
+
+    const vars = buildTemplateVars({
+      workspace: workspace
+        ? {
+            name: workspace.name,
+            workingBranch: workspace.workingBranch,
+            sourceBranch: workspace.sourceBranch,
+            projectPath: workspace.projectPath,
+          }
+        : null,
+      gitStats: gitStats
+        ? {
+            commitCount: gitStats.commitCount,
+            unpushedCount: gitStats.unpushedCount,
+            filesChanged: gitStats.filesChanged,
+            insertions: gitStats.insertions,
+            deletions: gitStats.deletions,
+            prNumber,
+            prUrl: gitStats.prUrl,
+            prState: gitStats.prState,
+          }
+        : null,
+      sessionName,
+    })
+    const expanded = expandTemplate(template.content, vars)
+    replaceFragmentWith(expanded)
+    closeDropdown()
+    return
+  }
+
+  // Skills Claude + Kōbō commands: insert `/name` (complete the fragment)
+  const asCommand = `/${item.name}`
+  if (item.type === 'kobo' && KOBO_COMMANDS[asCommand]) {
+    // Kōbō commands auto-send — preserve the existing behavior
+    message.value = asCommand
+    closeDropdown()
+    sendMessage()
+    return
+  }
+  // Claude skills: just complete the fragment in the input, user hits Enter to send
+  replaceFragmentWith(`${asCommand} `)
+  closeDropdown()
+}
+
+// "Running" means iterations are actively spawning — auto_loop AND auto_loop_ready
+// must both be set. During grooming (ready=0) the user must stay free to answer
+// the agent's clarifying questions.
+const isAutoLoopRunning = computed(() => {
+  const id = props.workspaceId
+  if (!id) return false
+  const state = store.autoLoopStates[id]
+  return state?.auto_loop === true && state?.auto_loop_ready === true
+})
+
+const isAwaitingUser = computed(() => store.selectedWorkspace?.status === 'awaiting-user')
+const isArchived = computed(() => Boolean(store.selectedWorkspace?.archivedAt))
+
+const isDisabled = computed(() => {
+  return !props.workspaceId || isAwaitingUser.value || isArchived.value || isHandoffBlocking.value
+})
+
+const voiceEnabled = computed(() => settingsStore.global.voiceEnabled && !isDisabled.value)
+
+// Message history (arrow up/down to cycle through previous messages).
+// Per-workspace, persisted server-side via /api/workspaces/:id/chat-history.
+const MAX_HISTORY_ENTRIES = 200
+const messageHistory = ref<string[]>([])
+const historyIndex = ref(-1)
+const savedDraft = ref('')
+
+async function loadHistory() {
+  const wsId = props.workspaceId
+  try {
+    const res = await fetch(`/api/workspaces/${wsId}/chat-history`)
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const { history } = (await res.json()) as { history: string[] }
+    // Drop stale responses: if the user switched workspaces during the
+    // fetch, this is no longer the active history.
+    if (wsId !== props.workspaceId) return
+    messageHistory.value = Array.isArray(history) ? history : []
+  } catch (err) {
+    if (wsId !== props.workspaceId) return
+    console.error('[ChatInput] loadHistory failed:', err)
+    messageHistory.value = []
+  }
+  if (wsId !== props.workspaceId) return
+  historyIndex.value = -1
+}
+
+async function pushToHistory(text: string, wsId = props.workspaceId) {
+  if (!text) return
+  if (wsId === props.workspaceId) {
+    if (messageHistory.value[0] === text) return
+    messageHistory.value.unshift(text)
+    if (messageHistory.value.length > MAX_HISTORY_ENTRIES) messageHistory.value.pop()
+  }
+  try {
+    const res = await fetch(`/api/workspaces/${wsId}/chat-history`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: text }),
+    })
+    if (!res.ok && res.status !== 204) throw new Error(`HTTP ${res.status}`)
+  } catch (err) {
+    console.error('[ChatInput] pushToHistory failed:', err)
+  }
+}
+
+function resetHistoryNav() {
+  historyIndex.value = -1
+  savedDraft.value = ''
+}
+
+// One-time cleanup of the pre-migration global blob.
+localStorage.removeItem('kobo:chatHistory')
+
+onMounted(loadHistory)
+onMounted(() => {
+  registerUnsavedScope(
+    'chat:message',
+    () => !!message.value.trim() && message.value.trim() !== queuedMessage.value?.content.trim(),
+  )
+})
+onUnmounted(() => {
+  unregisterUnsavedScope('chat:message')
+})
+watch(() => props.workspaceId, loadHistory)
+
+async function sendMessage() {
+  if (sendingMessage.value || isQueued.value) return
+  sendingMessage.value = true
+  try {
+    await sendMessageNow()
+  } finally {
+    sendingMessage.value = false
+  }
+}
+
+async function sendMessageNow() {
+  const workspaceId = props.workspaceId
+  let targetSessionId = store.selectedSessionId
+  const text = message.value.trim()
+  if (
+    (!text && pendingAttachments.value.length === 0) ||
+    isDisabled.value ||
+    isCompacting.value ||
+    attachmentsBlocked.value
+  )
+    return
+
+  let session = currentSession.value
+
+  const autoLoopEnabled =
+    store.autoLoopStates[workspaceId]?.auto_loop ??
+    store.workspaces.find((workspace) => workspace.id === workspaceId)?.autoLoop
+  if (autoLoopEnabled) {
+    // A queued iteration can become selected before its HTTP receipt arrives.
+    // Transfer attachment ownership before that change clears the old draft.
+    const sentAttachments = attachments.take()
+    try {
+      const instruction = KOBO_COMMANDS[text]?.prompt ?? text
+      await store.queueAutoLoopMessage(workspaceId, instruction)
+      pushToHistory(text, workspaceId)
+      if (props.workspaceId === workspaceId && store.selectedSessionId === targetSessionId) {
+        resetHistoryNav()
+        message.value = ''
+      }
+    } catch (error) {
+      if (props.workspaceId === workspaceId && store.selectedSessionId === targetSessionId) {
+        message.value = text
+        attachments.restore(sentAttachments)
+      }
+      $q.notify({
+        type: 'negative',
+        message: error instanceof Error ? error.message : t('network.login.unreachable'),
+        position: 'top',
+      })
+    }
+    return
+  }
+
+  // Intercept Kobo built-in commands
+  const koboCmd = KOBO_COMMANDS[text]
+  if (koboCmd) {
+    if (!wsStore.sendChatMessage(workspaceId, koboCmd.prompt, store.selectedSessionId ?? undefined)) {
+      $q.notify({ type: 'negative', message: t('network.login.unreachable'), position: 'top', timeout: 6000 })
+      return
+    }
+    store.markRead(workspaceId)
+    store.addActivityItem(workspaceId, {
+      id: `user-${Date.now()}`,
+      type: 'text',
+      content: koboCmd.prompt,
+      timestamp: new Date().toISOString(),
+      sessionId: store.selectedSessionId ?? undefined,
+      meta: { sender: 'user', pending: true },
+    })
+    pushToHistory(text)
+    resetHistoryNav()
+    message.value = ''
+    return
+  }
+
+  // Queue the message if the agent is busy
+  if (isAgentBusy.value) {
+    if (!store.selectedSessionId) return
+    store.queueMessage(workspaceId, text, store.selectedSessionId)
+    attachments.take()
+    return
+  }
+  store.cancelQueuedMessage(workspaceId, store.selectedSessionId)
+
+  // Ready attachments already have their final references in the draft.
+  let composedText = text
+  const orphanTags = pendingAttachments.value
+    .filter((p) => p.status === 'ready' && p.path && !composedText.includes(p.placeholder))
+    .map((p) => p.reference ?? p.placeholder)
+    .join(' ')
+  if (orphanTags) {
+    composedText = `${composedText} ${orphanTags}`.trim()
+  }
+  // Detach before createSession can switch the selected session. The draft's
+  // files now belong to this send until it succeeds or is restored on failure.
+  const sentAttachments = attachments.take()
+  const restoreDraft = () => {
+    if (props.workspaceId === workspaceId && store.selectedSessionId === targetSessionId) {
+      message.value = composedText
+      attachments.restore(sentAttachments)
+    }
+  }
+  // Historical completed/error sessions without an engine conversation cannot
+  // be resumed. Start a new session transparently so the user's message can
+  // still continue the workspace.
+  if ((session?.status === 'completed' || session?.status === 'error') && !session.engineSessionId) {
+    try {
+      session = await store.createSession(workspaceId)
+      targetSessionId = session.id
+    } catch (err) {
+      restoreDraft()
+      const serverMsg = err instanceof Error ? err.message : null
+      $q.notify({
+        type: 'negative',
+        message: serverMsg ?? t('workspacePage.startFailed'),
+        position: 'top',
+        timeout: 6000,
+      })
+      return
+    }
+  }
+  if (isCompacting.value || isHandoffBlocking.value) {
+    restoreDraft()
+    return
+  }
+  const sessionTag = session?.id ?? store.selectedSessionId ?? undefined
+
+  const requiresWebSocket = session?.status !== 'idle' && session?.status !== 'completed' && session?.status !== 'error'
+  if (requiresWebSocket && !wsStore.isConnected()) {
+    restoreDraft()
+    $q.notify({ type: 'negative', message: t('network.login.unreachable'), position: 'top', timeout: 6000 })
+    return
+  }
+
+  // Add the optimistic local item BEFORE sending so the WS user:message event
+  // (which the backend may emit synchronously during /start) can find it via
+  // the dedup pass and update its id instead of creating a duplicate.
+  const optimisticId = `user-${Date.now()}`
+  store.markRead(workspaceId)
+  store.addActivityItem(workspaceId, {
+    id: optimisticId,
+    type: 'text',
+    content: composedText,
+    timestamp: new Date().toISOString(),
+    sessionId: sessionTag,
+    meta: { sender: 'user', pending: true },
+  })
+
+  pushToHistory(text)
+  resetHistoryNav()
+  if (props.workspaceId === workspaceId && store.selectedSessionId === targetSessionId) message.value = ''
+
+  // On failure: roll back the optimistic item and restore the input so the
+  // user doesn't lose their message. Only applies to HTTP flows that can fail
+  // before the WS event arrives to upgrade the pending item.
+  const rollback = (err: unknown, contextMsg: string) => {
+    console.error(`[ChatInput] ${contextMsg} failed:`, err)
+    store.removeActivityItem(workspaceId, optimisticId)
+    restoreDraft()
+    const serverMsg = err instanceof Error ? err.message : null
+    $q.notify({
+      type: 'negative',
+      message: serverMsg ?? t('workspacePage.startFailed'),
+      position: 'top',
+      timeout: 6000,
+    })
+  }
+
+  if (session?.status === 'idle') {
+    // First message on an idle session — start a fresh agent for it
+    try {
+      await store.startWorkspace(workspaceId, composedText, session.id)
+      await store.fetchSessions(workspaceId)
+    } catch (err) {
+      rollback(err, 'startWorkspace')
+    }
+  } else if (session?.status === 'completed' || session?.status === 'error') {
+    // Continue an ended session — resume the underlying Claude conversation
+    try {
+      await store.startWorkspace(workspaceId, composedText, session.id, true)
+      await store.fetchSessions(workspaceId)
+    } catch (err) {
+      rollback(err, 'resume session')
+    }
+  } else {
+    if (!wsStore.sendChatMessage(workspaceId, composedText, store.selectedSessionId ?? undefined)) {
+      rollback(new Error(t('network.login.unreachable')), 'send chat message')
+    }
+  }
+}
+
+async function startVoiceCapture() {
+  if (!voiceEnabled.value || isRecording.value || isTranscribing.value) return
+  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+    $q.notify({ type: 'warning', message: t('voice.notSupported'), position: 'top', timeout: 4000 })
+    return
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    mediaStreamRef.value = stream
+    chunksRef.value = []
+    const mimeType = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : ''
+    const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream)
+    recorder.ondataavailable = (event) => {
+      if (event.data && event.data.size > 0) chunksRef.value.push(event.data)
+    }
+    recorder.start()
+    mediaRecorderRef.value = recorder
+    isRecording.value = true
+    recordTimeoutRef.value = setTimeout(() => {
+      void stopVoiceCapture()
+      $q.notify({ type: 'info', message: t('voice.maxDurationReached'), position: 'top', timeout: 3500 })
+    }, MAX_RECORDING_MS)
+  } catch {
+    $q.notify({ type: 'negative', message: t('voice.errorMicPermission'), position: 'top', timeout: 5000 })
+  }
+}
+
+async function stopVoiceCapture() {
+  if (!isRecording.value) return
+  const recorder = mediaRecorderRef.value
+  if (!recorder) return
+  isRecording.value = false
+  isTranscribing.value = true
+  if (recordTimeoutRef.value) {
+    clearTimeout(recordTimeoutRef.value)
+    recordTimeoutRef.value = null
+  }
+
+  const blob = await new Promise<Blob>((resolve) => {
+    recorder.onstop = () => resolve(new Blob(chunksRef.value, { type: 'audio/webm' }))
+    recorder.stop()
+  })
+
+  try {
+    if (blob.size === 0) throw new Error('MIC_AUDIO_INVALID')
+    const fd = new FormData()
+    fd.append('audio', blob, 'voice.webm')
+    fd.append('language', settingsStore.global.voiceLanguage || 'auto')
+    const res = await fetch(`/api/voice/workspaces/${encodeURIComponent(props.workspaceId)}/transcribe`, {
+      method: 'POST',
+      body: fd,
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error(String(body.code ?? body.error ?? `HTTP_${res.status}`))
+    }
+    const data = (await res.json()) as { text: string }
+    if (data.text?.trim()) {
+      message.value = message.value ? `${message.value.trimEnd()} ${data.text.trim()}` : data.text.trim()
+    }
+  } catch (err) {
+    const code = err instanceof Error ? err.message : 'TRANSCRIPTION_FAILED'
+    const map: Record<string, string> = {
+      VOICE_DISABLED: 'voice.errorDisabled',
+      MODEL_NOT_CONFIGURED: 'voice.errorModelMissing',
+      MODEL_NOT_INSTALLED: 'voice.errorModelNotInstalled',
+      VOICE_RUNTIME_MISSING: 'voice.errorRuntimeMissing',
+      MIC_AUDIO_INVALID: 'voice.errorAudioInvalid',
+      LANGUAGE_INVALID: 'voice.errorLanguageInvalid',
+      TRANSCRIPTION_TIMEOUT: 'voice.errorTranscription',
+    }
+    $q.notify({ type: 'negative', message: t(map[code] ?? 'voice.errorTranscription'), position: 'top', timeout: 5000 })
+  } finally {
+    mediaRecorderRef.value = null
+    chunksRef.value = []
+    mediaStreamRef.value?.getTracks().forEach((t) => {
+      t.stop()
+    })
+    mediaStreamRef.value = null
+    isTranscribing.value = false
+  }
+}
+
+function shouldHandlePtt(event: KeyboardEvent): boolean {
+  if (!voiceEnabled.value) return false
+  const key = settingsStore.global.voicePttKey
+  if (key === 'ctrl+space') return event.ctrlKey && event.code === 'Space'
+  return event.key === 'Alt'
+}
+
+function onWindowKeyDown(event: KeyboardEvent) {
+  if (!shouldHandlePtt(event) || event.repeat) return
+  event.preventDefault()
+  void startVoiceCapture()
+}
+
+function onWindowKeyUp(event: KeyboardEvent) {
+  if (!shouldHandlePtt(event)) return
+  event.preventDefault()
+  void stopVoiceCapture()
+}
+
+function onWindowBlur() {
+  if (isRecording.value) void stopVoiceCapture()
+}
+
+function onVisibilityChange() {
+  if (document.visibilityState !== 'visible' && isRecording.value) {
+    void stopVoiceCapture()
+  }
+}
+
+function onKeydown(event: KeyboardEvent) {
+  if (event.ctrlKey && event.key === 'Enter' && isQueued.value && canForceQueuedMessage.value) {
+    event.preventDefault()
+    forceQueuedMessage()
+    return
+  }
+
+  if (event.ctrlKey && event.key.toLowerCase() === 'j') {
+    event.preventDefault()
+    const textarea = event.target as HTMLTextAreaElement | null
+    const start = textarea?.selectionStart ?? message.value.length
+    const end = textarea?.selectionEnd ?? start
+    message.value = `${message.value.slice(0, start)}\n${message.value.slice(end)}`
+    nextTick(() => textarea?.setSelectionRange(start + 1, start + 1))
+    return
+  }
+
+  if (showFiles.value && fileMatches.value.length > 0) {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      selectedFileIndex.value = Math.min(selectedFileIndex.value + 1, fileMatches.value.length - 1)
+      return
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      selectedFileIndex.value = Math.max(selectedFileIndex.value - 1, 0)
+      return
+    }
+    if (event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey)) {
+      event.preventDefault()
+      selectFile(fileMatches.value[selectedFileIndex.value])
+      return
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      closeFileDropdown()
+      return
+    }
+  }
+
+  if (showSkills.value && flatDropdown.value.length > 0) {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      selectedSkillIndex.value = Math.min(selectedSkillIndex.value + 1, flatDropdown.value.length - 1)
+      return
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      selectedSkillIndex.value = Math.max(selectedSkillIndex.value - 1, 0)
+      return
+    }
+    if (event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey)) {
+      event.preventDefault()
+      selectDropdownItem(flatDropdown.value[selectedSkillIndex.value])
+      return
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      closeDropdown()
+      return
+    }
+  }
+
+  // Arrow up/down to navigate message history (only when cursor is on first/last line)
+  if (event.key === 'ArrowUp' && messageHistory.value.length > 0) {
+    const textarea = event.target as HTMLTextAreaElement | null
+    const cursorOnFirstLine =
+      !textarea ||
+      textarea.selectionStart <=
+        (message.value.indexOf('\n') === -1 ? message.value.length : message.value.indexOf('\n'))
+    if (!cursorOnFirstLine && historyIndex.value === -1) return
+    event.preventDefault()
+    if (historyIndex.value === -1) {
+      savedDraft.value = message.value
+    }
+    if (historyIndex.value < messageHistory.value.length - 1) {
+      historyIndex.value++
+      message.value = messageHistory.value[historyIndex.value]
+    }
+    return
+  }
+  if (event.key === 'ArrowDown' && historyIndex.value >= 0) {
+    event.preventDefault()
+    historyIndex.value--
+    message.value = historyIndex.value >= 0 ? messageHistory.value[historyIndex.value] : savedDraft.value
+    return
+  }
+
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault()
+    sendMessage()
+  }
+}
+</script>
+
+<style lang="scss" scoped>
+.chat-input-container {
+  background-color: var(--kobo-bg-deep);
+  border-top: 1px solid var(--kobo-border-subtle);
+  min-height: 48px;
+  position: relative;
+
+  &.chat-input-dragging {
+    outline: 2px dashed var(--kobo-accent);
+    outline-offset: -2px;
+  }
+}
+
+.chat-input {
+  background-color: var(--kobo-surface);
+  padding: 4px 12px;
+
+  :deep(.q-field__control) {
+    min-height: 32px;
+  }
+  :deep(textarea),
+  :deep(input) {
+    color: var(--kobo-text-2);
+    font-size: 13px;
+  }
+}
+
+// Position the slash-suggestions popup above the chat textarea, flush with
+// the input edges. The popup's internal styling (sections + items) is owned
+// by SlashSuggestionsPopup itself.
+.chat-slash-popup {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 8px;
+  right: 48px;
+  z-index: 9999;
+}
+
+/* `@file` popup — slash popup owns positioning; this owns the surface. */
+.chat-file-popup {
+  max-height: 300px;
+  overflow-y: auto;
+  background-color: var(--kobo-surface);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+}
+.chat-file-popup .chat-file-path {
+  font-family: var(--kobo-font-mono);
+  font-size: 12px;
+  word-break: break-all;
+}
+.chat-file-popup .chat-file-item--active {
+  background-color: rgba(102, 95, 221, 0.15);
+}
+
+.attachment-tag {
+  font-family: var(--kobo-font-mono);
+  font-size: 12px;
+  line-height: 1;
+
+  &--uploading {
+    background-color: var(--kobo-hover);
+    border: 1px solid var(--kobo-border);
+    color: var(--kobo-text-3);
+  }
+
+  &--ready {
+    background-color: rgba(52, 211, 153, 0.12);
+    border: 1px solid rgba(52, 211, 153, 0.35);
+    color: var(--kobo-success);
+  }
+
+  &--error {
+    background-color: rgba(248, 113, 113, 0.12);
+    border: 1px solid rgba(248, 113, 113, 0.35);
+    color: var(--kobo-danger);
+  }
+}
+
+.attachment-tag-label {
+  max-width: 250px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-hint {
+  font-size: 10px;
+  text-align: left;
+  padding: 2px 4px 0;
+  min-width: 0;
+
+  &__shortcuts { flex: 1 1 auto; min-width: 0; overflow: hidden; }
+  &__primary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  &__status, &__interrupt { flex: 0 0 auto; }
+
+  kbd {
+    background-color: var(--kobo-hover);
+    border-radius: 3px;
+    padding: 1px 4px;
+    font-family: var(--kobo-font-mono);
+    font-size: 9px;
+  }
+}
+
+.chat-shortcuts-menu { min-width: 190px; font-size: 12px; }
+
+.queue-banner {
+  background-color: rgba(251, 191, 36, 0.12);
+  border-bottom: 1px solid rgba(251, 191, 36, 0.35);
+}
+
+.autoloop-banner {
+  background-color: var(--kobo-surface-2);
+  border-bottom: 1px solid rgba(102, 95, 221, 0.4);
+  border-top: 1px solid rgba(102, 95, 221, 0.4);
+}
+
+.voice-btn--recording {
+  animation: voice-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes voice-pulse {
+  0% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.06);
+    opacity: 0.86;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.attachment-tag-close {
+  color: var(--kobo-danger);
+  opacity: 0.7;
+
+  &:hover {
+    opacity: 1;
+  }
+}
+</style>

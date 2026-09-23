@@ -1,0 +1,240 @@
+import type { EffectiveSettings } from '../../settings-service.js'
+
+// ── Engine contract ───────────────────────────────────────────────────────────
+
+/**
+ * Substring an engine's error message must contain once its session has
+ * fully ended and it can no longer receive a message. The Claude engine
+ * throws `Claude agent is no longer running`; the Codex engine's
+ * post-session-end guard in `codex/engine.ts` reuses this same substring so a
+ * single already-recognized `isAgentUnavailableError` pattern in the
+ * orchestrator covers both engines, instead of growing that list with a
+ * fourth, engine-specific string. Kept here — a module neither engine's
+ * business logic depends on — purely to give the two call sites a shared
+ * anchor; it is not itself part of the `AgentEngine` interface.
+ */
+export const AGENT_NO_LONGER_RUNNING_TEXT = 'agent is no longer running'
+
+/**
+ * Known engine identifiers. Expand this union when new engines are added.
+ * The registry still accepts plain strings at its resolve boundary because DB
+ * values are untyped — validation happens at workspace creation via
+ * `listEngines()` (see `workspace-service.ts` / `mapWorkspace`).
+ */
+export type EngineId = 'claude-code' | 'codex'
+
+export interface AgentEngine {
+  readonly id: EngineId
+  readonly displayName: string
+  readonly capabilities: EngineCapabilities
+  start(options: StartOptions, onEvent: (ev: AgentEvent) => void): Promise<EngineProcess>
+}
+
+export type PendingUserInputResponse =
+  | { kind: 'question'; answers: Record<string, string>; response?: string }
+  | { kind: 'question-cancel'; reason?: string }
+  | { kind: 'permission-allow' }
+  | { kind: 'permission-deny'; reason?: string }
+
+export interface EngineProcess {
+  /** Resolves once the initial native conversation/turn is accepted; rejects on launch failure. */
+  readonly ready?: Promise<void>
+  readonly pid: number | undefined
+  readonly engineSessionId: string | undefined
+  /**
+   * Resolves only once the runtime has actually closed. A watchdog may emit
+   * session:ended before this; an unconfirmed shutdown leaves it pending.
+   * Optional for legacy engines/test doubles; both built-in engines expose it.
+   */
+  readonly closed?: Promise<void>
+  sendMessage(text: string): void | Promise<void>
+  /** Atomically queue a wakeup only after a turn ended waiting on background work. */
+  sendWakeupIfWaiting?(text: string): boolean
+  interrupt(): void
+  stop(): Promise<void>
+  /**
+   * Resolve a pending `canUseTool` callback by `toolCallId`. Returns true if
+   * a pending entry was found and resolved, false if no entry exists for the
+   * given id (already resolved, never registered, or different session).
+   */
+  resolvePendingUserInput(toolCallId: string, response: PendingUserInputResponse): boolean
+  /**
+   * Optional liveness probe used by the orchestrator watchdog. Engines that
+   * don't expose a `pid` (e.g. SDK in-process engines) can implement this so
+   * the watchdog has a signal beyond `isProcessAlive(pid)`. When omitted, the
+   * watchdog falls back to the pid-based check.
+   */
+  isAlive?(): boolean
+}
+
+export interface StartOptions {
+  workspaceId: string
+  workingDir: string
+  prompt: string
+  model?: string
+  effort?: string
+  /**
+   * Unified SDK-aligned permission mode. Maps 1:1 to the SDK:
+   *   - 'plan'        → SDK 'plan' (read-only).
+   *   - 'bypass'      → SDK 'bypassPermissions' (+ allowDangerouslySkipPermissions).
+   *   - 'strict'      → SDK 'acceptEdits' (auto-accept edits, allow-list rest).
+   *   - 'interactive' → SDK 'default' + Kōbō PreToolUse defer hook.
+   */
+  agentPermissionMode?: 'plan' | 'bypass' | 'strict' | 'interactive'
+  resumeFromEngineSessionId?: string
+  backendUrl: string
+  koboHome: string
+  settings: EffectiveSettings
+  mcpServers?: McpServerSpec[]
+  env?: NodeJS.ProcessEnv
+}
+
+export interface McpServerSpec {
+  name: string
+  command: string
+  args: string[]
+  env: Record<string, string>
+}
+
+export interface EngineCapabilities {
+  models: Array<{ id: string; label: string }>
+  effortLevels?: Array<{ id: string; label: string }>
+  permissionModes: Array<'plan' | 'bypass' | 'strict' | 'interactive'>
+  supportsResume: boolean
+  supportsMcp: boolean
+  supportsSkills: boolean
+  /**
+   * Whether the engine surfaces sub-agent spawn/progress events to Kōbō.
+   *
+   * Claude Code emits `subagent:progress` events via the SDK Task tool, so the
+   * SUB-AGENTS panel and the AgentBusyBanner are populated. The Codex SDK
+   * internally spawns sub-agents through `functions.spawn_agent` /
+   * `functions.wait_agent` but does NOT expose them as ThreadEvents — Kōbō has
+   * no visibility, so the UI should hide the panel rather than show an empty
+   * shell that's misleading.
+   */
+  supportsSubagents: boolean
+  /**
+   * Whether the engine exposes structured rate-limit / quota info that Kōbō
+   * can surface in the QuotaFooter at the bottom of the chat.
+   *
+   * Claude SDK emits `rate_limit_event` items with bucket usage percentages
+   * and reset timestamps. The Codex SDK has no equivalent → the footer would
+   * stay stuck on "Loading…" indefinitely. The UI should hide it.
+   */
+  supportsQuotaStatus: boolean
+}
+
+// ── Event model ───────────────────────────────────────────────────────────────
+
+export interface RateLimitBucket {
+  id: string
+  label?: string
+  usedPct: number
+  resetsAt?: string
+  details?: string
+}
+
+export interface RateLimitInfo {
+  buckets: RateLimitBucket[]
+  /**
+   * Verbatim of `SDKRateLimitInfo.status` from the Claude SDK. `'rejected'`
+   * means the request was blocked because the user is out of quota — the
+   * orchestrator surfaces this as a quota error.
+   */
+  status?: 'allowed' | 'allowed_warning' | 'rejected'
+}
+
+export type AgentEvent =
+  // Lifecycle
+  | { kind: 'session:started'; engineSessionId: string; model?: string }
+  | {
+      kind: 'session:ended'
+      reason: 'completed' | 'error' | 'killed' | 'watchdog'
+      exitCode: number | null
+      superseded?: boolean
+    }
+  /**
+   * The current model turn has produced its terminal result and no tracked
+   * background work remains. The session may still be draining internally.
+   * This is deliberately separate from `session:ended`, which remains the
+   * authoritative lifecycle signal for orchestration and auto-loop.
+   */
+  | { kind: 'turn:completed' }
+  | {
+      kind: 'session:user-input-requested'
+      requestKind: 'question' | 'permission'
+      toolCallId: string
+      toolName: string
+      payload: unknown
+    }
+  | { kind: 'session:compacted' }
+  // Transient live signal: the engine is compacting context now (`active: true`)
+  // or has finished (`active: false`). Ephemeral — never persisted/replayed.
+  | { kind: 'session:compacting'; active: boolean }
+  | { kind: 'session:brainstorm-complete' }
+  // Conversation
+  | { kind: 'message:text'; messageId: string; text: string; streaming: boolean }
+  | { kind: 'message:thinking'; messageId: string; text: string }
+  | { kind: 'message:end'; messageId: string }
+  | { kind: 'message:raw'; content: string }
+  | { kind: 'tool:call'; messageId: string; toolCallId: string; name: string; input: unknown }
+  | { kind: 'tool:result'; toolCallId: string; output: unknown; isError: boolean }
+  // Subagent
+  | {
+      kind: 'subagent:progress'
+      toolCallId: string
+      /** Claude SDK task id, used by stopTask; Codex has no equivalent. */
+      taskId?: string
+      status: 'running' | 'done'
+      description?: string
+      taskType?: string
+      lastToolName?: string
+      totalTokens?: number
+      toolUses?: number
+      durationMs?: number
+    }
+  // Meta
+  | { kind: 'skills:discovered'; skills: string[] }
+  | {
+      kind: 'usage'
+      inputTokens: number
+      outputTokens: number
+      cacheRead?: number
+      cacheWrite?: number
+      costUsd?: number
+    }
+  | { kind: 'rate_limit'; info: RateLimitInfo }
+  | { kind: 'mcp:status'; serverName: string; status: 'starting' | 'ready' | 'error'; message?: string }
+  // Errors
+  | {
+      kind: 'error'
+      category: 'quota' | 'spawn_failed' | 'parse_error' | 'resume_failed' | 'other'
+      message: string
+      /** Stable diagnostic identifier; independent of the human-readable message. */
+      code?: string
+    }
+
+/** Every AgentEvent kind, as a const for exhaustive iteration in tests. */
+export const ALL_AGENT_EVENT_KINDS = [
+  'session:started',
+  'session:ended',
+  'turn:completed',
+  'session:user-input-requested',
+  'session:compacted',
+  'session:compacting',
+  'session:brainstorm-complete',
+  'message:text',
+  'message:thinking',
+  'message:end',
+  'message:raw',
+  'tool:call',
+  'tool:result',
+  'subagent:progress',
+  'skills:discovered',
+  'usage',
+  'rate_limit',
+  'error',
+] as const
+
+export type AgentEventKind = (typeof ALL_AGENT_EVENT_KINDS)[number]

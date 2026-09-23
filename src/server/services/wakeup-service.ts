@@ -1,0 +1,329 @@
+import { getDb } from '../db/index.js'
+import { slugifyProjectName } from '../utils/project-slug.js'
+import { isWorkspaceLifecycleBusy } from '../utils/workspace-lifecycle-guard.js'
+import { resolveWorkspaceWorktreePath } from '../utils/worktree-paths.js'
+import * as orchestrator from './agent/orchestrator.js'
+import * as autoLoopService from './auto-loop-service.js'
+import * as settingsService from './settings-service.js'
+import { emitEphemeral } from './websocket-service.js'
+
+export interface PendingWakeup {
+  targetAt: string
+  reason?: string
+}
+
+interface PendingWakeupRow {
+  workspace_id: string
+  target_at: string
+  retry_at: string | null
+  prompt: string
+  reason: string | null
+  created_at: string
+  agent_session_id: string | null
+}
+
+const MIN_DELAY_SECONDS = 60
+const MAX_DELAY_SECONDS = 21600
+const ACTIVE_SESSION_RETRY_MS = 15_000
+const STALE_WAKEUP_GRACE_MS = 5 * 60 * 1000
+const AUTONOMOUS_LOOP_SENTINEL = '<<autonomous-loop-dynamic>>'
+const AUTONOMOUS_LOOP_FALLBACK_PROMPT = 'Continue where you left off.'
+
+/** In-memory timers — cleared on cancel/fire; rebuilt on boot via rehydrate. */
+const timers = new Map<string, NodeJS.Timeout>()
+let suspended = false
+
+/** Preserve persisted wakeups while preventing delivery during teardown. */
+export function suspendForShutdown(): void {
+  suspended = true
+  for (const timer of timers.values()) clearTimeout(timer)
+  timers.clear()
+}
+
+function clamp(n: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, n))
+}
+
+function rowToPending(row: PendingWakeupRow | undefined): PendingWakeup | null {
+  if (!row) return null
+  return { targetAt: row.target_at, reason: row.reason ?? undefined }
+}
+
+/**
+ * How many times a wakeup may be re-armed after `startAgent` failed before we
+ * conclude the failure is permanent. `startAgent` throws for good on an
+ * archived or purged workspace, and on a session id that no longer resolves;
+ * without a bound that is a 15 s loop writing to SQLite forever. Deferring
+ * because a session is *running* is a different case and stays unbounded — the
+ * wakeup is meant to land once that session ends, however long it takes.
+ */
+const MAX_FAILED_RETRIES = 5
+
+/** Consecutive `startAgent` failures per workspace. In memory on purpose: a
+ *  restart is a legitimate fresh attempt. */
+const failedRetries = new Map<string, number>()
+
+/** Keep a claimed wakeup durable while the session is still unavailable. */
+function defer(workspaceId: string, row: PendingWakeupRow): void {
+  const targetAt = new Date(Date.now() + ACTIVE_SESSION_RETRY_MS).toISOString()
+  getDb().prepare('UPDATE pending_wakeups SET retry_at = ? WHERE workspace_id = ?').run(targetAt, workspaceId)
+
+  const timeout = setTimeout(() => fire(workspaceId), ACTIVE_SESSION_RETRY_MS)
+  timeout.unref?.()
+  timers.set(workspaceId, timeout)
+  emitEphemeral(workspaceId, 'wakeup:scheduled', { targetAt: row.target_at, reason: row.reason ?? undefined })
+}
+
+/** Schedule a wakeup for the given workspace. Replaces any existing pending wakeup. */
+export function schedule(
+  workspaceId: string,
+  delaySeconds: number,
+  prompt: string,
+  reason: string | undefined,
+  agentSessionId?: string,
+): void {
+  try {
+    const clampedSeconds = clamp(Math.floor(delaySeconds), MIN_DELAY_SECONDS, MAX_DELAY_SECONDS)
+    const effectivePrompt = prompt === AUTONOMOUS_LOOP_SENTINEL ? AUTONOMOUS_LOOP_FALLBACK_PROMPT : prompt
+    const targetAtIso = new Date(Date.now() + clampedSeconds * 1000).toISOString()
+
+    const existing = timers.get(workspaceId)
+    if (existing) clearTimeout(existing)
+
+    const db = getDb()
+    db.prepare(
+      `INSERT OR REPLACE INTO pending_wakeups
+         (workspace_id, target_at, prompt, reason, created_at, agent_session_id)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(workspaceId, targetAtIso, effectivePrompt, reason ?? null, new Date().toISOString(), agentSessionId ?? null)
+
+    timers.delete(workspaceId)
+    if (!suspended) {
+      const timeout = setTimeout(() => fire(workspaceId), clampedSeconds * 1000)
+      timeout.unref?.()
+      timers.set(workspaceId, timeout)
+    }
+
+    emitEphemeral(workspaceId, 'wakeup:scheduled', { targetAt: targetAtIso, reason })
+  } catch (err) {
+    console.error('[wakeup-service] schedule failed:', err)
+  }
+}
+
+/** Move a source conversation's pending check only once its handoff succeeds. */
+export function transferSession(workspaceId: string, sourceSessionId: string | null, targetSessionId: string): void {
+  if (!sourceSessionId) return
+  getDb()
+    .prepare('UPDATE pending_wakeups SET agent_session_id = ? WHERE workspace_id = ? AND agent_session_id = ?')
+    .run(targetSessionId, workspaceId, sourceSessionId)
+}
+
+/** Cancel any pending wakeup for the workspace. Idempotent. */
+export function cancel(
+  workspaceId: string,
+  reason: 'user-message' | 'stopped' | 'archived' | 'deleted' | 'manual',
+): void {
+  try {
+    const existing = timers.get(workspaceId)
+    if (existing) {
+      clearTimeout(existing)
+      timers.delete(workspaceId)
+    }
+    failedRetries.delete(workspaceId)
+
+    const db = getDb()
+    const result = db.prepare('DELETE FROM pending_wakeups WHERE workspace_id = ?').run(workspaceId)
+
+    if (result.changes > 0) {
+      emitEphemeral(workspaceId, 'wakeup:cancelled', { reason })
+    }
+  } catch (err) {
+    console.error('[wakeup-service] cancel failed:', err)
+  }
+}
+
+/** Return the current pending wakeup for a workspace, or null if none. */
+export function getPending(workspaceId: string): PendingWakeup | null {
+  try {
+    const db = getDb()
+    const row = db.prepare('SELECT * FROM pending_wakeups WHERE workspace_id = ?').get(workspaceId) as
+      | PendingWakeupRow
+      | undefined
+    return rowToPending(row)
+  } catch (err) {
+    console.error('[wakeup-service] getPending failed:', err)
+    return null
+  }
+}
+
+/**
+ * Whether a wakeup is currently scheduled for the workspace. Used to decide
+ * that background work the agent left running is intentional (the wakeup will
+ * resume the session to check it) and must NOT be torn down — e.g. the engine's
+ * result-drain watchdog skips its abort when this is true.
+ */
+export function isWakeupScheduled(workspaceId: string): boolean {
+  return getPending(workspaceId) !== null
+}
+
+/** Re-register persisted timers. Previously deferred work survives downtime; only never-attempted stale wakeups expire. */
+export function rehydrate(): void {
+  suspendForShutdown()
+  suspended = false
+  try {
+    const db = getDb()
+    const rows = db.prepare('SELECT * FROM pending_wakeups').all() as PendingWakeupRow[]
+    const now = Date.now()
+
+    for (const row of rows) {
+      try {
+        const target = new Date(row.retry_at ?? row.target_at).getTime()
+        const delay = target - now
+
+        if (delay > 0) {
+          const timeout = setTimeout(() => fire(row.workspace_id), delay)
+          timeout.unref?.()
+          timers.set(row.workspace_id, timeout)
+        } else if (row.retry_at != null || -delay <= STALE_WAKEUP_GRACE_MS) {
+          // Admission deferred this wakeup after its deadline. Downtime does not
+          // revoke the pending instruction; retry through the same admission gate.
+          const timeout = setTimeout(() => fire(row.workspace_id), 0)
+          timeout.unref?.()
+          timers.set(row.workspace_id, timeout)
+        } else {
+          db.prepare('DELETE FROM pending_wakeups WHERE workspace_id = ?').run(row.workspace_id)
+          console.log(
+            `[wakeup-service] Skipping stale wakeup for workspace ${row.workspace_id} (late by ${Math.round(-delay / 1000)}s)`,
+          )
+        }
+      } catch (err) {
+        console.error('[wakeup-service] rehydrate row failed:', row.workspace_id, err)
+      }
+    }
+  } catch (err) {
+    console.error('[wakeup-service] rehydrate failed:', err)
+  }
+}
+
+/** Internal — invoked by setTimeout. */
+function fire(workspaceId: string): void {
+  if (suspended) return
+  try {
+    const db = getDb()
+
+    const row = db.prepare('SELECT * FROM pending_wakeups WHERE workspace_id = ?').get(workspaceId) as
+      | PendingWakeupRow
+      | undefined
+
+    timers.delete(workspaceId)
+
+    if (!row) return
+
+    if (isWorkspaceLifecycleBusy(workspaceId)) {
+      defer(workspaceId, row)
+      return
+    }
+
+    if (orchestrator.hasController(workspaceId)) {
+      // Claude can keep the stream open after a result while a background
+      // task runs. Waiting for that controller to disappear deadlocks a
+      // scheduled check on the very work it is meant to inspect.
+      try {
+        if (orchestrator.sendWakeupIfWaiting(workspaceId, row.prompt, row.agent_session_id ?? undefined)) {
+          failedRetries.delete(workspaceId)
+          db.prepare('DELETE FROM pending_wakeups WHERE workspace_id = ?').run(workspaceId)
+          emitEphemeral(workspaceId, 'wakeup:fired', {})
+          return
+        }
+      } catch (err) {
+        console.error(`[wakeup-service] delivery to active session failed for '${workspaceId}':`, err)
+      }
+      defer(workspaceId, row)
+      return
+    }
+
+    const wsRow = db
+      .prepare(
+        `SELECT project_path, working_branch, worktree_path, model, agent_permission_mode, reasoning_effort, auto_loop
+           FROM workspaces WHERE id = ?`,
+      )
+      .get(workspaceId) as
+      | {
+          project_path: string
+          working_branch: string
+          worktree_path: string | null
+          model: string
+          agent_permission_mode: string | null
+          reasoning_effort: string
+          auto_loop: number
+        }
+      | undefined
+
+    if (!wsRow) {
+      emitEphemeral(workspaceId, 'wakeup:skipped', { reason: 'fire-failed' })
+      return
+    }
+
+    if (wsRow.auto_loop !== 1 && !autoLoopService.canStartAutomatically(workspaceId)) {
+      defer(workspaceId, row)
+      return
+    }
+    if (wsRow.auto_loop === 1) {
+      if (!autoLoopService.queueInstruction(workspaceId, row.prompt, `wakeup:${row.created_at}`)) {
+        defer(workspaceId, row)
+        return
+      }
+      failedRetries.delete(workspaceId)
+      db.prepare('DELETE FROM pending_wakeups WHERE workspace_id = ?').run(workspaceId)
+      emitEphemeral(workspaceId, 'wakeup:fired', {})
+      return
+    }
+
+    const globalSettings = settingsService.getGlobalSettings()
+    const projectSettings = settingsService.getProjectSettings(wsRow.project_path)
+    const projectSlug = globalSettings.worktreesPrefixByProject
+      ? slugifyProjectName(projectSettings?.displayName ?? '', wsRow.project_path)
+      : undefined
+    const worktreePath =
+      wsRow.worktree_path ??
+      resolveWorkspaceWorktreePath(wsRow.project_path, wsRow.working_branch, globalSettings.worktreesPath, projectSlug)
+    // Narrow against the four known values; unknowns → 'bypass'.
+    const stored = wsRow.agent_permission_mode
+    const agentPermissionMode: 'plan' | 'bypass' | 'strict' | 'interactive' =
+      stored === 'plan' || stored === 'strict' || stored === 'interactive' ? stored : 'bypass'
+
+    try {
+      orchestrator.startAgent(
+        workspaceId,
+        worktreePath,
+        row.prompt,
+        wsRow.model,
+        true,
+        agentPermissionMode,
+        row.agent_session_id ?? undefined,
+        wsRow.reasoning_effort,
+      )
+      failedRetries.delete(workspaceId)
+      db.prepare('DELETE FROM pending_wakeups WHERE workspace_id = ?').run(workspaceId)
+      emitEphemeral(workspaceId, 'wakeup:fired', {})
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      console.error(`[wakeup-service] startAgent at fire time failed for '${workspaceId}':`, message)
+      const attempts = (failedRetries.get(workspaceId) ?? 0) + 1
+      if (attempts > MAX_FAILED_RETRIES) {
+        failedRetries.delete(workspaceId)
+        db.prepare('DELETE FROM pending_wakeups WHERE workspace_id = ?').run(workspaceId)
+        console.error(
+          `[wakeup-service] giving up on the wakeup for '${workspaceId}' after ${MAX_FAILED_RETRIES} failed attempts`,
+        )
+        emitEphemeral(workspaceId, 'wakeup:skipped', { reason: message })
+        return
+      }
+      failedRetries.set(workspaceId, attempts)
+      defer(workspaceId, row)
+    }
+  } catch (err) {
+    console.error('[wakeup-service] fire failed:', err)
+    timers.delete(workspaceId)
+  }
+}

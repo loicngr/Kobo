@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  pull_request:
+    # `main` included: the develop -> main release PR is the one that ships,
+    # and it was the only PR in the repo running no checks at all.
+    branches: [develop, main]
+  push:
+    branches: [develop]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Lint, type check and tests
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          # Single source of truth, instead of a version repeated here, in
+          # release.yml and in .nvmrc, free to drift apart.
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            src/client/package-lock.json
+            src/client/src-pwa/package-lock.json
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Install client dependencies
+        working-directory: src/client
+        run: npm ci
+
+      - name: Install PWA dependencies
+        working-directory: src/client/src-pwa
+        run: npm ci
+
+      - name: Audit root dependencies
+        run: npm audit --audit-level=high
+
+      - name: Audit client dependencies
+        working-directory: src/client
+        run: npm audit --audit-level=high
+
+      - name: Audit PWA dependencies
+        working-directory: src/client/src-pwa
+        run: npm audit --audit-level=high
+
+      - name: Lint (biome)
+        run: npm run lint
+
+      - name: Type check (server)
+        run: npx tsc --noEmit
+
+      - name: Type check (tests)
+        run: npm run typecheck:tests
+
+      - name: Type check (client)
+        working-directory: src/client
+        run: npm run type-check
+
+      - name: Build
+        # `quasar build -m pwa` exercises the whole Vite/PWA path, which neither
+        # vue-tsc nor Vitest touches. Without this a broken production build
+        # only surfaced during the release, after merging to main.
+        run: npm run build
+
+      - name: Run backend tests
+        run: npm test
+
+      - name: Run frontend tests
+        working-directory: src/client
+        run: npm test
+
+      - name: Install and smoke-test the distributable tarball
+        run: npm run test:package

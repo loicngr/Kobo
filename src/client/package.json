@@ -1,0 +1,57 @@
+{
+  "name": "kobo-client",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Vue 3 + Quasar frontend for Kōbō.",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "author": {
+    "name": "loicngr",
+    "email": "loicnogier@ik.me",
+    "url": "https://github.com/loicngr"
+  },
+  "engines": {
+    "node": ">=24.15.0"
+  },
+  "scripts": {
+    "dev": "quasar dev",
+    "build": "quasar build -m pwa",
+    "build:spa": "quasar build",
+    "type-check": "vue-tsc --noEmit",
+    "postinstall": "quasar prepare",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@quasar/extras": "^2.1.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "dompurify": "^3.4.15",
+    "driver.js": "^1.8.0",
+    "marked": "^18.0.14",
+    "monaco-editor": "^0.56.0",
+    "pinia": "^4.0.3",
+    "qrcode": "^1.5.4",
+    "quasar": "^2.33.1",
+    "vue": "^3.5.43",
+    "vue-i18n": "^11.4.12",
+    "vue-router": "^5.3.1"
+  },
+  "devDependencies": {
+    "@quasar/app-vite": "^3.10.0",
+    "@types/qrcode": "^1.5.6",
+    "@vitejs/plugin-vue": "^6.0.9",
+    "@vue/test-utils": "^2.5.1",
+    "autoprefixer": "^10.6.1",
+    "happy-dom": "^20.14.5",
+    "jsdom": "^30.1.1",
+    "sass": "^1.105.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.11",
+    "vue-tsc": "^3.3.11"
+  },
+  "overrides": {
+    "dompurify": "^3.4.15",
+    "esbuild": "0.28.1"
+  }
+}

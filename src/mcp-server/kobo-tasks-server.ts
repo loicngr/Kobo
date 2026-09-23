@@ -1,0 +1,1125 @@
+#!/usr/bin/env node
+import { Server } from '@modelcontextprotocol/sdk/server/index.js'
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
+import { CallToolRequestSchema, ListToolsRequestSchema, type Tool } from '@modelcontextprotocol/sdk/types.js'
+import type Database from 'better-sqlite3'
+import { getDb } from '../server/db/index.js'
+import { WORKSPACE_DIALOGUE_TOOLS } from '../shared/workspace-dialogue-tools.js'
+import {
+  createTaskHandler,
+  cronListHandler,
+  deleteTaskHandler,
+  getDevServerStatusHandler,
+  getSessionUsageHandler,
+  getSettingsHandler,
+  getTicketSourcesHandler,
+  getWorkspaceInfoHandler,
+  listDocumentsHandler,
+  listTasksHandler,
+  listWorkspaceImagesHandler,
+  listWorkspacesHandler,
+  logThoughtHandler,
+  markAutoLoopReadyHandler,
+  markTaskDoneHandler,
+  readDocumentHandler,
+  readWorkspaceEventsCsvHandler,
+  setWorkspaceAgentDescriptionHandler,
+  updateTaskHandler,
+} from './kobo-tasks-handlers.js'
+import { callWorkspaceDialogueTool } from './workspace-dialogue-client.js'
+
+const handoffId = process.env.KOBO_HANDOFF_ID
+const handoffToken = process.env.KOBO_HANDOFF_TOKEN
+const workspaceId = process.env.KOBO_WORKSPACE_ID
+const dbPath = process.env.KOBO_DB_PATH
+const settingsPath = process.env.KOBO_SETTINGS_PATH
+const backendUrl = process.env.KOBO_BACKEND_URL ?? 'http://localhost:3000'
+
+if (!dbPath) {
+  console.error('[kobo-tasks-server] KOBO_DB_PATH env var is required')
+  process.exit(1)
+}
+
+let db: Database.Database
+try {
+  // Use the shared `getDb` singleton so any service that calls `getDb()`
+  // internally (e.g. cron-service.arm) hits the SAME connection as this
+  // MCP server, against the SAME DB file. Without this bootstrap, the
+  // singleton would resolve via getDbPath() → getKoboHome() → KOBO_HOME
+  // env var, which the agent SDK does NOT pass to the MCP server (only
+  // KOBO_DB_PATH is passed). That would silently open a second connection
+  // against the user's prod DB at ~/.config/kobo/kobo.db, which may not
+  // even have the same schema as the dev DB the backend is using.
+  // On ouvre SANS migrer. Ce process est lancé une fois par workspace, sur le
+  // même fichier de base : `runMigrations` calcule l'ensemble des blocs
+  // appliqués AVANT de prendre le verrou, donc deux serveurs MCP démarrés
+  // ensemble peuvent rejouer le même bloc — et les blocs v2 à v19 ajoutent
+  // des colonnes sans garde d'existence. Un `duplicate column name` ici
+  // termine le process et prive l'agent de tous ses outils en pleine session.
+  // Le backend migre au démarrage, et il démarre nécessairement avant de
+  // pouvoir lancer ce serveur.
+  db = getDb(dbPath)
+} catch (err) {
+  console.error('[kobo-tasks-server] Failed to open database:', err)
+  process.exit(1)
+}
+
+/** Fire-and-forget POST to the backend so the UI reflects a task marked as done. */
+async function notifyBackend(taskId: string): Promise<void> {
+  try {
+    const url = `${backendUrl}/api/workspaces/${workspaceId}/tasks/${taskId}/notify-done`
+    const res = await fetch(url, { method: 'POST' })
+    if (!res.ok) {
+      console.error(`[kobo-tasks-server] notify-done HTTP ${res.status}`)
+    }
+  } catch (err) {
+    console.error('[kobo-tasks-server] notify-done failed:', err)
+  }
+}
+
+/** Fire-and-forget POST to the backend so the UI refreshes the task list after a mutation. */
+async function notifyTasksUpdated(): Promise<void> {
+  try {
+    const url = `${backendUrl}/api/workspaces/${workspaceId}/tasks/notify-updated`
+    await fetch(url, { method: 'POST' })
+  } catch (err) {
+    console.error('[kobo-tasks-server] notify-updated failed:', err)
+  }
+}
+
+/**
+ * Fire-and-forget POST that lands on `/auto-loop-ready`, which itself emits
+ * the `autoloop:ready-flipped` WS event so the frontend's toggle unlocks
+ * immediately after the grooming session completes. The handler already
+ * flipped the DB flag; this call is ONLY for the event emission + the
+ * (harmless) idempotent second write.
+ */
+async function notifyAutoLoopReady(): Promise<void> {
+  try {
+    const url = `${backendUrl}/api/workspaces/${workspaceId}/auto-loop-ready`
+    await fetch(url, { method: 'POST' })
+  } catch (err) {
+    console.error('[kobo-tasks-server] notify-autoloop-ready failed:', err)
+  }
+}
+
+/**
+ * Fire-and-forget POST that lands on `/agent-description/notify-updated`,
+ * which emits the `workspace:agent-description-updated` WS event so the
+ * sidebar fallback display + the workspace header italic line refresh live
+ * across every connected client. The handler already wrote the column to DB;
+ * this call is ONLY for the event emission.
+ */
+async function notifyAgentDescriptionUpdated(): Promise<void> {
+  try {
+    const url = `${backendUrl}/api/workspaces/${workspaceId}/agent-description/notify-updated`
+    await fetch(url, { method: 'POST' })
+  } catch (err) {
+    console.error('[kobo-tasks-server] notify-agent-description-updated failed:', err)
+  }
+}
+
+/** Generic HTTP request to the Kobo backend, returning parsed JSON or null. */
+async function backendRequest(
+  method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+  pathname: string,
+  body?: unknown,
+): Promise<unknown> {
+  const url = `${backendUrl}${pathname}`
+  const headers: Record<string, string> = process.env.KOBO_NETWORK_TOKEN
+    ? { 'X-Kobo-Token': process.env.KOBO_NETWORK_TOKEN }
+    : {}
+  const init: RequestInit = { method, headers }
+  if (body !== undefined) {
+    headers['Content-Type'] = 'application/json'
+    init.body = JSON.stringify(body)
+  }
+  const res = await fetch(url, init)
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '')
+    throw new Error(`Backend ${method} ${pathname} returned ${res.status}: ${errText}`)
+  }
+  const text = await res.text()
+  return text ? JSON.parse(text) : null
+}
+
+const server = new Server({ name: 'kobo-tasks', version: '1.0.0' }, { capabilities: { tools: {} } })
+
+const TASK_VERIFICATION_SCHEMA = {
+  type: 'object',
+  description:
+    'Required to complete an auto-loop task. Describe checks actually performed; every check must be passed for done. Record failed/not_run checks only on an unfinished task.',
+  properties: {
+    method: { type: 'string', minLength: 1 },
+    summary: { type: 'string', minLength: 1 },
+    checks: {
+      type: 'array',
+      minItems: 1,
+      items: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', minLength: 1 },
+          status: { type: 'string', enum: ['passed', 'failed', 'not_run'] },
+        },
+        required: ['name', 'status'],
+      },
+    },
+  },
+  required: ['method', 'summary', 'checks'],
+}
+
+const TASK_ORDER_PROPERTIES = {
+  sort_order: {
+    type: 'integer',
+    minimum: 0,
+    description:
+      'Insert/move at this order, shifting siblings. Omit to append on creation. Mutually exclusive with after_task_id.',
+  },
+  after_task_id: {
+    type: 'string',
+    description: 'Insert/move immediately after this task in the same workspace, preserving the remaining order.',
+  },
+}
+
+const WORKSPACE_SCOPED_TOOLS: Tool[] = [
+  {
+    name: 'submit_session_handoff',
+    description:
+      'Submit the final Markdown handoff requested by Kōbō for this generation turn, then end your turn. Only available during a backend-owned session transfer; does not launch or stop sessions.',
+    inputSchema: {
+      type: 'object',
+      properties: { report: { type: 'string', minLength: 1, maxLength: 24000 } },
+      required: ['report'],
+    },
+    annotations: { destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: 'list_tasks',
+    description:
+      'CALL FIRST on any non-trivial turn to know what the user wants done and what is already completed. Returns every task and acceptance criterion for the current workspace with its id, status, sort_order, role, and verification evidence. Re-call periodically (before marking something done, or after the user asks for a status) to stay in sync with user-added or external updates.',
+    inputSchema: { type: 'object', properties: {}, required: [] },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'mark_task_done',
+    description:
+      'CALL AS SOON AS a task or acceptance criterion is finished AND verified by checks actually performed. Auto-loop requires structured verification evidence with all checks passed. Never mark done if required checks failed or were not run. Finalization also requires all work tasks and criteria done. Do not wait for the end of the turn — the user watches progress live and marking each item as it completes is the primary signal Kōbō uses to track you.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: 'Task id from list_tasks.' },
+        verification: TASK_VERIFICATION_SCHEMA,
+      },
+      required: ['task_id'],
+    },
+    annotations: { destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: 'mark_auto_loop_ready',
+    description:
+      'CALL ONLY at the end of a `/kobo-prep-autoloop` grooming session, once all tasks look atomic and implementable in one session. Flips a flag on the workspace that unlocks the auto-loop toggle in the UI. Do NOT call during normal sessions.',
+    inputSchema: { type: 'object', properties: {}, required: [] },
+    annotations: { destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: 'create_task',
+    description:
+      'CALL WHEN you discover follow-up work that was not in the original list and needs to stick around (e.g. "refactor this helper later", "add a test for edge case"). Appends by default; use after_task_id for a dependent check immediately after its parent. Use role finalization for the final verification gate. Do not use it for ephemeral internal notes — prefer log_thought for those.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...TASK_ORDER_PROPERTIES,
+        role: {
+          type: 'string',
+          enum: ['work', 'finalization'],
+          description:
+            'Default work. Finalization is the final verification gate and cannot finish while work/criteria remain open.',
+        },
+        title: { type: 'string', description: 'Short, imperative title (e.g. "Add retry to fetchUser").' },
+        is_acceptance_criterion: {
+          type: 'boolean',
+          description: 'Mark as acceptance criterion rather than a task (default: false).',
+        },
+      },
+      required: ['title'],
+    },
+    annotations: { destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: 'update_task',
+    description:
+      'CALL WHEN you need to refine a task — rewording for clarity, flipping status to `in_progress` as you start it, or promoting a task to acceptance criterion. At least one mutable field is required.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: 'Task id from list_tasks.' },
+        ...TASK_ORDER_PROPERTIES,
+        verification: TASK_VERIFICATION_SCHEMA,
+        title: { type: 'string', description: 'New title (optional).' },
+        status: {
+          type: 'string',
+          enum: ['pending', 'in_progress', 'done'],
+          description: 'New status (optional).',
+        },
+        is_acceptance_criterion: {
+          type: 'boolean',
+          description: 'Toggle acceptance criterion flag (optional).',
+        },
+      },
+      required: ['task_id'],
+    },
+    annotations: { destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: 'delete_task',
+    description:
+      'CALL ONLY when a task was created in error or became truly irrelevant (scope change validated by user). Prefer marking done or in_progress over deleting.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: 'Task id from list_tasks.' },
+      },
+      required: ['task_id'],
+    },
+    annotations: { destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: 'get_workspace_info',
+    description:
+      'CALL EARLY in a session to confirm project path, working/source branch, worktree path, model, and notion link. Cheap read — useful when the user refers to "this workspace" or when you need the worktree path to locate files.',
+    inputSchema: { type: 'object', properties: {}, required: [] },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'set_auto_loop',
+    description:
+      'Enable or disable auto-loop for THIS workspace. Read get_workspace_info first. Enable it only when the user explicitly asks for autonomous continuation and pending tasks remain; disable it only when the user explicitly asks. Kōbō resumes the next iteration automatically after a session ends while it is enabled.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        enabled: {
+          type: 'boolean',
+          description: 'True to enable auto-loop; false to disable it.',
+        },
+      },
+      required: ['enabled'],
+    },
+    annotations: { destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: 'set_workspace_agent_description',
+    description:
+      "Set or clear the workspace's agent-side description (≤ 200 chars). Pass an empty string to clear. The user sees this string under the workspace title in the sidebar (it takes precedence over the user-controlled `description` field). Plain text only. The current value is available via get_workspace_info as agentDescription. NOTE: there is a separate user-controlled `description` field — do NOT try to write it; it has no MCP tool.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        description: {
+          type: 'string',
+          description: 'Plain text, max 200 characters. Empty string clears the description.',
+        },
+      },
+      required: ['description'],
+    },
+    annotations: { destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: 'set_workspace_name',
+    description:
+      'Rename THIS workspace — sets the `name` shown in the sidebar and window title. Call this ONLY when the user explicitly asks you to rename the workspace — never rename it on your own initiative. Whitespace is collapsed and trimmed; the name cannot be empty and is capped at the configured max length. Distinct from `agent_description` (the one-line status summary) and from the user-controlled `description`. The current value is in get_workspace_info as `name`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: {
+          type: 'string',
+          description: 'New workspace name. Non-empty after trimming; control characters are stripped.',
+        },
+      },
+      required: ['name'],
+    },
+    annotations: { destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: 'cron_create',
+    description:
+      'Schedule a recurring trigger on THIS workspace. At each fire, Kōbō waits for the workspace to be idle (no active session) and then resumes the same conversation by injecting `prompt` as the next user message — same UX as `schedule_wakeup` but recurring. Skip-if-active: if a session is already running when the timer fires, that occurrence is skipped, the next occurrence is computed, and the cron continues. The cron persists across server restarts (skip-missed semantics on boot — no catchup spam). Delete with `cron_delete(id)`. Multiple crons per workspace are allowed.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        expression: {
+          type: 'string',
+          description:
+            'Standard 5-field cron expression (`min hour dom month dow`) or one of the helpers `@hourly`, `@daily`, `@weekly`, `@monthly`, `@yearly`. Example: `*/30 * * * *` = every 30 minutes; `0 9 * * 1` = every Monday at 9am. Validated at create time.',
+        },
+        prompt: {
+          type: 'string',
+          description: 'The prompt to inject as the next user message at each fire.',
+        },
+        label: {
+          type: 'string',
+          description: 'Optional human-readable label for the cron (shown in the UI).',
+        },
+        mode: {
+          type: 'string',
+          enum: ['resume', 'fresh'],
+          description:
+            "How each fire is handled. 'resume' (default) pins the cron to the session you're calling from, so every fire continues THAT conversation by injecting `prompt` as the next user message — use this when the cron should follow up on ongoing work. 'fresh' starts a brand-new session at every fire with a clean context — use this for periodic checks (e.g. CI watch, daily standup) that don't need conversation continuity.",
+        },
+        oneShot: {
+          type: 'boolean',
+          description:
+            "When true, the cron cancels itself after the first real fire (default false = recurring). Use this to schedule a single trigger at a specific cron-expressible time (e.g. `0 14 7 6 *` = next 7 June at 14:00) without it repeating yearly. Skip-active fires don't consume the one-shot — the cron retries at the next occurrence until it actually runs once.",
+        },
+      },
+      required: ['expression', 'prompt'],
+    },
+    annotations: { destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: 'cron_delete',
+    description:
+      "Cancel a previously-armed cron by id. Idempotent — returns ok=true even if the id is unknown. Only the workspace's own crons can be cancelled (cron_list to see them).",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'The cron id returned by cron_create.' },
+      },
+      required: ['id'],
+    },
+    annotations: { destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: 'cron_list',
+    description: 'List all crons currently armed on THIS workspace, including their next and last fire times.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'get_git_info',
+    description:
+      'CALL BEFORE creating a PR, committing in batches, or reporting progress to the user. Returns commit count ahead of source, files changed, insertions/deletions, and existing PR URL if any.',
+    inputSchema: { type: 'object', properties: {}, required: [] },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'set_workspace_status',
+    description:
+      'CALL WHEN you believe the mission is done (`completed`) or blocked beyond recovery (`error`). Do NOT set `idle` while this agent session is active: ask the user with AskUserQuestion or end the turn instead. Transitions are validated by the backend — invalid or unsafe ones are rejected.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        status: {
+          type: 'string',
+          enum: ['idle', 'completed', 'error'],
+          description: 'Target status.',
+        },
+      },
+      required: ['status'],
+    },
+    annotations: { destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: 'get_ticket',
+    description:
+      'CALL when the user references "the ticket", "the issue", "the Notion page", or when you need the source-of-truth text for the mission. Works for any source — a Notion ticket or a Sentry issue. Returns `{ sources: [{ type, url, content }] }`, one entry per imported ticket (type is "notion" or "sentry"). Usually one source; empty when none was imported.',
+    inputSchema: { type: 'object', properties: {}, required: [] },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'get_dev_server_status',
+    description:
+      'CALL BEFORE asking the user whether the app is running, or when your change is dev-server-sensitive. Returns `not_configured` when this project has no dev server: do not start one manually in that case. Otherwise returns running/stopped/starting/error + URL, port, container names.',
+    inputSchema: { type: 'object', properties: {}, required: [] },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'start_dev_server',
+    description: 'CALL WHEN the user asks you to test the running app and the dev server is stopped.',
+    inputSchema: { type: 'object', properties: {}, required: [] },
+    annotations: { destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: 'stop_dev_server',
+    description:
+      'CALL WHEN the user explicitly asks to stop the dev server, or before destructive operations that require a clean boot.',
+    inputSchema: { type: 'object', properties: {}, required: [] },
+    annotations: { destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: 'get_dev_server_logs',
+    description:
+      'CALL WHEN debugging a runtime issue the user describes as happening in the running app. Returns the last N lines of logs (default 200). Cheaper than asking the user to paste them.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        tail: { type: 'number', description: 'Number of lines from the end (default: 200).' },
+      },
+      required: [],
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'list_workspace_images',
+    description:
+      'CALL WHEN the user mentions "the screenshot", "the attached image", or when you need to reference a previously-uploaded image. Returns uid, originalName, relativePath, createdAt for every image in .ai/images/.',
+    inputSchema: { type: 'object', properties: {}, required: [] },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'get_settings',
+    description:
+      'CALL WHEN you need to confirm configured models, PR prompt templates, git conventions, or dev-server commands before acting on them. Pass project_path to merge global + project-specific entries.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_path: {
+          type: 'string',
+          description: 'Project path to resolve a specific project entry (optional).',
+        },
+      },
+      required: [],
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  // ── Knowledge / context tools ─────────────────────────────────────────────
+  {
+    name: 'list_documents',
+    description:
+      'CALL EARLY on a new session to discover plans, specs, and thoughts previously written for this workspace. Recursively lists every .md under docs/plans/, docs/superpowers/, .ai/thoughts/, and .ai/handoffs/. Before writing a new plan, check if one already exists.',
+    inputSchema: { type: 'object', properties: {}, required: [] },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'read_document',
+    description:
+      'CALL AFTER list_documents when a file title looks relevant to the current task. Returns the full markdown content. Scoped to docs/plans/, docs/superpowers/, .ai/thoughts/, .ai/handoffs/ — reject anything else.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: {
+          type: 'string',
+          description: 'Worktree-relative path from list_documents (e.g. "docs/superpowers/plans/2026-04-17-foo.md").',
+        },
+      },
+      required: ['path'],
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'log_thought',
+    description:
+      'CALL WHEN you make a decision worth remembering — architecture choice, trade-off taken, dead-end avoided, pattern discovered. Appends a dated markdown file to .ai/thoughts/logs/. Keep entries short and focused; one decision per call. Use create_task for actionable follow-ups instead.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'Short, descriptive title (becomes the filename slug and the # H1).' },
+        content: { type: 'string', description: 'Markdown body explaining the decision and its reasoning.' },
+        tag: {
+          type: 'string',
+          description: 'Optional short tag appended to filename (e.g. "arch", "bug", "perf").',
+        },
+      },
+      required: ['title', 'content'],
+    },
+    annotations: { destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: 'search_codebase',
+    description:
+      'CALL WHEN you need to recall prior chat history across workspaces — past decisions, prior user requests, an agent message you remember but can’t locate. Full-text search over user messages + agent outputs persisted in Kōbō. Use the local Grep tool for searching source code; this tool searches CONVERSATIONS.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Search phrase. Plain text; no regex.' },
+        include_archived: {
+          type: 'boolean',
+          description: 'Include archived workspaces in the search (default: false).',
+        },
+        scope: {
+          type: 'string',
+          enum: ['workspace', 'all'],
+          description: 'Restrict to this workspace only (default) or search across every workspace.',
+        },
+        limit: { type: 'number', description: 'Max results to return (default 30, max 100).' },
+      },
+      required: ['query'],
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'get_session_usage',
+    description:
+      'CALL when you need to self-regulate on long missions — returns token/cost totals for the workspace lifetime and for the currently running agent_session. Useful before spawning heavy subagents or deep reasoning on already-expensive sessions.',
+    inputSchema: { type: 'object', properties: {}, required: [] },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'read_workspace_events_csv',
+    description:
+      'Read the user/agent conversation history for THIS workspace as paginated CSV. Use it to recover context from prior sessions without loading the whole history at once. Optionally filter to one session_id. Read-only; cannot access another workspace.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        session_id: { type: 'string', description: 'Optional Kōbō session id to restrict the history.' },
+        offset: { type: 'number', description: 'Zero-based offset for pagination, default 0.' },
+        limit: { type: 'number', description: 'Messages to return, default 100, max 500.' },
+      },
+      required: [],
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'schedule_wakeup',
+    description:
+      'WHEN: use this whenever you would otherwise WAIT for or POLL a long-running task (test suite, CI, build, deploy, or external state) — never block your turn with sleep/poll loops, and never end a turn merely "waiting" on a background job, because the session goes idle and will not resume on its own. CALL to schedule a follow-up turn on THIS workspace after a delay. End the current turn normally; once it finishes and the workspace is idle, Kōbō waits `delaySeconds`, then resumes the same conversation by injecting `prompt` as the next user message. The wakeup is scoped to the current workspace and resumes its latest session — you cannot target another workspace or another session. If a turn is still active when the timer fires, the wakeup is skipped (status: `session-active`). Replaces any previously pending wakeup on this workspace. Delay is clamped to [60, 21600] seconds (1min to 6h). Prefer this over the built-in `ScheduleWakeup` tool — it is the SDK-supported entry point.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        delaySeconds: {
+          type: 'number',
+          description: 'Seconds from now until the wakeup fires. Clamped to [60, 21600] (1min to 6h).',
+        },
+        prompt: {
+          type: 'string',
+          description: 'Prompt sent to the agent when the wakeup fires.',
+        },
+        reason: {
+          type: 'string',
+          description: 'Short label shown to the user explaining the wakeup (optional).',
+        },
+      },
+      required: ['delaySeconds', 'prompt'],
+    },
+    annotations: { destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: 'cancel_wakeup',
+    description:
+      'CALL to cancel any pending wakeup on this workspace (e.g. the condition you were waiting on resolved early, or you decided not to continue). Idempotent — safe to call when nothing is pending.',
+    inputSchema: { type: 'object', properties: {}, required: [] },
+    annotations: { destructiveHint: false, openWorldHint: false },
+  },
+]
+
+const GLOBAL_TOOLS: typeof WORKSPACE_SCOPED_TOOLS = [
+  ...WORKSPACE_DIALOGUE_TOOLS,
+  {
+    name: 'list_workspaces',
+    description:
+      'List Kōbō workspaces with their id, title, status, and creation date. Works even when the Kōbō backend server is not running (reads the database directly). Use this to discover existing workspaces before creating one or targeting one with archive_workspace/stop_workspace.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        include_archived: {
+          type: 'boolean',
+          description: 'Include archived workspaces (default false).',
+        },
+      },
+      required: [],
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'create_workspace',
+    description:
+      'Create a new Kōbō workspace (git worktree + agent session), like the "Créer" button on the Create page. Requires the Kōbō backend server to be running and reachable at KOBO_BACKEND_URL. name/project_path/source_branch/working_branch are mandatory — unlike the UI, this API does not auto-derive a branch name from the workspace name.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Workspace display name.' },
+        project_path: { type: 'string', description: 'Absolute path to the project on disk.' },
+        source_branch: { type: 'string', description: 'Branch to base the new worktree on (e.g. "develop").' },
+        working_branch: {
+          type: 'string',
+          description: 'New branch name for the worktree (e.g. "feature/my-thing").',
+        },
+        model: { type: 'string', description: 'Model id override (optional, defaults to project/global setting).' },
+        reasoning_effort: { type: 'string', description: 'Reasoning effort override (optional).' },
+        engine: { type: 'string', description: 'Agent engine id, e.g. "claude-code" or "codex" (optional).' },
+        description: { type: 'string', description: 'Task description / initial brainstorming prompt (optional).' },
+        tasks: { type: 'array', items: { type: 'string' }, description: 'Initial manual task titles (optional).' },
+        acceptance_criteria: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Initial manual acceptance criteria (optional).',
+        },
+        agent_permission_mode: {
+          type: 'string',
+          enum: ['plan', 'bypass', 'strict', 'interactive'],
+          description: 'Permission mode for the new session (optional).',
+        },
+        auto_loop: { type: 'boolean', description: 'Start the workspace in auto-loop mode (optional).' },
+        auto_loop_session_mode: {
+          type: 'string',
+          enum: ['per_task', 'continuous'],
+          description: "Auto-loop session mode when auto_loop is true (optional, default 'per_task').",
+        },
+        skip_setup_script: { type: 'boolean', description: "Skip the project's setup script (optional)." },
+      },
+      required: ['name', 'project_path', 'source_branch', 'working_branch'],
+    },
+    annotations: { destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: 'archive_workspace',
+    description:
+      'Archive a workspace by id, like the "Archiver" action in the workspace context menu. Requires the Kōbō backend server to be running.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace_id: { type: 'string', description: 'Workspace id, from list_workspaces.' },
+      },
+      required: ['workspace_id'],
+    },
+    annotations: { destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: 'stop_workspace',
+    description:
+      'Force-stop the currently running agent session on a workspace, like the red "Arrêter" button in the chat header. Requires the Kōbō backend server to be running. Safe to call when nothing is running.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace_id: { type: 'string', description: 'Workspace id, from list_workspaces.' },
+      },
+      required: ['workspace_id'],
+    },
+    annotations: { destructiveHint: false, openWorldHint: false },
+  },
+]
+
+/**
+ * Tool names callable without KOBO_WORKSPACE_ID set. Everything else requires
+ * a workspace-bound session — enforced once, up front, in the
+ * CallToolRequestSchema handler below rather than repeating a guard in every
+ * one of the ~35 workspace-scoped branches.
+ */
+const GLOBAL_TOOL_NAMES = new Set(GLOBAL_TOOLS.map((t) => t.name))
+
+function availableTools(): Tool[] {
+  const tools = workspaceId ? [...WORKSPACE_SCOPED_TOOLS, ...GLOBAL_TOOLS] : GLOBAL_TOOLS
+  return tools.filter((tool) =>
+    handoffId && handoffToken
+      ? tool.name === 'submit_session_handoff' || tool.annotations?.readOnlyHint === true
+      : tool.name !== 'submit_session_handoff',
+  )
+}
+server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: availableTools() }))
+
+/** Wrap a successful result as an MCP tool response with JSON text content. */
+function ok(data: unknown) {
+  return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] }
+}
+
+/** Wrap an error message as an MCP tool error response. */
+function fail(message: string) {
+  return { content: [{ type: 'text', text: `Error: ${message}` }], isError: true }
+}
+
+/**
+ * Turn a backendRequest() rejection into a user-facing message. backendRequest
+ * always throws `Backend ${method} ${pathname} returned ${status}: ...` for a
+ * non-2xx HTTP response (already a clear message — pass it through). Any
+ * other error (fetch itself throwing, e.g. ECONNREFUSED) means the backend
+ * process isn't reachable at all, which gets a friendlier, actionable message.
+ */
+function backendErrorMessage(err: unknown): string {
+  if (err instanceof Error && err.message.startsWith('Backend ')) {
+    return err.message
+  }
+  const detail = err instanceof Error ? err.message : String(err)
+  return `Kōbō backend unreachable at ${backendUrl} — is the app running? (${detail})`
+}
+
+server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  const { name, arguments: args } = request.params
+  const a = (args ?? {}) as Record<string, unknown>
+
+  if (!workspaceId && !GLOBAL_TOOL_NAMES.has(name)) {
+    return fail(`Tool '${name}' requires a workspace-bound MCP session (KOBO_WORKSPACE_ID not set).`)
+  }
+
+  try {
+    if (handoffId && handoffToken && !availableTools().some((tool) => tool.name === name))
+      return fail(
+        'This turn is reserved for a handoff report. Only read tools and submit_session_handoff are available.',
+      )
+    if (name === 'submit_session_handoff') {
+      if (!workspaceId || !handoffId || !handoffToken)
+        return fail('No handoff generation is active for this MCP invocation.')
+      return ok(
+        await backendRequest('POST', `/api/workspaces/${workspaceId}/session-handoffs/${handoffId}/report`, {
+          token: handoffToken,
+          report: a.report,
+        }),
+      )
+    }
+    if (WORKSPACE_DIALOGUE_TOOLS.some((tool) => tool.name === name)) {
+      if (workspaceId && a.workspace_id === workspaceId && name === 'send_workspace_message')
+        return fail('Use the normal conversation to communicate in your own workspace.')
+      return await callWorkspaceDialogueTool(
+        backendUrl,
+        name,
+        a,
+        process.env.KOBO_NETWORK_TOKEN,
+        process.env.KOBO_MCP_CLIENT_NAME ?? server.getClientVersion()?.name,
+      )
+    }
+    if (name === 'list_tasks') {
+      return ok(listTasksHandler(db, workspaceId!))
+    }
+
+    if (name === 'mark_task_done') {
+      const taskId = a.task_id as string | undefined
+      if (!taskId) return fail('task_id parameter is required')
+      const result = markTaskDoneHandler(db, workspaceId!, taskId, a.verification)
+      void notifyBackend(taskId)
+      return ok(result)
+    }
+
+    if (name === 'mark_auto_loop_ready') {
+      const result = markAutoLoopReadyHandler(db, workspaceId!)
+      void notifyAutoLoopReady()
+      return ok(result)
+    }
+
+    if (name === 'create_task') {
+      const title = a.title as string | undefined
+      if (!title) return fail('title parameter is required')
+      const task = createTaskHandler(db, workspaceId!, {
+        title,
+        role: a.role as 'work' | 'finalization' | undefined,
+        is_acceptance_criterion: a.is_acceptance_criterion as boolean | undefined,
+        sort_order: a.sort_order as number | undefined,
+        after_task_id: a.after_task_id as string | undefined,
+      })
+      void notifyTasksUpdated()
+      return ok(task)
+    }
+
+    if (name === 'update_task') {
+      const taskId = a.task_id as string | undefined
+      if (!taskId) return fail('task_id parameter is required')
+      const task = updateTaskHandler(db, workspaceId!, taskId, {
+        title: a.title as string | undefined,
+        status: a.status as string | undefined,
+        verification: a.verification,
+        is_acceptance_criterion: a.is_acceptance_criterion as boolean | undefined,
+        sort_order: a.sort_order as number | undefined,
+        after_task_id: a.after_task_id as string | undefined,
+      })
+      void notifyTasksUpdated()
+      return ok(task)
+    }
+
+    if (name === 'delete_task') {
+      const taskId = a.task_id as string | undefined
+      if (!taskId) return fail('task_id parameter is required')
+      const result = deleteTaskHandler(db, workspaceId!, taskId)
+      void notifyTasksUpdated()
+      return ok(result)
+    }
+
+    if (name === 'get_settings') {
+      return ok(getSettingsHandler(settingsPath, a.project_path as string | undefined))
+    }
+
+    if (name === 'get_dev_server_status') {
+      try {
+        const result = await backendRequest('GET', `/api/dev-server/${workspaceId}/status`)
+        return ok(result)
+      } catch {
+        // Fallback to DB if the backend HTTP API is unreachable
+        return ok(getDevServerStatusHandler(db, workspaceId!))
+      }
+    }
+
+    if (name === 'get_workspace_info') {
+      return ok(getWorkspaceInfoHandler(db, workspaceId!))
+    }
+
+    if (name === 'set_auto_loop') {
+      if (typeof a.enabled !== 'boolean') return fail('enabled parameter is required and must be boolean')
+      try {
+        const method = a.enabled ? 'POST' : 'DELETE'
+        const result = await backendRequest(method, `/api/workspaces/${workspaceId}/auto-loop`)
+        return ok(result)
+      } catch (err) {
+        return fail(err instanceof Error ? err.message : String(err))
+      }
+    }
+
+    if (name === 'set_workspace_agent_description') {
+      const description = a.description as string | undefined
+      if (typeof description !== 'string') return fail('description parameter is required')
+      const result = setWorkspaceAgentDescriptionHandler(db, workspaceId!, { description })
+      if ('ok' in result && result.ok) {
+        void notifyAgentDescriptionUpdated()
+      }
+      return ok(result)
+    }
+
+    if (name === 'set_workspace_name') {
+      const newName = a.name as string | undefined
+      if (typeof newName !== 'string' || !newName.trim()) return fail('name parameter is required (non-empty)')
+      try {
+        const updated = (await backendRequest('PATCH', `/api/workspaces/${workspaceId}`, { name: newName })) as {
+          name?: string
+        }
+        return ok({ ok: true, name: updated.name ?? newName.trim() })
+      } catch (err) {
+        return fail(err instanceof Error ? err.message : String(err))
+      }
+    }
+
+    if (name === 'cron_create') {
+      const expression = a.expression as string | undefined
+      const prompt = a.prompt as string | undefined
+      const label = typeof a.label === 'string' ? (a.label as string) : undefined
+      const mode = typeof a.mode === 'string' ? (a.mode as string) : undefined
+      const oneShot = typeof a.oneShot === 'boolean' ? (a.oneShot as boolean) : undefined
+      if (typeof expression !== 'string' || typeof prompt !== 'string') {
+        return fail('expression and prompt parameters are required')
+      }
+      if (mode !== undefined && mode !== 'resume' && mode !== 'fresh') {
+        return fail("mode must be 'resume' or 'fresh'")
+      }
+      // Route through the backend so the in-memory `setTimeout` lives in the
+      // backend process (which owns orchestrator + WS broadcast). Calling
+      // cron-service.arm() directly here would persist the row but arm the
+      // timer in the MCP server sub-process, which dies with the agent
+      // session — fires would never trigger a real session resume.
+      try {
+        const created = (await backendRequest('POST', `/api/workspaces/${workspaceId}/crons`, {
+          expression,
+          prompt,
+          label,
+          mode,
+          oneShot,
+        })) as { cron: unknown }
+        return ok({ ok: true, cron: created.cron })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        return ok({ ok: false, error: message })
+      }
+    }
+
+    if (name === 'cron_delete') {
+      const id = a.id as string | undefined
+      if (typeof id !== 'string') return fail('id parameter is required')
+      // Same reason as cron_create — the backend owns the timer Map.
+      try {
+        await backendRequest('DELETE', `/api/workspaces/${workspaceId}/crons/${id}`)
+        return ok({ ok: true })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        return ok({ ok: false, error: message })
+      }
+    }
+
+    if (name === 'cron_list') {
+      const result = cronListHandler(db, workspaceId!)
+      return ok(result)
+    }
+
+    if (name === 'start_dev_server') {
+      const result = await backendRequest('POST', `/api/dev-server/${workspaceId}/start`)
+      return ok(result)
+    }
+
+    if (name === 'stop_dev_server') {
+      const result = await backendRequest('POST', `/api/dev-server/${workspaceId}/stop`)
+      return ok(result)
+    }
+
+    if (name === 'get_dev_server_logs') {
+      const tail = (a.tail as number | undefined) ?? 200
+      const result = await backendRequest('GET', `/api/dev-server/${workspaceId}/logs?tail=${tail}`)
+      return ok(result)
+    }
+
+    if (name === 'list_workspace_images') {
+      const info = getWorkspaceInfoHandler(db, workspaceId!)
+      return ok(listWorkspaceImagesHandler(info.worktreePath))
+    }
+
+    // `get_notion_ticket` is the pre-1.7 name, kept as a back-compat alias so
+    // sessions resumed against an older tool list still resolve.
+    if (name === 'get_ticket' || name === 'get_notion_ticket') {
+      const info = getWorkspaceInfoHandler(db, workspaceId!)
+      return ok({ sources: getTicketSourcesHandler(info.worktreePath) })
+    }
+
+    if (name === 'get_git_info') {
+      const result = await backendRequest('GET', `/api/workspaces/${workspaceId}/git-stats`)
+      return ok(result)
+    }
+
+    if (name === 'set_workspace_status') {
+      const status = a.status as string | undefined
+      if (!status) return fail('status parameter is required')
+      const result = await backendRequest('PATCH', `/api/workspaces/${workspaceId}`, { status })
+      return ok(result)
+    }
+
+    if (name === 'list_documents') {
+      const info = getWorkspaceInfoHandler(db, workspaceId!)
+      return ok(listDocumentsHandler(info.worktreePath))
+    }
+
+    if (name === 'read_document') {
+      const docPath = a.path as string | undefined
+      if (!docPath) return fail('path parameter is required')
+      const info = getWorkspaceInfoHandler(db, workspaceId!)
+      return ok(readDocumentHandler(info.worktreePath, docPath))
+    }
+
+    if (name === 'log_thought') {
+      const title = a.title as string | undefined
+      const content = a.content as string | undefined
+      if (!title) return fail('title parameter is required')
+      if (!content) return fail('content parameter is required')
+      const info = getWorkspaceInfoHandler(db, workspaceId!)
+      return ok(
+        logThoughtHandler(info.worktreePath, {
+          title,
+          content,
+          tag: a.tag as string | undefined,
+        }),
+      )
+    }
+
+    if (name === 'get_session_usage') {
+      return ok(getSessionUsageHandler(db, workspaceId!))
+    }
+
+    if (name === 'read_workspace_events_csv') {
+      return ok(
+        readWorkspaceEventsCsvHandler(db, workspaceId!, {
+          sessionId: typeof a.session_id === 'string' ? a.session_id : undefined,
+          offset: typeof a.offset === 'number' ? a.offset : undefined,
+          limit: typeof a.limit === 'number' ? a.limit : undefined,
+        }),
+      )
+    }
+
+    if (name === 'schedule_wakeup') {
+      const delaySeconds = a.delaySeconds
+      const prompt = a.prompt
+      if (typeof delaySeconds !== 'number' || !Number.isFinite(delaySeconds) || delaySeconds <= 0) {
+        return fail('delaySeconds must be a positive number')
+      }
+      if (typeof prompt !== 'string' || prompt.trim().length === 0) {
+        return fail('prompt is required')
+      }
+      const reason = a.reason
+      if (reason !== undefined && typeof reason !== 'string') {
+        return fail('reason must be a string when provided')
+      }
+      const result = await backendRequest('POST', `/api/workspaces/${workspaceId}/pending-wakeup`, {
+        delaySeconds,
+        prompt,
+        reason,
+        // Pin the calling session so the wakeup resumes THIS conversation (keeps
+        // context). The route now defaults to 'fresh' for manual UI scheduling;
+        // the agent must opt into 'resume' explicitly.
+        mode: 'resume',
+      })
+      return ok(result)
+    }
+
+    if (name === 'cancel_wakeup') {
+      const result = await backendRequest('DELETE', `/api/workspaces/${workspaceId}/pending-wakeup`)
+      return ok(result)
+    }
+
+    if (name === 'search_codebase') {
+      const query = a.query as string | undefined
+      if (!query) return fail('query parameter is required')
+      const scope = (a.scope as string | undefined) ?? 'workspace'
+      const includeArchived = a.include_archived === true
+      const limit = Math.min(Math.max(1, (a.limit as number | undefined) ?? 30), 100)
+      const qs = new URLSearchParams({ q: query, limit: String(limit) })
+      if (includeArchived) qs.set('includeArchived', 'true')
+      const raw = (await backendRequest('GET', `/api/search?${qs.toString()}`)) as Array<Record<string, unknown>>
+      const results = scope === 'all' ? raw : raw.filter((r) => r.workspaceId === workspaceId)
+      return ok({ query, scope, total: results.length, results })
+    }
+
+    if (name === 'list_workspaces') {
+      const includeArchived = a.include_archived === true
+      return ok(listWorkspacesHandler(db, { includeArchived }))
+    }
+
+    if (name === 'create_workspace') {
+      const workspaceName = a.name as string | undefined
+      const projectPath = a.project_path as string | undefined
+      const sourceBranch = a.source_branch as string | undefined
+      const workingBranch = a.working_branch as string | undefined
+      if (!workspaceName || !projectPath || !sourceBranch || !workingBranch) {
+        return fail('name, project_path, source_branch, and working_branch parameters are required')
+      }
+      try {
+        const created = await backendRequest('POST', '/api/workspaces', {
+          name: workspaceName,
+          projectPath,
+          sourceBranch,
+          workingBranch,
+          model: a.model as string | undefined,
+          reasoningEffort: a.reasoning_effort as string | undefined,
+          engine: a.engine as string | undefined,
+          description: a.description as string | undefined,
+          tasks: a.tasks as string[] | undefined,
+          acceptanceCriteria: a.acceptance_criteria as string[] | undefined,
+          agentPermissionMode: a.agent_permission_mode as string | undefined,
+          autoLoop: a.auto_loop as boolean | undefined,
+          autoLoopSessionMode: a.auto_loop_session_mode as string | undefined,
+          skipSetupScript: a.skip_setup_script as boolean | undefined,
+        })
+        return ok(created)
+      } catch (err) {
+        return fail(backendErrorMessage(err))
+      }
+    }
+
+    if (name === 'archive_workspace') {
+      const targetId = a.workspace_id as string | undefined
+      if (!targetId) return fail('workspace_id parameter is required')
+      try {
+        const result = await backendRequest('POST', `/api/workspaces/${targetId}/archive`)
+        return ok(result)
+      } catch (err) {
+        return fail(backendErrorMessage(err))
+      }
+    }
+
+    if (name === 'stop_workspace') {
+      const targetId = a.workspace_id as string | undefined
+      if (!targetId) return fail('workspace_id parameter is required')
+      try {
+        const result = await backendRequest('POST', `/api/workspaces/${targetId}/stop`)
+        return ok(result)
+      } catch (err) {
+        return fail(backendErrorMessage(err))
+      }
+    }
+
+    return fail(`Unknown tool: ${name}`)
+  } catch (err) {
+    return fail(err instanceof Error ? err.message : String(err))
+  }
+})
+
+const transport = new StdioServerTransport()
+server.connect(transport).catch((err) => {
+  console.error('[kobo-tasks-server] Fatal:', err)
+  process.exit(1)
+})
+
+process.on('SIGTERM', () => {
+  db.close()
+  process.exit(0)
+})
+process.on('SIGINT', () => {
+  db.close()
+  process.exit(0)
+})

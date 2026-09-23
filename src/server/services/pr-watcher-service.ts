@@ -1,0 +1,515 @@
+import fs from 'node:fs'
+import { fetchSourceBranchAsync } from '../utils/git-ops.js'
+import { withGitRepoLock } from '../utils/git-repo-lock.js'
+import { isWorkspaceLifecycleBusy, withWorkspaceLifecycleGuard } from '../utils/workspace-lifecycle-guard.js'
+import { hasController } from './agent/orchestrator.js'
+import { stopDevServer } from './dev-server-service.js'
+import { getForgeProvider } from './forge/registry.js'
+import { resolveForge } from './forge/resolve.js'
+import type { PrSnapshot } from './forge/types.js'
+import { computeGitStats, type GitStatsResult } from './git-stats-service.js'
+import * as lifecycleHookService from './lifecycle-hook-service.js'
+import { getGlobalSettings } from './settings-service.js'
+import { destroyTerminal } from './terminal-service.js'
+import { emitEphemeral } from './websocket-service.js'
+import {
+  archiveWorkspace,
+  getWorkspace,
+  listArchivedWorkspaces,
+  listWorkspaces,
+  markWorkspaceUnread,
+  restoreWorktreeFromDisk,
+  updateWorkspaceSourceBranch,
+} from './workspace-service.js'
+import { purgeWorktree } from './worktree-purge-service.js'
+import { isMatchingWorkspaceWorktree } from './worktree-service.js'
+
+// ── PR Watcher ────────────────────────────────────────────────────────────────
+// Polls GitHub every POLL_INTERVAL_MS to detect merged/closed PRs and
+// automatically archive the corresponding workspace.
+//
+// Only archives on a STATE TRANSITION from OPEN → CLOSED/MERGED.
+// If a PR is already closed/merged when first seen (e.g. after unarchive),
+// it is recorded but NOT acted upon — prevents re-archiving manually
+// unarchived workspaces.
+
+const POLL_INTERVAL_MS = 30 * 1000 // 30 seconds
+const WORKSPACE_CHECK_CONCURRENCY = 4
+
+let timer: ReturnType<typeof setTimeout> | null = null
+/** Latched by `stopPrWatcher` so a tick already in flight does not re-arm. */
+let stopped = false
+let checking = false
+
+async function runBounded<T>(
+  items: readonly T[],
+  concurrency: number,
+  worker: (item: T) => Promise<void>,
+): Promise<void> {
+  let nextIndex = 0
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const item = items[nextIndex++]
+      await worker(item)
+    }
+  })
+  await Promise.all(workers)
+}
+
+/** Tracks the last known PR snapshot per workspace, used to detect transitions
+ *  (state, base, reviewDecision). */
+const lastKnownPr = new Map<string, PrSnapshot>()
+
+/** Latest git-stats snapshot per workspace, refreshed each watcher tick. */
+const lastKnownGitStats = new Map<string, GitStatsResult>()
+const activeChecks = new Map<string, Set<{ invalidated: boolean }>>()
+
+/** Also cancels stale results from checks that started before restoration. */
+export function invalidateWorkspacePrCaches(workspaceId: string): void {
+  lastKnownPr.delete(workspaceId)
+  lastKnownGitStats.delete(workspaceId)
+  for (const check of activeChecks.get(workspaceId) ?? []) check.invalidated = true
+}
+
+/**
+ * Read-only snapshot map, keyed by workspace id. Used by the drawer indicator
+ * AND the Git panel. Workspaces without a known PR are absent.
+ */
+export function getAllPrSnapshots(): Record<string, PrSnapshot> {
+  const out: Record<string, PrSnapshot> = {}
+  for (const [id, snap] of lastKnownPr) {
+    out[id] = snap
+  }
+  return out
+}
+
+/** Read-only git-stats map, keyed by workspace id. Used by the bulk
+ *  `/api/workspaces/info` endpoint. */
+export function getAllGitStats(): Record<string, GitStatsResult> {
+  const out: Record<string, GitStatsResult> = {}
+  for (const [id, s] of lastKnownGitStats) {
+    out[id] = s
+  }
+  return out
+}
+
+/** Drops a single workspace's cached PR snapshot — called when PR-watch is
+ *  disabled for it, so a stale "Ready to merge"-style badge doesn't linger
+ *  after the toggle (the watcher loop skips, rather than clears, a disabled
+ *  workspace's entry, so this must be done explicitly by the caller). */
+export function clearPrSnapshotCache(workspaceId: string): void {
+  lastKnownPr.delete(workspaceId)
+}
+
+/**
+ * Test-only escape hatch — drops the in-memory cache so each test starts
+ * from a clean slate. Not part of the public API.
+ */
+export function _resetForTest(): void {
+  lastKnownPr.clear()
+  lastKnownGitStats.clear()
+}
+
+/**
+ * Flip a workspace to unread (DB + WS event) on a PR-attention transition.
+ * Best-effort: a failure here must never break the watcher loop.
+ */
+function markUnread(workspaceId: string): void {
+  try {
+    markWorkspaceUnread(workspaceId)
+    emitEphemeral(workspaceId, 'workspace:unread', { hasUnread: true })
+  } catch (err) {
+    console.error('[pr-watcher] markUnread failed:', err instanceof Error ? err.message : err)
+  }
+}
+
+async function autoRestoreManuallyRecreatedWorktrees(): Promise<void> {
+  for (const ws of listArchivedWorkspaces()) {
+    if (!ws.worktreePurgedAt || !ws.worktreeOwned || isWorkspaceLifecycleBusy(ws.id)) continue
+    if (!fs.existsSync(ws.worktreePath)) continue
+    try {
+      await withWorkspaceLifecycleGuard(ws.id, async () => {
+        const current = getWorkspace(ws.id)
+        if (!current?.worktreePurgedAt || !current.worktreeOwned) return
+        if (!(await isMatchingWorkspaceWorktree(current))) return
+        const restored = restoreWorktreeFromDisk(ws.id)
+        invalidateWorkspacePrCaches(ws.id)
+        emitEphemeral(ws.id, 'workspace:worktree-restored', { workspace: restored })
+        console.log(`[pr-watcher] auto-restored worktree for workspace '${ws.name}' (manual restore detected)`)
+      })
+    } catch (err) {
+      console.error(`[pr-watcher] auto-restore failed for '${ws.name}':`, err instanceof Error ? err.message : err)
+    }
+  }
+}
+
+export async function checkPrStatuses(): Promise<void> {
+  await autoRestoreManuallyRecreatedWorktrees()
+  const workspaces = listWorkspaces(false) // non-archived only
+
+  // Clean up entries for workspaces that no longer exist
+  for (const id of lastKnownPr.keys()) {
+    if (!workspaces.some((ws) => ws.id === id)) {
+      lastKnownPr.delete(id)
+    }
+  }
+  for (const id of lastKnownGitStats.keys()) {
+    if (!workspaces.some((ws) => ws.id === id)) {
+      lastKnownGitStats.delete(id)
+    }
+  }
+
+  await runBounded(workspaces, WORKSPACE_CHECK_CONCURRENCY, async (ws) => {
+    // Without this guard, every git/forge spawn below fails with ENOENT and
+    // floods the logs when a worktree was deleted externally.
+    if (isWorkspaceLifecycleBusy(ws.id) || !fs.existsSync(ws.worktreePath)) return
+    const check = { invalidated: false }
+    const checks = activeChecks.get(ws.id) ?? new Set<{ invalidated: boolean }>()
+    checks.add(check)
+    activeChecks.set(ws.id, checks)
+    const stale = () => {
+      const current = getWorkspace(ws.id)
+      return (
+        check.invalidated ||
+        isWorkspaceLifecycleBusy(ws.id) ||
+        !current ||
+        current.archivedAt !== ws.archivedAt ||
+        current.worktreePurgedAt !== ws.worktreePurgedAt
+      )
+    }
+
+    try {
+      // Opt-out: skip the forge call entirely for a workspace with PR-watch
+      // disabled — no PR-status fetch, no auto-archive/purge, no PR-derived
+      // badges. Git stats (below) still run every tick regardless; the
+      // existing `if (!pr) continue` further down already handles a null
+      // `pr` correctly (same path taken by a workspace with no PR yet).
+      const pr = ws.prWatchDisabledAt
+        ? null
+        : await getForgeProvider(resolveForge(ws.projectPath)).getPrStatus(ws.worktreePath, ws.workingBranch)
+
+      if (stale()) return
+
+      // Detect a PR base change BEFORE computing git stats so the new base
+      // is used in commitCount / behindCount / diffStats. Otherwise the
+      // user keeps seeing stale ahead/behind counts vs the OLD base until
+      // the next tick (30s later) — when the user re-targeted the PR via
+      // `gh pr edit --base …`, the lag was painful and confusing.
+      let baseTransitionedFrom: string | null = null
+      if (pr?.state === 'OPEN' && pr.base) {
+        const prevBase = lastKnownPr.get(ws.id)?.base ?? ws.sourceBranch
+        if (prevBase !== pr.base) {
+          try {
+            updateWorkspaceSourceBranch(ws.id, pr.base)
+            ws.sourceBranch = pr.base
+            baseTransitionedFrom = prevBase
+            console.log(`[pr-watcher] PR base changed for workspace '${ws.name}': ${prevBase} → ${pr.base}`)
+          } catch (err) {
+            console.error(
+              `[pr-watcher] updateWorkspaceSourceBranch failed for '${ws.name}':`,
+              err instanceof Error ? err.message : err,
+            )
+            // Leave the cache untouched so the next tick retries — and skip
+            // stats too, since they'd be computed against the stale base.
+            return
+          }
+        }
+      }
+
+      // Git stats — best-effort, cached independently of the PR-transition
+      // logic below. Its own try/catch so a git failure neither skips PR
+      // transitions nor poisons other workspaces.
+      try {
+        // AWAITED, and serialised on the repository's common git dir: remote
+        // refs live there, shared by every worktree of the project. Firing this
+        // without awaiting made the stats below read the refs from BEFORE the
+        // fetch, so ahead/behind counters were always one tick stale; firing it
+        // concurrently across four worktrees made them fight over the same file
+        // lock, with the error swallowed.
+        await withGitRepoLock(ws.worktreePath, () => fetchSourceBranchAsync(ws.worktreePath, ws.sourceBranch))
+        if (stale()) return
+        const stats = await computeGitStats(ws, pr)
+        if (stale()) return
+        lastKnownGitStats.set(ws.id, stats)
+      } catch (err) {
+        console.error(`[pr-watcher] computeGitStats failed for '${ws.name}':`, err instanceof Error ? err.message : err)
+      }
+
+      if (stale() || !pr) return
+
+      const prev = lastKnownPr.get(ws.id)
+      // We delay updating `lastKnownPr` until after the actions succeed.
+      // Setting it eagerly would poison the cache: if updateWorkspaceSourceBranch
+      // throws (transient DB issue, race with workspace deletion), the cache
+      // already holds the new base and the user never sees the toast — the
+      // next tick computes `prev.base === pr.base` and treats it as no-op.
+
+      // Archive on a transition FROM OPEN to CLOSED/MERGED. Skips the
+      // base-change detection below — archiving wins.
+      if (prev?.state === 'OPEN' && (pr.state === 'MERGED' || pr.state === 'CLOSED')) {
+        // Started here, awaited just before the purge below: the worktree is
+        // still on disk at this point, and a hook that deploys or tags from it
+        // must not have the ground removed under it by auto-purge.
+        let prMergedHook: Promise<void> = Promise.resolve()
+        if (pr.state === 'MERGED') {
+          emitEphemeral(ws.id, 'pr:merged', {
+            prNumber: pr.number,
+            prUrl: pr.url,
+          })
+          prMergedHook = lifecycleHookService.onPrMerged(ws.id, { prNumber: pr.number, prUrl: pr.url })
+        }
+        if (['extracting', 'brainstorming', 'executing', 'compacting'].includes(ws.status) || hasController(ws.id)) {
+          // Agent is working — update the cache but skip auto-archive.
+          // (The defensive base preservation from the no-base branch doesn't apply here
+          // because we ARE in the OPEN→MERGED/CLOSED branch which always has a base.)
+          //
+          // The status list alone is not enough: `awaiting-user` is a live
+          // session parked on a tool approval, and a controller can still be
+          // draining while the status already reads idle or error. Unlike the
+          // manual archive route and purge-worktree, this path never stops the
+          // agent, so archiving under one orphans its pending question and
+          // leaves it writing into a workspace the UI now shows as archived.
+          lastKnownPr.set(ws.id, pr)
+          return
+        }
+        console.log(`[pr-watcher] PR ${pr.state.toLowerCase()} for workspace '${ws.name}' — archiving`)
+
+        // Best-effort cleanup (same as manual archive): stop dev server + terminal.
+        // Agent is already not running here (guarded above).
+        try {
+          await stopDevServer(ws.id)
+        } catch (err) {
+          console.error(`[pr-watcher] stopDevServer failed for '${ws.name}':`, err instanceof Error ? err.message : err)
+        }
+        if (stale()) return
+        const current = getWorkspace(ws.id)
+        if (
+          !current ||
+          ['extracting', 'brainstorming', 'executing', 'compacting'].includes(current.status) ||
+          hasController(ws.id)
+        )
+          return
+        try {
+          destroyTerminal(ws.id)
+        } catch {
+          // Terminal may not exist — ignore
+        }
+
+        const archived = archiveWorkspace(ws.id)
+        lastKnownPr.delete(ws.id)
+        emitEphemeral(ws.id, 'workspace:archived', {
+          reason: `PR ${pr.state.toLowerCase()}`,
+          prUrl: pr.url,
+        })
+
+        // Only MERGED — closed-without-merge keeps the worktree so the user
+        // can inspect / push fixes.
+        if (pr.state === 'MERGED') {
+          try {
+            const { autoPurgeOnPrMerged } = getGlobalSettings()
+            if (autoPurgeOnPrMerged) {
+              // `onPrMerged` never rejects and is capped by the script-runner's
+              // own timeout, so this cannot hang the watcher indefinitely.
+              await prMergedHook
+              const current = getWorkspace(ws.id)
+              if (check.invalidated || !archived.archivedAt || current?.archivedAt !== archived.archivedAt) return
+              void purgeWorktree(ws.id, archived.archivedAt)
+                .then((result) => {
+                  // Auto-purge runs with nobody watching: without this trace an
+                  // outcome of 'removal-failed' left no record anywhere.
+                  if (result.outcome !== 'purged') {
+                    console.warn(
+                      `[pr-watcher] auto-purge for '${ws.name}' ended as '${result.outcome}':`,
+                      result.warnings.join('\n') || '(no warning)',
+                    )
+                  }
+                })
+                .catch((err) => {
+                  console.error(
+                    `[pr-watcher] auto-purge failed for '${ws.name}':`,
+                    err instanceof Error ? err.message : err,
+                  )
+                })
+            }
+          } catch (err) {
+            console.error(
+              `[pr-watcher] auto-purge guard failed for '${ws.name}':`,
+              err instanceof Error ? err.message : err,
+            )
+          }
+        }
+        return // do not run base-change detection on a workspace we just archived
+      }
+
+      // Review, CI, mergeability, and readiness transitions (only on OPEN PRs;
+      // first-sight is silent). Each check is independent so simultaneous
+      // state changes emit every applicable event.
+      if (pr.state === 'OPEN' && prev) {
+        const payload = { prNumber: pr.number, prUrl: pr.url }
+
+        if (prev.reviewDecision !== 'CHANGES_REQUESTED' && pr.reviewDecision === 'CHANGES_REQUESTED') {
+          emitEphemeral(ws.id, 'pr:changes-requested', payload)
+          markUnread(ws.id)
+        }
+        if (prev.reviewDecision !== 'APPROVED' && pr.reviewDecision === 'APPROVED') {
+          emitEphemeral(ws.id, 'pr:approved', payload)
+        }
+        if (prev.ci.rollup !== 'FAILURE' && pr.ci.rollup === 'FAILURE') {
+          emitEphemeral(ws.id, 'pr:ci-failed', payload)
+          markUnread(ws.id)
+        }
+        if (prev.ci.rollup === 'FAILURE' && pr.ci.rollup === 'SUCCESS') {
+          emitEphemeral(ws.id, 'pr:ci-recovered', payload)
+        }
+        if (prev.mergeable !== 'CONFLICTING' && pr.mergeable === 'CONFLICTING') {
+          emitEphemeral(ws.id, 'pr:merge-conflict', payload)
+          markUnread(ws.id)
+        }
+        const notBusy = !['extracting', 'brainstorming', 'executing', 'compacting'].includes(ws.status)
+        if (notBusy && !prev.readyToMerge && pr.readyToMerge) {
+          emitEphemeral(ws.id, 'pr:ready-to-merge', payload)
+          markUnread(ws.id)
+        }
+      }
+
+      // Cache the snapshot for the next tick. For non-OPEN PRs (closed /
+      // merged) we preserve the previous `base` if the fresh snapshot is
+      // missing one — keeps the OPEN→CLOSED/MERGED archiving logic stable.
+      if (pr.state !== 'OPEN' || !pr.base) {
+        const next: PrSnapshot = pr.base ? pr : { ...pr, base: prev?.base ?? pr.base }
+        lastKnownPr.set(ws.id, next)
+        return
+      }
+      lastKnownPr.set(ws.id, pr)
+
+      // Emit the base-change event AFTER the snapshot is committed so a
+      // sync:response replay on reconnect sees a consistent state. The
+      // DB update + ws.sourceBranch mutation already happened above
+      // (before computeGitStats).
+      if (baseTransitionedFrom !== null) {
+        emitEphemeral(ws.id, 'pr:base-changed', {
+          oldBase: baseTransitionedFrom,
+          newBase: pr.base,
+          prUrl: pr.url,
+        })
+      }
+    } catch (err) {
+      console.error(
+        `[pr-watcher] Failed to check PR for workspace '${ws.name}':`,
+        err instanceof Error ? err.message : err,
+      )
+    } finally {
+      checks.delete(check)
+      if (!checks.size) activeChecks.delete(ws.id)
+    }
+  })
+}
+
+/**
+ * On-demand refresh of a single workspace's PR snapshot. Bypasses the 30s tick.
+ * No side effects beyond cache update — no archive, no transition emits. The
+ * user is watching the UI; we don't replay events for state they're already
+ * looking at.
+ *
+ * Returns the fresh snapshot, or null if the workspace has no PR (cache entry
+ * cleared in that case). Throws if the workspace doesn't exist.
+ */
+export async function refreshPrSnapshot(workspaceId: string): Promise<PrSnapshot | null> {
+  const ws = getWorkspace(workspaceId)
+  if (!ws) throw new Error(`Workspace '${workspaceId}' not found`)
+
+  if (isWorkspaceLifecycleBusy(workspaceId)) return null
+  const check = { invalidated: false }
+  const checks = activeChecks.get(workspaceId) ?? new Set<{ invalidated: boolean }>()
+  checks.add(check)
+  activeChecks.set(workspaceId, checks)
+  try {
+    const snap = await getForgeProvider(resolveForge(ws.projectPath)).getPrStatus(ws.worktreePath, ws.workingBranch)
+    const current = getWorkspace(workspaceId)
+    if (
+      check.invalidated ||
+      isWorkspaceLifecycleBusy(workspaceId) ||
+      !current ||
+      current.archivedAt !== ws.archivedAt ||
+      current.worktreePurgedAt !== ws.worktreePurgedAt
+    )
+      return null
+    if (snap === null) {
+      lastKnownPr.delete(workspaceId)
+      return null
+    }
+    // Mirror the watcher's base-change detection so a manual refresh fixes a
+    // stale `sourceBranch` (typical scenario: user ran `gh pr edit --base …`
+    // and clicks the GitPanel refresh button instead of waiting for the next
+    // 30s tick). Best-effort: a DB write failure here leaves the snapshot
+    // cached but the metadata stale — the watcher will retry on its own.
+    if (snap.state === 'OPEN' && snap.base && snap.base !== ws.sourceBranch) {
+      try {
+        updateWorkspaceSourceBranch(workspaceId, snap.base)
+        emitEphemeral(workspaceId, 'pr:base-changed', {
+          oldBase: ws.sourceBranch,
+          newBase: snap.base,
+          prUrl: snap.url,
+        })
+      } catch (err) {
+        console.error(
+          `[pr-watcher] updateWorkspaceSourceBranch (refresh) failed for '${ws.name}':`,
+          err instanceof Error ? err.message : err,
+        )
+      }
+    }
+    lastKnownPr.set(workspaceId, snap)
+    return snap
+  } finally {
+    checks.delete(check)
+    if (!checks.size) activeChecks.delete(workspaceId)
+  }
+}
+
+/**
+ * Runs a single check while honouring the `checking` re-entrancy guard. Used
+ * both by the immediate boot-time kick-off and by the periodic timer tick.
+ */
+async function runOneCheck(): Promise<void> {
+  if (checking) return
+  checking = true
+  try {
+    await checkPrStatuses()
+  } catch (err) {
+    console.error('[pr-watcher] Unexpected error in checkPrStatuses:', err)
+  } finally {
+    checking = false
+  }
+}
+
+function scheduleNext(): void {
+  timer = setTimeout(async () => {
+    await runOneCheck()
+    // A stop can land while the tick above is awaiting a `gh` call, which takes
+    // seconds. Without this the loop re-arms itself after shutdown was asked
+    // for, and `startPrWatcher`'s `if (timer) return` then sees a live timer.
+    if (stopped) return
+    scheduleNext()
+  }, POLL_INTERVAL_MS)
+  timer.unref?.()
+}
+
+/** Start polling GitHub for merged/closed PRs to auto-archive workspaces. */
+export function startPrWatcher(): void {
+  if (timer) return
+  stopped = false
+  // Kick off an immediate check so the front-end has fresh PR data on boot
+  // without waiting for the first 30s tick. Fire-and-forget; the recurring
+  // loop is scheduled independently and the `checking` guard prevents overlap.
+  void runOneCheck()
+  scheduleNext()
+}
+
+/** Stop the PR watcher polling loop. */
+export function stopPrWatcher(): void {
+  stopped = true
+  if (timer) {
+    clearTimeout(timer)
+    timer = null
+  }
+}

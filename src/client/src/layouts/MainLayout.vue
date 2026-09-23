@@ -1,0 +1,484 @@
+<template>
+  <q-layout view="lHh LpR lFf">
+    <q-drawer
+      :model-value="!isWorkspacePane && layout.leftDrawerOpen"
+      @update:model-value="layout.setLeft"
+      :width="effectiveLeftWidth"
+      :breakpoint="DRAWER_BREAKPOINT"
+      bordered
+      class="bg-dark"
+    >
+      <WorkspaceList />
+      <div v-if="!$q.screen.lt.md" class="resize-handle" @mousedown="startResize" />
+    </q-drawer>
+
+    <q-drawer
+      :model-value="showRightDrawer && layout.rightDrawerOpen"
+      side="right"
+      :width="effectiveRightWidth"
+      :breakpoint="DRAWER_BREAKPOINT"
+      bordered
+      class="bg-dark"
+      @update:model-value="layout.setRight"
+    >
+      <div
+        v-if="!$q.screen.lt.md"
+        class="resize-handle resize-handle--right"
+        @mousedown="startRightResize"
+      />
+      <div class="column no-wrap" style="position: absolute; inset: 0; overflow: hidden;">
+        <!-- Upper zone -->
+        <div :style="{ flex: `${topPercent} 1 0%` }" class="column no-wrap" style="overflow: hidden;">
+          <q-tabs
+            :model-value="rightTab"
+            dense
+            dark
+            active-color="primary"
+            indicator-color="primary"
+            narrow-indicator
+            @update:model-value="setRightTab"
+          >
+            <q-tab name="git" data-tour="ws-tabnav-git" icon="commit" :aria-label="$t('git.title')">
+              <q-tooltip>{{ $t('git.title') }}</q-tooltip>
+            </q-tab>
+            <q-tab name="timeline" data-tour="ws-tabnav-timeline" icon="timeline" :aria-label="$t('timeline.title')">
+              <q-tooltip>{{ $t('timeline.title') }}</q-tooltip>
+            </q-tab>
+            <q-tab name="tasks" data-tour="ws-tabnav-tasks" icon="checklist" :aria-label="$t('tasks.title')">
+              <q-tooltip>{{ $t('tasks.title') }}</q-tooltip>
+            </q-tab>
+            <q-tab
+              v-if="subagentsTabVisible"
+              name="subagents"
+              data-tour="ws-tabnav-subagents"
+              icon="smart_toy"
+              :aria-label="$t('subagents.title')"
+            >
+              <q-tooltip>{{ $t('subagents.title') }}</q-tooltip>
+            </q-tab>
+            <q-tab name="documents" data-tour="ws-tabnav-documents" icon="description" :aria-label="$t('documents.title')">
+              <q-tooltip>{{ $t('documents.title') }}</q-tooltip>
+            </q-tab>
+            <q-tab name="schedule" data-tour="ws-tabnav-schedule" icon="event" :aria-label="$t('schedule.tabLabel')">
+              <q-tooltip>{{ $t('schedule.tabLabel') }}</q-tooltip>
+            </q-tab>
+          </q-tabs>
+
+          <q-separator dark />
+
+          <div class="col" style="overflow: auto;">
+            <q-tab-panels v-model="rightTab" animated keep-alive>
+              <q-tab-panel name="git" data-tour="ws-tab-git" class="q-pa-none">
+                <ComparisonPanel
+                  v-if="store.selectedWorkspace?.comparisonId && store.selectedWorkspaceId"
+                  :workspace-id="store.selectedWorkspaceId"
+                />
+                <GitPanel :workspace="store.selectedWorkspace" />
+              </q-tab-panel>
+              <q-tab-panel name="timeline" data-tour="ws-tab-timeline" class="q-pa-none">
+                <SessionTimelinePanel v-if="store.selectedWorkspaceId" :workspace-id="store.selectedWorkspaceId" />
+              </q-tab-panel>
+
+              <q-tab-panel name="tasks" data-tour="ws-tab-tasks" class="q-pa-none">
+                <TasksPanel :workspace="store.selectedWorkspace" :tasks="store.tasks" />
+                <q-separator dark />
+                <AcceptancePanel :tasks="store.acceptanceCriteria" />
+                <q-separator dark />
+                <AgentTodosPanel />
+              </q-tab-panel>
+
+              <q-tab-panel v-if="subagentsTabVisible" name="subagents" data-tour="ws-tab-subagents" class="q-pa-none">
+                <SubagentsPanel />
+              </q-tab-panel>
+
+              <q-tab-panel name="documents" data-tour="ws-tab-documents" class="q-pa-none">
+                <DocumentsPanel :workspace="store.selectedWorkspace" />
+              </q-tab-panel>
+
+              <q-tab-panel name="schedule" data-tour="ws-tab-schedule" class="q-pa-none">
+                <SchedulePanel v-if="store.selectedWorkspaceId" :workspace-id="store.selectedWorkspaceId" />
+              </q-tab-panel>
+            </q-tab-panels>
+          </div>
+        </div>
+
+        <!-- Drag handle -->
+        <div v-if="!$q.screen.lt.md" class="vertical-resize-handle" @mousedown="startVerticalResize" />
+
+        <!-- Lower zone -->
+        <div :style="{ flex: `${100 - topPercent} 1 0%` }" class="column no-wrap" style="overflow: hidden;">
+          <q-tabs
+            v-model="bottomTab"
+            dense
+            dark
+            active-color="primary"
+            indicator-color="primary"
+            narrow-indicator
+          >
+            <q-tab name="tools" data-tour="ws-tabnav-tools" icon="build" :aria-label="$t('tools.title')">
+              <q-tooltip>{{ $t('tools.title') }}</q-tooltip>
+            </q-tab>
+            <q-tab name="terminal" data-tour="ws-tabnav-terminal" icon="terminal" :aria-label="$t('terminal.title')">
+              <q-tooltip>{{ $t('terminal.title') }}</q-tooltip>
+            </q-tab>
+          </q-tabs>
+
+          <q-separator dark />
+
+          <q-tab-panels v-model="bottomTab" animated keep-alive class="col" style="overflow: hidden;">
+            <q-tab-panel name="tools" data-tour="ws-tab-tools" class="q-pa-none" style="overflow: auto;">
+              <ToolsPanel :workspace="store.selectedWorkspace" />
+            </q-tab-panel>
+
+            <q-tab-panel name="terminal" data-tour="ws-terminal" class="q-pa-none" style="height: 100%;">
+              <TerminalPanel />
+            </q-tab-panel>
+          </q-tab-panels>
+        </div>
+      </div>
+    </q-drawer>
+
+    <q-page-container class="bg-dark">
+      <PwaStatusBanner />
+      <FirstRunSetup v-if="!isWorkspacePane" />
+      <q-banner v-if="availableVersion" dense class="kobo-update-banner">
+        <template #avatar>
+          <q-icon name="system_update_alt" size="20px" />
+        </template>
+        {{ $t('update.available', { version: availableVersion }) }}
+        <template #action>
+          <q-btn flat dense no-caps :label="$t('update.how')" @click="showUpdateHelp = !showUpdateHelp" />
+          <q-btn flat dense no-caps :label="$t('common.dismiss')" @click="dismissUpdate" />
+        </template>
+      </q-banner>
+      <div v-if="availableVersion && showUpdateHelp" class="kobo-update-help">
+        <code>npx @loicngr/kobo@latest</code>
+      </div>
+      <router-view />
+    </q-page-container>
+
+    <WhatsNewDialog v-model="showWhatsNew" :versions="newVersions" />
+  </q-layout>
+</template>
+
+<script setup lang="ts">
+import { useQuasar } from 'quasar'
+import AcceptancePanel from 'src/components/AcceptancePanel.vue'
+import AgentTodosPanel from 'src/components/AgentTodosPanel.vue'
+import FirstRunSetup from 'src/components/FirstRunSetup.vue'
+import PwaStatusBanner from 'src/components/PwaStatusBanner.vue'
+import SessionTimelinePanel from 'src/components/SessionTimelinePanel.vue'
+import SubagentsPanel from 'src/components/SubagentsPanel.vue'
+import TasksPanel from 'src/components/TasksPanel.vue'
+import ToolsPanel from 'src/components/ToolsPanel.vue'
+import WhatsNewDialog from 'src/components/WhatsNewDialog.vue'
+import WorkspaceList from 'src/components/WorkspaceList.vue'
+import { useTours } from 'src/composables/use-tours'
+import { useWhatsNew } from 'src/composables/use-whats-new'
+import { supportsSubagents } from 'src/constants/engineFeatures'
+import { useCustomSoundsStore } from 'src/stores/custom-sounds'
+import { useDocumentsStore } from 'src/stores/documents'
+import { useLayoutStore } from 'src/stores/layout'
+import { useWorkspaceStore } from 'src/stores/workspace'
+import { cappedDrawerWidth } from 'src/utils/drawer-width'
+import { isWorkspacePane } from 'src/utils/split-workspace'
+import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, provide, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
+
+// The four heaviest panels of the right drawer. q-tab-panels only renders the
+// active panel, so deferring their chunk means they are not downloaded until
+// the user actually opens their tab — and never at all on the settings page.
+// GitPanel drags DiffViewer + monaco, TerminalPanel drags @xterm/xterm and its
+// stylesheet, DocumentsPanel drags marked + dompurify.
+const DocumentsPanel = defineAsyncComponent(() => import('src/components/DocumentsPanel.vue'))
+const GitPanel = defineAsyncComponent(() => import('src/components/GitPanel.vue'))
+// Async like its neighbours: the vast majority of workspaces belong to no
+// comparison and never render this.
+const ComparisonPanel = defineAsyncComponent(() => import('src/components/ComparisonPanel.vue'))
+const SchedulePanel = defineAsyncComponent(() => import('src/components/SchedulePanel.vue'))
+const TerminalPanel = defineAsyncComponent(() => import('src/components/TerminalPanel.vue'))
+
+// First-run home tour, and the post-update "What's new" dialog.
+const { scheduleAutoRun, migrateLegacyFlag } = useTours()
+const { showDialog: showWhatsNew, newVersions, checkForUpdate, availableVersion, dismissUpdate } = useWhatsNew()
+const showUpdateHelp = ref(false)
+onMounted(() => {
+  if (!isWorkspacePane) {
+    migrateLegacyFlag()
+    void checkForUpdate()
+  }
+  // Loaded here, not from the Settings tab that manages them: a notification can
+  // arrive before Settings is ever opened, and the settings form would otherwise
+  // read an empty catalogue and normalise every imported-sound selection away.
+  void useCustomSoundsStore().fetchSounds()
+})
+
+const DRAWER_TAB_KEY = 'kobo:rightTab'
+const VALID_RIGHT_TABS = ['git', 'timeline', 'tasks', 'subagents', 'documents', 'schedule'] as const
+const storedRightTab = localStorage.getItem(DRAWER_TAB_KEY)
+const rightTab = ref(
+  storedRightTab && (VALID_RIGHT_TABS as readonly string[]).includes(storedRightTab) ? storedRightTab : 'git',
+)
+
+function setRightTab(val: string) {
+  rightTab.value = val
+  localStorage.setItem(DRAWER_TAB_KEY, val)
+}
+
+async function onOpenDiff(event: Event) {
+  layout.setRight(true)
+  setRightTab('git')
+  await nextTick()
+  window.dispatchEvent(new CustomEvent('kobo:select-diff', { detail: (event as CustomEvent).detail }))
+}
+onMounted(() => window.addEventListener('kobo:open-diff', onOpenDiff))
+onUnmounted(() => window.removeEventListener('kobo:open-diff', onOpenDiff))
+
+// External deep-link: when the documents store signals a request to open
+// (e.g. user clicked a plan path inside a chat message), switch to the
+// Documents tab so the opened file is visible.
+const documentsStore = useDocumentsStore()
+watch(
+  () => documentsStore.requestOpen,
+  () => setRightTab('documents'),
+)
+
+// Keep the documents list populated for the selected workspace regardless
+// of whether the user has opened the Documents tab yet — otherwise the
+// in-chat clickable-path detection has no catalogue to match against.
+
+const layout = useLayoutStore()
+const $q = useQuasar()
+
+// Below this width QDrawer switches to dismissible overlay mode (see template).
+const DRAWER_BREAKPOINT = 1023
+
+// Drawers start open on large screens, closed on small ones; re-applied whenever
+// the viewport crosses the breakpoint. Manual toggles persist until the next cross.
+watch(
+  () => $q.screen.lt.md,
+  (isSmall) => layout.applyScreenSize(isSmall),
+  { immediate: true },
+)
+
+const DRAWER_WIDTH_KEY = 'at-left-drawer-width'
+const savedWidth = parseInt(localStorage.getItem(DRAWER_WIDTH_KEY) ?? '260', 10)
+const leftDrawerWidth = ref(Math.min(500, Math.max(140, savedWidth)))
+const isResizing = ref(false)
+
+const RIGHT_DRAWER_WIDTH_KEY = 'kobo:rightDrawerWidth'
+const RIGHT_DRAWER_MIN = 240
+const RIGHT_DRAWER_MAX = 800
+const savedRightWidth = parseInt(localStorage.getItem(RIGHT_DRAWER_WIDTH_KEY) ?? '300', 10)
+const rightDrawerWidth = ref(Math.min(RIGHT_DRAWER_MAX, Math.max(RIGHT_DRAWER_MIN, savedRightWidth)))
+const isResizingRight = ref(false)
+
+// Cap the overlay drawer width to the viewport (minus a safe strip) on small
+// screens so it never covers the whole screen; full saved width on large screens.
+const effectiveLeftWidth = computed(() => cappedDrawerWidth(leftDrawerWidth.value, $q.screen.width, $q.screen.lt.md))
+const effectiveRightWidth = computed(() => cappedDrawerWidth(rightDrawerWidth.value, $q.screen.width, $q.screen.lt.md))
+
+function startResize(event: MouseEvent) {
+  event.preventDefault()
+  isResizing.value = true
+
+  const onMouseMove = (e: MouseEvent) => {
+    const newWidth = Math.min(500, Math.max(140, e.clientX))
+    leftDrawerWidth.value = newWidth
+  }
+
+  const onMouseUp = () => {
+    isResizing.value = false
+    localStorage.setItem(DRAWER_WIDTH_KEY, String(leftDrawerWidth.value))
+    document.removeEventListener('mousemove', onMouseMove)
+    document.removeEventListener('mouseup', onMouseUp)
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+  }
+
+  document.body.style.cursor = 'col-resize'
+  document.body.style.userSelect = 'none'
+  document.addEventListener('mousemove', onMouseMove)
+  document.addEventListener('mouseup', onMouseUp)
+}
+
+function startRightResize(event: MouseEvent) {
+  event.preventDefault()
+  isResizingRight.value = true
+
+  const onMouseMove = (e: MouseEvent) => {
+    const newWidth = Math.min(RIGHT_DRAWER_MAX, Math.max(RIGHT_DRAWER_MIN, window.innerWidth - e.clientX))
+    rightDrawerWidth.value = newWidth
+  }
+
+  const onMouseUp = () => {
+    isResizingRight.value = false
+    localStorage.setItem(RIGHT_DRAWER_WIDTH_KEY, String(rightDrawerWidth.value))
+    document.removeEventListener('mousemove', onMouseMove)
+    document.removeEventListener('mouseup', onMouseUp)
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+  }
+
+  document.body.style.cursor = 'col-resize'
+  document.body.style.userSelect = 'none'
+  document.addEventListener('mousemove', onMouseMove)
+  document.addEventListener('mouseup', onMouseUp)
+}
+
+const route = useRoute()
+watch(
+  () => [route.params.id, route.query.panel],
+  ([, panel]) => {
+    if (panel === 'git') {
+      layout.setRight(true)
+      setRightTab('git')
+    }
+  },
+  { immediate: true },
+)
+const store = useWorkspaceStore()
+
+// The home tour belongs to the home route, whichever route the app opened on.
+// A slightly longer delay lets the sidebar render its anchors.
+watch(
+  () => route.name,
+  (name) => {
+    if (name === 'workspace') scheduleAutoRun('home', 500)
+  },
+  { immediate: true },
+)
+
+// The SUB-AGENTS tab is hidden when the selected workspace's engine cannot
+// surface sub-agent activity (e.g. Codex SDK — see `engineFeatures.ts`).
+// When the user has no workspace selected we keep the tab visible (default
+// experience matches the Claude case).
+const subagentsTabVisible = computed(() => supportsSubagents(store.selectedWorkspace?.engine))
+
+// If the user was viewing the SUB-AGENTS tab and switches to a workspace where
+// it's hidden, fall back to `tasks` so the right drawer doesn't render blank.
+watch(subagentsTabVisible, (visible) => {
+  if (!visible && rightTab.value === 'subagents') {
+    setRightTab('tasks')
+  }
+})
+
+watch(
+  () => store.selectedWorkspaceId,
+  (wsId) => {
+    if (wsId) void documentsStore.fetchDocuments(wsId)
+  },
+  { immediate: true },
+)
+
+// Clear the workspace selection when the user navigates to a non-workspace
+// page (create, settings, search, health). The sidebar highlight stops
+// pointing to a workspace the user is no longer working on.
+watch(
+  () => route.name,
+  (name) => {
+    if (name !== 'workspace' && store.selectedWorkspaceId) {
+      store.selectedWorkspaceId = null
+      store.selectedSessionId = null
+    }
+  },
+  { immediate: true },
+)
+
+const showRightDrawer = computed(() => route.name === 'workspace')
+
+provide('openDrawerTab', (tab: string) => {
+  layout.setRight(true)
+  setRightTab(tab)
+})
+
+const SPLIT_KEY = 'kobo:rightDrawerSplit'
+const savedSplit = parseInt(localStorage.getItem(SPLIT_KEY) ?? '60', 10)
+const topPercent = ref(Math.min(80, Math.max(20, savedSplit)))
+const isResizingVertical = ref(false)
+
+const bottomTab = ref('tools')
+
+function startVerticalResize(event: MouseEvent) {
+  event.preventDefault()
+  isResizingVertical.value = true
+
+  const drawer = (event.target as HTMLElement).closest('.q-drawer') as HTMLElement | null
+  if (!drawer) return
+
+  const onMouseMove = (e: MouseEvent) => {
+    const rect = drawer.getBoundingClientRect()
+    const y = e.clientY - rect.top
+    const percent = Math.round((y / rect.height) * 100)
+    topPercent.value = Math.min(80, Math.max(20, percent))
+  }
+
+  const onMouseUp = () => {
+    isResizingVertical.value = false
+    localStorage.setItem(SPLIT_KEY, String(topPercent.value))
+    document.removeEventListener('mousemove', onMouseMove)
+    document.removeEventListener('mouseup', onMouseUp)
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+  }
+
+  document.body.style.cursor = 'row-resize'
+  document.body.style.userSelect = 'none'
+  document.addEventListener('mousemove', onMouseMove)
+  document.addEventListener('mouseup', onMouseUp)
+}
+</script>
+
+<style lang="scss" scoped>
+.kobo-update-banner {
+  background: var(--kobo-surface-2);
+  color: var(--kobo-text);
+  border-bottom: 1px solid var(--kobo-border);
+}
+
+.kobo-update-help {
+  padding: var(--kobo-space-sm) var(--kobo-space-md);
+  background: var(--kobo-surface-2);
+  border-bottom: 1px solid var(--kobo-border);
+  font-family: var(--kobo-font-mono);
+  color: var(--kobo-text-2);
+}
+
+.bg-dark {
+  background-color: var(--kobo-bg-deep) !important;
+  border-color: var(--kobo-border-subtle) !important;
+}
+
+.resize-handle {
+  position: absolute;
+  top: 0;
+  right: -2px;
+  width: 4px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 10;
+  transition: background-color 0.15s;
+
+  &:hover,
+  &:active {
+    background-color: rgba(102, 95, 221, 0.5);
+  }
+
+  &--right {
+    right: auto;
+    left: -2px;
+  }
+}
+
+.vertical-resize-handle {
+  height: 4px;
+  cursor: row-resize;
+  background-color: var(--kobo-hover);
+  transition: background-color 0.15s;
+
+  &:hover,
+  &:active {
+    background-color: rgba(102, 95, 221, 0.5);
+  }
+}
+</style>

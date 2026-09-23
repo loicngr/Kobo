@@ -1,0 +1,8348 @@
+import { Hono } from 'hono'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+vi.mock('../server/services/image-service.js', () => ({
+  saveImage: vi.fn(),
+  deleteImage: vi.fn().mockResolvedValue(undefined),
+}))
+
+import * as imageService from '../server/services/image-service.js'
+
+vi.mock('../server/services/worktree-restore-service.js', () => ({
+  restorePurgedWorktree: vi.fn(),
+  WorktreeRestoreError: class extends Error {
+    constructor(
+      readonly code: string,
+      message: string,
+    ) {
+      super(message)
+    }
+  },
+}))
+
+import { restorePurgedWorktree, WorktreeRestoreError } from '../server/services/worktree-restore-service.js'
+import { withWorkspaceLifecycleGuard } from '../server/utils/workspace-lifecycle-guard.js'
+
+// ── Mocks ────────────────────────────────────────────────────────────────────
+
+const { MockInterruptAgentError } = vi.hoisted(() => ({
+  MockInterruptAgentError: class extends Error {
+    constructor(
+      message: string,
+      readonly code: 'no_agent_running' | 'session_not_active' | 'interrupt_failed',
+    ) {
+      super(message)
+      this.name = 'InterruptAgentError'
+    }
+  },
+}))
+
+vi.mock('../server/services/workspace-service.js', () => ({
+  createWorkspace: vi.fn(),
+  getWorkspace: vi.fn(),
+  getWorkspaceWithTasks: vi.fn(),
+  listWorkspaces: vi.fn(),
+  updateWorkspaceStatus: vi.fn(),
+  updateWorkspaceName: vi.fn(),
+  updateWorkingBranch: vi.fn(),
+  updateWorktreePath: vi.fn(),
+  updateWorkspaceModel: vi.fn(),
+  updateWorkspaceReasoningEffort: vi.fn(),
+  updateWorkspaceDescription: vi.fn(),
+  updateWorkspaceFields: vi.fn(),
+  updateAgentPermissionMode: vi.fn(),
+  deleteWorkspace: vi.fn(),
+  createTask: vi.fn(),
+  getTask: vi.fn(),
+  listTasks: vi.fn(),
+  updateTask: vi.fn(),
+  updateTaskStatus: vi.fn(),
+  updateTaskTitle: vi.fn(),
+  deleteTask: vi.fn(),
+  listSessions: vi.fn(),
+  getLatestSession: vi.fn(),
+  getActiveSession: vi.fn(),
+  createIdleSession: vi.fn(),
+  renameSession: vi.fn(),
+  deleteSession: vi.fn(),
+  archiveWorkspace: vi.fn(),
+  unarchiveWorkspace: vi.fn(),
+  listArchivedWorkspaces: vi.fn(),
+  markWorkspaceRead: vi.fn(),
+  markWorkspaceUnread: vi.fn(),
+  setFavorite: vi.fn(),
+  unsetFavorite: vi.fn(),
+  setPrWatchDisabled: vi.fn(),
+  setPrWatchEnabled: vi.fn(),
+  setWorkspaceTags: vi.fn(),
+  updateWorkspaceSourceBranch: vi.fn(),
+  setInitialPrompt: vi.fn(),
+  clearInitialPrompt: vi.fn(),
+  recomputeSessionMetrics: vi.fn(),
+  listComparisonMembers: vi.fn(() => []),
+}))
+
+vi.mock('../server/services/worktree-service.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../server/services/worktree-service.js')>()),
+  createWorktreeUnlocked: vi.fn(),
+  removeWorktree: vi.fn(),
+}))
+
+vi.mock('../server/services/agent/orchestrator.js', () => ({
+  InterruptAgentError: MockInterruptAgentError,
+  startAgent: vi.fn().mockReturnValue({ agentSessionId: 'mock-agent-session-id' }),
+  stopAgent: vi.fn(),
+  stopAgentAndWait: vi.fn().mockResolvedValue('not-running'),
+  interruptAgent: vi.fn(),
+  sendMessage: vi.fn(),
+  sendMessageForFallback: vi.fn().mockResolvedValue({ status: 'sent', sessionId: 'delivered-session-id' }),
+  hasController: vi.fn(() => false),
+  getAgentStatus: vi.fn().mockReturnValue(null),
+  getActiveSessionId: vi.fn().mockReturnValue('active-session-id'),
+  getAgentLiveness: vi.fn().mockReturnValue(null),
+  getAllAgentLiveness: vi.fn().mockReturnValue({}),
+  getPendingInputs: vi.fn().mockReturnValue([]),
+}))
+
+vi.mock('../server/services/agent/engines/registry.js', () => ({
+  listEngines: vi.fn().mockReturnValue([
+    { id: 'claude-code', capabilities: { permissionModes: ['plan', 'bypass', 'strict', 'interactive'] } },
+    { id: 'codex', capabilities: { permissionModes: ['plan', 'bypass', 'strict'] } },
+  ]),
+  resolveEngine: vi.fn(),
+}))
+
+// I10: workspaces.ts now uses promisify(execFile) instead of execFileSync.
+// We mock execFile with a [util.promisify.custom] property so that promisify returns our mock.
+const { execFilePromiseMock, spawnMock } = vi.hoisted(() => {
+  const execFilePromiseMock = vi.fn()
+  // Fake ChildProcess: supports both the fire-and-forget `.on('error')` path
+  // (open-editor) and the awaited `.once('spawn'/'error')` path (waitForSpawn,
+  // used by open-file-manager / open-terminal). Emits 'spawn' on next microtask
+  // so waitForSpawn resolves — override with mockImplementationOnce to emit 'error'.
+  const spawnMock = vi.fn(() => {
+    const handlers: Record<string, (...a: unknown[]) => void> = {}
+    const child = {
+      on: (event: string, cb: (...a: unknown[]) => void) => {
+        handlers[event] = cb
+        return child
+      },
+      once: (event: string, cb: (...a: unknown[]) => void) => {
+        handlers[event] = cb
+        return child
+      },
+      unref: () => child,
+    }
+    queueMicrotask(() => handlers.spawn?.())
+    return child
+  })
+  return { execFilePromiseMock, spawnMock }
+})
+vi.mock('node:child_process', async () => {
+  const actual = await vi.importActual<typeof import('node:child_process')>('node:child_process')
+  const mock = Object.assign(vi.fn(), {
+    [Symbol.for('nodejs.util.promisify.custom')]: execFilePromiseMock,
+  })
+  return {
+    ...actual,
+    execFile: mock,
+    execFileSync: vi.fn(),
+    spawn: spawnMock,
+  }
+})
+
+vi.mock('../server/services/pr-template-service.js', () => ({
+  renderPrTemplate: vi.fn().mockReturnValue('rendered prompt'),
+}))
+
+vi.mock('../server/services/notion-service.js', () => ({
+  extractNotionPage: vi.fn(),
+  parseNotionUrl: vi.fn(),
+  assignNotionPageToSelf: vi.fn().mockResolvedValue({ assigned: false, reason: 'mock' }),
+  listNotionUsers: vi.fn().mockResolvedValue([]),
+  updateNotionStatus: vi.fn().mockResolvedValue(undefined),
+}))
+
+vi.mock('../server/services/sentry-service.js', () => ({
+  extractSentryIssue: vi.fn(),
+  parseSentryUrl: vi.fn(),
+  assignSentryIssueToSelf: vi.fn().mockResolvedValue({ assigned: false, reason: 'mock' }),
+}))
+
+vi.mock('../server/utils/git-ops.js', async (importOriginal) => ({
+  // Les helpers purs (validation, slug) viennent du vrai module : les recopier
+  // ici les faisait diverger en silence de la production.
+  isValidBranchName: (await importOriginal<typeof import('../server/utils/git-ops.js')>()).isValidBranchName,
+  slugifyBranchSegment: (await importOriginal<typeof import('../server/utils/git-ops.js')>()).slugifyBranchSegment,
+  fetchSourceBranch: vi.fn(),
+  fetchSourceBranchOrThrowAsync: vi.fn(),
+  localBranchExists: vi.fn(),
+  deleteLocalBranch: vi.fn(),
+  deleteRemoteBranch: vi.fn(),
+  pushBranch: vi.fn(),
+  pullBranch: vi.fn(),
+  fetchAllBranches: vi.fn(),
+  rebaseBranch: vi.fn(),
+  mergeBranch: vi.fn(),
+  // The HTTP handlers moved to the async variants: execFileSync on a request
+  // path blocked the event loop for up to the 60 s git timeout.
+  pushBranchAsync: vi.fn(),
+  pullBranchAsync: vi.fn(),
+  fetchAllBranchesAsync: vi.fn(),
+  rebaseBranchAsync: vi.fn(),
+  mergeBranchAsync: vi.fn(),
+  continueOngoingGitOperation: vi.fn(),
+  getOngoingGitOperation: vi.fn().mockReturnValue(null),
+  getConflictedFiles: vi.fn(),
+  commitAllChanges: vi.fn(),
+  discardWorkingTreeChanges: vi.fn(),
+  // Real-enough error classes so `err instanceof gitOps.X` matches what the
+  // tests throw. Self-contained — no importActual needed.
+  GitConflictError: class GitConflictError extends Error {
+    operation: string
+    files: string[]
+    constructor(operation: string, files: string[]) {
+      super(`${operation} conflict`)
+      this.name = 'GitConflictError'
+      this.operation = operation
+      this.files = files
+    }
+  },
+  DirtyWorktreeError: class DirtyWorktreeError extends Error {
+    operation: 'rebase' | 'merge' | 'pull'
+    status: { staged: number; modified: number; untracked: number }
+    constructor(
+      operation: 'rebase' | 'merge' | 'pull',
+      status: { staged: number; modified: number; untracked: number },
+    ) {
+      super(`${operation} dirty`)
+      this.name = 'DirtyWorktreeError'
+      this.operation = operation
+      this.status = status
+    }
+  },
+  getFileAtRef: vi.fn().mockReturnValue(null),
+  getFileContent: vi.fn().mockReturnValue(null),
+  getCommitsBetween: vi.fn().mockReturnValue(''),
+  getDiffStatsBetween: vi.fn().mockReturnValue(''),
+  getCommitCount: vi.fn().mockReturnValue(0),
+  getCommitCountAsync: vi.fn().mockResolvedValue(0),
+  getCommitsBehind: vi.fn().mockReturnValue(0),
+  getCommitsBehindAsync: vi.fn().mockResolvedValue(0),
+  getStructuredDiffStatsBetween: vi.fn().mockReturnValue({ filesChanged: 0, insertions: 0, deletions: 0 }),
+  getStructuredDiffStatsBetweenAsync: vi.fn().mockResolvedValue({ filesChanged: 0, insertions: 0, deletions: 0 }),
+  getUnpushedCount: vi.fn().mockReturnValue(0),
+  getUnpushedCountAsync: vi.fn().mockResolvedValue(0),
+  getWorkingTreeStatus: vi.fn().mockReturnValue({ staged: 0, modified: 0, untracked: 0 }),
+  getWorkingTreeStatusAsync: vi.fn().mockResolvedValue({ staged: 0, modified: 0, untracked: 0 }),
+  getChangedFiles: vi.fn().mockReturnValue([]),
+  getChangedFilesBetween: vi.fn().mockReturnValue([]),
+  commitExists: vi.fn().mockReturnValue(true),
+  EMPTY_TREE_SHA: '4b825dc642cb6eb9a060e54bf8d69288fbee4904',
+  getUnpushedChangedFiles: vi.fn().mockReturnValue([]),
+  listBranchCommits: vi.fn().mockReturnValue([]),
+  listCommitsBehind: vi.fn().mockReturnValue([]),
+  fetchSourceBranchAsync: vi.fn().mockResolvedValue(undefined),
+  getCurrentBranch: vi.fn(),
+  moveWorktree: vi.fn(),
+  renameBranch: vi.fn(),
+  branchExists: vi.fn().mockReturnValue(false),
+  listBackupBranches: vi.fn().mockReturnValue([]),
+  pruneBackupBranches: vi.fn().mockReturnValue([]),
+  restoreBranchFromBackup: vi.fn(),
+  getWorkingTreeFiles: vi.fn().mockReturnValue([]),
+}))
+
+vi.mock('../server/services/wakeup-service.js', () => ({
+  schedule: vi.fn(),
+  cancel: vi.fn(),
+  rehydrate: vi.fn(),
+  getPending: vi.fn(() => null),
+}))
+
+vi.mock('../server/services/quota-backoff-service.js', () => ({
+  arm: vi.fn(),
+  cancel: vi.fn(),
+  getPending: vi.fn(),
+  listPending: vi.fn(() => []),
+  restoreOnBoot: vi.fn(),
+  setOnFireCallback: vi.fn(),
+}))
+
+vi.mock('../server/services/cron-service.js', () => ({
+  arm: vi.fn(),
+  cancel: vi.fn(),
+  listForWorkspace: vi.fn(),
+  cancelAllForWorkspace: vi.fn(),
+}))
+
+vi.mock('../server/services/comparison-stats-service.js', () => ({
+  computeWorkspaceActivityStats: vi.fn((_db: unknown, id: string) => ({
+    sessions: id === 'w1' ? 2 : 1,
+    durationMs: 0,
+    userMessages: 3,
+    injectedPrompts: 0,
+    agentMessages: 7,
+    questions: 1,
+    toolCalls: 12,
+    errors: 0,
+    inputTokens: 1000,
+    outputTokens: 100,
+  })),
+}))
+
+vi.mock('../server/services/pr-watcher-service.js', () => ({
+  getAllPrSnapshots: vi.fn(),
+  getAllGitStats: vi.fn(() => ({})),
+  refreshPrSnapshot: vi.fn(),
+  clearPrSnapshotCache: vi.fn(),
+  startPrWatcher: vi.fn(),
+  stopPrWatcher: vi.fn(),
+}))
+
+vi.mock('../server/services/forge/resolve.js', () => ({
+  resolveForge: vi.fn(() => 'github'),
+}))
+const changePrBaseMock = vi.fn()
+const mergeRequestMock = vi.fn()
+const createPrMock = vi.fn()
+const getPrStatusMock = vi.fn().mockResolvedValue(null)
+const changeSourceBranchMock = vi.fn()
+vi.mock('../server/services/change-source-branch-service.js', () => ({
+  changeSourceBranch: (...args: unknown[]) => changeSourceBranchMock(...args),
+}))
+vi.mock('../server/services/forge/registry.js', () => ({
+  getForgeProvider: vi.fn(() => ({
+    id: 'github',
+    capabilities: { canCreatePr: true, canChangePrBase: true, canMergeRequest: true, requestTermShort: 'PR' },
+    isAvailable: vi.fn(async () => ({ available: true })),
+    changePrBase: changePrBaseMock,
+    mergeRequest: mergeRequestMock,
+    createPr: createPrMock,
+    getPrStatus: getPrStatusMock,
+  })),
+}))
+
+vi.mock('../server/services/websocket-service.js', () => ({
+  emit: vi.fn(),
+  emitEphemeral: vi.fn(),
+}))
+
+vi.mock('../server/services/dev-server-service.js', () => ({
+  stopDevServer: vi.fn(),
+  startDevServer: vi.fn(),
+  getStatus: vi.fn(),
+  getDevServerLogs: vi.fn(),
+}))
+
+vi.mock('../server/db/index.js', () => ({
+  getDb: vi.fn().mockReturnValue({
+    prepare: vi.fn().mockReturnValue({
+      run: vi.fn(),
+      get: vi.fn(),
+      all: vi.fn().mockReturnValue([]),
+    }),
+  }),
+}))
+
+vi.mock('../server/services/settings-service.js', () => ({
+  getEffectiveSettings: vi.fn(),
+  getGlobalSettings: vi.fn(),
+  getProjectSettings: vi.fn(),
+  getEffectiveFinalization: vi.fn().mockReturnValue({ prompt: '' }),
+}))
+
+vi.mock('../server/services/setup-script-service.js', () => ({
+  runSetupScript: vi.fn(),
+}))
+
+vi.mock('../server/services/chat-history-service.js', () => ({
+  listChatHistory: vi.fn().mockReturnValue([]),
+  pushChatHistory: vi.fn(),
+}))
+
+vi.mock('../server/services/workspace-template-service.js', () => ({
+  presetFromWorkspace: vi.fn(),
+}))
+
+vi.mock('../server/services/file-editor-service.js', () => ({
+  saveWorkspaceFile: vi.fn(),
+  shaOf: vi.fn((s: string) => `sha-${s.length}`),
+}))
+
+vi.mock('node:fs', async () => {
+  const actual = await vi.importActual<typeof import('node:fs')>('node:fs')
+  const mocked = {
+    ...actual,
+    mkdirSync: vi.fn(),
+    writeFileSync: vi.fn(),
+    openSync: vi.fn().mockReturnValue(101),
+    closeSync: vi.fn(),
+    existsSync: vi.fn().mockReturnValue(false),
+    readFileSync: vi.fn().mockReturnValue(''),
+    appendFileSync: vi.fn(),
+  }
+  return {
+    ...mocked,
+    default: mocked,
+  }
+})
+
+// ── Imports (after mocks) ────────────────────────────────────────────────────
+
+import { execFileSync } from 'node:child_process'
+import * as fs from 'node:fs'
+import { getDb } from '../server/db/index.js'
+import router from '../server/routes/workspaces.js'
+import * as agentManager from '../server/services/agent/orchestrator.js'
+import * as chatHistoryService from '../server/services/chat-history-service.js'
+import * as contentMigrationService from '../server/services/content-migration-service.js'
+import * as cronService from '../server/services/cron-service.js'
+import * as devServerService from '../server/services/dev-server-service.js'
+import * as fileEditorService from '../server/services/file-editor-service.js'
+import { getForgeProvider } from '../server/services/forge/registry.js'
+import * as notionService from '../server/services/notion-service.js'
+import * as prWatcher from '../server/services/pr-watcher-service.js'
+import type { EffectiveSettings } from '../server/services/settings-service.js'
+import * as settingsService from '../server/services/settings-service.js'
+import * as setupScriptService from '../server/services/setup-script-service.js'
+import * as wakeupService from '../server/services/wakeup-service.js'
+import * as wsService from '../server/services/websocket-service.js'
+import * as workspaceService from '../server/services/workspace-service.js'
+import * as worktreeService from '../server/services/worktree-service.js'
+import * as gitOps from '../server/utils/git-ops.js'
+import * as safePath from '../server/utils/safe-path.js'
+import {
+  makeEffectiveSettings,
+  makeGlobalSettings,
+  makeProjectSettings,
+  makeWorkspace,
+  makeWorkspaceWithTasks,
+} from './helpers/fixtures.js'
+
+// ── App setup ────────────────────────────────────────────────────────────────
+
+const app = new Hono()
+app.route('/api/workspaces', router)
+
+// ── Fixtures ─────────────────────────────────────────────────────────────────
+
+const fakeWorkspace = makeWorkspace()
+
+describe('POST /api/workspaces/:id/restore-worktree', () => {
+  it('blocks restoration during content migration', async () => {
+    const status = vi.spyOn(contentMigrationService, 'getContentMigrationStatus').mockReturnValueOnce({
+      state: 'running',
+      total: 1,
+      processed: 0,
+      startedAt: '2026-09-09',
+    })
+    try {
+      const res = await app.request(`/api/workspaces/${fakeWorkspace.id}/restore-worktree`, { method: 'POST' })
+      expect(res.status).toBe(503)
+      expect(restorePurgedWorktree).not.toHaveBeenCalled()
+    } finally {
+      status.mockRestore()
+    }
+  })
+  it('returns the restored workspace and recovery source', async () => {
+    vi.mocked(restorePurgedWorktree).mockResolvedValueOnce({
+      workspace: fakeWorkspace,
+      outcome: 'restored',
+      source: 'local-branch',
+    })
+    const res = await app.request(`/api/workspaces/${fakeWorkspace.id}/restore-worktree`, { method: 'POST' })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({
+      workspace: { id: fakeWorkspace.id },
+      outcome: 'restored',
+      source: 'local-branch',
+    })
+  })
+
+  it.each([
+    ['not-found', 404],
+    ['not-purged', 409],
+    ['workspace-busy', 409],
+    ['path-conflict', 409],
+    ['branch-in-use', 409],
+    ['worktree-not-owned', 422],
+    ['project-unavailable', 422],
+    ['recovery-source-unavailable', 422],
+    ['git-failed', 500],
+  ] as const)('maps %s to HTTP %s', async (code, status) => {
+    vi.mocked(restorePurgedWorktree).mockRejectedValueOnce(new WorktreeRestoreError(code, 'Restore failed'))
+    const res = await app.request(`/api/workspaces/${fakeWorkspace.id}/restore-worktree`, { method: 'POST' })
+    expect(res.status).toBe(status)
+    expect(await res.json()).toMatchObject({ code, error: 'Restore failed' })
+  })
+
+  it('refuses deletion while a restore holds the lifecycle guard', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    await withWorkspaceLifecycleGuard(fakeWorkspace.id, async () => {
+      const res = await app.request(`/api/workspaces/${fakeWorkspace.id}`, { method: 'DELETE' })
+      expect(res.status).toBe(409)
+      expect(await res.json()).toMatchObject({ code: 'workspace-busy' })
+      expect(workspaceService.deleteWorkspace).not.toHaveBeenCalled()
+      expect(agentManager.stopAgentAndWait).not.toHaveBeenCalled()
+    })
+  })
+})
+
+const fakeWorkspaceWithTasks = makeWorkspaceWithTasks({ ...fakeWorkspace })
+
+const fakeSession = {
+  id: 'sess-1',
+  workspaceId: 'ws-1',
+  startedAt: '2026-01-01T00:00:00.000Z',
+  endedAt: null,
+  exitCode: null,
+  prompt: 'test prompt',
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  // fetchSourceBranch succeeds by default; individual tests can override.
+  vi.mocked(gitOps.fetchSourceBranchOrThrowAsync).mockResolvedValue(undefined)
+  // Reset the async-fetch default (clearAllMocks wipes call history but some
+  // tests below override with mockResolvedValueOnce — re-pin the baseline so
+  // every test sees a resolved promise unless it explicitly opts in).
+  vi.mocked(gitOps.fetchSourceBranchAsync).mockResolvedValue(undefined)
+  // No git operation in flight by default; a describe that pins 'rebase' must not leak.
+  vi.mocked(gitOps.getOngoingGitOperation).mockReturnValue(null)
+  vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+    makeEffectiveSettings({
+      model: 'auto',
+      dangerouslySkipPermissions: true,
+      prPromptTemplate: '',
+      gitConventions: '',
+      sourceBranch: 'main',
+      devServer: null,
+      setupScript: '',
+      notionStatusProperty: '',
+      notionInProgressStatus: '',
+    }),
+  )
+  vi.mocked(settingsService.getGlobalSettings).mockReturnValue(
+    makeGlobalSettings({
+      dangerouslySkipPermissions: true,
+      prPromptTemplate: '',
+      gitConventions: '',
+      editorCommand: '',
+      browserNotifications: true,
+      audioNotifications: true,
+      notionStatusProperty: '',
+      notionInProgressStatus: '',
+      notionMcpKey: '',
+      sentryMcpKey: '',
+      notionEnabled: true,
+      sentryEnabled: true,
+      tags: [],
+      worktreesPath: '.worktrees',
+      worktreesPrefixByProject: false,
+    }),
+  )
+  vi.mocked(workspaceService.updateWorkspaceFields).mockImplementation((_id, fields) => ({
+    ...fakeWorkspace,
+    ...fields,
+  }))
+})
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+
+describe('GET /api/workspaces', () => {
+  it('returns workspace list', async () => {
+    vi.mocked(workspaceService.listWorkspaces).mockReturnValue([fakeWorkspace])
+
+    const res = await app.request('/api/workspaces')
+    expect(res.status).toBe(200)
+    const data = await res.json()
+    expect(data).toEqual([fakeWorkspace])
+    expect(workspaceService.listWorkspaces).toHaveBeenCalledOnce()
+  })
+
+  it('returns empty array when no workspaces', async () => {
+    vi.mocked(workspaceService.listWorkspaces).mockReturnValue([])
+
+    const res = await app.request('/api/workspaces')
+    expect(res.status).toBe(200)
+    const data = await res.json()
+    expect(data).toEqual([])
+  })
+
+  it('returns 500 on service error', async () => {
+    vi.mocked(workspaceService.listWorkspaces).mockImplementation(() => {
+      throw new Error('DB connection failed')
+    })
+
+    const res = await app.request('/api/workspaces')
+    expect(res.status).toBe(500)
+    const data = await res.json()
+    expect(data.error).toBe('DB connection failed')
+  })
+})
+
+describe('POST /api/workspaces', () => {
+  it('saves creation images and documents before starting the agent and persists their references in the initial prompt', async () => {
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
+      worktreePath: '/tmp/worktree',
+      base: 'origin',
+      branchCreated: true,
+    })
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+    vi.mocked(imageService.saveImage).mockResolvedValue({ uid: 'image1', relativePath: '.ai/images/image1.png' })
+    const form = new FormData()
+    form.append(
+      'workspace',
+      JSON.stringify({
+        name: 'Screenshot fix',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/screenshot',
+        description: 'Match this screenshot',
+      }),
+    )
+    form.append('images', new File(['pixels'], 'screen.png', { type: 'image/png' }))
+    form.append('attachments', new File(['# Brief'], 'brief.md'))
+    const directory = vi.spyOn(safePath, 'ensureDirectoryInside').mockReturnValue('/tmp/worktree/.ai/attachments')
+    const ignorePath = vi.spyOn(safePath, 'resolvePathInside').mockReturnValue('/tmp/worktree/.gitignore')
+
+    const response = await app.request('/api/workspaces', { method: 'POST', body: form })
+    directory.mockRestore()
+    ignorePath.mockRestore()
+    const documentWrite = vi.mocked(fs.writeFileSync).mock.calls.find(([p]) => p === 101)
+    expect(documentWrite?.[1]).toEqual(Buffer.from('# Brief'))
+    expect(workspaceService.setInitialPrompt).toHaveBeenCalledWith(
+      'ws-1',
+      expect.stringMatching(/Attached document "brief\.md": \[file: \.ai\/attachments\/[^\]]+\.md\]/),
+    )
+
+    expect(response.status).toBe(201)
+    expect(imageService.saveImage).toHaveBeenCalledWith('/tmp/worktree', Buffer.from('pixels'), 'screen.png')
+    const prompt = vi.mocked(agentManager.startAgent).mock.calls[0]?.[2]
+    expect(prompt).toContain('Match this screenshot')
+    expect(prompt).toContain('Attached document')
+    expect(
+      vi.mocked(fs.writeFileSync).mock.invocationCallOrder[
+        vi.mocked(fs.writeFileSync).mock.calls.indexOf(documentWrite!)
+      ],
+    ).toBeLessThan(vi.mocked(agentManager.startAgent).mock.invocationCallOrder[0]!)
+    expect(prompt).toContain('[image: .ai/images/image1.png]')
+    expect(workspaceService.setInitialPrompt).toHaveBeenCalledWith('ws-1', prompt)
+    expect(vi.mocked(imageService.saveImage).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(agentManager.startAgent).mock.invocationCallOrder[0]!,
+    )
+  })
+
+  it('rejects unsupported creation attachments before creating a workspace', async () => {
+    const form = new FormData()
+    form.append(
+      'workspace',
+      JSON.stringify({
+        name: 'Screenshot fix',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/screenshot',
+      }),
+    )
+    form.append('images', new File(['script'], 'script.svg', { type: 'image/svg+xml' }))
+    const response = await app.request('/api/workspaces', { method: 'POST', body: form })
+    expect(response.status).toBe(400)
+    expect((await response.json()).error).toContain('attachment')
+    expect(workspaceService.createWorkspace).not.toHaveBeenCalled()
+    expect(gitOps.fetchSourceBranchOrThrowAsync).not.toHaveBeenCalled()
+  })
+
+  it('does not start the agent when saving a creation image fails', async () => {
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
+      worktreePath: '/tmp/worktree',
+      base: 'origin',
+      branchCreated: true,
+    })
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(imageService.saveImage).mockRejectedValueOnce(new Error('Image disk full'))
+    const form = new FormData()
+    form.append(
+      'workspace',
+      JSON.stringify({
+        name: 'Screenshot fix',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/screenshot',
+      }),
+    )
+    form.append('images', new File(['pixels'], 'screen.png', { type: 'image/png' }))
+    const response = await app.request('/api/workspaces', { method: 'POST', body: form })
+    expect(response.status).toBe(500)
+    expect((await response.json()).error).toContain('Image disk full')
+    expect(agentManager.startAgent).not.toHaveBeenCalled()
+    expect(workspaceService.deleteWorkspace).toHaveBeenCalled()
+  })
+
+  it('creates workspace without Notion URL', async () => {
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
+      worktreePath: '/tmp/worktree',
+      base: 'origin',
+      branchCreated: true,
+    })
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    const data = await res.json()
+    expect(data.id).toBe('ws-1')
+    expect(workspaceService.createWorkspace).toHaveBeenCalledOnce()
+    expect(worktreeService.createWorktreeUnlocked).toHaveBeenCalledWith(
+      '/tmp/project',
+      'feature/test',
+      'origin/main',
+      '.worktrees',
+      undefined,
+    )
+    expect(agentManager.startAgent).toHaveBeenCalledOnce()
+  })
+
+  it('refuses a working branch name git would read as an option', async () => {
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: '--upload-pack=/tmp/evil.sh',
+      }),
+    })
+
+    expect(res.status).toBe(400)
+    const data = await res.json()
+    expect(data.error).toContain('Invalid working branch name')
+    expect(workspaceService.createWorkspace).not.toHaveBeenCalled()
+  })
+
+  it('refuses a source branch name git would read as an option', async () => {
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: '--upload-pack=/tmp/evil.sh',
+        workingBranch: 'feature/test',
+      }),
+    })
+
+    expect(res.status).toBe(400)
+    const data = await res.json()
+    expect(data.error).toContain('Invalid source branch name')
+    expect(workspaceService.createWorkspace).not.toHaveBeenCalled()
+  })
+
+  it('does not validate workingBranch when it is derived from an existing worktreePath', async () => {
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
+      worktreePath: '/tmp/worktree',
+      base: 'origin',
+      branchCreated: true,
+    })
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        worktreePath: '/tmp/existing-worktree',
+      }),
+    })
+
+    // No 400 from the branch-name guard: workingBranch is absent here on
+    // purpose, resolved from git further down this handler, not user input.
+    expect(res.status).not.toBe(400)
+  })
+
+  it('emits one named progress beat per creation step on the creationId channel', async () => {
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
+      worktreePath: '/tmp/worktree',
+      base: 'origin',
+      branchCreated: true,
+    })
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+        creationId: 'create-abc',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+
+    const steps = vi
+      .mocked(wsService.emitEphemeral)
+      .mock.calls.filter(([channel, type]) => channel === 'create-abc' && type === 'workspace:create-progress')
+      .map(([, , payload]) => (payload as { step: string }).step)
+
+    // The user must be able to tell a slow git fetch from a slow setup script.
+    expect(steps).toContain('fetch-source-branch')
+    expect(steps).toContain('create-record')
+    expect(steps).toContain('create-worktree')
+    expect(steps).toContain('build-prompt')
+    expect(steps).toContain('start-agent')
+    expect(steps.at(-1)).toBe('done')
+  })
+
+  it('stays silent when the caller sends no creationId', async () => {
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
+      worktreePath: '/tmp/worktree',
+      base: 'origin',
+      branchCreated: true,
+    })
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+
+    await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+      }),
+    })
+
+    const progressCalls = vi
+      .mocked(wsService.emitEphemeral)
+      .mock.calls.filter(([, type]) => type === 'workspace:create-progress')
+    expect(progressCalls).toEqual([])
+  })
+
+  it('names the failing step when worktree creation fails', async () => {
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockImplementationOnce(async () => {
+      throw new Error('fatal: File name too long')
+    })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+        creationId: 'create-def',
+      }),
+    })
+
+    expect(res.status).toBe(500)
+    const data = await res.json()
+    expect(data.step).toBe('create-worktree')
+
+    expect(wsService.emitEphemeral).toHaveBeenCalledWith(
+      'create-def',
+      'workspace:create-failed',
+      expect.objectContaining({ step: 'create-worktree' }),
+    )
+  })
+
+  it('rolls back the workspace record when worktree creation fails (no orphan)', async () => {
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockImplementationOnce(async () => {
+      throw new Error('fatal: File name too long')
+    })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+      }),
+    })
+
+    expect(res.status).toBe(500)
+    const data = await res.json()
+    expect(data.error).toContain('Failed to create worktree')
+    // A failed checkout never acquired ownership of the requested path.
+    expect(worktreeService.removeWorktree).not.toHaveBeenCalled()
+    // The just-inserted workspace must be deleted, not left as an orphan 'error' record.
+    expect(workspaceService.deleteWorkspace).toHaveBeenCalledWith('ws-1')
+    expect(agentManager.startAgent).not.toHaveBeenCalled()
+  })
+
+  it.each([true, false])(
+    'cleans a checkout created before bookkeeping failed (new branch: %s)',
+    async (branchCreated) => {
+      vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+      vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+      vi.mocked(worktreeService.createWorktreeUnlocked).mockRejectedValueOnce(
+        new worktreeService.WorktreeCreationError(
+          fakeWorkspace.worktreePath,
+          branchCreated,
+          new Error('exclude write failed'),
+        ),
+      )
+      const res = await app.request('/api/workspaces', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Test Workspace',
+          projectPath: '/tmp/project',
+          sourceBranch: 'main',
+          workingBranch: 'feature/test',
+        }),
+      })
+      expect(res.status).toBe(500)
+      expect((await res.json()).error).toContain('exclude write failed')
+      expect(worktreeService.removeWorktree).toHaveBeenCalledWith(fakeWorkspace.projectPath, fakeWorkspace.worktreePath)
+      expect(gitOps.deleteLocalBranch).toHaveBeenCalledTimes(branchCreated ? 1 : 0)
+      expect(workspaceService.deleteWorkspace).toHaveBeenCalledWith(fakeWorkspace.id)
+      expect(agentManager.startAgent).not.toHaveBeenCalled()
+    },
+  )
+
+  it('destroys everything it created when the agent fails to start', async () => {
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
+      worktreePath: '/tmp/worktree',
+      base: 'origin',
+      branchCreated: true,
+    })
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+    vi.mocked(agentManager.startAgent).mockImplementationOnce(() => {
+      throw new Error('claude: command not found')
+    })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+        creationId: 'create-ghi',
+      }),
+    })
+
+    // A half-created workspace is exactly the kind of object whose existence
+    // lies to the user. Nothing is kept.
+    expect(res.status).toBe(500)
+    const data = await res.json()
+    expect(data.step).toBe('start-agent')
+    expect(data.error).toContain('claude: command not found')
+
+    // Worktree gone from disk, branch gone, row gone from the DB (cascading to
+    // tasks, sessions and events).
+    expect(worktreeService.removeWorktree).toHaveBeenCalledWith('/tmp/project', '/tmp/project/.worktrees/feature/test')
+    expect(gitOps.deleteLocalBranch).toHaveBeenCalledWith('/tmp/project', 'feature/test')
+    expect(workspaceService.deleteWorkspace).toHaveBeenCalledWith('ws-1')
+
+    // The progress stream must say the creation was undone, not sit on the last
+    // step it managed to reach.
+    expect(wsService.emitEphemeral).toHaveBeenCalledWith(
+      'create-ghi',
+      'workspace:create-progress',
+      expect.objectContaining({ step: 'rollback' }),
+    )
+    expect(wsService.emitEphemeral).toHaveBeenCalledWith(
+      'create-ghi',
+      'workspace:create-failed',
+      expect.objectContaining({ step: 'start-agent' }),
+    )
+  })
+
+  it('preserves a pre-existing branch when the agent fails to start', async () => {
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
+      worktreePath: '/tmp/worktree',
+      base: 'origin',
+      branchCreated: false,
+    })
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+    vi.mocked(agentManager.startAgent).mockImplementationOnce(() => {
+      throw new Error('claude: command not found')
+    })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+        creationId: 'create-ghi',
+      }),
+    })
+
+    // A half-created workspace is exactly the kind of object whose existence
+    // lies to the user. Nothing is kept.
+    expect(res.status).toBe(500)
+    const data = await res.json()
+    expect(data.step).toBe('start-agent')
+    expect(data.error).toContain('claude: command not found')
+    expect(data.error).not.toContain('its branch were removed')
+
+    // Remove the checkout created here, but retain the user's existing branch.
+    expect(worktreeService.removeWorktree).toHaveBeenCalledWith('/tmp/project', '/tmp/project/.worktrees/feature/test')
+    expect(gitOps.deleteLocalBranch).not.toHaveBeenCalled()
+    expect(workspaceService.deleteWorkspace).toHaveBeenCalledWith('ws-1')
+
+    // The progress stream must say the creation was undone, not sit on the last
+    // step it managed to reach.
+    expect(wsService.emitEphemeral).toHaveBeenCalledWith(
+      'create-ghi',
+      'workspace:create-progress',
+      expect.objectContaining({ step: 'rollback' }),
+    )
+    expect(wsService.emitEphemeral).toHaveBeenCalledWith(
+      'create-ghi',
+      'workspace:create-failed',
+      expect.objectContaining({ step: 'start-agent' }),
+    )
+  })
+
+  it('warns that the setup script may have left effects the rollback cannot undo', async () => {
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
+      worktreePath: '/tmp/worktree',
+      base: 'origin',
+      branchCreated: true,
+    })
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'auto',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '#!/bin/bash\necho setting up',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
+    vi.mocked(setupScriptService.runSetupScript).mockResolvedValue({ exitCode: 0 })
+    vi.mocked(agentManager.startAgent).mockImplementationOnce(() => {
+      throw new Error('engine handshake timed out')
+    })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+      }),
+    })
+
+    const data = await res.json()
+    // Docker containers, global caches, files written outside the worktree:
+    // the rollback cannot reach them, so it must not claim it did.
+    expect(data.error).toMatch(/setup script/i)
+    expect(data.rollback.done).toBe(true)
+  })
+
+  it('never lets a cleanup failure replace the original error', async () => {
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
+      worktreePath: '/tmp/worktree',
+      base: 'origin',
+      branchCreated: true,
+    })
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(agentManager.startAgent).mockImplementationOnce(() => {
+      throw new Error('claude: command not found')
+    })
+    vi.mocked(worktreeService.removeWorktree).mockImplementationOnce(() => {
+      throw new Error('EACCES: permission denied')
+    })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+      }),
+    })
+
+    expect(res.status).toBe(500)
+    const data = await res.json()
+    // The reported cause stays the agent start; the cleanup failure rides along.
+    expect(data.error).toContain('claude: command not found')
+    expect(data.step).toBe('start-agent')
+    expect(data.rollback.warnings.join('\n')).toContain('EACCES')
+    // The DB row is deleted anyway — a stuck directory must not resurrect the
+    // half-created workspace.
+    expect(workspaceService.deleteWorkspace).toHaveBeenCalledWith('ws-1')
+  })
+
+  it('keeps a reused worktree and its branch when the agent fails to start', async () => {
+    const reused = { ...fakeWorkspace, worktreeOwned: false, worktreePath: '/tmp/user-worktree' }
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(reused)
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(reused)
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    // Once only: this must not leak into later tests, which rely on the
+    // module-wide default of `false` for their own `resolveUniqueBranchAndPath`
+    // disk checks (see branch-resolver.ts).
+    vi.mocked(fs.existsSync).mockReturnValueOnce(true)
+    vi.mocked(execFileSync).mockReturnValueOnce('/tmp/project/.git').mockReturnValueOnce('feature/reused')
+    vi.mocked(agentManager.startAgent).mockImplementationOnce(() => {
+      throw new Error('claude: command not found')
+    })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        worktreePath: '/tmp/user-worktree',
+      }),
+    })
+
+    expect(res.status).toBe(500)
+    // The user brought this worktree and this branch — they are not ours to destroy.
+    expect(worktreeService.removeWorktree).not.toHaveBeenCalled()
+    expect(gitOps.deleteLocalBranch).not.toHaveBeenCalled()
+    expect(workspaceService.deleteWorkspace).toHaveBeenCalledWith('ws-1')
+  })
+
+  it('still creates the workspace when everything works', async () => {
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
+      worktreePath: '/tmp/worktree',
+      base: 'origin',
+      branchCreated: true,
+    })
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    const data = await res.json()
+    expect(data.id).toBe('ws-1')
+    expect(data.warning).toBeUndefined()
+    expect(workspaceService.deleteWorkspace).not.toHaveBeenCalled()
+  })
+
+  it('creates new workspaces under the configured global worktrees path', async () => {
+    vi.mocked(settingsService.getGlobalSettings).mockReturnValue(
+      makeGlobalSettings({
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        editorCommand: '',
+        browserNotifications: true,
+        audioNotifications: true,
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+        notionMcpKey: '',
+        sentryMcpKey: '',
+        tags: [],
+        worktreesPath: '$HOME/kobo/worktress',
+        worktreesPrefixByProject: false,
+      }),
+    )
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
+      worktreePath: '/home/test/kobo/worktress/feature/test',
+      base: 'origin',
+      branchCreated: true,
+    })
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    expect(workspaceService.createWorkspace).toHaveBeenCalledWith(
+      expect.objectContaining({ worktreesPath: '$HOME/kobo/worktress' }),
+    )
+    expect(worktreeService.createWorktreeUnlocked).toHaveBeenCalledWith(
+      '/tmp/project',
+      'feature/test',
+      'origin/main',
+      '$HOME/kobo/worktress',
+      undefined,
+    )
+  })
+
+  it('creates workspace with Notion URL and extracts content', async () => {
+    const notionContent = {
+      title: 'Notion Page Title',
+      ticketId: 'TK-123',
+      status: '',
+      goal: 'Build something',
+      todos: [{ title: 'Do thing', checked: false }],
+      gherkinFeatures: ['Feature: login'],
+    }
+
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      name: 'workspace',
+      notionUrl: 'https://notion.so/page-123',
+    })
+    vi.mocked(notionService.extractNotionPage).mockResolvedValue(notionContent)
+    vi.mocked(notionService.parseNotionUrl).mockReturnValue('page-123')
+    vi.mocked(workspaceService.updateWorkspaceName).mockReturnValue({
+      ...fakeWorkspace,
+      name: 'Notion Page Title',
+    })
+    vi.mocked(workspaceService.updateWorkingBranch).mockReturnValue({
+      ...fakeWorkspace,
+      name: 'Notion Page Title',
+      workingBranch: 'feature/TK-123--notion-page-title',
+    } as never)
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
+      worktreePath: '/tmp/worktree',
+      base: 'origin',
+      branchCreated: true,
+    })
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+        notionUrl: 'https://notion.so/page-123',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    expect(notionService.extractNotionPage).toHaveBeenCalledWith('https://notion.so/page-123')
+    expect(workspaceService.createTask).toHaveBeenCalled()
+    // Workspace name uses the Notion title when the user left the generic
+    // placeholder name ("workspace").
+    expect(workspaceService.updateWorkspaceName).toHaveBeenCalledWith('ws-1', 'Notion Page Title')
+    // Ticket-ID injection now happens BEFORE createWorkspace, so the final
+    // working branch is passed in directly — no follow-up updateWorkingBranch call.
+    expect(workspaceService.createWorkspace).toHaveBeenCalledWith(
+      expect.objectContaining({ workingBranch: 'feature/TK-123--notion-page-title' }),
+    )
+    expect(workspaceService.updateWorkingBranch).not.toHaveBeenCalled()
+  })
+
+  it('calls fetchSourceBranch before createWorkspace on workspace creation', async () => {
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
+      worktreePath: '/tmp/worktree',
+      base: 'origin',
+      branchCreated: true,
+    })
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+
+    const callOrder: string[] = []
+    vi.mocked(gitOps.fetchSourceBranchOrThrowAsync).mockImplementation(async () => {
+      callOrder.push('fetchSourceBranch')
+    })
+    vi.mocked(workspaceService.createWorkspace).mockImplementation(() => {
+      callOrder.push('createWorkspace')
+      return fakeWorkspace
+    })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    expect(callOrder).toEqual(['fetchSourceBranch', 'createWorkspace'])
+    expect(gitOps.fetchSourceBranchOrThrowAsync).toHaveBeenCalledWith('/tmp/project', 'main')
+  })
+
+  it('returns 422 when fetchSourceBranch fails, without creating any workspace record', async () => {
+    vi.mocked(gitOps.fetchSourceBranchOrThrowAsync).mockImplementation(async () => {
+      throw new Error("Failed to fetch 'main' from 'origin': fatal: no remote")
+    })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+      }),
+    })
+
+    expect(res.status).toBe(422)
+    const data = await res.json()
+    expect(data.error).toMatch(/fetch.*main/i)
+    expect(workspaceService.createWorkspace).not.toHaveBeenCalled()
+  })
+
+  it('bases the worktree on origin and sets no fallback header when fetch succeeds', async () => {
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(gitOps.fetchSourceBranchOrThrowAsync).mockImplementation(async () => {})
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
+      worktreePath: '/tmp/wt',
+      base: 'origin',
+      branchCreated: true,
+    })
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    expect(res.headers.get('X-Kobo-Source-Fallback')).toBeNull()
+    expect(worktreeService.createWorktreeUnlocked).toHaveBeenCalledWith(
+      '/tmp/project',
+      'feature/test',
+      'origin/main',
+      '.worktrees',
+      undefined,
+    )
+  })
+
+  it('falls back to the local branch and sets the header when origin fetch fails but the local branch exists', async () => {
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(gitOps.fetchSourceBranchOrThrowAsync).mockImplementation(async () => {
+      throw new Error('no origin')
+    })
+    vi.mocked(gitOps.localBranchExists).mockReturnValue(true)
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
+      worktreePath: '/tmp/wt',
+      base: 'local',
+      branchCreated: true,
+    })
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    expect(res.headers.get('X-Kobo-Source-Fallback')).toBe('local')
+    expect(worktreeService.createWorktreeUnlocked).toHaveBeenCalledWith(
+      '/tmp/project',
+      'feature/test',
+      'main',
+      '.worktrees',
+      undefined,
+    )
+  })
+
+  it('returns 422 when origin fetch fails and no local branch exists', async () => {
+    vi.mocked(gitOps.fetchSourceBranchOrThrowAsync).mockImplementation(async () => {
+      throw new Error('no origin')
+    })
+    vi.mocked(gitOps.localBranchExists).mockReturnValue(false)
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+      }),
+    })
+
+    expect(res.status).toBe(422)
+    expect(worktreeService.createWorktreeUnlocked).not.toHaveBeenCalled()
+    // The hard-block happens before any DB write, so no orphan workspace row is left behind.
+    expect(workspaceService.createWorkspace).not.toHaveBeenCalled()
+  })
+
+  it('does not block reuse of an existing worktree when origin fetch fails', async () => {
+    vi.mocked(gitOps.fetchSourceBranchOrThrowAsync).mockImplementation(async () => {
+      throw new Error('no origin')
+    })
+    vi.mocked(gitOps.localBranchExists).mockReturnValue(false)
+    // Reuse path: body carries a worktreePath, mirroring the reuse happy-path
+    // test's fixtures (fs/git mocked so the reuse validation passes).
+    vi.mocked(fs.existsSync).mockReturnValue(true)
+    vi.mocked(execFileSync)
+      .mockImplementationOnce(() => '/tmp/project/.git\n' as never)
+      .mockImplementationOnce(() => 'feature/derived\n' as never)
+    vi.mocked(getDb).mockReturnValue({
+      prepare: vi.fn().mockReturnValue({
+        run: vi.fn(),
+        get: vi.fn().mockReturnValue(undefined),
+        all: vi.fn().mockReturnValue([]),
+      }),
+    } as never)
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'reuse-test',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/placeholder',
+        worktreePath: '/tmp/project/.worktrees/feature/derived',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    expect(worktreeService.createWorktreeUnlocked).not.toHaveBeenCalled()
+
+    // This test permanently overrides fs.existsSync / getDb (vi.clearAllMocks
+    // clears call history but not implementations) — restore the file-wide
+    // defaults so later tests in this file aren't affected by the reuse-path
+    // fixtures used here.
+    vi.mocked(fs.existsSync).mockReturnValue(false)
+    vi.mocked(getDb).mockReturnValue({
+      prepare: vi.fn().mockReturnValue({
+        run: vi.fn(),
+        get: vi.fn(),
+        all: vi.fn().mockReturnValue([]),
+      }),
+    } as never)
+  })
+
+  it('returns 400 when required fields are missing', async () => {
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Test' }),
+    })
+
+    expect(res.status).toBe(400)
+    const data = await res.json()
+    expect(data.error).toContain('Missing required fields')
+  })
+
+  it('returns 500 when worktree creation fails', async () => {
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockImplementation(async () => {
+      throw new Error('git worktree add failed')
+    })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+      }),
+    })
+
+    expect(res.status).toBe(500)
+    const data = await res.json()
+    expect(data.error).toContain('Failed to create worktree')
+    // Rollback: the orphan workspace record is deleted, not left in 'error' status.
+    expect(workspaceService.deleteWorkspace).toHaveBeenCalledWith('ws-1')
+  })
+
+  it('crée des tasks et critères manuels quand pas de Notion', async () => {
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue({ id: 'ws-1', name: 'workspace' } as never)
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
+      worktreePath: '/tmp/wt',
+      base: 'origin',
+    } as never)
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue({ id: 'ws-1' } as never)
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'test',
+        projectPath: '/p',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+        model: 'auto',
+        tasks: ['Task A', 'Task B'],
+        acceptanceCriteria: ['Criterion 1'],
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    expect(workspaceService.createTask).toHaveBeenCalledWith(
+      'ws-1',
+      expect.objectContaining({ title: 'Task A', isAcceptanceCriterion: false }),
+    )
+    expect(workspaceService.createTask).toHaveBeenCalledWith(
+      'ws-1',
+      expect.objectContaining({ title: 'Task B', isAcceptanceCriterion: false }),
+    )
+    expect(workspaceService.createTask).toHaveBeenCalledWith(
+      'ws-1',
+      expect.objectContaining({ title: 'Criterion 1', isAcceptanceCriterion: true }),
+    )
+  })
+
+  it('runs setup script when configured and continues on success', async () => {
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
+      worktreePath: '/tmp/worktree',
+      base: 'origin',
+      branchCreated: true,
+    })
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'claude-opus-4-6',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '#!/bin/bash\necho "ok"',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
+    vi.mocked(setupScriptService.runSetupScript).mockResolvedValue({ exitCode: 0 })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'test-ws',
+        projectPath: '/tmp/test',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    expect(vi.mocked(setupScriptService.runSetupScript)).toHaveBeenCalledOnce()
+  })
+
+  it('keeps creation images and documents and their initial prompt when setup fails', async () => {
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
+      worktreePath: '/tmp/worktree',
+      base: 'origin',
+      branchCreated: true,
+    })
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'claude-opus-4-6',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '#!/bin/bash\nexit 1',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
+    vi.mocked(setupScriptService.runSetupScript).mockResolvedValue({ exitCode: 1 })
+
+    vi.mocked(imageService.saveImage).mockResolvedValue({ uid: 'kept', relativePath: '.ai/images/kept.png' })
+    const form = new FormData()
+    form.append(
+      'workspace',
+      JSON.stringify({
+        name: 'test-ws',
+        projectPath: '/tmp/test',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+      }),
+    )
+    form.append('images', new File(['pixels'], 'screen.png', { type: 'image/png' }))
+    form.append('attachments', new File(['# Brief'], 'brief.md'))
+    const directory = vi.spyOn(safePath, 'ensureDirectoryInside').mockReturnValue('/tmp/worktree/.ai/attachments')
+    const ignorePath = vi.spyOn(safePath, 'resolvePathInside').mockReturnValue('/tmp/worktree/.gitignore')
+    const res = await app.request('/api/workspaces', { method: 'POST', body: form })
+    directory.mockRestore()
+    ignorePath.mockRestore()
+    const documentWrite = vi.mocked(fs.writeFileSync).mock.calls.find(([p]) => p === 101)
+    expect(documentWrite?.[1]).toEqual(Buffer.from('# Brief'))
+    expect(workspaceService.setInitialPrompt).toHaveBeenCalledWith(
+      'ws-1',
+      expect.stringMatching(/Attached document "brief\.md": \[file: \.ai\/attachments\/[^\]]+\.md\]/),
+    )
+
+    expect(res.status).toBe(201)
+    expect(workspaceService.updateWorkspaceStatus).toHaveBeenCalledWith(fakeWorkspace.id, 'error')
+    // Agent should NOT be started when setup script fails
+    expect(agentManager.startAgent).not.toHaveBeenCalled()
+    expect(workspaceService.setInitialPrompt).toHaveBeenCalledWith(
+      'ws-1',
+      expect.stringContaining('[image: .ai/images/kept.png]'),
+    )
+    expect(imageService.deleteImage).not.toHaveBeenCalled()
+    expect(workspaceService.deleteWorkspace).not.toHaveBeenCalled()
+  })
+
+  it('emits create-failed and never emits done when the setup script fails', async () => {
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
+      worktreePath: '/tmp/worktree',
+      base: 'origin',
+      branchCreated: true,
+    })
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'claude-opus-4-6',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '#!/bin/bash\nexit 1',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
+    vi.mocked(setupScriptService.runSetupScript).mockResolvedValue({ exitCode: 1 })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'test-ws',
+        projectPath: '/tmp/test',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+        creationId: 'create-setup-fail',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    // The channel must name the real failure — not lie by going silent...
+    expect(wsService.emitEphemeral).toHaveBeenCalledWith(
+      'create-setup-fail',
+      'workspace:create-failed',
+      expect.objectContaining({ step: 'setup-script' }),
+    )
+    // ...nor claim success afterwards: `done` must never fire on this path.
+    const doneCalls = vi
+      .mocked(wsService.emitEphemeral)
+      .mock.calls.filter(
+        ([channel, type, payload]) =>
+          channel === 'create-setup-fail' &&
+          type === 'workspace:create-progress' &&
+          (payload as { step: string }).step === 'done',
+      )
+    expect(doneCalls).toEqual([])
+  })
+
+  it('emits create-failed, rolls back and never emits done when startAgent throws', async () => {
+    // Updated by task 2: a failed agent start used to leave the workspace in
+    // `error` status and still answer 201 — a half-created object lying to
+    // the user. It now rolls back everything and answers 500 instead.
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
+      worktreePath: '/tmp/worktree',
+      base: 'origin',
+      branchCreated: true,
+    })
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+    vi.mocked(agentManager.startAgent).mockImplementationOnce(() => {
+      throw new Error('engine unavailable')
+    })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+        creationId: 'create-agent-fail',
+      }),
+    })
+
+    expect(res.status).toBe(500)
+    expect(workspaceService.deleteWorkspace).toHaveBeenCalledWith('ws-1')
+    expect(wsService.emitEphemeral).toHaveBeenCalledWith(
+      'create-agent-fail',
+      'workspace:create-failed',
+      expect.objectContaining({ step: 'start-agent' }),
+    )
+    const doneCalls = vi
+      .mocked(wsService.emitEphemeral)
+      .mock.calls.filter(
+        ([channel, type, payload]) =>
+          channel === 'create-agent-fail' &&
+          type === 'workspace:create-progress' &&
+          (payload as { step: string }).step === 'done',
+      )
+    expect(doneCalls).toEqual([])
+  })
+
+  it('names the last-known step when an unforeseen error escapes every per-step handler', async () => {
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
+      worktreePath: '/tmp/worktree',
+      base: 'origin',
+      branchCreated: true,
+    })
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    // Throws AFTER a successful startAgent call, outside any per-step try/catch —
+    // the outer catch must still name a step instead of responding with a bare error.
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockImplementationOnce(() => {
+      throw new Error('db connection lost')
+    })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+        creationId: 'create-unexpected',
+      }),
+    })
+
+    expect(res.status).toBe(500)
+    const data = await res.json()
+    expect(data.step).toBe('start-agent')
+    expect(wsService.emitEphemeral).toHaveBeenCalledWith(
+      'create-unexpected',
+      'workspace:create-failed',
+      expect.objectContaining({ step: 'start-agent', message: expect.stringContaining('db connection lost') }),
+    )
+  })
+
+  it('rolls back the record when an unforeseen error escapes before the agent starts', async () => {
+    // The outer catch used to answer 500 without demolishing anything, while
+    // the client told the user "the server undoes everything it created".
+    // Every step past `create-record` is now covered, not just the two that
+    // had their own handler.
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
+      worktreePath: '/tmp/worktree',
+      base: 'origin',
+      branchCreated: true,
+    })
+    // Throws while the prompt is being built — no agent is running yet, so the
+    // workspace really is half-created and demolishing it loses nothing.
+    vi.mocked(workspaceService.listTasks).mockImplementationOnce(() => {
+      throw new Error('db connection lost')
+    })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+        creationId: 'create-late-failure',
+      }),
+    })
+
+    expect(res.status).toBe(500)
+    const data = await res.json()
+    // The original cause still wins: the rollback rides along, never replaces.
+    expect(data.error).toContain('db connection lost')
+    expect(data.rollback.done).toBe(true)
+    // No orphan left in the DB, no orphan worktree, no orphan branch.
+    expect(workspaceService.deleteWorkspace).toHaveBeenCalledWith('ws-1')
+    expect(worktreeService.removeWorktree).toHaveBeenCalledWith('/tmp/project', '/tmp/project/.worktrees/feature/test')
+    expect(gitOps.deleteLocalBranch).toHaveBeenCalledWith('/tmp/project', 'feature/test')
+    expect(wsService.emitEphemeral).toHaveBeenCalledWith(
+      'create-late-failure',
+      'workspace:create-progress',
+      expect.objectContaining({ step: 'rollback' }),
+    )
+  })
+
+  it('never demolishes a workspace whose agent already started', async () => {
+    // The rollback exists to clean up half-created objects. Once the agent is
+    // running the object is live: a late throw (a lost DB read, a header) must
+    // return 500 and leave the worktree — with an agent working in it — alone.
+    // Demolishing here would destroy work in progress to tidy up a failed read.
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
+      worktreePath: '/tmp/worktree',
+      base: 'origin',
+      branchCreated: true,
+    })
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    // startAgent is left succeeding; the throw lands strictly after it.
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockImplementationOnce(() => {
+      throw new Error('db connection lost')
+    })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+        creationId: 'create-live-failure',
+      }),
+    })
+
+    expect(res.status).toBe(500)
+    const data = await res.json()
+    expect(data.error).toContain('db connection lost')
+    // Nothing was undone, and the response does not claim otherwise.
+    expect(data.rollback).toBeUndefined()
+    expect(workspaceService.deleteWorkspace).not.toHaveBeenCalled()
+    expect(worktreeService.removeWorktree).not.toHaveBeenCalled()
+    expect(gitOps.deleteLocalBranch).not.toHaveBeenCalled()
+  })
+
+  it('has nothing to roll back when the failure precedes the record', async () => {
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: 'not json at all',
+    })
+
+    // A malformed body is the caller's mistake, not ours: 400, not a 500
+    // leaking the JSON parser's own message.
+    expect(res.status).toBe(400)
+    const data = await res.json()
+    // Nothing existed yet: the response must not claim an undo that never
+    // happened, and no demolition may run.
+    expect(data.rollback).toBeUndefined()
+    expect(workspaceService.deleteWorkspace).not.toHaveBeenCalled()
+  })
+
+  it('does not run setup script when not configured', async () => {
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
+      worktreePath: '/tmp/worktree',
+      base: 'origin',
+      branchCreated: true,
+    })
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'claude-opus-4-6',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'test-ws',
+        projectPath: '/tmp/test',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    expect(vi.mocked(setupScriptService.runSetupScript)).not.toHaveBeenCalled()
+  })
+
+  it('POST / brainstorm prompt advertises kobo__set_workspace_agent_description with the user-description boundary', async () => {
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
+      worktreePath: '/tmp/worktree',
+      base: 'origin',
+      branchCreated: true,
+    })
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+
+    const startSpy = vi.mocked(agentManager.startAgent)
+    startSpy.mockClear()
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/agent-desc-mention',
+      }),
+    })
+    expect(res.status).toBe(201)
+    expect(startSpy).toHaveBeenCalledTimes(1)
+    // Third positional arg of startAgent(workspaceId, workingDir, prompt, …)
+    const prompt = startSpy.mock.calls[0][2]
+    expect(prompt).toMatch(/kobo__set_workspace_agent_description/)
+    expect(prompt).toMatch(/short one-line summary/i)
+    expect(prompt).not.toMatch(/kobo__set_workspace_description\b(?!_)/)
+    expect(prompt).toMatch(/user[- ]controlled `?description`?[\s\S]*not touch/i)
+  })
+
+  it('uses brainstormModel for the initial session when autoLoop is true', async () => {
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      model: 'claude-sonnet-4-6',
+      brainstormModel: 'claude-opus-4-8',
+      autoLoop: false,
+    })
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      model: 'claude-sonnet-4-6',
+      brainstormModel: 'claude-opus-4-8',
+      autoLoop: true,
+    })
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
+      worktreePath: '/tmp/worktree',
+      base: 'origin',
+      branchCreated: true,
+    })
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+
+    const startSpy = vi.mocked(agentManager.startAgent)
+    startSpy.mockClear()
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/brainstorm-model',
+        model: 'claude-sonnet-4-6',
+        brainstormModel: 'claude-opus-4-8',
+        autoLoop: true,
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    expect(startSpy).toHaveBeenCalledTimes(1)
+    const modelArg = startSpy.mock.calls[0][3]
+    expect(modelArg).toBe('claude-opus-4-8')
+    expect(workspaceService.createWorkspace).toHaveBeenCalledWith(
+      expect.objectContaining({ brainstormModel: 'claude-opus-4-8' }),
+    )
+  })
+
+  it('falls back to model for the initial session when brainstormModel is not set', async () => {
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      model: 'claude-sonnet-4-6',
+      brainstormModel: null,
+      autoLoop: true,
+    })
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      model: 'claude-sonnet-4-6',
+      brainstormModel: null,
+      autoLoop: true,
+    })
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
+      worktreePath: '/tmp/worktree',
+      base: 'origin',
+      branchCreated: true,
+    })
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+
+    const startSpy = vi.mocked(agentManager.startAgent)
+    startSpy.mockClear()
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/no-brainstorm-model',
+        model: 'claude-sonnet-4-6',
+        autoLoop: true,
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    const modelArg = startSpy.mock.calls[0][3]
+    expect(modelArg).toBe('claude-sonnet-4-6')
+  })
+
+  it('ignores brainstormModel for the initial session when autoLoop is false', async () => {
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      model: 'claude-sonnet-4-6',
+      brainstormModel: 'claude-opus-4-8',
+      autoLoop: false,
+    })
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
+      worktreePath: '/tmp/worktree',
+      base: 'origin',
+      branchCreated: true,
+    })
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+
+    const startSpy = vi.mocked(agentManager.startAgent)
+    startSpy.mockClear()
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/no-auto-loop',
+        model: 'claude-sonnet-4-6',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    const modelArg = startSpy.mock.calls[0][3]
+    expect(modelArg).toBe('claude-sonnet-4-6')
+  })
+
+  it('accepts engine: codex on creation', async () => {
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
+      worktreePath: '/tmp/worktree',
+      base: 'origin',
+      branchCreated: true,
+    })
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Codex Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/codex',
+        engine: 'codex',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    expect(workspaceService.createWorkspace).toHaveBeenCalledWith(expect.objectContaining({ engine: 'codex' }))
+  })
+
+  it('rejects unknown engine with 400', async () => {
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Bad Engine Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/bad-engine',
+        engine: 'gemini',
+      }),
+    })
+
+    expect(res.status).toBe(400)
+    const data = (await res.json()) as { error: string }
+    expect(data.error).toMatch(/gemini/)
+    expect(workspaceService.createWorkspace).not.toHaveBeenCalled()
+  })
+
+  it('rejects engine=codex paired with agentPermissionMode=interactive', async () => {
+    // Codex does not expose a canUseTool-equivalent hook, so 'interactive'
+    // would park the workspace in `awaiting-user` forever. The route must
+    // refuse the combination up-front.
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Codex Interactive Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/codex-interactive',
+        engine: 'codex',
+        agentPermissionMode: 'interactive',
+      }),
+    })
+
+    expect(res.status).toBe(400)
+    const data = (await res.json()) as { error: string }
+    expect(data.error).toMatch(/codex/)
+    expect(data.error).toMatch(/interactive/)
+    expect(workspaceService.createWorkspace).not.toHaveBeenCalled()
+  })
+})
+
+// ── Initial-prompt template injection (Notion + Sentry) ──────────────────────
+// Eight tests covering the cascade `effective || DEFAULT` resolution in the
+// route. The project/global cascade itself is unit-tested in settings-service —
+// here we only exercise the route's single-fallback behaviour and the two
+// injection points (Notion after `Local copy:`, Sentry after `Fix workflow:`).
+describe('POST /api/workspaces — Notion/Sentry initial prompt injection', () => {
+  // Defaults used as a reference inside assertions when the user template is
+  // empty/whitespace and the route should fall back to the hard-coded prompt.
+  const DEFAULT_NOTION =
+    'For the Notion ticket {ticket_id}, systematically explore the linked sub-pages (sub-tickets, references, linked blocks) and enrich the local file {notion_file_path} with all relevant information you find before starting the work.'
+
+  function mockEffectiveSettings(overrides: Partial<EffectiveSettings>) {
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'auto',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        reviewPromptTemplate: '',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+        notionInitialPromptTemplate: '',
+        sentryInitialPromptTemplate: '',
+        ...overrides,
+      }),
+    )
+  }
+
+  function mockNotionExtraction(opts: { ticketId: string }) {
+    vi.mocked(notionService.extractNotionPage).mockResolvedValue({
+      title: 'Some Page',
+      ticketId: opts.ticketId,
+      status: '',
+      goal: '',
+      todos: [],
+      gherkinFeatures: [],
+    })
+    vi.mocked(notionService.parseNotionUrl).mockReturnValue('page-1')
+  }
+
+  async function mockSentryExtraction(opts: { issueId: string }) {
+    const sentryService = await import('../server/services/sentry-service.js')
+    vi.mocked(sentryService.extractSentryIssue).mockResolvedValue({
+      title: 'crash',
+      issueId: opts.issueId,
+      issueNumericId: '42',
+      culprit: 'fn',
+      url: 'https://my-org.sentry.io/issues/42',
+      platform: 'js',
+      occurrences: 1,
+      firstSeen: '2026-01-01',
+      lastSeen: '2026-01-02',
+      tags: {},
+      offendingSpans: [],
+      extraContext: '',
+      assignee: '',
+    })
+  }
+
+  function commonHappyPathMocks() {
+    // The body sends `name: 'workspace'` (the placeholder that triggers the
+    // Notion/Sentry rename branch in the route). createWorkspace returns the
+    // raw row with that placeholder; updateWorkspaceName + updateWorkingBranch
+    // both must return a complete workspace object since the route reassigns
+    // the local `workspace` variable from their return values.
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      name: 'workspace',
+    })
+    vi.mocked(workspaceService.updateWorkspaceName).mockReturnValue({
+      ...fakeWorkspace,
+      name: 'Renamed by Notion/Sentry',
+    } as never)
+    vi.mocked(workspaceService.updateWorkingBranch).mockReturnValue({
+      ...fakeWorkspace,
+      name: 'Renamed by Notion/Sentry',
+    } as never)
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
+      worktreePath: '/tmp/wt',
+      base: 'origin',
+      branchCreated: true,
+    })
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+  }
+
+  function getCapturedPrompt(): string {
+    expect(agentManager.startAgent).toHaveBeenCalled()
+    const startCall = vi.mocked(agentManager.startAgent).mock.calls[0]
+    return startCall?.[2] as string
+  }
+
+  it('appends the rendered Notion initial prompt after the Local copy line when notionUrl is set', async () => {
+    commonHappyPathMocks()
+    mockNotionExtraction({ ticketId: 'TK-1' })
+    mockEffectiveSettings({ notionInitialPromptTemplate: 'CUSTOM_NOTION {ticket_id}' })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+        notionUrl: 'https://notion.so/page-1',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    const prompt = getCapturedPrompt()
+    // The Notion render lands immediately after the Local copy line.
+    expect(prompt).toMatch(/Local copy: [^\n]+\n\nCUSTOM_NOTION TK-1\n/)
+  })
+
+  it('appends the rendered Sentry initial prompt after the Fix workflow paragraph when sentryUrl is set', async () => {
+    commonHappyPathMocks()
+    await mockSentryExtraction({ issueId: 'ACME-API-3' })
+    mockEffectiveSettings({ sentryInitialPromptTemplate: 'CUSTOM_SENTRY {issue_id}' })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+        sentryUrl: 'https://my-org.sentry.io/issues/42/',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    const prompt = getCapturedPrompt()
+    // The render lands after the Sentry MCP tag-values bullet (last line of the
+    // Fix workflow block).
+    expect(prompt).toContain('filter by tag\n\nCUSTOM_SENTRY ACME-API-3\n')
+    // Notion absent → no notion render either.
+    expect(prompt).not.toContain('Notion ticket:')
+  })
+
+  it('keeps the engine suffix when a comparison workspace takes the Sentry title', async () => {
+    commonHappyPathMocks()
+    // The shared mock answers `workspace`; this row was created with the
+    // comparison placeholder, suffix included.
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue({ ...fakeWorkspace, name: 'workspace (OpenAI Codex)' })
+    await mockSentryExtraction({ issueId: 'ACME-API-3' })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'workspace (OpenAI Codex)',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/task-1-codex',
+        engine: 'codex',
+        comparisonId: 'cmp_1',
+        sentryUrl: 'https://my-org.sentry.io/issues/42/',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    expect(workspaceService.updateWorkspaceName).toHaveBeenCalledWith(
+      expect.anything(),
+      'ACME-API-3 | crash (OpenAI Codex)',
+    )
+  })
+
+  it('keeps the engine suffix on the branch when the Sentry rewrite renames it', async () => {
+    commonHappyPathMocks()
+    await mockSentryExtraction({ issueId: 'ACME-API-3' })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'workspace (OpenAI Codex)',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/task-1-codex',
+        engine: 'codex',
+        comparisonId: 'cmp_1',
+        sentryUrl: 'https://my-org.sentry.io/issues/42/',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    // Without the suffix both halves of the comparison collapse onto the same
+    // branch and the second one gets a random `-HASH` instead of its engine.
+    const created = vi.mocked(workspaceService.createWorkspace).mock.calls[0]?.[0]
+    expect(created?.workingBranch).toBe('feature/ACME-API-3--crash-codex')
+  })
+
+  it('rejects a comparison id that is not a string', async () => {
+    commonHappyPathMocks()
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'x',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/x',
+        comparisonId: { nope: true },
+      }),
+    })
+
+    expect(res.status).toBe(400)
+    expect(workspaceService.createWorkspace).not.toHaveBeenCalled()
+  })
+
+  it('truncates an overlong Sentry issue title instead of failing workspace creation', async () => {
+    commonHappyPathMocks()
+    const sentryService = await import('../server/services/sentry-service.js')
+    vi.mocked(sentryService.extractSentryIssue).mockResolvedValue({
+      title: 'x'.repeat(250),
+      issueId: 'ACME-API-3',
+      issueNumericId: '42',
+      culprit: 'fn',
+      url: 'https://my-org.sentry.io/issues/42',
+      platform: 'js',
+      occurrences: 1,
+      firstSeen: '2026-01-01',
+      lastSeen: '2026-01-02',
+      tags: {},
+      offendingSpans: [],
+      extraContext: '',
+      assignee: '',
+    })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+        sentryUrl: 'https://my-org.sentry.io/issues/42/',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    const namePassed = vi.mocked(workspaceService.updateWorkspaceName).mock.calls[0]?.[1] as string
+    expect(namePassed.length).toBeLessThanOrEqual(200)
+    expect(namePassed.endsWith('…')).toBe(true)
+  })
+
+  it('appends both Notion and Sentry rendered prompts (Notion before Sentry) when both URLs are set', async () => {
+    commonHappyPathMocks()
+    mockNotionExtraction({ ticketId: 'TK-9' })
+    await mockSentryExtraction({ issueId: 'PROJ-1' })
+    mockEffectiveSettings({
+      notionInitialPromptTemplate: 'NTPL {ticket_id}',
+      sentryInitialPromptTemplate: 'STPL {issue_id}',
+    })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+        notionUrl: 'https://notion.so/page-1',
+        sentryUrl: 'https://my-org.sentry.io/issues/42/',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    const prompt = getCapturedPrompt()
+    expect(prompt).toContain('NTPL TK-9')
+    expect(prompt).toContain('STPL PROJ-1')
+    const notionIdx = prompt.indexOf('NTPL TK-9')
+    const sentryIdx = prompt.indexOf('STPL PROJ-1')
+    expect(notionIdx).toBeLessThan(sentryIdx)
+  })
+
+  it('renders the project Notion template (project override beats global)', async () => {
+    commonHappyPathMocks()
+    mockNotionExtraction({ ticketId: 'TK-2' })
+    // The project/global cascade is computed inside getEffectiveSettings —
+    // here we simulate the post-cascade outcome: the project override wins.
+    mockEffectiveSettings({ notionInitialPromptTemplate: 'PROJ' })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+        notionUrl: 'https://notion.so/page-1',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    const prompt = getCapturedPrompt()
+    expect(prompt).toContain('PROJ')
+    expect(prompt).not.toContain('GLOBAL')
+  })
+
+  it('treats a whitespace-only Notion template as an escape hatch (project " ", global "GLOBAL")', async () => {
+    commonHappyPathMocks()
+    mockNotionExtraction({ ticketId: 'TK-3' })
+    // Whitespace-only effective value → no injection, even though the route
+    // fallback to DEFAULT only triggers on empty string.
+    mockEffectiveSettings({ notionInitialPromptTemplate: ' ' })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+        notionUrl: 'https://notion.so/page-1',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    const prompt = getCapturedPrompt()
+    // No render: the Local copy line is followed by the next prompt section,
+    // not by a rendered template, and DEFAULT_NOTION must NOT appear.
+    expect(prompt).not.toContain('GLOBAL')
+    expect(prompt).not.toContain(DEFAULT_NOTION)
+    // Sanity check: Notion section was emitted (Local copy line present).
+    expect(prompt).toMatch(/Local copy: /)
+  })
+
+  it('treats a whitespace-only global Notion template as an escape hatch (project "", global " ")', async () => {
+    commonHappyPathMocks()
+    mockNotionExtraction({ ticketId: 'TK-4' })
+    // After the project/global cascade inside getEffectiveSettings, the
+    // resulting effective value is the whitespace-only global string.
+    mockEffectiveSettings({ notionInitialPromptTemplate: ' ' })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+        notionUrl: 'https://notion.so/page-1',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    const prompt = getCapturedPrompt()
+    expect(prompt).not.toContain(DEFAULT_NOTION)
+  })
+
+  it('falls back to DEFAULT_NOTION_INITIAL_PROMPT when both project and global are empty strings', async () => {
+    commonHappyPathMocks()
+    mockNotionExtraction({ ticketId: 'TK-5' })
+    // Empty effective string → route falls back to the hard-coded default.
+    mockEffectiveSettings({ notionInitialPromptTemplate: '' })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+        notionUrl: 'https://notion.so/page-1',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    const prompt = getCapturedPrompt()
+    // The default template substitutes {ticket_id} and {notion_file_path}; we
+    // assert on a stable substring that only appears in the rendered default.
+    expect(prompt).toContain('Enrich the context for Notion ticket TK-5')
+  })
+
+  it('does NOT inject the Notion template when notionFilePath ends up null (file-write failure)', async () => {
+    commonHappyPathMocks()
+    mockNotionExtraction({ ticketId: 'TK-6' })
+    mockEffectiveSettings({ notionInitialPromptTemplate: 'CUSTOM {ticket_id}' })
+    // Force notionFilePath to remain null by making the directory creation
+    // throw BEFORE the route assigns notionFilePath. The catch swallows the
+    // error so the workspace is still created — only the Notion section of
+    // the brainstorm prompt is skipped. Restore the default no-op impl after
+    // the assertion to avoid leaking the throw into sibling tests (vi.clearAllMocks
+    // resets call history, NOT mockImplementation).
+    const mkdirSpy = vi.mocked(fs.mkdirSync).mockImplementation((p) => {
+      if (typeof p === 'string' && p.includes('thoughts')) {
+        throw new Error('ENOSPC: no space left on device')
+      }
+      return undefined
+    })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+        notionUrl: 'https://notion.so/page-1',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    const prompt = getCapturedPrompt()
+    // Custom template is non-empty AND notion extraction succeeded, but the
+    // file-write failure means the Notion block (Local copy:) is absent and
+    // the rendered prompt MUST NOT appear.
+    expect(prompt).not.toContain('CUSTOM TK-6')
+    expect(prompt).not.toContain('Local copy:')
+    // Reset the throwing implementation so it doesn't leak into sibling tests.
+    mkdirSpy.mockImplementation(() => undefined)
+  })
+})
+
+describe('GET /api/workspaces/:id', () => {
+  it('returns workspace with tasks', async () => {
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+
+    const res = await app.request('/api/workspaces/ws-1')
+    expect(res.status).toBe(200)
+    const data = await res.json()
+    expect(data.id).toBe('ws-1')
+    expect(data.tasks).toHaveLength(1)
+  })
+
+  it('returns 404 for unknown workspace', async () => {
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(null)
+
+    const res = await app.request('/api/workspaces/nonexistent')
+    expect(res.status).toBe(404)
+    const data = await res.json()
+    expect(data.error).toContain('not found')
+  })
+})
+
+describe('GET /api/workspaces/:id/sessions', () => {
+  it('returns sessions list', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(workspaceService.listSessions).mockReturnValue([fakeSession as any])
+
+    const res = await app.request('/api/workspaces/ws-1/sessions')
+    expect(res.status).toBe(200)
+    const data = await res.json()
+    expect(data).toEqual([fakeSession])
+    expect(workspaceService.listSessions).toHaveBeenCalledWith('ws-1')
+  })
+
+  it('returns 404 when workspace not found', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null)
+
+    const res = await app.request('/api/workspaces/nonexistent/sessions')
+    expect(res.status).toBe(404)
+    const data = await res.json()
+    expect(data.error).toContain('not found')
+  })
+})
+
+describe('POST /api/workspaces/:id/tasks', () => {
+  it('crée une task et retourne 201', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ id: 'ws-1' } as never)
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.createTask).mockReturnValue({
+      id: 'task-1',
+      workspaceId: 'ws-1',
+      title: 'My task',
+      status: 'pending',
+      isAcceptanceCriterion: false,
+      sortOrder: 0,
+      createdAt: 't',
+      updatedAt: 't',
+    } as never)
+
+    const res = await app.request('/api/workspaces/ws-1/tasks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'My task', isAcceptanceCriterion: false }),
+    })
+
+    expect(res.status).toBe(201)
+    const data = await res.json()
+    expect(data.title).toBe('My task')
+  })
+
+  it('retourne 404 si workspace inconnu', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null as never)
+    const res = await app.request('/api/workspaces/unknown/tasks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'test', isAcceptanceCriterion: false }),
+    })
+    expect(res.status).toBe(404)
+  })
+
+  it('retourne 400 si title manquant', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ id: 'ws-1' } as never)
+    const res = await app.request('/api/workspaces/ws-1/tasks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ isAcceptanceCriterion: false }),
+    })
+    expect(res.status).toBe(400)
+  })
+
+  it('retourne 400 si title vide', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ id: 'ws-1' } as never)
+    const res = await app.request('/api/workspaces/ws-1/tasks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: '   ', isAcceptanceCriterion: false }),
+    })
+    expect(res.status).toBe(400)
+  })
+})
+
+describe('PATCH /api/workspaces/:id/tasks/:taskId', () => {
+  it('passes structured verification and the combined edit to one atomic mutation', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ id: 'ws-1', autoLoop: true } as never)
+    vi.mocked(workspaceService.getTask).mockReturnValue({ id: 'task-1', workspaceId: 'ws-1' } as never)
+    const verification = { method: 'tests', summary: 'Passed', checks: [{ name: 'unit', status: 'passed' }] }
+    const res = await app.request('/api/workspaces/ws-1/tasks/task-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Verified scope', status: 'done', verification, afterTaskId: 'task-2' }),
+    })
+    expect(res.status).toBe(200)
+    expect(workspaceService.updateTask).toHaveBeenCalledWith('task-1', {
+      title: 'Verified scope',
+      status: 'done',
+      verification,
+      afterTaskId: 'task-2',
+    })
+    expect(workspaceService.updateTaskTitle).not.toHaveBeenCalled()
+    expect(workspaceService.updateTaskStatus).not.toHaveBeenCalled()
+  })
+
+  it('reports rejected auto-loop verification as a client error', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ id: 'ws-1', autoLoop: true } as never)
+    vi.mocked(workspaceService.getTask).mockReturnValue({ id: 'task-1', workspaceId: 'ws-1' } as never)
+    const { TaskValidationError } = await import('../server/services/task-mutations.js')
+    vi.mocked(workspaceService.updateTask).mockImplementationOnce(() => {
+      throw new TaskValidationError('Task verification is required')
+    })
+    const res = await app.request('/api/workspaces/ws-1/tasks/task-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'done' }),
+    })
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toContain('verification')
+  })
+
+  it('updates task status', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ id: 'ws-1' } as never)
+    vi.mocked(workspaceService.getTask).mockReturnValue({ id: 'task-1', workspaceId: 'ws-1' } as never)
+    vi.mocked(workspaceService.updateTaskStatus).mockReturnValue(undefined as any)
+
+    const res = await app.request('/api/workspaces/ws-1/tasks/task-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'done' }),
+    })
+
+    expect(res.status).toBe(200)
+    const data = await res.json()
+    expect(data.ok).toBe(true)
+    expect(workspaceService.updateTask).toHaveBeenCalledWith('task-1', { status: 'done' })
+  })
+
+  it('returns 400 for invalid status', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ id: 'ws-1' } as never)
+    vi.mocked(workspaceService.getTask).mockReturnValue({ id: 'task-1', workspaceId: 'ws-1' } as never)
+
+    const res = await app.request('/api/workspaces/ws-1/tasks/task-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'invalid_status' }),
+    })
+
+    expect(res.status).toBe(400)
+    const data = await res.json()
+    expect(data.error).toContain('Invalid status')
+  })
+
+  it("met à jour le titre d'une task", async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ id: 'ws-1' } as never)
+    vi.mocked(workspaceService.getTask).mockReturnValue({ id: 'task-1', workspaceId: 'ws-1' } as never)
+    vi.mocked(workspaceService.updateTaskTitle).mockReturnValue({ id: 'task-1', title: 'New title' } as never)
+
+    const res = await app.request('/api/workspaces/ws-1/tasks/task-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'New title' }),
+    })
+
+    expect(res.status).toBe(200)
+    expect(workspaceService.updateTask).toHaveBeenCalledWith('task-1', { title: 'New title' })
+  })
+
+  it('accepte title et status ensemble', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ id: 'ws-1' } as never)
+    vi.mocked(workspaceService.getTask).mockReturnValue({ id: 'task-1', workspaceId: 'ws-1' } as never)
+    vi.mocked(workspaceService.updateTaskTitle).mockReturnValue({ id: 'task-1' } as never)
+    vi.mocked(workspaceService.updateTaskStatus).mockReturnValue({ id: 'task-1' } as never)
+
+    const res = await app.request('/api/workspaces/ws-1/tasks/task-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'New', status: 'done' }),
+    })
+
+    expect(res.status).toBe(200)
+    expect(workspaceService.updateTask).toHaveBeenCalledWith('task-1', { title: 'New', status: 'done' })
+  })
+
+  it('retourne 400 si ni title ni status', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ id: 'ws-1' } as never)
+    vi.mocked(workspaceService.getTask).mockReturnValue({ id: 'task-1', workspaceId: 'ws-1' } as never)
+
+    const res = await app.request('/api/workspaces/ws-1/tasks/task-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+    expect(res.status).toBe(400)
+  })
+
+  it('retourne 400 si title vide', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ id: 'ws-1' } as never)
+    vi.mocked(workspaceService.getTask).mockReturnValue({ id: 'task-1', workspaceId: 'ws-1' } as never)
+
+    const res = await app.request('/api/workspaces/ws-1/tasks/task-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: '  ' }),
+    })
+    expect(res.status).toBe(400)
+  })
+
+  it('retourne 404 si workspace inconnu', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null as never)
+
+    const res = await app.request('/api/workspaces/unknown/tasks/task-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'done' }),
+    })
+    expect(res.status).toBe(404)
+  })
+
+  it("retourne 404 si la task n'appartient pas au workspace", async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ id: 'ws-1' } as never)
+    vi.mocked(workspaceService.getTask).mockReturnValue(null as never)
+
+    const res = await app.request('/api/workspaces/ws-1/tasks/task-other', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'done' }),
+    })
+    expect(res.status).toBe(404)
+    const data = await res.json()
+    expect(data.error).toContain("Task 'task-other' not found in workspace 'ws-1'")
+  })
+})
+
+describe('DELETE /api/workspaces/:id/tasks/:taskId', () => {
+  it('supprime une task et retourne 204', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ id: 'ws-1' } as never)
+    vi.mocked(workspaceService.getTask).mockReturnValue({ id: 'task-1', workspaceId: 'ws-1' } as never)
+
+    const res = await app.request('/api/workspaces/ws-1/tasks/task-1', {
+      method: 'DELETE',
+    })
+
+    expect(res.status).toBe(204)
+    expect(workspaceService.deleteTask).toHaveBeenCalledWith('task-1')
+  })
+
+  it('retourne 404 si workspace inconnu', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null as never)
+    const res = await app.request('/api/workspaces/unknown/tasks/task-1', {
+      method: 'DELETE',
+    })
+    expect(res.status).toBe(404)
+  })
+
+  it("retourne 404 si la task n'appartient pas au workspace", async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ id: 'ws-1' } as never)
+    vi.mocked(workspaceService.getTask).mockReturnValue(null as never)
+
+    const res = await app.request('/api/workspaces/ws-1/tasks/task-other', {
+      method: 'DELETE',
+    })
+    expect(res.status).toBe(404)
+    const data = await res.json()
+    expect(data.error).toContain("Task 'task-other' not found in workspace 'ws-1'")
+  })
+})
+
+describe('POST /api/workspaces/:id/tasks/:taskId/notify-done', () => {
+  it('emet un event WebSocket task:updated et retourne 204', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ id: 'ws-1' } as never)
+
+    const res = await app.request('/api/workspaces/ws-1/tasks/task-1/notify-done', {
+      method: 'POST',
+    })
+
+    expect(res.status).toBe(204)
+    expect(wsService.emit).toHaveBeenCalledWith(
+      'ws-1',
+      'task:updated',
+      expect.objectContaining({ taskId: 'task-1', status: 'done' }),
+    )
+  })
+
+  it('retourne 404 si workspace inconnu', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null as never)
+
+    const res = await app.request('/api/workspaces/unknown/tasks/task-1/notify-done', {
+      method: 'POST',
+    })
+    expect(res.status).toBe(404)
+  })
+
+  it('updates workspace reasoning effort', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+
+    const res = await app.request('/api/workspaces/ws-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reasoningEffort: 'high' }),
+    })
+
+    expect(res.status).toBe(200)
+    expect(workspaceService.updateWorkspaceFields).toHaveBeenCalledWith('ws-1', { reasoningEffort: 'high' })
+  })
+})
+
+describe('POST /api/workspaces/:id/tasks/notify-updated', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('emet un event WebSocket task:updated et retourne 204', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ id: 'ws-1' } as never)
+
+    const res = await app.request('/api/workspaces/ws-1/tasks/notify-updated', {
+      method: 'POST',
+    })
+
+    expect(res.status).toBe(204)
+    expect(wsService.emit).toHaveBeenCalledWith('ws-1', 'task:updated', expect.any(Object))
+  })
+
+  it('retourne 404 si workspace inconnu', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null as never)
+
+    const res = await app.request('/api/workspaces/unknown/tasks/notify-updated', {
+      method: 'POST',
+    })
+    expect(res.status).toBe(404)
+  })
+})
+
+describe('POST /api/workspaces/:id/agent-description/notify-updated', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('emits workspace:agent-description-updated with the current value and returns 204', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      id: 'ws-1',
+      agentDescription: 'Live status',
+    } as never)
+
+    const res = await app.request('/api/workspaces/ws-1/agent-description/notify-updated', {
+      method: 'POST',
+    })
+
+    expect(res.status).toBe(204)
+    expect(wsService.emitEphemeral).toHaveBeenCalledWith('ws-1', 'workspace:agent-description-updated', {
+      agentDescription: 'Live status',
+    })
+  })
+
+  it('emits null when agentDescription is cleared', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      id: 'ws-1',
+      agentDescription: null,
+    } as never)
+
+    const res = await app.request('/api/workspaces/ws-1/agent-description/notify-updated', {
+      method: 'POST',
+    })
+
+    expect(res.status).toBe(204)
+    expect(wsService.emitEphemeral).toHaveBeenCalledWith('ws-1', 'workspace:agent-description-updated', {
+      agentDescription: null,
+    })
+  })
+
+  it('returns 404 when workspace is unknown', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null as never)
+
+    const res = await app.request('/api/workspaces/unknown/agent-description/notify-updated', {
+      method: 'POST',
+    })
+
+    expect(res.status).toBe(404)
+    expect(wsService.emitEphemeral).not.toHaveBeenCalled()
+  })
+})
+
+describe('PATCH /api/workspaces/:id', () => {
+  it('updates workspace status', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(workspaceService.updateWorkspaceStatus).mockReturnValue({
+      ...fakeWorkspace,
+      status: 'executing',
+    })
+
+    const res = await app.request('/api/workspaces/ws-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'executing' }),
+    })
+
+    expect(res.status).toBe(200)
+    const data = await res.json()
+    expect(data.status).toBe('executing')
+  })
+
+  it('returns 400 when status is missing', async () => {
+    const res = await app.request('/api/workspaces/ws-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+
+    expect(res.status).toBe(400)
+    const data = await res.json()
+    expect(data.error).toContain('Missing field: status, model, reasoningEffort, agentPermissionMode,')
+  })
+
+  it('validates the complete payload before applying any field', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+
+    const res = await app.request('/api/workspaces/ws-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'new-model', agentPermissionMode: 'invalid' }),
+    })
+
+    expect(res.status).toBe(400)
+    expect(workspaceService.updateWorkspaceFields).not.toHaveBeenCalled()
+  })
+
+  it('rejects non-string model values at runtime', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    const res = await app.request('/api/workspaces/ws-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 42 }),
+    })
+    expect(res.status).toBe(400)
+    expect(workspaceService.updateWorkspaceFields).not.toHaveBeenCalled()
+  })
+
+  it('returns 404 for unknown workspace', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null)
+
+    const res = await app.request('/api/workspaces/nonexistent', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'idle' }),
+    })
+
+    expect(res.status).toBe(404)
+  })
+
+  it('refuses to mark an active agent workspace idle', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(agentManager.hasController).mockReturnValue(true)
+
+    const res = await app.request('/api/workspaces/ws-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'idle' }),
+    })
+
+    expect(res.status).toBe(409)
+    expect(workspaceService.updateWorkspaceStatus).not.toHaveBeenCalled()
+  })
+})
+
+describe('PATCH /api/workspaces/:id — description', () => {
+  it('updates the description and returns 200 with the updated workspace', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(workspaceService.updateWorkspaceDescription).mockReturnValue({
+      ...fakeWorkspace,
+      description: 'Investigating SERVICE-1600',
+    } as never)
+
+    const res = await app.request('/api/workspaces/ws-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ description: 'Investigating SERVICE-1600' }),
+    })
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { description: string }
+    expect(body.description).toBe('Investigating SERVICE-1600')
+    expect(workspaceService.updateWorkspaceFields).toHaveBeenCalledWith('ws-1', {
+      description: 'Investigating SERVICE-1600',
+    })
+  })
+
+  it('returns 400 when description exceeds 200 chars', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(workspaceService.updateWorkspaceFields).mockImplementation(() => {
+      throw new Error('Description must be 200 characters or fewer (got 201)')
+    })
+
+    const res = await app.request('/api/workspaces/ws-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ description: 'x'.repeat(201) }),
+    })
+
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toMatch(/200/)
+  })
+
+  it('returns 404 when workspace not found', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null)
+
+    const res = await app.request('/api/workspaces/does-not-exist', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ description: 'hi' }),
+    })
+
+    expect(res.status).toBe(404)
+  })
+
+  it('accepts null to clear the description', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(workspaceService.updateWorkspaceDescription).mockReturnValue({
+      ...fakeWorkspace,
+      description: null,
+    } as never)
+
+    const res = await app.request('/api/workspaces/ws-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ description: null }),
+    })
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { description: string | null }
+    expect(body.description).toBeNull()
+    expect(workspaceService.updateWorkspaceFields).toHaveBeenCalledWith('ws-1', { description: null })
+  })
+})
+
+describe('PATCH /api/workspaces/:id — rejects agent_description', () => {
+  it('returns 400 when the body contains agent_description', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+
+    const res = await app.request('/api/workspaces/ws-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agent_description: 'attempt to bypass MCP' }),
+    })
+
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toMatch(/agent_description/i)
+    expect(body.error).toMatch(/MCP/i)
+  })
+})
+
+describe('POST /api/workspaces/:id/start', () => {
+  it('starts agent for workspace', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(workspaceService.updateWorkspaceStatus).mockReturnValue({
+      ...fakeWorkspace,
+      status: 'executing',
+    })
+
+    const res = await app.request('/api/workspaces/ws-1/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: 'Do something' }),
+    })
+
+    expect(res.status).toBe(200)
+    const data = await res.json()
+    expect(data.status).toBe('started')
+    expect(agentManager.startAgent).toHaveBeenCalledWith(
+      'ws-1',
+      '/tmp/project/.worktrees/feature/test',
+      'Do something',
+      'claude-opus-4-6',
+      false,
+      'bypass',
+      undefined,
+      'auto',
+    )
+    expect(workspaceService.updateWorkspaceStatus).toHaveBeenCalledWith('ws-1', 'executing')
+  })
+
+  it('uses default prompt when none provided', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(workspaceService.updateWorkspaceStatus).mockReturnValue({
+      ...fakeWorkspace,
+      status: 'executing',
+    })
+
+    const res = await app.request('/api/workspaces/ws-1/start', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    expect(agentManager.startAgent).toHaveBeenCalledWith(
+      'ws-1',
+      '/tmp/project/.worktrees/feature/test',
+      'Continue the previous task where you left off.',
+      'claude-opus-4-6',
+      false,
+      'bypass',
+      undefined,
+      'auto',
+    )
+  })
+
+  it('falls back to pending initial_prompt when no body.prompt is provided', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      initialPrompt: 'Pending brainstorm prompt after setup-script crash',
+    } as never)
+    vi.mocked(workspaceService.updateWorkspaceStatus).mockReturnValue({
+      ...fakeWorkspace,
+      status: 'executing',
+    })
+
+    const res = await app.request('/api/workspaces/ws-1/start', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    const [, , promptArg] = vi.mocked(agentManager.startAgent).mock.calls[0]
+    expect(promptArg).toBe('Pending brainstorm prompt after setup-script crash')
+    // Cleared after the agent has been handed the prompt.
+    expect(workspaceService.clearInitialPrompt).toHaveBeenCalledWith('ws-1')
+  })
+
+  it('body.prompt wins over pending initial_prompt', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      initialPrompt: 'should be ignored',
+    } as never)
+    vi.mocked(workspaceService.updateWorkspaceStatus).mockReturnValue({
+      ...fakeWorkspace,
+      status: 'executing',
+    })
+
+    const res = await app.request('/api/workspaces/ws-1/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: 'explicit user prompt' }),
+    })
+
+    expect(res.status).toBe(200)
+    const [, , promptArg] = vi.mocked(agentManager.startAgent).mock.calls[0]
+    expect(promptArg).toBe('explicit user prompt')
+    // Even when an explicit prompt wins, the pending initial_prompt is still
+    // cleared so the next /:id/start without body.prompt doesn't replay it.
+    expect(workspaceService.clearInitialPrompt).toHaveBeenCalledWith('ws-1')
+  })
+
+  it('returns 404 for unknown workspace', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null)
+
+    const res = await app.request('/api/workspaces/nonexistent/start', { method: 'POST' })
+    expect(res.status).toBe(404)
+  })
+
+  it('refuses to start an archived workspace', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      archivedAt: '2026-01-02T00:00:00.000Z',
+    } as never)
+
+    const res = await app.request('/api/workspaces/ws-1/start', { method: 'POST' })
+
+    expect(res.status).toBe(409)
+    expect(agentManager.startAgent).not.toHaveBeenCalled()
+  })
+
+  it('refuses to start a workspace whose worktree was purged', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      worktreePurgedAt: '2026-01-02T00:00:00.000Z',
+    } as never)
+
+    const res = await app.request('/api/workspaces/ws-1/start', { method: 'POST' })
+
+    expect(res.status).toBe(409)
+    expect(agentManager.startAgent).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 when the workspace engine is no longer registered', async () => {
+    const { listEngines } = await import('../server/services/agent/engines/registry.js')
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      engine: 'unregistered-engine',
+    } as unknown as ReturnType<typeof workspaceService.getWorkspace>)
+    vi.mocked(listEngines).mockReturnValue([{ id: 'claude-code' } as unknown as ReturnType<typeof listEngines>[number]])
+
+    const res = await app.request('/api/workspaces/ws-1/start', { method: 'POST' })
+    expect(res.status).toBe(400)
+    const data = (await res.json()) as { error: string }
+    expect(data.error).toMatch(/unregistered-engine/)
+    expect(data.error).toMatch(/no longer available/i)
+    expect(agentManager.startAgent).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /api/workspaces/:id/stop', () => {
+  it('stops agent for workspace', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+
+    const res = await app.request('/api/workspaces/ws-1/stop', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    const data = await res.json()
+    expect(data.status).toBe('stopped')
+    expect(agentManager.stopAgentAndWait).toHaveBeenCalledWith('ws-1')
+    expect(workspaceService.updateWorkspaceStatus).toHaveBeenCalledWith('ws-1', 'idle')
+  })
+
+  it('returns stopped even when agent is not running', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(agentManager.stopAgentAndWait).mockImplementation(async () => {
+      return 'not-running'
+    })
+
+    const res = await app.request('/api/workspaces/ws-1/stop', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    const data = await res.json()
+    expect(data.status).toBe('stopped')
+  })
+
+  it('returns 404 for unknown workspace', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null)
+
+    const res = await app.request('/api/workspaces/nonexistent/stop', { method: 'POST' })
+    expect(res.status).toBe(404)
+  })
+})
+
+describe('POST /api/workspaces/:id/interrupt', () => {
+  it('forwards whip session safety options to interruptAgent', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    const res = await app.request('/api/workspaces/ws-1/interrupt', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ expectedSessionId: 'session-running', disableAutoLoop: true }),
+    })
+
+    expect(res.status).toBe(200)
+    expect(agentManager.interruptAgent).toHaveBeenCalledWith('ws-1', {
+      expectedSessionId: 'session-running',
+      disableAutoLoop: true,
+    })
+  })
+
+  it.each([
+    [{ expectedSessionId: 42 }, 'expectedSessionId'],
+    [{ expectedSessionId: '' }, 'expectedSessionId'],
+    [{ expectedSessionId: '   ' }, 'expectedSessionId'],
+    [{ disableAutoLoop: 'yes' }, 'disableAutoLoop'],
+  ])('rejects malformed interruption options: %j', async (body, invalidField) => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    const res = await app.request('/api/workspaces/ws-1/interrupt', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+
+    expect(res.status).toBe(400)
+    expect(((await res.json()) as { error: string }).error).toContain(invalidField)
+    expect(agentManager.interruptAgent).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['{"expectedSessionId":', 'invalid JSON'],
+    ['null', 'null'],
+    ['[]', 'array'],
+    ['"session-running"', 'primitive'],
+  ])('rejects a supplied non-object JSON body: %s', async (rawBody) => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    const res = await app.request('/api/workspaces/ws-1/interrupt', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: rawBody,
+    })
+
+    expect(res.status).toBe(400)
+    expect(agentManager.interruptAgent).not.toHaveBeenCalled()
+  })
+
+  it('accepts an empty body as default interruption options', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    const res = await app.request('/api/workspaces/ws-1/interrupt', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    expect(agentManager.interruptAgent).toHaveBeenCalledWith('ws-1', {})
+  })
+
+  it('accepts a whitespace-only body as default interruption options', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    const res = await app.request('/api/workspaces/ws-1/interrupt', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '  \n\t ',
+    })
+
+    expect(res.status).toBe(200)
+    expect(agentManager.interruptAgent).toHaveBeenCalledWith('ws-1', {})
+  })
+
+  it.each([
+    ['no_agent_running', 409],
+    ['session_not_active', 409],
+    ['interrupt_failed', 500],
+  ] as const)('serializes %s interruption failures with status %i', async (code, status) => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(agentManager.interruptAgent).mockImplementation(() => {
+      throw new MockInterruptAgentError(`interruption failed: ${code}`, code)
+    })
+
+    const res = await app.request('/api/workspaces/ws-1/interrupt', { method: 'POST' })
+
+    expect(res.status).toBe(status)
+    expect(await res.json()).toEqual({ error: `interruption failed: ${code}`, code })
+  })
+
+  it('returns an untagged 500 response for an untyped interruption failure', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(agentManager.interruptAgent).mockImplementation(() => {
+      throw new Error('unexpected interruption failure')
+    })
+
+    const res = await app.request('/api/workspaces/ws-1/interrupt', { method: 'POST' })
+
+    expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({ error: 'unexpected interruption failure' })
+  })
+})
+
+describe('DELETE /api/workspaces/:id', () => {
+  it('deletes workspace with full cleanup', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+
+    const res = await app.request('/api/workspaces/ws-1', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        deleteLocalBranch: true,
+        deleteRemoteBranch: true,
+      }),
+    })
+
+    expect(res.status).toBe(204)
+    expect(agentManager.stopAgentAndWait).toHaveBeenCalledWith('ws-1', undefined, 'delete')
+    expect(worktreeService.removeWorktree).toHaveBeenCalledWith('/tmp/project', '/tmp/project/.worktrees/feature/test')
+    expect(gitOps.deleteLocalBranch).toHaveBeenCalledWith('/tmp/project', 'feature/test')
+    expect(gitOps.deleteRemoteBranch).toHaveBeenCalledWith('/tmp/project', 'feature/test')
+    expect(workspaceService.deleteWorkspace).toHaveBeenCalledWith('ws-1')
+    expect(wsService.emitEphemeral).toHaveBeenCalledWith('ws-1', 'workspace:deleted', { workspaceId: 'ws-1' })
+  })
+
+  it('waits for the agent to actually stop before removing the worktree', async () => {
+    const callOrder: string[] = []
+    let releaseStop: (() => void) | undefined
+
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(agentManager.stopAgentAndWait).mockImplementation(async () => {
+      callOrder.push('stopAgentAndWait:start')
+      await new Promise<void>((resolve) => {
+        releaseStop = resolve
+        setTimeout(resolve, 0)
+      })
+      callOrder.push('stopAgentAndWait:done')
+      return 'stopped'
+    })
+    vi.mocked(worktreeService.removeWorktree).mockImplementation(async () => {
+      callOrder.push('removeWorktree')
+    })
+
+    const res = await app.request('/api/workspaces/ws-1', { method: 'DELETE' })
+
+    expect(res.status).toBe(204)
+    expect(callOrder).toEqual(['stopAgentAndWait:start', 'stopAgentAndWait:done', 'removeWorktree'])
+    releaseStop?.()
+  })
+
+  it('deletes workspace without branch cleanup', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+
+    const res = await app.request('/api/workspaces/ws-1', { method: 'DELETE' })
+
+    expect(res.status).toBe(204)
+    expect(gitOps.deleteLocalBranch).not.toHaveBeenCalled()
+    expect(gitOps.deleteRemoteBranch).not.toHaveBeenCalled()
+    expect(workspaceService.deleteWorkspace).toHaveBeenCalledWith('ws-1')
+  })
+
+  it('returns 404 for unknown workspace', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null)
+
+    const res = await app.request('/api/workspaces/nonexistent', { method: 'DELETE' })
+    expect(res.status).toBe(404)
+  })
+
+  it('keeps the worktree on disk when the workspace is not owned', async () => {
+    // Reused/attached external worktrees: Kōbō did not create the dir, so it
+    // must not delete it on the user's behalf. The DB row is still removed.
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      worktreeOwned: false,
+      worktreePath: '/tmp/external/foo',
+    })
+
+    const res = await app.request('/api/workspaces/ws-1', { method: 'DELETE' })
+
+    expect(res.status).toBe(204)
+    expect(vi.mocked(worktreeService.removeWorktree)).not.toHaveBeenCalled()
+    expect(vi.mocked(workspaceService.deleteWorkspace)).toHaveBeenCalledWith('ws-1')
+  })
+
+  it('surfaces a warning with copy-pasteable sudo command when the worktree removal fails (permission denied)', async () => {
+    // Common case: Docker containers created root-owned files inside the
+    // worktree. `git worktree remove` fails with EACCES. We still want the
+    // DB row gone, but the user needs to know the directory wasn't cleaned
+    // up and how to fix it manually.
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.removeWorktree).mockImplementation(async () => {
+      throw new Error("Failed to remove worktree '/tmp/project/.worktrees/feature/test': EACCES: permission denied")
+    })
+
+    const res = await app.request('/api/workspaces/ws-1', { method: 'DELETE' })
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { ok: boolean; warnings: string[] }
+    expect(body.ok).toBe(true)
+    expect(body.warnings.length).toBeGreaterThan(0)
+    expect(body.warnings.join('\n')).toContain('/tmp/project/.worktrees/feature/test')
+    expect(body.warnings.join('\n')).toMatch(/sudo rm -rf/)
+    expect(body.warnings.join('\n')).toMatch(/git worktree prune/)
+    // DB cleanup still ran
+    expect(workspaceService.deleteWorkspace).toHaveBeenCalledWith('ws-1')
+  })
+})
+
+describe('DELETE /api/workspaces/archived', () => {
+  beforeEach(() => {
+    // The DELETE /:id suite above leaves removeWorktree throwing — vi.clearAllMocks
+    // resets call history but not implementations, so restore the no-ops here.
+    vi.mocked(worktreeService.removeWorktree).mockReset()
+    vi.mocked(workspaceService.deleteWorkspace).mockReset()
+    vi.mocked(workspaceService.getWorkspace).mockImplementation(
+      (id) => [archivedA, archivedB].find((workspace) => workspace.id === id) ?? null,
+    )
+  })
+
+  const archivedA = {
+    ...fakeWorkspace,
+    id: 'ws-arch-1',
+    name: 'Archived A',
+    workingBranch: 'feature/a',
+    archivedAt: '2026-04-05T10:00:00.000Z',
+  }
+  const archivedB = {
+    ...fakeWorkspace,
+    id: 'ws-arch-2',
+    name: 'Archived B',
+    workingBranch: 'feature/b',
+    archivedAt: '2026-04-04T10:00:00.000Z',
+  }
+
+  it('bulk-deletes every archived workspace with full cleanup', async () => {
+    vi.mocked(workspaceService.listArchivedWorkspaces).mockReturnValue([archivedA, archivedB])
+
+    const res = await app.request('/api/workspaces/archived', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deleteLocalBranch: true, deleteRemoteBranch: true }),
+    })
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { ok: boolean; deleted: number; warnings: string[] }
+    expect(body.ok).toBe(true)
+    expect(body.deleted).toBe(2)
+    expect(body.warnings).toEqual([])
+    expect(workspaceService.deleteWorkspace).toHaveBeenCalledWith('ws-arch-1')
+    expect(workspaceService.deleteWorkspace).toHaveBeenCalledWith('ws-arch-2')
+    expect(gitOps.deleteLocalBranch).toHaveBeenCalledWith('/tmp/project', 'feature/a')
+    expect(gitOps.deleteRemoteBranch).toHaveBeenCalledWith('/tmp/project', 'feature/b')
+  })
+
+  it('does not touch branches when no options are passed', async () => {
+    vi.mocked(workspaceService.listArchivedWorkspaces).mockReturnValue([archivedA])
+
+    const res = await app.request('/api/workspaces/archived', { method: 'DELETE' })
+
+    expect(res.status).toBe(200)
+    expect(gitOps.deleteLocalBranch).not.toHaveBeenCalled()
+    expect(gitOps.deleteRemoteBranch).not.toHaveBeenCalled()
+    expect(workspaceService.deleteWorkspace).toHaveBeenCalledWith('ws-arch-1')
+  })
+
+  it('returns deleted: 0 when there are no archived workspaces', async () => {
+    vi.mocked(workspaceService.listArchivedWorkspaces).mockReturnValue([])
+
+    const res = await app.request('/api/workspaces/archived', { method: 'DELETE' })
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { deleted: number; warnings: string[] }
+    expect(body.deleted).toBe(0)
+    expect(body.warnings).toEqual([])
+    expect(workspaceService.deleteWorkspace).not.toHaveBeenCalled()
+  })
+
+  it('keeps deleting the rest of the batch when one workspace fails', async () => {
+    vi.mocked(workspaceService.listArchivedWorkspaces).mockReturnValue([archivedA, archivedB])
+    vi.mocked(workspaceService.deleteWorkspace).mockImplementation((id: string) => {
+      if (id === 'ws-arch-1') throw new Error('DB locked')
+    })
+
+    const res = await app.request('/api/workspaces/archived', { method: 'DELETE' })
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { deleted: number; warnings: string[] }
+    expect(body.deleted).toBe(1)
+    expect(body.warnings.join('\n')).toContain('Archived A')
+    expect(workspaceService.deleteWorkspace).toHaveBeenCalledWith('ws-arch-2')
+  })
+
+  it('skips a workspace restored after the archived list was loaded', async () => {
+    vi.mocked(workspaceService.listArchivedWorkspaces).mockReturnValue([archivedA])
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ ...archivedA, archivedAt: null })
+    const res = await app.request('/api/workspaces/archived', { method: 'DELETE' })
+    expect(await res.json()).toMatchObject({ deleted: 0 })
+    expect(workspaceService.deleteWorkspace).not.toHaveBeenCalled()
+    expect(worktreeService.removeWorktree).not.toHaveBeenCalled()
+  })
+
+  it('is not matched by DELETE /:id (route order regression)', async () => {
+    vi.mocked(workspaceService.listArchivedWorkspaces).mockReturnValue([])
+
+    const res = await app.request('/api/workspaces/archived', { method: 'DELETE' })
+
+    expect(res.status).toBe(200)
+    expect(workspaceService.listArchivedWorkspaces).toHaveBeenCalled()
+    // DELETE /:id resolves the target via getWorkspace — if it ran, order regressed.
+    expect(workspaceService.getWorkspace).not.toHaveBeenCalled()
+  })
+})
+
+describe('git conventions file creation on workspace create', () => {
+  beforeEach(() => {
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace as never)
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
+      worktreePath: '/tmp/worktree',
+      base: 'origin',
+      branchCreated: true,
+    })
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks as never)
+    vi.mocked(workspaceService.updateWorkspaceStatus).mockReturnValue(fakeWorkspace as never)
+    vi.mocked(fs.writeFileSync).mockClear()
+  })
+
+  it('writes .ai/.git-conventions.md when gitConventions is non-empty', async () => {
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'auto',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '# My conventions\n- Rule 1',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
+
+    await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+      }),
+    })
+
+    const writeCall = vi
+      .mocked(fs.writeFileSync)
+      .mock.calls.find(([p]) => typeof p === 'string' && p.includes('.git-conventions.md'))
+    expect(writeCall).toBeDefined()
+    expect(writeCall?.[1]).toBe('# My conventions\n- Rule 1')
+  })
+
+  it('does NOT write the file when gitConventions is empty', async () => {
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'auto',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
+
+    await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+      }),
+    })
+
+    const writeCall = vi
+      .mocked(fs.writeFileSync)
+      .mock.calls.find(([p]) => typeof p === 'string' && p.includes('.git-conventions.md'))
+    expect(writeCall).toBeUndefined()
+  })
+
+  it('includes the git conventions section in the agent prompt when non-empty', async () => {
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'auto',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '# conventions',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
+
+    await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+      }),
+    })
+
+    const startCall = vi.mocked(agentManager.startAgent).mock.calls[0]
+    expect(startCall).toBeDefined()
+    const prompt = startCall?.[2] as string
+    expect(prompt).toContain('Git conventions')
+    expect(prompt).toContain('.ai/.git-conventions.md')
+  })
+
+  it('does NOT include the git conventions section when empty', async () => {
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'auto',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
+
+    await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+      }),
+    })
+
+    const startCall = vi.mocked(agentManager.startAgent).mock.calls[0]
+    const prompt = startCall?.[2] as string
+    expect(prompt).not.toContain('.ai/.git-conventions.md')
+  })
+})
+
+describe('POST /api/workspaces/:id/push', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    // Reset pushBranch implementation so a previous test's throw doesn't leak
+    vi.mocked(gitOps.pushBranchAsync).mockReset()
+    vi.mocked(gitOps.pushBranchAsync).mockResolvedValue({ upToDate: false })
+    vi.mocked(gitOps.getOngoingGitOperation).mockReturnValue(null)
+  })
+
+  it('returns 409 operation_in_progress and does not push during a rebase', async () => {
+    // During a rebase the local branch ref has not moved, so git would report
+    // "Everything up-to-date" and the user would see nothing happen.
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      workingBranch: 'feature/test',
+      projectPath: '/tmp/project',
+    } as never)
+    vi.mocked(gitOps.getOngoingGitOperation).mockReturnValue('rebase')
+
+    const res = await app.request('/api/workspaces/ws-1/push', { method: 'POST' })
+
+    expect(res.status).toBe(409)
+    const data = await res.json()
+    expect(data).toEqual({ error: expect.any(String), code: 'operation_in_progress', operation: 'rebase' })
+    expect(vi.mocked(gitOps.pushBranchAsync)).not.toHaveBeenCalled()
+  })
+
+  it('returns upToDate=true and a "nothing to push" trace when the remote already had everything', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      workingBranch: 'feature/test',
+      projectPath: '/tmp/project',
+    } as never)
+    vi.mocked(gitOps.pushBranchAsync).mockResolvedValue({ upToDate: true })
+
+    const res = await app.request('/api/workspaces/ws-1/push', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ ok: true, branch: 'feature/test', upToDate: true })
+    const { emit } = await import('../server/services/websocket-service.js')
+    expect(vi.mocked(emit)).toHaveBeenCalledWith(
+      'ws-1',
+      'user:message',
+      expect.objectContaining({
+        content: 'Nothing to push: branch feature/test is already up to date on origin',
+      }),
+      undefined,
+    )
+  })
+
+  it('pushes the branch and returns 200', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      workingBranch: 'feature/test',
+      projectPath: '/tmp/project',
+    } as never)
+
+    const res = await app.request('/api/workspaces/ws-1/push', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    const data = await res.json()
+    expect(data.ok).toBe(true)
+    expect(data.branch).toBe('feature/test')
+    expect(data.upToDate).toBe(false)
+    expect(vi.mocked(gitOps.pushBranchAsync)).toHaveBeenCalledWith(
+      expect.stringContaining('.worktrees'),
+      'feature/test',
+    )
+  })
+
+  it('returns 404 when workspace not found', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null as never)
+
+    const res = await app.request('/api/workspaces/unknown/push', { method: 'POST' })
+
+    expect(res.status).toBe(404)
+  })
+
+  it('returns 500 with stderr when git push fails', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      workingBranch: 'feature/test',
+      projectPath: '/tmp/project',
+    } as never)
+    vi.mocked(gitOps.pushBranchAsync).mockImplementation(() => {
+      throw new Error('remote rejected: non-fast-forward')
+    })
+
+    const res = await app.request('/api/workspaces/ws-1/push', { method: 'POST' })
+
+    expect(res.status).toBe(500)
+    const data = await res.json()
+    expect(data.error).toContain('remote rejected')
+  })
+
+  it('emits user:message on success', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      workingBranch: 'feature/test',
+      projectPath: '/tmp/project',
+    } as never)
+    vi.mocked(workspaceService.getActiveSession).mockReturnValue({
+      id: 's-1',
+      engineSessionId: 'session-uuid',
+    } as never)
+
+    await app.request('/api/workspaces/ws-1/push', { method: 'POST' })
+
+    const { emit } = await import('../server/services/websocket-service.js')
+    expect(vi.mocked(emit)).toHaveBeenCalledWith(
+      'ws-1',
+      'user:message',
+      expect.objectContaining({ content: expect.stringContaining('Pushed') }),
+      's-1',
+    )
+  })
+})
+
+describe('POST /api/workspaces/:id/fetch', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(gitOps.fetchAllBranchesAsync).mockReset()
+  })
+
+  it('fetches the workspace repo and returns 200', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ ...fakeWorkspace } as never)
+    const res = await app.request('/api/workspaces/ws-1/fetch', { method: 'POST' })
+    expect(res.status).toBe(200)
+    expect((await res.json()).ok).toBe(true)
+    expect(vi.mocked(gitOps.fetchAllBranchesAsync)).toHaveBeenCalledWith(expect.stringContaining('.worktrees'))
+  })
+
+  it('returns 404 when workspace not found', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null as never)
+    const res = await app.request('/api/workspaces/unknown/fetch', { method: 'POST' })
+    expect(res.status).toBe(404)
+    expect(vi.mocked(gitOps.fetchAllBranchesAsync)).not.toHaveBeenCalled()
+  })
+
+  it('returns 500 when the fetch fails', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ ...fakeWorkspace } as never)
+    vi.mocked(gitOps.fetchAllBranchesAsync).mockImplementation(() => {
+      throw new Error('no remote configured')
+    })
+    const res = await app.request('/api/workspaces/ws-1/fetch', { method: 'POST' })
+    expect(res.status).toBe(500)
+  })
+})
+
+describe('POST /api/workspaces/:id/pull', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(gitOps.pullBranchAsync).mockReset()
+  })
+
+  it('pulls the branch and returns 200', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      workingBranch: 'feature/test',
+      projectPath: '/tmp/project',
+    } as never)
+
+    const res = await app.request('/api/workspaces/ws-1/pull', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    const data = await res.json()
+    expect(data.ok).toBe(true)
+    expect(data.branch).toBe('feature/test')
+    expect(vi.mocked(gitOps.pullBranchAsync)).toHaveBeenCalledWith(
+      expect.stringContaining('.worktrees'),
+      'feature/test',
+      'origin',
+      { autostash: false },
+    )
+  })
+
+  it('returns 404 when workspace not found', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null as never)
+    const res = await app.request('/api/workspaces/unknown/pull', { method: 'POST' })
+    expect(res.status).toBe(404)
+  })
+
+  it('maps DirtyWorktreeError to 409 with code dirty_worktree on pull', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      workingBranch: 'feature/test',
+      projectPath: '/tmp/project',
+    } as never)
+    vi.mocked(gitOps.pullBranchAsync).mockImplementation(() => {
+      throw new gitOps.DirtyWorktreeError('pull', { staged: 0, modified: 2, untracked: 0 })
+    })
+
+    const res = await app.request('/api/workspaces/ws-1/pull', { method: 'POST' })
+
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.code).toBe('dirty_worktree')
+    expect(body.operation).toBe('pull')
+    expect(body.status).toEqual({ staged: 0, modified: 2, untracked: 0 })
+  })
+
+  it('passes autostash:true to pullBranch when ?autostash=1', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      workingBranch: 'feature/test',
+      projectPath: '/tmp/project',
+    } as never)
+    vi.mocked(gitOps.pullBranchAsync).mockResolvedValue(undefined)
+
+    const res = await app.request('/api/workspaces/ws-1/pull?autostash=1', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    expect(vi.mocked(gitOps.pullBranchAsync)).toHaveBeenCalledWith(
+      expect.stringContaining('.worktrees'),
+      'feature/test',
+      'origin',
+      {
+        autostash: true,
+      },
+    )
+  })
+
+  it('returns 500 when git pull fails (non-ff)', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      workingBranch: 'feature/test',
+      projectPath: '/tmp/project',
+    } as never)
+    vi.mocked(gitOps.pullBranchAsync).mockImplementation(() => {
+      throw new Error('Not possible to fast-forward, aborting.')
+    })
+
+    const res = await app.request('/api/workspaces/ws-1/pull', { method: 'POST' })
+
+    expect(res.status).toBe(500)
+    const data = await res.json()
+    expect(data.error).toContain('fast-forward')
+  })
+
+  it('emits user:message on success tagged with the active session id', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      workingBranch: 'feature/test',
+      projectPath: '/tmp/project',
+    } as never)
+    vi.mocked(workspaceService.getActiveSession).mockReturnValue({
+      id: 's-active',
+      engineSessionId: 'claude-uuid',
+    } as never)
+
+    await app.request('/api/workspaces/ws-1/pull', { method: 'POST' })
+
+    const { emit } = await import('../server/services/websocket-service.js')
+    expect(vi.mocked(emit)).toHaveBeenCalledWith(
+      'ws-1',
+      'user:message',
+      expect.objectContaining({ content: expect.stringContaining('Pulled') }),
+      's-active',
+    )
+  })
+})
+
+describe('POST /api/workspaces/:id/open-pr', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(agentManager.sendMessageForFallback).mockReset()
+    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValue({
+      status: 'sent',
+      sessionId: 'delivered-session-id',
+    })
+    execFilePromiseMock.mockReset()
+    createPrMock.mockReset()
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      workingBranch: 'feature/test',
+      sourceBranch: 'main',
+      projectPath: '/tmp/project',
+    } as never)
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getActiveSession).mockReturnValue({
+      id: 's-1',
+      engineSessionId: 'sess-uuid',
+    } as never)
+    // Default: branch is on remote and up-to-date
+    execFilePromiseMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args.includes('ls-remote')) return Promise.resolve({ stdout: 'abc refs/heads/feature/test\n' })
+      if (args.includes('rev-list')) return Promise.resolve({ stdout: '0\n' })
+      return Promise.resolve({ stdout: '' })
+    })
+  })
+
+  it('returns 404 when workspace not found', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null as never)
+    const res = await app.request('/api/workspaces/unknown/open-pr', { method: 'POST' })
+    expect(res.status).toBe(404)
+  })
+
+  it('returns 409 branch_not_pushed when ls-remote returns empty', async () => {
+    execFilePromiseMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args.includes('ls-remote')) return Promise.resolve({ stdout: '' })
+      return Promise.reject(new Error('unexpected'))
+    })
+
+    const res = await app.request('/api/workspaces/ws-1/open-pr', { method: 'POST' })
+    expect(res.status).toBe(409)
+    const data = await res.json()
+    expect(data.code).toBe('branch_not_pushed')
+  })
+
+  it('returns 409 branch_not_pushed when upstream is not configured', async () => {
+    execFilePromiseMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args.includes('ls-remote')) return Promise.resolve({ stdout: 'abc refs/heads/feature/test\n' })
+      if (args.includes('rev-list')) {
+        const err = new Error("fatal: no upstream configured for branch 'feature/test'")
+        ;(err as never as { stderr: string }).stderr = 'fatal: no upstream configured'
+        return Promise.reject(err)
+      }
+      return Promise.reject(new Error('unexpected'))
+    })
+
+    const res = await app.request('/api/workspaces/ws-1/open-pr', { method: 'POST' })
+    expect(res.status).toBe(409)
+    const data = await res.json()
+    expect(data.code).toBe('branch_not_pushed')
+  })
+
+  it('returns 409 unpushed_commits when rev-list returns > 0', async () => {
+    execFilePromiseMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args.includes('ls-remote')) return Promise.resolve({ stdout: 'abc refs/heads/feature/test\n' })
+      if (args.includes('rev-list')) return Promise.resolve({ stdout: '3\n' })
+      return Promise.reject(new Error('unexpected'))
+    })
+
+    const res = await app.request('/api/workspaces/ws-1/open-pr', { method: 'POST' })
+    expect(res.status).toBe(409)
+    const data = await res.json()
+    expect(data.code).toBe('unpushed_commits')
+  })
+
+  it('creates the PR when pushed even if @{u} points at the base branch (agent-pushed without -u)', async () => {
+    // Regression: the worktree is created from origin/<sourceBranch>, so the
+    // branch's upstream @{u} tracks the BASE. Counting `@{u}..HEAD` therefore
+    // returns the branch's own commits (>0) and falsely reports unpushed work,
+    // even though origin/<workingBranch>..HEAD is 0 (everything pushed). open-pr
+    // must measure against origin/<workingBranch>, like the GitPanel does.
+    createPrMock.mockResolvedValueOnce({ url: 'https://github.com/o/r/pull/9', number: 9 })
+    execFilePromiseMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args.includes('ls-remote')) return Promise.resolve({ stdout: 'abc refs/heads/feature/test\n' })
+      if (args.includes('rev-list')) {
+        const spec = args.find((a) => a.endsWith('..HEAD')) ?? ''
+        if (spec.includes('@{u}')) return Promise.resolve({ stdout: '2\n' }) // upstream = base → false positive
+        return Promise.resolve({ stdout: '0\n' }) // origin/<workingBranch> → aligned
+      }
+      return Promise.resolve({ stdout: '' })
+    })
+
+    const res = await app.request('/api/workspaces/ws-1/open-pr', { method: 'POST' })
+    expect(res.status).toBe(200)
+    expect(createPrMock).toHaveBeenCalled()
+  })
+
+  it('open-pr creates the PR via the resolved forge provider', async () => {
+    createPrMock.mockResolvedValueOnce({ url: 'https://github.com/o/r/pull/5', number: 5 })
+
+    const res = await app.request('/api/workspaces/ws-1/open-pr', { method: 'POST' })
+    expect(res.status).toBe(200)
+    expect(createPrMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ base: expect.any(String), head: expect.any(String) }),
+    )
+    const data = await res.json()
+    expect(data.prNumber).toBe(5)
+    expect(data.prUrl).toBe('https://github.com/o/r/pull/5')
+  })
+
+  it('creates PR, renders template, sends message on happy path', async () => {
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'auto',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: 'template body',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
+
+    createPrMock.mockResolvedValueOnce({ url: 'https://github.com/org/repo/pull/42', number: 42 })
+
+    const prTemplateService = await import('../server/services/pr-template-service.js')
+    vi.mocked(prTemplateService.renderPrTemplate).mockReturnValue('RENDERED PROMPT')
+
+    const res = await app.request('/api/workspaces/ws-1/open-pr', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    const data = await res.json()
+    expect(data.ok).toBe(true)
+    expect(data.prNumber).toBe(42)
+    expect(data.prUrl).toBe('https://github.com/org/repo/pull/42')
+    expect(data.messageSent).toBe(true)
+
+    const { emit } = await import('../server/services/websocket-service.js')
+    expect(vi.mocked(emit)).toHaveBeenCalledWith(
+      'ws-1',
+      'user:message',
+      expect.objectContaining({ content: 'RENDERED PROMPT', sender: 'user' }),
+      'delivered-session-id',
+    )
+    expect(vi.mocked(emit)).toHaveBeenCalledOnce()
+    expect(vi.mocked(agentManager.sendMessageForFallback)).toHaveBeenCalledWith('ws-1', 'RENDERED PROMPT')
+    expect(agentManager.startAgent).not.toHaveBeenCalled()
+  })
+
+  it('returns messageSent: false when template is empty (PR still created)', async () => {
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'auto',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
+
+    createPrMock.mockResolvedValueOnce({ url: 'https://github.com/org/repo/pull/42', number: 42 })
+
+    const res = await app.request('/api/workspaces/ws-1/open-pr', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    const data = await res.json()
+    expect(data.prNumber).toBe(42)
+    expect(data.messageSent).toBe(false)
+    expect(vi.mocked(agentManager.sendMessageForFallback)).not.toHaveBeenCalled()
+  })
+
+  it('returns 500 when createPr fails', async () => {
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'auto',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
+
+    createPrMock.mockRejectedValueOnce(new Error('auth required'))
+
+    const res = await app.request('/api/workspaces/ws-1/open-pr', { method: 'POST' })
+
+    expect(res.status).toBe(500)
+    const data = await res.json()
+    expect(data.error).toContain('auth required')
+  })
+
+  it('returns 409 forge_unsupported when canCreatePr is false', async () => {
+    vi.mocked(getForgeProvider).mockReturnValueOnce({
+      id: 'github',
+      capabilities: { canCreatePr: false, canChangePrBase: true, requestTermShort: 'PR' },
+      isAvailable: vi.fn(async () => ({ available: true })),
+      changePrBase: changePrBaseMock,
+      createPr: createPrMock,
+    } as never)
+
+    const res = await app.request('/api/workspaces/ws-1/open-pr', { method: 'POST' })
+
+    expect(res.status).toBe(409)
+    const data = await res.json()
+    expect(data.code).toBe('forge_unsupported')
+  })
+
+  it('resumes agent when lifecycle-safe delivery reports stopped (PR already created)', async () => {
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'auto',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: 'template',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
+
+    createPrMock.mockResolvedValueOnce({ url: 'https://github.com/org/repo/pull/42', number: 42 })
+
+    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce({ status: 'stopped' })
+
+    const res = await app.request('/api/workspaces/ws-1/open-pr', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    const data = await res.json()
+    expect(data.ok).toBe(true)
+    expect(data.prNumber).toBe(42)
+    // Agent is resumed with the PR prompt
+    expect(data.messageSent).toBe(true)
+    expect(agentManager.startAgent).toHaveBeenCalled()
+    expect(wsService.emit).toHaveBeenCalledOnce()
+    expect(wsService.emit).toHaveBeenCalledWith(
+      'ws-1',
+      'user:message',
+      expect.objectContaining({ sender: 'user' }),
+      'mock-agent-session-id',
+    )
+  })
+
+  it('keeps the created PR response without a ghost prompt when lifecycle-safe delivery rejects', async () => {
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'auto',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: 'template',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
+    createPrMock.mockResolvedValueOnce({ url: 'https://github.com/org/repo/pull/42', number: 42 })
+    vi.mocked(agentManager.sendMessageForFallback).mockRejectedValueOnce(new Error('replacement rejected'))
+
+    const res = await app.request('/api/workspaces/ws-1/open-pr', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ ok: true, prNumber: 42, messageSent: false })
+    expect(agentManager.startAgent).not.toHaveBeenCalled()
+    expect(wsService.emit).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /api/workspaces/:id/archive', () => {
+  it('returns 200 with archived workspace, stops agent and dev server', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    const archivedWs = { ...fakeWorkspace, archivedAt: '2026-04-05T10:00:00.000Z' }
+    vi.mocked(workspaceService.archiveWorkspace).mockReturnValue(archivedWs)
+
+    const res = await app.request('/api/workspaces/ws-1/archive', { method: 'POST' })
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.archivedAt).toBe('2026-04-05T10:00:00.000Z')
+    expect(agentManager.stopAgentAndWait).toHaveBeenCalledWith('ws-1', undefined, 'archive')
+    expect(devServerService.stopDevServer).toHaveBeenCalledWith('ws-1')
+    expect(workspaceService.archiveWorkspace).toHaveBeenCalledWith('ws-1')
+    expect(wsService.emitEphemeral).toHaveBeenCalledWith('ws-1', 'workspace:archived', { workspace: archivedWs })
+  })
+
+  it('returns 404 when workspace not found', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null)
+    const res = await app.request('/api/workspaces/missing/archive', { method: 'POST' })
+    expect(res.status).toBe(404)
+  })
+
+  it('returns 400 when workspace already archived', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      archivedAt: '2026-04-04T10:00:00.000Z',
+    })
+    const res = await app.request('/api/workspaces/ws-1/archive', { method: 'POST' })
+    expect(res.status).toBe(400)
+  })
+
+  it('does not archive when dev-server shutdown fails', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    const archivedWs = { ...fakeWorkspace, archivedAt: '2026-04-05T10:00:00.000Z' }
+    vi.mocked(workspaceService.archiveWorkspace).mockReturnValue(archivedWs)
+    vi.mocked(devServerService.stopDevServer).mockImplementation(() => {
+      throw new Error('docker daemon unreachable')
+    })
+    const res = await app.request('/api/workspaces/ws-1/archive', { method: 'POST' })
+    expect(res.status).toBe(500)
+    expect(workspaceService.archiveWorkspace).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /api/workspaces/:id/unarchive', () => {
+  it('returns 200 with unarchived workspace, status preserved', async () => {
+    const archivedWs = { ...fakeWorkspace, status: 'idle' as const, archivedAt: '2026-04-04T10:00:00.000Z' }
+    const restoredWs = { ...archivedWs, archivedAt: null }
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(archivedWs)
+    vi.mocked(workspaceService.unarchiveWorkspace).mockReturnValue(restoredWs)
+
+    const res = await app.request('/api/workspaces/ws-1/unarchive', { method: 'POST' })
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.archivedAt).toBeNull()
+    expect(body.status).toBe('idle')
+    expect(workspaceService.unarchiveWorkspace).toHaveBeenCalledWith('ws-1')
+    expect(wsService.emitEphemeral).toHaveBeenCalledWith('ws-1', 'workspace:unarchived', { workspace: restoredWs })
+  })
+
+  it('returns 404 when workspace not found', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null)
+    const res = await app.request('/api/workspaces/missing/unarchive', { method: 'POST' })
+    expect(res.status).toBe(404)
+  })
+
+  it('returns 400 when workspace not archived', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ ...fakeWorkspace, archivedAt: null })
+    const res = await app.request('/api/workspaces/ws-1/unarchive', { method: 'POST' })
+    expect(res.status).toBe(400)
+  })
+})
+
+describe('GET /api/workspaces/archived', () => {
+  it('returns archived workspaces', async () => {
+    const archivedList = [
+      { ...fakeWorkspace, id: 'ws-arch-1', archivedAt: '2026-04-05T10:00:00.000Z' },
+      { ...fakeWorkspace, id: 'ws-arch-2', archivedAt: '2026-04-04T10:00:00.000Z' },
+    ]
+    vi.mocked(workspaceService.listArchivedWorkspaces).mockReturnValue(archivedList)
+
+    const res = await app.request('/api/workspaces/archived')
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body).toHaveLength(2)
+    expect(body[0].id).toBe('ws-arch-1')
+    expect(workspaceService.listArchivedWorkspaces).toHaveBeenCalled()
+  })
+
+  it('returns empty array when no archived workspaces', async () => {
+    vi.mocked(workspaceService.listArchivedWorkspaces).mockReturnValue([])
+    const res = await app.request('/api/workspaces/archived')
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body).toEqual([])
+  })
+
+  it('is not matched by GET /:id (route order regression)', async () => {
+    vi.mocked(workspaceService.listArchivedWorkspaces).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(null)
+
+    const res = await app.request('/api/workspaces/archived')
+    expect(res.status).toBe(200)
+    expect(workspaceService.listArchivedWorkspaces).toHaveBeenCalled()
+    expect(workspaceService.getWorkspaceWithTasks).not.toHaveBeenCalled()
+  })
+})
+
+describe('GET /api/workspaces/pr-states', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('returns the snapshot from pr-watcher', async () => {
+    const prWatcher = await import('../server/services/pr-watcher-service.js')
+    vi.mocked(prWatcher.getAllPrSnapshots).mockReturnValue({
+      w1: { number: 1, state: 'OPEN' } as never,
+      w2: { number: 2, state: 'CLOSED' } as never,
+    })
+
+    const res = await app.request('/api/workspaces/pr-states')
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({
+      w1: { number: 1, state: 'OPEN' },
+      w2: { number: 2, state: 'CLOSED' },
+    })
+  })
+
+  it('returns an empty object when no PRs are known', async () => {
+    const prWatcher = await import('../server/services/pr-watcher-service.js')
+    vi.mocked(prWatcher.getAllPrSnapshots).mockReturnValue({})
+
+    const res = await app.request('/api/workspaces/pr-states')
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({})
+  })
+
+  it('is not matched by GET /:id (route order regression)', async () => {
+    const prWatcher = await import('../server/services/pr-watcher-service.js')
+    vi.mocked(prWatcher.getAllPrSnapshots).mockReturnValue({})
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(null)
+
+    const res = await app.request('/api/workspaces/pr-states')
+    expect(res.status).toBe(200)
+    expect(prWatcher.getAllPrSnapshots).toHaveBeenCalled()
+    expect(workspaceService.getWorkspaceWithTasks).not.toHaveBeenCalled()
+  })
+
+  it('GET /info returns workspaces, prSnapshots and gitStats', async () => {
+    const prWatcher = await import('../server/services/pr-watcher-service.js')
+    vi.mocked(workspaceService.listWorkspaces).mockReturnValue([{ id: 'ws-1', name: 'w' }] as never)
+    vi.mocked(prWatcher.getAllPrSnapshots).mockReturnValue({ 'ws-1': { number: 1 } } as never)
+    vi.mocked(prWatcher.getAllGitStats).mockReturnValue({ 'ws-1': { commitCount: 4 } } as never)
+
+    const res = await app.request('/api/workspaces/info')
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.workspaces).toEqual([{ id: 'ws-1', name: 'w' }])
+    expect(body.prSnapshots).toEqual({ 'ws-1': { number: 1 } })
+    expect(body.gitStats).toEqual({ 'ws-1': { commitCount: 4 } })
+  })
+})
+
+describe('GET /api/workspaces/:id/git-stats', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('returns commit count and diff stats for a workspace', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      projectPath: '/tmp/project',
+      sourceBranch: 'main',
+      workingBranch: 'feature/test',
+    } as never)
+    vi.mocked(gitOps.getCommitCountAsync).mockResolvedValue(5)
+    vi.mocked(gitOps.getStructuredDiffStatsBetweenAsync).mockResolvedValue({
+      filesChanged: 3,
+      insertions: 42,
+      deletions: 7,
+    })
+    getPrStatusMock.mockResolvedValue({ state: 'OPEN', url: 'https://github.com/org/repo/pull/1' })
+
+    const res = await app.request('/api/workspaces/ws-1/git-stats')
+    expect(res.status).toBe(200)
+
+    const data = await res.json()
+    expect(data.commitCount).toBe(5)
+    expect(data.filesChanged).toBe(3)
+    expect(data.insertions).toBe(42)
+    expect(data.deletions).toBe(7)
+    expect(data.prUrl).toBe('https://github.com/org/repo/pull/1')
+    expect(data.prState).toBe('OPEN')
+  })
+
+  it('returns 404 when workspace not found', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null as never)
+
+    const res = await app.request('/api/workspaces/unknown/git-stats')
+    expect(res.status).toBe(404)
+  })
+})
+
+describe('GET /api/workspaces/:id/session-metrics', () => {
+  it('reads pre-aggregated metrics instead of scanning every persisted event', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(workspaceService.listSessions).mockReturnValue([{ id: 'session-1' }] as never)
+    const prepare = vi.fn().mockReturnValue({
+      all: vi
+        .fn()
+        .mockReturnValue([{ session_id: 'session-1', tool_calls: 4, errors: 1, input_tokens: 120, output_tokens: 30 }]),
+    })
+    vi.mocked(getDb).mockReturnValueOnce({ prepare } as never)
+
+    const res = await app.request('/api/workspaces/ws-1/session-metrics')
+
+    expect(res.status).toBe(200)
+    await expect(res.json()).resolves.toMatchObject({
+      metrics: [{ sessionId: 'session-1', toolCalls: 4, errors: 1, inputTokens: 120, outputTokens: 30 }],
+    })
+    expect(prepare).toHaveBeenCalledWith(expect.stringContaining('FROM session_event_metrics'))
+  })
+})
+
+describe('GET /:id/git-stats — extended', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('includes behindCount in the response payload', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(gitOps.getCommitsBehindAsync).mockResolvedValue(7)
+    const res = await app.request('/api/workspaces/ws-1/git-stats')
+    expect(res.status).toBe(200)
+    const data = await res.json()
+    expect(data.behindCount).toBe(7)
+  })
+
+  it('with ?freshFetch=1 awaits fetchSourceBranchAsync before reading refs', async () => {
+    let fetchResolved = false
+    let fetchResolver!: () => void
+    vi.mocked(gitOps.fetchSourceBranchAsync).mockReturnValue(
+      new Promise<void>((resolve) => {
+        fetchResolver = () => {
+          fetchResolved = true
+          resolve()
+        }
+      }),
+    )
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+
+    const responsePromise = app.request('/api/workspaces/ws-1/git-stats?freshFetch=1')
+    await new Promise((r) => setImmediate(r))
+    const settled = await Promise.race([
+      Promise.resolve(responsePromise).then(() => 'response'),
+      new Promise((r) => setTimeout(() => r('timeout'), 50)),
+    ])
+    expect(settled).toBe('timeout')
+    expect(fetchResolved).toBe(false)
+
+    fetchResolver()
+    const res = await responsePromise
+    expect(res.status).toBe(200)
+  })
+
+  it('without freshFetch kicks fire-and-forget and responds immediately', async () => {
+    vi.mocked(gitOps.fetchSourceBranchAsync).mockReturnValue(
+      new Promise<void>(() => {
+        /* never resolves */
+      }),
+    )
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+
+    const res = (await Promise.race([
+      app.request('/api/workspaces/ws-1/git-stats'),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 1000)),
+    ])) as Response
+    expect(res.status).toBe(200)
+  })
+
+  it('does not produce an unhandled rejection when fire-and-forget fetch fails', async () => {
+    const handler = vi.fn()
+    process.on('unhandledRejection', handler)
+    try {
+      vi.mocked(gitOps.fetchSourceBranchAsync).mockRejectedValue(new Error('boom'))
+      vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+      await app.request('/api/workspaces/ws-1/git-stats')
+      await new Promise((r) => setImmediate(r))
+      await new Promise((r) => setImmediate(r))
+      expect(handler).not.toHaveBeenCalled()
+    } finally {
+      process.off('unhandledRejection', handler)
+    }
+  })
+})
+
+describe('GET /api/workspaces/:id/git-stats — forge block', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('git-stats response includes the resolved forge block', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(gitOps.getCommitCountAsync).mockResolvedValue(0)
+    vi.mocked(gitOps.getCommitsBehindAsync).mockResolvedValue(0)
+    vi.mocked(gitOps.getStructuredDiffStatsBetweenAsync).mockResolvedValue({
+      filesChanged: 0,
+      insertions: 0,
+      deletions: 0,
+    })
+    getPrStatusMock.mockResolvedValue(null)
+
+    const res = await app.request('/api/workspaces/ws-1/git-stats')
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.forge).toMatchObject({
+      id: 'github',
+      capabilities: { requestTermShort: 'PR' },
+      availability: { available: true },
+    })
+  })
+})
+
+describe('POST /api/workspaces/:id/run-setup-script', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('runs setup script and returns success when exit code is 0', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'auto',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: 'echo "hello"',
+      }),
+    )
+    vi.mocked(fs.existsSync).mockReturnValue(true)
+    vi.mocked(setupScriptService.runSetupScript).mockResolvedValue({ exitCode: 0 })
+
+    const res = await app.request('/api/workspaces/ws-1/run-setup-script', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    const data = await res.json()
+    expect(data.success).toBe(true)
+    expect(setupScriptService.runSetupScript).toHaveBeenCalledWith(
+      'ws-1',
+      '/tmp/project/.worktrees/feature/test',
+      'echo "hello"',
+      {
+        workspaceName: 'Test Workspace',
+        branchName: 'feature/test',
+        sourceBranch: 'main',
+        projectPath: '/tmp/project',
+      },
+    )
+  })
+
+  it('returns 500 when setup script fails with non-zero exit code', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'auto',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: 'exit 1',
+      }),
+    )
+    vi.mocked(fs.existsSync).mockReturnValue(true)
+    vi.mocked(setupScriptService.runSetupScript).mockResolvedValue({ exitCode: 1 })
+
+    const res = await app.request('/api/workspaces/ws-1/run-setup-script', { method: 'POST' })
+
+    expect(res.status).toBe(500)
+    const data = await res.json()
+    expect(data.error).toBe('Setup script failed with exit code 1')
+  })
+
+  it('returns 400 when no setup script is configured', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'auto',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
+
+    const res = await app.request('/api/workspaces/ws-1/run-setup-script', { method: 'POST' })
+
+    expect(res.status).toBe(400)
+    const data = await res.json()
+    expect(data.error).toBe('No setup script configured')
+  })
+
+  it('returns 404 when workspace not found', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null as never)
+
+    const res = await app.request('/api/workspaces/unknown/run-setup-script', { method: 'POST' })
+
+    expect(res.status).toBe(404)
+  })
+
+  it('returns 400 when worktree path does not exist', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'auto',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: 'echo "hello"',
+      }),
+    )
+    vi.mocked(fs.existsSync).mockReturnValue(false)
+
+    const res = await app.request('/api/workspaces/ws-1/run-setup-script', { method: 'POST' })
+
+    expect(res.status).toBe(400)
+    const data = await res.json()
+    expect(data.error).toContain('Worktree path does not exist')
+  })
+})
+
+describe('POST /api/workspaces/:id/mark-read', () => {
+  it('returns success when workspace exists', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+
+    const res = await app.request('/api/workspaces/ws-1/mark-read', { method: 'POST' })
+    expect(res.status).toBe(200)
+    const data = await res.json()
+    expect(data.success).toBe(true)
+    expect(workspaceService.markWorkspaceRead).toHaveBeenCalledWith('ws-1')
+    expect(wsService.emitEphemeral).toHaveBeenCalledWith('ws-1', 'workspace:unread', { hasUnread: false })
+  })
+
+  it('returns 404 for unknown workspace', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null)
+
+    const res = await app.request('/api/workspaces/unknown-id/mark-read', { method: 'POST' })
+    expect(res.status).toBe(404)
+    const data = await res.json()
+    expect(data.error).toContain('not found')
+  })
+})
+
+describe('POST /api/workspaces/:id/sessions', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('crée une session idle et retourne 201', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace as any)
+    vi.mocked(agentManager.getAgentStatus).mockReturnValue(null)
+    const fakeSession = {
+      id: 'sess-1',
+      workspaceId: 'ws-1',
+      status: 'idle',
+      startedAt: new Date().toISOString(),
+      pid: null,
+      engineSessionId: null,
+      endedAt: null,
+      name: null,
+    }
+    vi.mocked(workspaceService.createIdleSession).mockReturnValue(fakeSession as any)
+
+    const res = await app.request('/api/workspaces/ws-1/sessions', { method: 'POST' })
+    expect(res.status).toBe(201)
+    const body = await res.json()
+    expect(body.id).toBe('sess-1')
+    expect(body.status).toBe('idle')
+    expect(workspaceService.createIdleSession).toHaveBeenCalledWith('ws-1')
+  })
+
+  it('retourne 404 si workspace introuvable', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null)
+    const res = await app.request('/api/workspaces/unknown/sessions', { method: 'POST' })
+    expect(res.status).toBe(404)
+  })
+
+  it('retourne 409 si un agent tourne déjà', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace as any)
+    vi.mocked(agentManager.getAgentStatus).mockReturnValue('running' as any)
+    const res = await app.request('/api/workspaces/ws-1/sessions', { method: 'POST' })
+    expect(res.status).toBe(409)
+  })
+})
+
+describe('PATCH /api/workspaces/:id/sessions/:sessionId', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('renomme la session et retourne 200', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace as any)
+    const updated = {
+      id: 'sess-1',
+      name: 'Mon nom',
+      workspaceId: 'ws-1',
+      status: 'idle',
+      startedAt: new Date().toISOString(),
+      pid: null,
+      engineSessionId: null,
+      endedAt: null,
+    }
+    vi.mocked(workspaceService.renameSession).mockReturnValue(updated as any)
+
+    const res = await app.request('/api/workspaces/ws-1/sessions/sess-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Mon nom' }),
+    })
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.name).toBe('Mon nom')
+    expect(workspaceService.renameSession).toHaveBeenCalledWith('sess-1', 'ws-1', 'Mon nom')
+  })
+
+  it('retourne 400 si name est vide', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace as any)
+    const res = await app.request('/api/workspaces/ws-1/sessions/sess-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: '' }),
+    })
+    expect(res.status).toBe(400)
+  })
+
+  it('retourne 404 si workspace introuvable', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null)
+    const res = await app.request('/api/workspaces/unknown/sessions/s1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Test' }),
+    })
+    expect(res.status).toBe(404)
+  })
+
+  it('retourne 404 si session introuvable', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace as any)
+    vi.mocked(workspaceService.renameSession).mockReturnValue(null)
+    const res = await app.request('/api/workspaces/ws-1/sessions/nope', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Test' }),
+    })
+    expect(res.status).toBe(404)
+  })
+})
+
+describe('POST /api/workspaces/:id/start avec agentSessionId', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('passe agentSessionId à startAgent quand fourni', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ ...fakeWorkspace, agentPermissionMode: 'bypass' } as any)
+    vi.mocked(workspaceService.updateWorkspaceStatus).mockReturnValue(undefined as any)
+
+    await app.request('/api/workspaces/ws-1/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: 'hello', agentSessionId: 'sess-idle-1' }),
+    })
+
+    expect(agentManager.startAgent).toHaveBeenCalledWith(
+      'ws-1',
+      expect.any(String),
+      'hello',
+      fakeWorkspace.model,
+      false,
+      'bypass',
+      'sess-idle-1',
+      'auto',
+    )
+  })
+
+  it('passe undefined si agentSessionId absent', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ ...fakeWorkspace, agentPermissionMode: 'bypass' } as any)
+    vi.mocked(workspaceService.updateWorkspaceStatus).mockReturnValue(undefined as any)
+
+    await app.request('/api/workspaces/ws-1/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: 'hello' }),
+    })
+
+    expect(agentManager.startAgent).toHaveBeenCalledWith(
+      'ws-1',
+      expect.any(String),
+      'hello',
+      fakeWorkspace.model,
+      false,
+      'bypass',
+      undefined,
+      'auto',
+    )
+  })
+})
+
+describe('favorite endpoints', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  const favoritedWorkspace = { ...fakeWorkspace, favoritedAt: '2026-04-17T10:00:00.000Z' } as any
+
+  it('POST /:id/favorite returns 200 + updated workspace and calls setFavorite', async () => {
+    vi.mocked(workspaceService.setFavorite).mockReturnValue(favoritedWorkspace)
+
+    const res = await app.request('/api/workspaces/ws-1/favorite', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.favoritedAt).toBe('2026-04-17T10:00:00.000Z')
+    expect(workspaceService.setFavorite).toHaveBeenCalledWith('ws-1')
+  })
+
+  it('POST /:id/favorite returns 404 when service throws not-found', async () => {
+    vi.mocked(workspaceService.setFavorite).mockImplementation(() => {
+      throw new Error("Workspace 'ws-missing' not found")
+    })
+
+    const res = await app.request('/api/workspaces/ws-missing/favorite', { method: 'POST' })
+
+    expect(res.status).toBe(404)
+    const body = await res.json()
+    expect(body.error).toContain('not found')
+  })
+
+  it('DELETE /:id/favorite returns 200 + updated workspace and calls unsetFavorite', async () => {
+    const unfavoritedWorkspace = { ...fakeWorkspace, favoritedAt: null } as any
+    vi.mocked(workspaceService.unsetFavorite).mockReturnValue(unfavoritedWorkspace)
+
+    const res = await app.request('/api/workspaces/ws-1/favorite', { method: 'DELETE' })
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.favoritedAt).toBeNull()
+    expect(workspaceService.unsetFavorite).toHaveBeenCalledWith('ws-1')
+  })
+
+  it('DELETE /:id/favorite returns 404 when service throws not-found', async () => {
+    vi.mocked(workspaceService.unsetFavorite).mockImplementation(() => {
+      throw new Error("Workspace 'ws-missing' not found")
+    })
+
+    const res = await app.request('/api/workspaces/ws-missing/favorite', { method: 'DELETE' })
+
+    expect(res.status).toBe(404)
+    const body = await res.json()
+    expect(body.error).toContain('not found')
+  })
+
+  it('POST /:id/favorite route order regression: reaches favorite handler (not GET /:id)', async () => {
+    vi.mocked(workspaceService.setFavorite).mockReturnValue(favoritedWorkspace)
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(null)
+
+    const res = await app.request('/api/workspaces/ws-1/favorite', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    expect(workspaceService.setFavorite).toHaveBeenCalledWith('ws-1')
+    // GET /:id uses getWorkspaceWithTasks — if that was called, route order regressed
+    expect(workspaceService.getWorkspaceWithTasks).not.toHaveBeenCalled()
+  })
+})
+
+describe('pr-watch-disabled endpoints', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  const disabledWorkspace = { ...fakeWorkspace, prWatchDisabledAt: '2026-04-17T10:00:00.000Z' } as any
+  const enabledWorkspace = { ...fakeWorkspace, prWatchDisabledAt: null } as any
+
+  it('POST /:id/pr-watch-disabled returns 200 + updated workspace, calls setPrWatchDisabled and clearPrSnapshotCache', async () => {
+    vi.mocked(workspaceService.setPrWatchDisabled).mockReturnValue(disabledWorkspace)
+    const prWatcher = await import('../server/services/pr-watcher-service.js')
+
+    const res = await app.request('/api/workspaces/ws-1/pr-watch-disabled', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.prWatchDisabledAt).toBe('2026-04-17T10:00:00.000Z')
+    expect(workspaceService.setPrWatchDisabled).toHaveBeenCalledWith('ws-1')
+    expect(prWatcher.clearPrSnapshotCache).toHaveBeenCalledWith('ws-1')
+  })
+
+  it('POST /:id/pr-watch-disabled returns 404 when service throws not-found', async () => {
+    vi.mocked(workspaceService.setPrWatchDisabled).mockImplementation(() => {
+      throw new Error("Workspace 'ws-missing' not found")
+    })
+
+    const res = await app.request('/api/workspaces/ws-missing/pr-watch-disabled', { method: 'POST' })
+
+    expect(res.status).toBe(404)
+    const body = await res.json()
+    expect(body.error).toContain('not found')
+  })
+
+  it('DELETE /:id/pr-watch-disabled returns 200 + workspace and prSnapshot, awaits refreshPrSnapshot', async () => {
+    vi.mocked(workspaceService.setPrWatchEnabled).mockReturnValue(enabledWorkspace)
+    const prWatcher = await import('../server/services/pr-watcher-service.js')
+    vi.mocked(prWatcher.refreshPrSnapshot).mockResolvedValue({ number: 7, state: 'OPEN' } as never)
+
+    const res = await app.request('/api/workspaces/ws-1/pr-watch-disabled', { method: 'DELETE' })
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.workspace.prWatchDisabledAt).toBeNull()
+    expect(body.prSnapshot).toEqual(expect.objectContaining({ number: 7 }))
+    expect(prWatcher.refreshPrSnapshot).toHaveBeenCalledWith('ws-1')
+  })
+
+  it('DELETE /:id/pr-watch-disabled returns prSnapshot: null when there is no PR', async () => {
+    vi.mocked(workspaceService.setPrWatchEnabled).mockReturnValue(enabledWorkspace)
+    const prWatcher = await import('../server/services/pr-watcher-service.js')
+    vi.mocked(prWatcher.refreshPrSnapshot).mockResolvedValue(null)
+
+    const res = await app.request('/api/workspaces/ws-1/pr-watch-disabled', { method: 'DELETE' })
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.prSnapshot).toBeNull()
+  })
+
+  it('DELETE /:id/pr-watch-disabled returns 200 with prSnapshot: null even if refreshPrSnapshot rejects', async () => {
+    vi.mocked(workspaceService.setPrWatchEnabled).mockReturnValue(enabledWorkspace)
+    const prWatcher = await import('../server/services/pr-watcher-service.js')
+    vi.mocked(prWatcher.refreshPrSnapshot).mockRejectedValue(new Error('gh exploded'))
+
+    const res = await app.request('/api/workspaces/ws-1/pr-watch-disabled', { method: 'DELETE' })
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.prSnapshot).toBeNull()
+  })
+
+  it('DELETE /:id/pr-watch-disabled returns 404 when service throws not-found', async () => {
+    vi.mocked(workspaceService.setPrWatchEnabled).mockImplementation(() => {
+      throw new Error("Workspace 'ws-missing' not found")
+    })
+
+    const res = await app.request('/api/workspaces/ws-missing/pr-watch-disabled', { method: 'DELETE' })
+
+    expect(res.status).toBe(404)
+    const body = await res.json()
+    expect(body.error).toContain('not found')
+  })
+})
+
+describe('PUT /api/workspaces/:id/tags', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  const taggedWorkspace = { id: 'ws-1', tags: ['bug', 'urgent'] } as unknown as ReturnType<
+    typeof workspaceService.setWorkspaceTags
+  >
+
+  it('returns 200 + updated workspace on happy path', async () => {
+    vi.mocked(workspaceService.setWorkspaceTags).mockReturnValue(taggedWorkspace)
+    const res = await app.request('/api/workspaces/ws-1/tags', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tags: ['bug', 'urgent'] }),
+    })
+    expect(res.status).toBe(200)
+    expect(workspaceService.setWorkspaceTags).toHaveBeenCalledWith('ws-1', ['bug', 'urgent'])
+  })
+
+  it('returns 400 when tags is not an array', async () => {
+    const res = await app.request('/api/workspaces/ws-1/tags', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tags: 'bug' }),
+    })
+    expect(res.status).toBe(400)
+    expect(workspaceService.setWorkspaceTags).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 when tags contains non-strings', async () => {
+    const res = await app.request('/api/workspaces/ws-1/tags', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tags: ['bug', 42, 'urgent'] }),
+    })
+    expect(res.status).toBe(400)
+    expect(workspaceService.setWorkspaceTags).not.toHaveBeenCalled()
+  })
+
+  it('returns 404 when workspace missing', async () => {
+    vi.mocked(workspaceService.setWorkspaceTags).mockImplementation(() => {
+      throw new Error("Workspace 'ws-missing' not found")
+    })
+    const res = await app.request('/api/workspaces/ws-missing/tags', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tags: ['bug'] }),
+    })
+    expect(res.status).toBe(404)
+  })
+})
+
+describe('GET /api/workspaces/:id/diff', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      id: 'w1',
+      name: 'W',
+      projectPath: '/p',
+      sourceBranch: 'develop',
+      workingBranch: 'feature/x',
+      worktreePath: '/p/.worktrees/feature/x',
+      worktreeOwned: true,
+      status: 'idle',
+      model: 'auto',
+      engine: 'claude-code',
+      reasoningEffort: 'auto',
+      agentPermissionMode: 'bypass',
+      devServerStatus: 'stopped',
+      hasUnread: false,
+      archivedAt: null,
+      favoritedAt: null,
+      tags: [],
+      createdAt: '2026-04-21',
+      updatedAt: '2026-04-21',
+    } as never)
+  })
+
+  it('returns branch diff by default (vs sourceBranch)', async () => {
+    const branchFiles = [{ path: 'a.ts', status: 'modified' }]
+    vi.mocked(gitOps.getChangedFiles).mockReturnValue(branchFiles as never)
+    vi.mocked(gitOps.getUnpushedChangedFiles).mockReturnValue([])
+
+    const res = await app.request('/api/workspaces/w1/diff')
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.mode).toBe('branch')
+    expect(body.files).toEqual(branchFiles)
+    expect(gitOps.getChangedFiles).toHaveBeenCalledWith(expect.any(String), 'develop', false)
+    expect(gitOps.getUnpushedChangedFiles).not.toHaveBeenCalled()
+  })
+
+  it('forwards includeUntracked=1 query param to getChangedFiles', async () => {
+    vi.mocked(gitOps.getChangedFiles).mockReturnValue([])
+    const res = await app.request('/api/workspaces/w1/diff?includeUntracked=1')
+    expect(res.status).toBe(200)
+    expect(gitOps.getChangedFiles).toHaveBeenCalledWith(expect.any(String), 'develop', true)
+  })
+
+  it('returns unpushed diff when mode=unpushed (vs origin/<workingBranch>)', async () => {
+    const unpushedFiles = [{ path: 'b.ts', status: 'added' }]
+    vi.mocked(gitOps.getChangedFiles).mockReturnValue([])
+    vi.mocked(gitOps.getUnpushedChangedFiles).mockReturnValue(unpushedFiles as never)
+
+    const res = await app.request('/api/workspaces/w1/diff?mode=unpushed')
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.mode).toBe('unpushed')
+    expect(body.files).toEqual(unpushedFiles)
+    expect(gitOps.getUnpushedChangedFiles).toHaveBeenCalledWith(expect.any(String), 'feature/x')
+    expect(gitOps.getChangedFiles).not.toHaveBeenCalled()
+  })
+
+  it('falls back to branch mode when mode is anything other than "unpushed"', async () => {
+    vi.mocked(gitOps.getChangedFiles).mockReturnValue([])
+    const res = await app.request('/api/workspaces/w1/diff?mode=bogus')
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.mode).toBe('branch')
+  })
+})
+
+describe('GET /api/workspaces/:id/diff-file', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      id: 'w1',
+      name: 'W',
+      projectPath: '/p',
+      sourceBranch: 'develop',
+      workingBranch: 'feature/x',
+      worktreePath: '/p/.worktrees/feature/x',
+      worktreeOwned: true,
+      status: 'idle',
+      model: 'auto',
+      engine: 'claude-code',
+      reasoningEffort: 'auto',
+      agentPermissionMode: 'bypass',
+      devServerStatus: 'stopped',
+      hasUnread: false,
+      archivedAt: null,
+      favoritedAt: null,
+      tags: [],
+      createdAt: '2026-04-21',
+      updatedAt: '2026-04-21',
+    } as never)
+    vi.mocked(gitOps.getFileContent).mockReturnValue('modified content')
+  })
+
+  it('reads original from sourceBranch when mode=branch (default)', async () => {
+    vi.mocked(gitOps.getFileAtRef).mockReturnValue('branch original')
+    const res = await app.request('/api/workspaces/w1/diff-file?path=a.ts')
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.mode).toBe('branch')
+    expect(body.original).toBe('branch original')
+    expect(body.modified).toBe('modified content')
+    expect(body.modifiedSha).toBe(`sha-${body.modified.length}`)
+    expect(gitOps.getFileAtRef).toHaveBeenCalledWith(expect.any(String), 'develop', 'a.ts')
+  })
+
+  it('reads original from origin/<workingBranch> when mode=unpushed', async () => {
+    vi.mocked(gitOps.getFileAtRef).mockReturnValue('remote original')
+    const res = await app.request('/api/workspaces/w1/diff-file?path=a.ts&mode=unpushed')
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.mode).toBe('unpushed')
+    expect(body.original).toBe('remote original')
+    expect(gitOps.getFileAtRef).toHaveBeenCalledWith(expect.any(String), 'origin/feature/x', 'a.ts')
+  })
+
+  it('returns 400 when path query param is missing', async () => {
+    const res = await app.request('/api/workspaces/w1/diff-file')
+    expect(res.status).toBe(400)
+  })
+
+  it('rejects a traversal path before reading either Git or the worktree', async () => {
+    const res = await app.request('/api/workspaces/w1/diff-file?path=../../etc/passwd')
+    expect(res.status).toBe(400)
+    expect(gitOps.getFileAtRef).not.toHaveBeenCalled()
+    expect(gitOps.getFileContent).not.toHaveBeenCalled()
+  })
+})
+
+describe('GET /api/workspaces/:id/commits', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      id: 'w1',
+      name: 'W',
+      projectPath: '/p',
+      sourceBranch: 'develop',
+      workingBranch: 'feature/x',
+      worktreePath: '/p/.worktrees/feature/x',
+      worktreeOwned: true,
+      status: 'idle',
+      model: 'auto',
+      engine: 'claude-code',
+      reasoningEffort: 'auto',
+      agentPermissionMode: 'bypass',
+      devServerStatus: 'stopped',
+      hasUnread: false,
+      archivedAt: null,
+      favoritedAt: null,
+      tags: [],
+      createdAt: '2026-04-21',
+      updatedAt: '2026-04-21',
+    } as never)
+  })
+
+  it('returns commits with their push state and the branches context', async () => {
+    const fakeCommits = [
+      {
+        sha: 'abc1234567890',
+        shortSha: 'abc1234',
+        subject: 'feat: add X',
+        author: 'Dev',
+        date: '2026-04-21T10:00:00Z',
+        isPushed: true,
+      },
+      {
+        sha: 'def1234567890',
+        shortSha: 'def1234',
+        subject: 'fix: Y',
+        author: 'Dev',
+        date: '2026-04-21T11:00:00Z',
+        isPushed: false,
+      },
+    ]
+    vi.mocked(gitOps.listBranchCommits).mockReturnValue(fakeCommits as never)
+
+    const res = await app.request('/api/workspaces/w1/commits')
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.commits).toEqual(fakeCommits)
+    expect(body.sourceBranch).toBe('develop')
+    expect(body.workingBranch).toBe('feature/x')
+    expect(gitOps.listBranchCommits).toHaveBeenCalledWith(expect.any(String), 'develop', 'feature/x', 50)
+  })
+
+  it('respects the limit query param within [1, 200]', async () => {
+    vi.mocked(gitOps.listBranchCommits).mockReturnValue([])
+    await app.request('/api/workspaces/w1/commits?limit=10')
+    expect(gitOps.listBranchCommits).toHaveBeenCalledWith(expect.any(String), 'develop', 'feature/x', 10)
+  })
+
+  it('clamps invalid limit values to the default 50', async () => {
+    vi.mocked(gitOps.listBranchCommits).mockReturnValue([])
+    await app.request('/api/workspaces/w1/commits?limit=notanumber')
+    expect(gitOps.listBranchCommits).toHaveBeenCalledWith(expect.any(String), 'develop', 'feature/x', 50)
+  })
+
+  it('returns 404 for unknown workspace', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(undefined as never)
+    const res = await app.request('/api/workspaces/w1/commits')
+    expect(res.status).toBe(404)
+  })
+})
+
+describe('GET /:id/branch-divergence', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('returns 404 when workspace is missing', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null as never)
+    const res = await app.request('/api/workspaces/missing/branch-divergence')
+    expect(res.status).toBe(404)
+  })
+
+  it('returns ahead and behind lists with branch metadata', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(gitOps.listBranchCommits).mockReturnValue([
+      {
+        sha: 'a'.repeat(40),
+        shortSha: 'aaaaaaa',
+        subject: 'feat: a',
+        author: 'u',
+        date: '2026-01-01',
+        isPushed: true,
+      },
+    ] as never)
+    vi.mocked(gitOps.listCommitsBehind).mockReturnValue([
+      { sha: 'b'.repeat(40), shortSha: 'bbbbbbb', subject: 'fix: b', author: 'u', date: '2026-01-02' },
+    ])
+    const res = await app.request('/api/workspaces/ws-1/branch-divergence')
+    expect(res.status).toBe(200)
+    const data = await res.json()
+    expect(data.ahead).toHaveLength(1)
+    expect(data.behind).toHaveLength(1)
+    expect(data.sourceBranch).toBe(fakeWorkspace.sourceBranch)
+    expect(data.workingBranch).toBe(fakeWorkspace.workingBranch)
+  })
+
+  it('clamps limit to [1, 200]', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(gitOps.listBranchCommits).mockReturnValue([] as never)
+    vi.mocked(gitOps.listCommitsBehind).mockReturnValue([])
+
+    await app.request('/api/workspaces/ws-1/branch-divergence?limit=0')
+    expect(vi.mocked(gitOps.listBranchCommits).mock.calls[0][3]).toBe(1)
+    expect(vi.mocked(gitOps.listCommitsBehind).mock.calls[0][3]).toBe(1)
+
+    vi.mocked(gitOps.listBranchCommits).mockClear()
+    vi.mocked(gitOps.listCommitsBehind).mockClear()
+
+    await app.request('/api/workspaces/ws-1/branch-divergence?limit=999')
+    expect(vi.mocked(gitOps.listBranchCommits).mock.calls[0][3]).toBe(200)
+    expect(vi.mocked(gitOps.listCommitsBehind).mock.calls[0][3]).toBe(200)
+  })
+
+  it('returns 500 when git ops throw unexpectedly', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(gitOps.listBranchCommits).mockImplementation(() => {
+      throw new Error('boom')
+    })
+    const res = await app.request('/api/workspaces/ws-1/branch-divergence')
+    expect(res.status).toBe(500)
+  })
+})
+
+describe('GET /api/workspaces/:id/pending-wakeup', () => {
+  it('returns null when no wakeup is pending', async () => {
+    vi.mocked(wakeupService.getPending).mockReturnValue(null)
+    const res = await app.request('/api/workspaces/w1/pending-wakeup')
+    expect(res.status).toBe(200)
+    expect(await res.json()).toBeNull()
+  })
+
+  it('returns { targetAt, reason } when a wakeup is pending', async () => {
+    vi.mocked(wakeupService.getPending).mockReturnValue({ targetAt: '2026-04-22T10:00:00Z', reason: 'CI' })
+    const res = await app.request('/api/workspaces/w1/pending-wakeup')
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ targetAt: '2026-04-22T10:00:00Z', reason: 'CI' })
+  })
+})
+
+describe('DELETE /api/workspaces/:id/pending-wakeup', () => {
+  it('invokes wakeupService.cancel with reason "manual" and returns { ok: true }', async () => {
+    const res = await app.request('/api/workspaces/w1/pending-wakeup', { method: 'DELETE' })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ ok: true })
+    expect(wakeupService.cancel).toHaveBeenCalledWith('w1', 'manual')
+  })
+
+  it('is idempotent — returns 200 even when nothing is pending', async () => {
+    const res = await app.request('/api/workspaces/w1/pending-wakeup', { method: 'DELETE' })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ ok: true })
+  })
+})
+
+describe('POST /api/workspaces/:id/pending-wakeup', () => {
+  it('pins the wakeup to the active session and returns the resulting pending entry', async () => {
+    vi.mocked(agentManager.getActiveSessionId).mockReturnValue('sess-42')
+    vi.mocked(wakeupService.getPending).mockReturnValue({ targetAt: '2026-04-22T10:00:00Z', reason: 'CI' })
+    const res = await app.request('/api/workspaces/w1/pending-wakeup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ delaySeconds: 120, prompt: 'check the build', reason: 'CI', mode: 'resume' }),
+    })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ ok: true, pending: { targetAt: '2026-04-22T10:00:00Z', reason: 'CI' } })
+    expect(wakeupService.schedule).toHaveBeenCalledWith('w1', 120, 'check the build', 'CI', 'sess-42')
+  })
+
+  it('schedules a fresh wakeup (no pinned session) when no active session exists', async () => {
+    vi.mocked(agentManager.getActiveSessionId).mockReturnValue(undefined)
+    vi.mocked(wakeupService.getPending).mockReturnValue({ targetAt: '2026-04-22T10:02:00Z' })
+    const res = await app.request('/api/workspaces/w1/pending-wakeup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ delaySeconds: 120, prompt: 'check' }),
+    })
+    expect(res.status).toBe(200)
+    // default mode is 'fresh' → agentSessionId undefined (fires a new session)
+    expect(wakeupService.schedule).toHaveBeenCalledWith('w1', 120, 'check', undefined, undefined)
+  })
+
+  it("pins the active session when mode is 'resume'", async () => {
+    vi.mocked(agentManager.getActiveSessionId).mockReturnValue('sess-99')
+    vi.mocked(wakeupService.getPending).mockReturnValue({ targetAt: '2026-04-22T10:02:00Z' })
+    const res = await app.request('/api/workspaces/w1/pending-wakeup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ delaySeconds: 120, prompt: 'check', mode: 'resume' }),
+    })
+    expect(res.status).toBe(200)
+    expect(wakeupService.schedule).toHaveBeenCalledWith('w1', 120, 'check', undefined, 'sess-99')
+  })
+
+  it('rejects an invalid mode with 400', async () => {
+    const res = await app.request('/api/workspaces/w1/pending-wakeup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ delaySeconds: 120, prompt: 'check', mode: 'bogus' }),
+    })
+    expect(res.status).toBe(400)
+    expect(wakeupService.schedule).not.toHaveBeenCalled()
+  })
+
+  it('rejects a missing/invalid delaySeconds with 400', async () => {
+    vi.mocked(agentManager.getActiveSessionId).mockReturnValue('sess-42')
+    const res = await app.request('/api/workspaces/w1/pending-wakeup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: 'check' }),
+    })
+    expect(res.status).toBe(400)
+    expect(wakeupService.schedule).not.toHaveBeenCalled()
+  })
+
+  it('rejects a missing prompt with 400', async () => {
+    vi.mocked(agentManager.getActiveSessionId).mockReturnValue('sess-42')
+    const res = await app.request('/api/workspaces/w1/pending-wakeup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ delaySeconds: 60, prompt: '   ' }),
+    })
+    expect(res.status).toBe(400)
+    expect(wakeupService.schedule).not.toHaveBeenCalled()
+  })
+
+  it("falls back to an unpinned wakeup when mode is 'resume' but no session is active", async () => {
+    vi.mocked(agentManager.getActiveSessionId).mockReturnValue(undefined)
+    vi.mocked(wakeupService.getPending).mockReturnValue({ targetAt: '2026-04-22T10:02:00Z' })
+    const res = await app.request('/api/workspaces/w1/pending-wakeup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ delaySeconds: 120, prompt: 'check', mode: 'resume' }),
+    })
+    expect(res.status).toBe(200)
+    expect(wakeupService.schedule).toHaveBeenCalledWith('w1', 120, 'check', undefined, undefined)
+  })
+})
+
+describe('POST /api/workspaces/:id/resync-branch', () => {
+  beforeEach(() => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      id: 'w1',
+      name: 'test',
+      projectPath: '/tmp/project',
+      sourceBranch: 'main',
+      workingBranch: 'feature/old-name',
+      status: 'idle',
+      notionUrl: null,
+      notionPageId: null,
+      model: 'sonnet',
+      reasoningEffort: 'auto',
+      agentPermissionMode: 'bypass',
+      devServerStatus: 'stopped',
+      hasUnread: false,
+      archivedAt: null,
+      favoritedAt: null,
+      tags: [],
+      engine: 'claude-code',
+      autoLoop: false,
+      autoLoopReady: false,
+      noProgressStreak: 0,
+      // legacy field removed
+      worktreePath: '/tmp/project/.worktrees/feature/old-name',
+      worktreeOwned: true,
+      createdAt: 'x',
+      updatedAt: 'x',
+    } as never)
+  })
+
+  it('moves the worktree directory when the branch has been renamed in git', async () => {
+    // Agent ran `git branch -m feature/old-name feature/new-name` inside the
+    // worktree; Kōbō detects it and calls /resync-branch. The worktree dir is
+    // still at .worktrees/feature/old-name → move it to match the new name,
+    // otherwise future session spawns fail with ENOENT on .mcp.json.
+    vi.mocked(gitOps.getCurrentBranch).mockReturnValue('feature/new-name')
+    vi.mocked(workspaceService.updateWorkingBranch).mockReturnValue({
+      workingBranch: 'feature/new-name',
+    } as never)
+
+    const res = await app.request('/api/workspaces/w1/resync-branch', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    expect(vi.mocked(gitOps.moveWorktree)).toHaveBeenCalledWith(
+      '/tmp/project',
+      '/tmp/project/.worktrees/feature/old-name',
+      '/tmp/project/.worktrees/feature/new-name',
+    )
+    expect(vi.mocked(workspaceService.updateWorktreePath)).toHaveBeenCalledWith(
+      'w1',
+      '/tmp/project/.worktrees/feature/new-name',
+    )
+    expect(vi.mocked(workspaceService.updateWorkingBranch)).toHaveBeenCalledWith('w1', 'feature/new-name')
+  })
+
+  it('moves a Windows worktree directory when the branch has been renamed in git', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      id: 'w-win',
+      projectPath: 'C:\\repo',
+      workingBranch: 'feature/old-name',
+      worktreePath: 'D:\\kobo\\worktrees\\feature\\old-name',
+    })
+    vi.mocked(gitOps.getCurrentBranch).mockReturnValue('feature/new-name')
+    vi.mocked(workspaceService.updateWorkingBranch).mockReturnValue({
+      workingBranch: 'feature/new-name',
+    } as never)
+
+    const res = await app.request('/api/workspaces/w-win/resync-branch', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    expect(vi.mocked(gitOps.moveWorktree)).toHaveBeenCalledWith(
+      'C:\\repo',
+      'D:\\kobo\\worktrees\\feature\\old-name',
+      'D:\\kobo\\worktrees\\feature\\new-name',
+    )
+    expect(vi.mocked(workspaceService.updateWorktreePath)).toHaveBeenCalledWith(
+      'w-win',
+      'D:\\kobo\\worktrees\\feature\\new-name',
+    )
+  })
+
+  it('rejects with 400 when the workspace is not owned', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      worktreeOwned: false,
+      worktreePath: '/tmp/external/foo',
+    })
+
+    const res = await app.request('/api/workspaces/ws-1/resync-branch', { method: 'POST' })
+
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toMatch(/external worktree/i)
+    expect(vi.mocked(gitOps.getCurrentBranch)).not.toHaveBeenCalled()
+    expect(vi.mocked(gitOps.moveWorktree)).not.toHaveBeenCalled()
+    expect(vi.mocked(workspaceService.updateWorkingBranch)).not.toHaveBeenCalled()
+    expect(vi.mocked(workspaceService.updateWorktreePath)).not.toHaveBeenCalled()
+  })
+
+  it('does NOT move the worktree when the branch name is unchanged', async () => {
+    vi.mocked(gitOps.getCurrentBranch).mockReturnValue('feature/old-name')
+
+    const res = await app.request('/api/workspaces/w1/resync-branch', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.changed).toBe(false)
+    expect(vi.mocked(gitOps.moveWorktree)).not.toHaveBeenCalled()
+  })
+
+  it('updates the DB even if moveWorktree fails (dir already moved / dirty / locked)', async () => {
+    // Best-effort move: keep the DB aligned with the git ref even when the
+    // physical dir rename can't happen — that way subsequent operations at
+    // least know the correct branch, and the user can repair manually.
+    vi.mocked(gitOps.getCurrentBranch).mockReturnValue('feature/new-name')
+    vi.mocked(gitOps.moveWorktree).mockImplementation(() => {
+      throw new Error('fatal: directory is not empty')
+    })
+    vi.mocked(workspaceService.updateWorkingBranch).mockReturnValue({
+      workingBranch: 'feature/new-name',
+    } as never)
+
+    const res = await app.request('/api/workspaces/w1/resync-branch', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    expect(vi.mocked(workspaceService.updateWorkingBranch)).toHaveBeenCalledWith('w1', 'feature/new-name')
+    expect(vi.mocked(workspaceService.updateWorktreePath)).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /api/workspaces/:id/rename-branch', () => {
+  beforeEach(() => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    // Reset mocks whose implementations may have been overridden by earlier
+    // tests (clearAllMocks only resets call history, not implementations).
+    vi.mocked(gitOps.branchExists).mockReturnValue(false)
+    vi.mocked(gitOps.renameBranch).mockReset()
+    vi.mocked(gitOps.moveWorktree).mockReset()
+  })
+
+  it('rejects with 400 when the workspace is not owned', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      worktreeOwned: false,
+      worktreePath: '/tmp/external/foo',
+    })
+
+    const res = await app.request('/api/workspaces/ws-1/rename-branch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ newName: 'feature/new' }),
+    })
+
+    expect(res.status).toBe(400)
+    const data = (await res.json()) as { error: string }
+    expect(data.error).toMatch(/external worktree/i)
+    expect(vi.mocked(gitOps.renameBranch)).not.toHaveBeenCalled()
+    expect(vi.mocked(gitOps.moveWorktree)).not.toHaveBeenCalled()
+    expect(vi.mocked(workspaceService.updateWorkingBranch)).not.toHaveBeenCalled()
+    expect(vi.mocked(workspaceService.updateWorktreePath)).not.toHaveBeenCalled()
+  })
+
+  it('updates worktreePath after moveWorktree succeeds for owned workspaces', async () => {
+    vi.mocked(workspaceService.updateWorkingBranch).mockReturnValue({
+      ...fakeWorkspace,
+      workingBranch: 'feature/new',
+    } as never)
+
+    const res = await app.request('/api/workspaces/ws-1/rename-branch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ newName: 'feature/new' }),
+    })
+
+    expect(res.status).toBe(200)
+    expect(vi.mocked(gitOps.renameBranch)).toHaveBeenCalledWith(
+      '/tmp/project/.worktrees/feature/test',
+      'feature/test',
+      'feature/new',
+    )
+    expect(vi.mocked(gitOps.moveWorktree)).toHaveBeenCalledWith(
+      '/tmp/project',
+      '/tmp/project/.worktrees/feature/test',
+      '/tmp/project/.worktrees/feature/new',
+    )
+    expect(vi.mocked(workspaceService.updateWorktreePath)).toHaveBeenCalledWith(
+      'ws-1',
+      '/tmp/project/.worktrees/feature/new',
+    )
+    expect(vi.mocked(workspaceService.updateWorkingBranch)).toHaveBeenCalledWith('ws-1', 'feature/new')
+  })
+
+  it('keeps worktreePath unchanged when moveWorktree fails for owned workspaces', async () => {
+    vi.mocked(gitOps.moveWorktree).mockImplementation(() => {
+      throw new Error('fatal: directory is not empty')
+    })
+    vi.mocked(workspaceService.updateWorkingBranch).mockReturnValue({
+      ...fakeWorkspace,
+      workingBranch: 'feature/new',
+    } as never)
+
+    const res = await app.request('/api/workspaces/ws-1/rename-branch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ newName: 'feature/new' }),
+    })
+
+    expect(res.status).toBe(200)
+    expect(vi.mocked(workspaceService.updateWorktreePath)).not.toHaveBeenCalled()
+    expect(vi.mocked(workspaceService.updateWorkingBranch)).toHaveBeenCalledWith('ws-1', 'feature/new')
+  })
+
+  it('rejects a branch name git would read as an option', async () => {
+    const res = await app.request('/api/workspaces/ws-1/rename-branch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ newName: '--force' }),
+    })
+    expect(res.status).toBe(400)
+    expect((await res.json()) as { error: string }).toMatchObject({
+      error: expect.stringContaining('Invalid branch name'),
+    })
+    expect(vi.mocked(gitOps.renameBranch)).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /api/workspaces — pre-flight URL validation', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('returns 422 and creates nothing when notionUrl extraction fails', async () => {
+    const notionService = await import('../server/services/notion-service.js')
+    const wsService = await import('../server/services/workspace-service.js')
+    const worktreeService = await import('../server/services/worktree-service.js')
+
+    vi.mocked(notionService.extractNotionPage).mockRejectedValueOnce(
+      new Error('Could not extract page ID from Notion URL'),
+    )
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'doomed',
+        projectPath: '/tmp/proj',
+        sourceBranch: 'main',
+        workingBranch: 'feat/doomed',
+        notionUrl: 'https://www.notion.so/bad-url',
+      }),
+    })
+
+    expect(res.status).toBe(422)
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toMatch(/Could not extract page ID/)
+    expect(vi.mocked(wsService.createWorkspace)).not.toHaveBeenCalled()
+    expect(vi.mocked(worktreeService.createWorktreeUnlocked)).not.toHaveBeenCalled()
+  })
+
+  it('returns 422 and creates nothing when sentryUrl extraction fails', async () => {
+    const sentryService = await import('../server/services/sentry-service.js')
+    const wsService = await import('../server/services/workspace-service.js')
+    const worktreeService = await import('../server/services/worktree-service.js')
+
+    vi.mocked(sentryService.extractSentryIssue).mockRejectedValueOnce(new Error('Sentry MCP failed to find issue'))
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'doomed',
+        projectPath: '/tmp/proj',
+        sourceBranch: 'main',
+        workingBranch: 'feat/doomed',
+        sentryUrl: 'https://my-org.sentry.io/issues/0/',
+      }),
+    })
+
+    expect(res.status).toBe(422)
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toMatch(/Sentry/)
+    expect(vi.mocked(wsService.createWorkspace)).not.toHaveBeenCalled()
+    expect(vi.mocked(worktreeService.createWorktreeUnlocked)).not.toHaveBeenCalled()
+  })
+
+  it('happy path: extraction precedes createWorkspace, sentryUrl is forwarded', async () => {
+    const notionService = await import('../server/services/notion-service.js')
+    const sentryService = await import('../server/services/sentry-service.js')
+    const wsService = await import('../server/services/workspace-service.js')
+
+    vi.mocked(notionService.extractNotionPage).mockResolvedValueOnce({
+      title: 'Page title',
+      ticketId: 'TK-1',
+      status: '',
+      goal: '',
+      todos: [],
+      gherkinFeatures: [],
+    })
+    vi.mocked(sentryService.extractSentryIssue).mockResolvedValueOnce({
+      title: 'crash',
+      issueId: 'ACME-API-3',
+      issueNumericId: '42',
+      culprit: 'fn',
+      url: 'https://my-org.sentry.io/issues/ACME-API-3',
+      platform: 'js',
+      occurrences: 1,
+      firstSeen: '2026-01-01',
+      lastSeen: '2026-01-02',
+      tags: {},
+      offendingSpans: [],
+      extraContext: '',
+      assignee: '',
+    })
+    vi.mocked(wsService.createWorkspace).mockReturnValue(
+      makeWorkspace({
+        id: 'ws-new',
+        name: 'doomed',
+        projectPath: '/tmp/proj',
+        sourceBranch: 'main',
+        workingBranch: 'feat/x',
+        status: 'created',
+        notionUrl: 'https://www.notion.so/x',
+        notionPageId: null,
+        sentryUrl: 'https://my-org.sentry.io/issues/42/',
+        model: 'claude-opus-4-7',
+        reasoningEffort: 'auto',
+        agentPermissionMode: 'bypass',
+        devServerStatus: 'stopped',
+        hasUnread: false,
+        archivedAt: null,
+        favoritedAt: null,
+        tags: [],
+        engine: 'claude-code',
+        autoLoop: false,
+        autoLoopReady: false,
+        noProgressStreak: 0,
+        // legacy field removed
+        worktreePath: '/tmp/proj/.worktrees/feat/x',
+        worktreeOwned: true,
+        createdAt: '2026-01-01',
+        updatedAt: '2026-01-01',
+      }),
+    )
+
+    await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'doomed',
+        projectPath: '/tmp/proj',
+        sourceBranch: 'main',
+        workingBranch: 'feat/x',
+        notionUrl: 'https://www.notion.so/x',
+        sentryUrl: 'https://my-org.sentry.io/issues/42/',
+      }),
+    })
+
+    expect(vi.mocked(wsService.createWorkspace)).toHaveBeenCalledWith(
+      expect.objectContaining({ sentryUrl: 'https://my-org.sentry.io/issues/42/' }),
+    )
+
+    const notionOrder = vi.mocked(notionService.extractNotionPage).mock.invocationCallOrder[0]
+    const sentryOrder = vi.mocked(sentryService.extractSentryIssue).mock.invocationCallOrder[0]
+    const createOrder = vi.mocked(wsService.createWorkspace).mock.invocationCallOrder[0]
+    expect(notionOrder).toBeLessThan(createOrder)
+    expect(sentryOrder).toBeLessThan(createOrder)
+  })
+
+  it('prefixes the workspace name with the Sentry short-id when the user did not name it', async () => {
+    const sentryService = await import('../server/services/sentry-service.js')
+    const wsService = await import('../server/services/workspace-service.js')
+
+    vi.mocked(sentryService.extractSentryIssue).mockResolvedValueOnce({
+      title: 'TypeError: undefined is not an object',
+      issueId: 'SEKUR-IOS-9',
+      issueNumericId: '99',
+      culprit: 'fn',
+      url: 'https://my-org.sentry.io/issues/SEKUR-IOS-9',
+      platform: 'js',
+      occurrences: 1,
+      firstSeen: '2026-01-01',
+      lastSeen: '2026-01-02',
+      tags: {},
+      offendingSpans: [],
+      extraContext: '',
+      assignee: '',
+    })
+    vi.mocked(wsService.createWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      name: 'workspace', // placeholder = "user did not provide a name"
+      sentryUrl: 'https://my-org.sentry.io/issues/99/',
+    })
+    vi.mocked(wsService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
+      worktreePath: '/tmp/wt',
+      base: 'origin',
+      branchCreated: true,
+    })
+
+    await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'workspace',
+        projectPath: '/tmp/proj',
+        sourceBranch: 'main',
+        workingBranch: 'feat/x',
+        sentryUrl: 'https://my-org.sentry.io/issues/99/',
+      }),
+    })
+
+    expect(wsService.updateWorkspaceName).toHaveBeenCalledWith(
+      'ws-1',
+      'SEKUR-IOS-9 | TypeError: undefined is not an object',
+    )
+    expect(worktreeService.createWorktreeUnlocked).toHaveBeenCalledWith(
+      '/tmp/proj',
+      'feat/SEKUR-IOS-9--typeerror-undefined-is-not-an-object',
+      'origin/main',
+      '.worktrees',
+      undefined,
+    )
+  })
+})
+
+describe('POST /api/workspaces — reuse existing worktree', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(gitOps.fetchSourceBranchOrThrowAsync).mockResolvedValue(undefined)
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'auto',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
+    vi.mocked(settingsService.getGlobalSettings).mockReturnValue(
+      makeGlobalSettings({
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        editorCommand: '',
+        browserNotifications: true,
+        audioNotifications: true,
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+        notionMcpKey: '',
+        sentryMcpKey: '',
+        tags: [],
+        worktreesPath: '.worktrees',
+      }),
+    )
+  })
+
+  it('returns 422 when worktreePath does not exist on disk', async () => {
+    vi.mocked(fs.existsSync).mockReturnValue(false)
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'reuse-test',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/placeholder',
+        worktreePath: '/tmp/orphan/.worktrees/feature/derived',
+      }),
+    })
+
+    expect(res.status).toBe(422)
+    const data = await res.json()
+    expect(data.error).toMatch(/does not exist/i)
+    expect(workspaceService.createWorkspace).not.toHaveBeenCalled()
+  })
+
+  it('returns 422 when worktreePath is not a git worktree of this project', async () => {
+    vi.mocked(fs.existsSync).mockReturnValue(true)
+    // First call: rev-parse --git-common-dir returns a different repo path
+    vi.mocked(execFileSync).mockImplementationOnce(() => '/tmp/OTHER-PROJECT/.git\n' as never)
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'reuse-test',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/placeholder',
+        worktreePath: '/tmp/elsewhere/.worktrees/feature/derived',
+      }),
+    })
+
+    expect(res.status).toBe(422)
+    const data = await res.json()
+    expect(data.error).toMatch(/different repository/i)
+    expect(workspaceService.createWorkspace).not.toHaveBeenCalled()
+  })
+
+  it('returns 422 when the worktree branch is detached HEAD', async () => {
+    vi.mocked(fs.existsSync).mockReturnValue(true)
+    vi.mocked(execFileSync)
+      // rev-parse --git-common-dir → matches /tmp/project/.git
+      .mockImplementationOnce(() => '/tmp/project/.git\n' as never)
+      // rev-parse --abbrev-ref HEAD → 'HEAD' (detached)
+      .mockImplementationOnce(() => 'HEAD\n' as never)
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'reuse-test',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/placeholder',
+        worktreePath: '/tmp/project/.worktrees/feature/detached',
+      }),
+    })
+
+    expect(res.status).toBe(422)
+    const data = await res.json()
+    expect(data.error).toMatch(/detached HEAD/i)
+    expect(workspaceService.createWorkspace).not.toHaveBeenCalled()
+  })
+
+  it('returns 422 when the worktreePath is already attached', async () => {
+    vi.mocked(fs.existsSync).mockReturnValue(true)
+    vi.mocked(execFileSync)
+      .mockImplementationOnce(() => '/tmp/project/.git\n' as never)
+      .mockImplementationOnce(() => 'feature/derived\n' as never)
+    // DB query returns an existing row with that worktree_path
+    vi.mocked(getDb).mockReturnValue({
+      prepare: vi.fn().mockReturnValue({
+        run: vi.fn(),
+        get: vi.fn().mockReturnValue({ id: 'ws-existing' }),
+        all: vi.fn().mockReturnValue([]),
+      }),
+    } as never)
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'reuse-test',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/placeholder',
+        worktreePath: '/tmp/project/.worktrees/feature/derived',
+      }),
+    })
+
+    expect(res.status).toBe(422)
+    const data = await res.json()
+    expect(data.error).toMatch(/already attached/i)
+    expect(workspaceService.createWorkspace).not.toHaveBeenCalled()
+  })
+
+  it.each([undefined, false])('ordinary reuse skips setup even with skipSetupScript=%s', async (skipSetupScript) => {
+    vi.mocked(fs.existsSync).mockReturnValue(true)
+    vi.mocked(execFileSync)
+      .mockImplementationOnce(() => '/tmp/project/.git\n' as never)
+      .mockImplementationOnce(() => 'feature/derived\n' as never)
+    // No existing row — happy path
+    vi.mocked(getDb).mockReturnValue({
+      prepare: vi.fn().mockReturnValue({
+        run: vi.fn(),
+        get: vi.fn().mockReturnValue(undefined),
+        all: vi.fn().mockReturnValue([]),
+      }),
+    } as never)
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+    // setup script configured — must still be skipped because of useReusedWorktree
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'claude-opus-4-6',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '#!/bin/bash\necho "ok"',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'reuse-test',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/placeholder',
+        worktreePath: '/tmp/project/.worktrees/feature/derived',
+        skipSetupScript,
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    expect(workspaceService.createWorkspace).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workingBranch: 'feature/derived',
+        worktreePath: '/tmp/project/.worktrees/feature/derived',
+        worktreeOwned: false,
+      }),
+    )
+    expect(worktreeService.createWorktreeUnlocked).not.toHaveBeenCalled()
+    expect(setupScriptService.runSetupScript).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /api/workspaces — PR context extraction', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(gitOps.fetchSourceBranchOrThrowAsync).mockResolvedValue(undefined)
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'auto',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
+    vi.mocked(settingsService.getGlobalSettings).mockReturnValue(
+      makeGlobalSettings({
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        editorCommand: '',
+        browserNotifications: true,
+        audioNotifications: true,
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+        notionMcpKey: '',
+        sentryMcpKey: '',
+        notionEnabled: true,
+        sentryEnabled: true,
+        tags: [],
+        worktreesPath: '.worktrees',
+        worktreesPrefixByProject: false,
+      }),
+    )
+    vi.mocked(workspaceService.updateWorkspaceFields).mockImplementation((_id, fields) => ({
+      ...fakeWorkspace,
+      ...fields,
+    }))
+  })
+
+  it.each([undefined, true, false])(
+    'writes PR context and honors explicit setup choice %s',
+    async (skipSetupScript) => {
+      vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+        makeEffectiveSettings({ setupScript: 'echo setup' }),
+      )
+      vi.mocked(setupScriptService.runSetupScript).mockResolvedValue({ exitCode: 0 })
+      vi.mocked(fs.existsSync).mockReturnValue(true)
+      vi.mocked(execFileSync)
+        .mockImplementationOnce(() => '/repo/.git\n' as never)
+        .mockImplementationOnce(() => 'feature/derived\n' as never)
+      vi.mocked(getDb).mockReturnValue({
+        prepare: vi.fn().mockReturnValue({
+          run: vi.fn(),
+          get: vi.fn().mockReturnValue(undefined),
+          all: vi.fn().mockReturnValue([]),
+        }),
+      } as never)
+      const fakeGithubProvider = {
+        id: 'github',
+        capabilities: {
+          canCreatePr: true,
+          canChangePrBase: true,
+          canMergeRequest: true,
+          canListPullRequests: true,
+          requestTermShort: 'PR',
+        },
+        isAvailable: vi.fn(async () => ({ available: true })),
+        listPullRequests: vi.fn().mockResolvedValue({
+          items: [
+            {
+              number: 42,
+              title: 'Fix the retry logic',
+              url: 'https://github.com/acme/app/pull/42',
+              author: 'octocat',
+              headBranch: 'fix/retry-logic',
+              baseBranch: 'main',
+              isFork: false,
+              isDraft: false,
+              updatedAt: '2026-01-01T00:00:00.000Z',
+              ci: null,
+              reviewDecision: null,
+            },
+          ],
+          nextCursor: null,
+        }),
+      } as never
+      // Resolved once during extract-pr and reused (not re-resolved) in
+      // write-context-files, so a single mocked return covers both.
+      vi.mocked(getForgeProvider).mockReturnValueOnce(fakeGithubProvider)
+      vi.mocked(workspaceService.createWorkspace).mockReturnValue({
+        ...fakeWorkspace,
+        name: 'workspace',
+      })
+      vi.mocked(workspaceService.updateWorkspaceName).mockReturnValue({
+        ...fakeWorkspace,
+        name: 'Fix the retry logic',
+      })
+      vi.mocked(workspaceService.listTasks).mockReturnValue([])
+      vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+
+      const res = await app.request('/api/workspaces', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'workspace',
+          projectPath: '/repo',
+          sourceBranch: 'main',
+          worktreePath: '/repo/.worktrees/feat-x',
+          prUrl: 'https://github.com/acme/app/pull/42',
+          description: 'Focus on the retry logic',
+          skipSetupScript,
+        }),
+      })
+      expect(res.status).toBe(201)
+
+      const written = vi.mocked(fs.writeFileSync).mock.calls.find(([p]) => String(p).includes('PR-42.md'))
+      expect(written).toBeDefined()
+      const contents = String(written?.[1])
+      expect(contents).toContain('## User instructions')
+      expect(contents).toContain('Focus on the retry logic')
+      expect(contents).toContain('https://github.com/acme/app/pull/42')
+      expect(setupScriptService.runSetupScript).toHaveBeenCalledTimes(skipSetupScript === false ? 1 : 0)
+    },
+  )
+
+  it('returns 422 when the pull request cannot be found', async () => {
+    vi.mocked(fs.existsSync).mockReturnValue(true)
+    vi.mocked(execFileSync)
+      .mockImplementationOnce(() => '/repo/.git\n' as never)
+      .mockImplementationOnce(() => 'feature/derived\n' as never)
+    vi.mocked(getDb).mockReturnValue({
+      prepare: vi.fn().mockReturnValue({
+        run: vi.fn(),
+        get: vi.fn().mockReturnValue(undefined),
+        all: vi.fn().mockReturnValue([]),
+      }),
+    } as never)
+    const fakeGithubProvider = {
+      id: 'github',
+      capabilities: {
+        canCreatePr: true,
+        canChangePrBase: true,
+        canMergeRequest: true,
+        canListPullRequests: true,
+        requestTermShort: 'PR',
+      },
+      isAvailable: vi.fn(async () => ({ available: true })),
+      // No item matches the requested prUrl's number (999), so extraction
+      // must fail with a clear 422 instead of silently defaulting to PR #0.
+      listPullRequests: vi.fn().mockResolvedValue({
+        items: [
+          {
+            number: 42,
+            title: 'Fix the retry logic',
+            url: 'https://github.com/acme/app/pull/42',
+            author: 'octocat',
+            headBranch: 'fix/retry-logic',
+            baseBranch: 'main',
+            isFork: false,
+            isDraft: false,
+            updatedAt: '2026-01-01T00:00:00.000Z',
+            ci: null,
+            reviewDecision: null,
+          },
+        ],
+        nextCursor: null,
+      }),
+    } as never
+    vi.mocked(getForgeProvider).mockReturnValueOnce(fakeGithubProvider)
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'workspace',
+        projectPath: '/repo',
+        sourceBranch: 'main',
+        worktreePath: '/repo/.worktrees/feat-x',
+        prUrl: 'https://github.com/acme/app/pull/999',
+      }),
+    })
+    expect(res.status).toBe(422)
+    const body = await res.json()
+    expect(body.step).toBe('extract-pr')
+  })
+
+  it('does not let a PR title override an already-named workspace', async () => {
+    vi.mocked(fs.existsSync).mockReturnValue(true)
+    vi.mocked(execFileSync)
+      .mockImplementationOnce(() => '/repo/.git\n' as never)
+      .mockImplementationOnce(() => 'feature/derived\n' as never)
+    vi.mocked(getDb).mockReturnValue({
+      prepare: vi.fn().mockReturnValue({
+        run: vi.fn(),
+        get: vi.fn().mockReturnValue(undefined),
+        all: vi.fn().mockReturnValue([]),
+      }),
+    } as never)
+    const fakeGithubProvider = {
+      id: 'github',
+      capabilities: {
+        canCreatePr: true,
+        canChangePrBase: true,
+        canMergeRequest: true,
+        canListPullRequests: true,
+        requestTermShort: 'PR',
+      },
+      isAvailable: vi.fn(async () => ({ available: true })),
+      listPullRequests: vi.fn().mockResolvedValue({
+        items: [
+          {
+            number: 42,
+            title: 'Fix the retry logic',
+            url: 'https://github.com/acme/app/pull/42',
+            author: 'octocat',
+            headBranch: 'fix/retry-logic',
+            baseBranch: 'main',
+            isFork: false,
+            isDraft: false,
+            updatedAt: '2026-01-01T00:00:00.000Z',
+            ci: null,
+            reviewDecision: null,
+          },
+        ],
+        nextCursor: null,
+      }),
+    } as never
+    vi.mocked(getForgeProvider).mockReturnValueOnce(fakeGithubProvider)
+    // The workspace already has a non-default name (from the request body),
+    // so the route's `workspace.name === 'workspace'` guard must skip the
+    // PR-title rename.
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      name: 'My Custom Name',
+    })
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue({
+      ...fakeWorkspaceWithTasks,
+      name: 'My Custom Name',
+    })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'My Custom Name',
+        projectPath: '/repo',
+        sourceBranch: 'main',
+        worktreePath: '/repo/.worktrees/feat-x',
+        prUrl: 'https://github.com/acme/app/pull/42',
+      }),
+    })
+    expect(res.status).toBe(201)
+    const body = await res.json()
+    expect(body.name).toBe('My Custom Name')
+    expect(workspaceService.updateWorkspaceName).not.toHaveBeenCalled()
+  })
+
+  it('persists prUrl on the created workspace', async () => {
+    vi.mocked(fs.existsSync).mockReturnValue(true)
+    vi.mocked(execFileSync)
+      .mockImplementationOnce(() => '/repo/.git\n' as never)
+      .mockImplementationOnce(() => 'feature/derived\n' as never)
+    vi.mocked(getDb).mockReturnValue({
+      prepare: vi.fn().mockReturnValue({
+        run: vi.fn(),
+        get: vi.fn().mockReturnValue(undefined),
+        all: vi.fn().mockReturnValue([]),
+      }),
+    } as never)
+    const fakeGithubProvider = {
+      id: 'github',
+      capabilities: {
+        canCreatePr: true,
+        canChangePrBase: true,
+        canMergeRequest: true,
+        canListPullRequests: true,
+        requestTermShort: 'PR',
+      },
+      isAvailable: vi.fn(async () => ({ available: true })),
+      listPullRequests: vi.fn().mockResolvedValue({
+        items: [
+          {
+            number: 42,
+            title: 'Fix the retry logic',
+            url: 'https://github.com/acme/app/pull/42',
+            author: 'octocat',
+            headBranch: 'fix/retry-logic',
+            baseBranch: 'main',
+            isFork: false,
+            isDraft: false,
+            updatedAt: '2026-01-01T00:00:00.000Z',
+            ci: null,
+            reviewDecision: null,
+          },
+        ],
+        nextCursor: null,
+      }),
+    } as never
+    vi.mocked(getForgeProvider).mockReturnValueOnce(fakeGithubProvider)
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      name: 'workspace',
+      prUrl: 'https://github.com/acme/app/pull/42',
+    })
+    vi.mocked(workspaceService.updateWorkspaceName).mockReturnValue({
+      ...fakeWorkspace,
+      name: 'Fix the retry logic',
+      prUrl: 'https://github.com/acme/app/pull/42',
+    })
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue({
+      ...fakeWorkspaceWithTasks,
+      prUrl: 'https://github.com/acme/app/pull/42',
+    })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'workspace',
+        projectPath: '/repo',
+        sourceBranch: 'main',
+        worktreePath: '/repo/.worktrees/feat-x',
+        prUrl: 'https://github.com/acme/app/pull/42',
+      }),
+    })
+    expect(res.status).toBe(201)
+    const body = await res.json()
+    expect(body.prUrl).toBe('https://github.com/acme/app/pull/42')
+    expect(vi.mocked(workspaceService.createWorkspace).mock.calls[0][0]).toMatchObject({
+      prUrl: 'https://github.com/acme/app/pull/42',
+    })
+  })
+})
+
+describe('GET /api/workspaces/:id/prep-autoloop-prompt', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('returns 404 when the workspace does not exist', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null)
+    const res = await app.request('/api/workspaces/ghost/prep-autoloop-prompt')
+    expect(res.status).toBe(404)
+  })
+
+  it('returns a prompt without the E2E review step when E2E is not configured', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(settingsService.getProjectSettings).mockReturnValue(
+      makeProjectSettings({
+        path: '/tmp/proj',
+        displayName: 'P',
+        defaultSourceBranch: 'main',
+        defaultModel: '',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        setupScript: '',
+        devServer: { startCommand: '', stopCommand: '' },
+        e2e: { framework: '', skill: '', prompt: '' },
+      }),
+    )
+    const res = await app.request('/api/workspaces/ws-1/prep-autoloop-prompt')
+    expect(res.status).toBe(200)
+    const data = (await res.json()) as { prompt: string }
+    expect(data.prompt).toContain('1. Call `kobo__list_tasks`')
+    expect(data.prompt).not.toContain('E2E review')
+  })
+
+  it('includes the E2E review step when configured', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(settingsService.getProjectSettings).mockReturnValue(
+      makeProjectSettings({
+        path: '/tmp/proj',
+        displayName: 'P',
+        defaultSourceBranch: 'main',
+        defaultModel: '',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        setupScript: '',
+        devServer: { startCommand: '', stopCommand: '' },
+        e2e: { framework: 'cypress', skill: 'cy', prompt: 'pop' },
+      }),
+    )
+    const res = await app.request('/api/workspaces/ws-1/prep-autoloop-prompt')
+    expect(res.status).toBe(200)
+    const data = (await res.json()) as { prompt: string }
+    expect(data.prompt).toContain('**E2E review**')
+    expect(data.prompt).toContain('The project uses `cypress`.')
+    expect(data.prompt).toContain(
+      'Use the `cy` skill for this task if available; otherwise use the existing project test tools directly.',
+    )
+  })
+})
+
+describe('POST /api/workspaces — worktree path collision', () => {
+  it('appends a hash suffix when the prospective worktree path already exists and surfaces the flag via header', async () => {
+    // First call (base path) → taken. Subsequent calls (suffixed) → free.
+    let existsCalls = 0
+    vi.mocked(fs.existsSync).mockImplementation((p) => {
+      if (typeof p !== 'string') return false
+      // Only collide on the exact base path; the suffixed variants are free.
+      if (p.endsWith('/feature/test')) {
+        existsCalls++
+        return true
+      }
+      return false
+    })
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockImplementation(async (_p, branch) => ({
+      worktreePath: `/tmp/project/.worktrees/${branch}`,
+      base: 'origin',
+      branchCreated: true,
+    }))
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    expect(res.headers.get('X-Kobo-Branch-Adjusted')).toBe('1')
+    expect(existsCalls).toBeGreaterThanOrEqual(1)
+    // The workspace must have been created with the suffixed branch name.
+    const createCall = vi.mocked(workspaceService.createWorkspace).mock.calls[0][0]
+    expect(createCall.workingBranch).toMatch(/^feature\/test-[A-Z0-9]{4}$/)
+    expect(createCall.worktreePath).toContain(createCall.workingBranch)
+  })
+
+  it('returns 409 with a clear error after exhausting all retries', async () => {
+    // Every candidate path is taken — resolver exhausts retries.
+    vi.mocked(fs.existsSync).mockImplementation((p) => {
+      return typeof p === 'string' && p.includes('feature/test')
+    })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+      }),
+    })
+
+    expect(res.status).toBe(409)
+    const data = await res.json()
+    expect(data.error).toMatch(/unique branch/i)
+    expect(workspaceService.createWorkspace).not.toHaveBeenCalled()
+  })
+
+  it('passes slug-prefixed worktreePath to createWorkspace when worktreesPrefixByProject is true', async () => {
+    // Arrange: enable prefix-by-project and set a displayName that produces slug "sekur"
+    vi.mocked(settingsService.getGlobalSettings).mockReturnValue(
+      makeGlobalSettings({
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        editorCommand: '',
+        browserNotifications: true,
+        audioNotifications: true,
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+        notionMcpKey: '',
+        sentryMcpKey: '',
+        tags: [],
+        worktreesPath: '.worktrees',
+        worktreesPrefixByProject: true,
+      }),
+    )
+    vi.mocked(settingsService.getProjectSettings).mockReturnValue(
+      makeProjectSettings({
+        displayName: 'Sekur',
+      }),
+    )
+    vi.mocked(fs.existsSync).mockReturnValue(false)
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
+      worktreePath: '/tmp/project/.worktrees/sekur/feature/test',
+      base: 'origin',
+      branchCreated: true,
+    })
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    // The worktreePath passed to createWorkspace must include the "sekur" slug segment
+    expect(workspaceService.createWorkspace).toHaveBeenCalledWith(
+      expect.objectContaining({
+        worktreePath: expect.stringContaining('/sekur/'),
+      }),
+    )
+  })
+})
+
+describe('POST /api/workspaces — Working directory in brainstorm prompt', () => {
+  it('passes "Working directory: <path>" to agentManager.startAgent', async () => {
+    vi.mocked(fs.existsSync).mockReturnValue(false)
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
+      worktreePath: '/tmp/worktree',
+      base: 'origin',
+      branchCreated: true,
+    })
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    expect(agentManager.startAgent).toHaveBeenCalledOnce()
+    const promptArg = vi.mocked(agentManager.startAgent).mock.calls[0][2]
+    expect(promptArg).toContain('Working directory: ')
+  })
+})
+
+describe('GET /api/workspaces/:id/crons', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('returns the list of crons for a workspace', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(cronService.listForWorkspace).mockReturnValue([
+      {
+        id: 'c1',
+        workspaceId: 'ws-1',
+        expression: '@hourly',
+        prompt: 'tick',
+        label: null,
+        agentSessionId: null,
+        nextFireAt: '2026-05-07T11:00:00Z',
+        lastFiredAt: null,
+        oneShot: false,
+        createdAt: '2026-05-07T10:00:00Z',
+      },
+    ])
+    const res = await app.request('/api/workspaces/ws-1/crons')
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { crons: unknown[] }
+    expect(body.crons).toHaveLength(1)
+  })
+
+  it('returns 404 when workspace is unknown', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null as never)
+    const res = await app.request('/api/workspaces/unknown/crons')
+    expect(res.status).toBe(404)
+  })
+})
+
+describe('POST /api/workspaces/:id/crons', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('arms a new cron and returns it', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    const cron = {
+      id: 'c1',
+      workspaceId: 'ws-1',
+      expression: '@hourly',
+      prompt: 'tick',
+      label: null,
+      agentSessionId: null,
+      nextFireAt: '2026-05-07T11:00:00Z',
+      lastFiredAt: null,
+      oneShot: false,
+      createdAt: '2026-05-07T10:00:00Z',
+    }
+    vi.mocked(cronService.arm).mockReturnValue(cron)
+    const res = await app.request('/api/workspaces/ws-1/crons', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expression: '@hourly', prompt: 'tick' }),
+    })
+    expect(res.status).toBe(201)
+    expect(await res.json()).toMatchObject({ cron: expect.objectContaining({ id: 'c1' }) })
+  })
+
+  it('returns 400 on invalid expression (service throws)', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(cronService.arm).mockImplementation(() => {
+      throw new Error('Invalid cron expression: foo')
+    })
+    const res = await app.request('/api/workspaces/ws-1/crons', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expression: 'foo', prompt: 'p' }),
+    })
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toMatch(/invalid cron expression/i)
+  })
+
+  it('returns 400 when expression or prompt is missing', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    const res = await app.request('/api/workspaces/ws-1/crons', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expression: '@hourly' }),
+    })
+    expect(res.status).toBe(400)
+  })
+
+  it("returns 400 on invalid mode (anything other than 'resume' or 'fresh')", async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    const res = await app.request('/api/workspaces/ws-1/crons', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expression: '@hourly', prompt: 'tick', mode: 'maybe' }),
+    })
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toMatch(/mode/)
+  })
+
+  it("mode='resume' (default) captures active session id and pins it", async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(agentManager.getActiveSessionId).mockReturnValue('sess-active-1')
+    const cron = {
+      id: 'c1',
+      workspaceId: 'ws-1',
+      expression: '@hourly',
+      prompt: 'tick',
+      label: null,
+      agentSessionId: 'sess-active-1',
+      nextFireAt: '2026-05-07T11:00:00Z',
+      lastFiredAt: null,
+      oneShot: false,
+      createdAt: '2026-05-07T10:00:00Z',
+    }
+    vi.mocked(cronService.arm).mockReturnValue(cron)
+    const res = await app.request('/api/workspaces/ws-1/crons', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expression: '@hourly', prompt: 'tick' }),
+    })
+    expect(res.status).toBe(201)
+    expect(cronService.arm).toHaveBeenCalledWith(
+      'ws-1',
+      expect.objectContaining({ agentSessionId: 'sess-active-1', oneShot: false }),
+    )
+  })
+
+  it("mode='fresh' does NOT pin a session (agentSessionId undefined)", async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(agentManager.getActiveSessionId).mockReturnValue('sess-active-1')
+    vi.mocked(cronService.arm).mockReturnValue({
+      id: 'c2',
+      workspaceId: 'ws-1',
+      expression: '@hourly',
+      prompt: 'tick',
+      label: null,
+      agentSessionId: null,
+      nextFireAt: '2026-05-07T11:00:00Z',
+      lastFiredAt: null,
+      oneShot: false,
+      createdAt: '2026-05-07T10:00:00Z',
+    })
+    const res = await app.request('/api/workspaces/ws-1/crons', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expression: '@hourly', prompt: 'tick', mode: 'fresh' }),
+    })
+    expect(res.status).toBe(201)
+    expect(cronService.arm).toHaveBeenCalledWith('ws-1', expect.objectContaining({ agentSessionId: undefined }))
+  })
+
+  it('forwards oneShot=true to the service', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(cronService.arm).mockReturnValue({
+      id: 'c3',
+      workspaceId: 'ws-1',
+      expression: '0 14 7 6 *',
+      prompt: 'one-time',
+      label: null,
+      agentSessionId: null,
+      nextFireAt: '2026-06-07T12:00:00Z',
+      lastFiredAt: null,
+      oneShot: true,
+      createdAt: '2026-05-07T10:00:00Z',
+    })
+    const res = await app.request('/api/workspaces/ws-1/crons', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expression: '0 14 7 6 *', prompt: 'one-time', mode: 'fresh', oneShot: true }),
+    })
+    expect(res.status).toBe(201)
+    expect(cronService.arm).toHaveBeenCalledWith('ws-1', expect.objectContaining({ oneShot: true }))
+  })
+
+  it('oneShot is false unless body explicitly === true (no truthy coercion)', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(cronService.arm).mockReturnValue({
+      id: 'c4',
+      workspaceId: 'ws-1',
+      expression: '@hourly',
+      prompt: 'tick',
+      label: null,
+      agentSessionId: null,
+      nextFireAt: '2026-05-07T11:00:00Z',
+      lastFiredAt: null,
+      oneShot: false,
+      createdAt: '2026-05-07T10:00:00Z',
+    })
+    const res = await app.request('/api/workspaces/ws-1/crons', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expression: '@hourly', prompt: 'tick', oneShot: 'yes' }),
+    })
+    expect(res.status).toBe(201)
+    expect(cronService.arm).toHaveBeenCalledWith('ws-1', expect.objectContaining({ oneShot: false }))
+  })
+})
+
+describe('DELETE /api/workspaces/:id/crons/:cronId', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('cancels the cron and returns 204', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(cronService.cancel).mockReturnValue(true)
+    const res = await app.request('/api/workspaces/ws-1/crons/c1', { method: 'DELETE' })
+    expect(res.status).toBe(204)
+    expect(cronService.cancel).toHaveBeenCalledWith('c1', 'user')
+  })
+
+  it('returns 204 even when cron is unknown (idempotent)', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(cronService.cancel).mockReturnValue(false)
+    const res = await app.request('/api/workspaces/ws-1/crons/unknown', { method: 'DELETE' })
+    expect(res.status).toBe(204)
+  })
+})
+
+describe('GET /api/workspaces/pr-states (rich payload)', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('returns the snapshot map from getAllPrSnapshots', async () => {
+    const { default: app } = await import('../server/routes/workspaces.js')
+    const prWatcher = await import('../server/services/pr-watcher-service.js')
+    vi.mocked(prWatcher.getAllPrSnapshots).mockReturnValue({
+      'ws-1': { number: 42, state: 'OPEN', reviewDecision: 'CHANGES_REQUESTED' } as never,
+    })
+    const res = await app.request('/pr-states')
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({
+      'ws-1': { number: 42, state: 'OPEN', reviewDecision: 'CHANGES_REQUESTED' },
+    })
+  })
+})
+
+describe('POST /api/workspaces/pr-snapshot/refresh/:id', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('200 with snapshot when refreshPrSnapshot succeeds', async () => {
+    const { default: app } = await import('../server/routes/workspaces.js')
+    const prWatcher = await import('../server/services/pr-watcher-service.js')
+    vi.mocked(prWatcher.refreshPrSnapshot).mockResolvedValue({ number: 7, state: 'OPEN' } as never)
+    const res = await app.request('/pr-snapshot/refresh/ws-1', { method: 'POST' })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ snapshot: { number: 7, state: 'OPEN' } })
+  })
+
+  it('404 when no PR is associated', async () => {
+    const { default: app } = await import('../server/routes/workspaces.js')
+    const prWatcher = await import('../server/services/pr-watcher-service.js')
+    vi.mocked(prWatcher.refreshPrSnapshot).mockResolvedValue(null)
+    const res = await app.request('/pr-snapshot/refresh/ws-1', { method: 'POST' })
+    expect(res.status).toBe(404)
+    expect(await res.json()).toEqual({ error: 'No PR for this workspace' })
+  })
+
+  it('404 when workspace does not exist', async () => {
+    const { default: app } = await import('../server/routes/workspaces.js')
+    const prWatcher = await import('../server/services/pr-watcher-service.js')
+    vi.mocked(prWatcher.refreshPrSnapshot).mockRejectedValue(new Error("Workspace 'ws-1' not found"))
+    const res = await app.request('/pr-snapshot/refresh/ws-1', { method: 'POST' })
+    expect(res.status).toBe(404)
+  })
+
+  it('500 on unexpected error', async () => {
+    const { default: app } = await import('../server/routes/workspaces.js')
+    const prWatcher = await import('../server/services/pr-watcher-service.js')
+    vi.mocked(prWatcher.refreshPrSnapshot).mockRejectedValue(new Error('gh exploded'))
+    const res = await app.request('/pr-snapshot/refresh/ws-1', { method: 'POST' })
+    expect(res.status).toBe(500)
+    expect(((await res.json()) as { error: string }).error).toMatch(/gh exploded/)
+  })
+})
+
+describe('GET /api/workspaces/:id and /info — agent liveness', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('serializes agent liveness alongside the workspace and in the bulk info payload', async () => {
+    const { default: app } = await import('../server/routes/workspaces.js')
+    const agentManager = await import('../server/services/agent/orchestrator.js')
+    vi.mocked(agentManager.getAgentLiveness).mockReturnValue({
+      status: 'running',
+      agentSessionId: 'sess-1',
+      startedAt: '2026-08-29T10:00:00.000Z',
+      lastEventAt: '2026-08-29T10:04:00.000Z',
+    })
+    vi.mocked(agentManager.getAllAgentLiveness).mockReturnValue({
+      'ws-1': {
+        status: 'stopping',
+        agentSessionId: 'sess-2',
+        startedAt: '2026-08-29T10:00:00.000Z',
+        lastEventAt: '2026-08-29T10:04:00.000Z',
+      },
+    })
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue({ id: 'ws-1', tasks: [] } as never)
+    vi.mocked(workspaceService.listWorkspaces).mockReturnValue([])
+
+    const detail = await (await app.request('/ws-1')).json()
+    expect(detail.agentLiveness).toMatchObject({ status: 'running', agentSessionId: 'sess-1' })
+
+    const info = await (await app.request('/info')).json()
+    expect(info.agentLiveness['ws-1']).toMatchObject({ status: 'stopping' })
+  })
+})
+
+describe('POST /api/workspaces/:id/change-pr-base', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    changePrBaseMock.mockReset()
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace as never)
+  })
+
+  it('change-pr-base calls the resolved forge provider', async () => {
+    changePrBaseMock.mockResolvedValueOnce(undefined)
+    const res = await app.request('/api/workspaces/ws-1/change-pr-base', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ base: 'develop' }),
+    })
+    expect(res.status).toBe(200)
+    expect(changePrBaseMock).toHaveBeenCalledWith(expect.any(String), 'develop')
+  })
+
+  it('returns 404 when workspace not found', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null as never)
+    const res = await app.request('/api/workspaces/ws-1/change-pr-base', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ base: 'develop' }),
+    })
+    expect(res.status).toBe(404)
+  })
+
+  it('refuses a base name git would read as an option', async () => {
+    const res = await app.request('/api/workspaces/ws-1/change-pr-base', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ base: '--upload-pack=/tmp/evil.sh' }),
+    })
+    expect(res.status).toBe(400)
+    expect(((await res.json()) as { error: string }).error).toContain('Invalid base branch name')
+    expect(changePrBaseMock).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 when base parameter is missing', async () => {
+    const res = await app.request('/api/workspaces/ws-1/change-pr-base', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+    expect(res.status).toBe(400)
+  })
+
+  it('returns 409 forge_unsupported when canChangePrBase is false', async () => {
+    vi.mocked(getForgeProvider).mockReturnValueOnce({
+      id: 'github',
+      capabilities: { canCreatePr: true, canChangePrBase: false, requestTermShort: 'PR' },
+      isAvailable: vi.fn(async () => ({ available: true })),
+      changePrBase: changePrBaseMock,
+    } as never)
+    const res = await app.request('/api/workspaces/ws-1/change-pr-base', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ base: 'develop' }),
+    })
+    expect(res.status).toBe(409)
+    expect(((await res.json()) as { code: string }).code).toBe('forge_unsupported')
+  })
+
+  it('returns 409 forge_cli_missing when CLI is unavailable with reason cli_missing', async () => {
+    vi.mocked(getForgeProvider).mockReturnValueOnce({
+      id: 'github',
+      capabilities: { canCreatePr: true, canChangePrBase: true, requestTermShort: 'PR' },
+      isAvailable: vi.fn(async () => ({ available: false, reason: 'cli_missing' })),
+      changePrBase: changePrBaseMock,
+    } as never)
+    const res = await app.request('/api/workspaces/ws-1/change-pr-base', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ base: 'develop' }),
+    })
+    expect(res.status).toBe(409)
+    expect(((await res.json()) as { code: string }).code).toBe('forge_cli_missing')
+  })
+
+  it('returns 409 forge_not_authenticated when CLI is unavailable with reason not_authenticated', async () => {
+    vi.mocked(getForgeProvider).mockReturnValueOnce({
+      id: 'github',
+      capabilities: { canCreatePr: true, canChangePrBase: true, requestTermShort: 'PR' },
+      isAvailable: vi.fn(async () => ({ available: false, reason: 'not_authenticated' })),
+      changePrBase: changePrBaseMock,
+    } as never)
+    const res = await app.request('/api/workspaces/ws-1/change-pr-base', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ base: 'develop' }),
+    })
+    expect(res.status).toBe(409)
+    expect(((await res.json()) as { code: string }).code).toBe('forge_not_authenticated')
+  })
+
+  it('returns 500 when changePrBase throws a generic Error', async () => {
+    changePrBaseMock.mockRejectedValueOnce(new Error('boom'))
+    const res = await app.request('/api/workspaces/ws-1/change-pr-base', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ base: 'develop' }),
+    })
+    expect(res.status).toBe(500)
+  })
+})
+
+describe('POST /api/workspaces/:id/merge-pr', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mergeRequestMock.mockReset()
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace as never)
+  })
+
+  it('merges a PR only after the provider confirms it is ready', async () => {
+    getPrStatusMock.mockResolvedValueOnce({ number: 42, state: 'OPEN', readyToMerge: true })
+    mergeRequestMock.mockResolvedValueOnce(undefined)
+
+    const res = await app.request('/api/workspaces/ws-1/merge-pr', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    expect(mergeRequestMock).toHaveBeenCalledWith(expect.any(String), 42)
+  })
+
+  it('refuses to merge a PR that is no longer ready', async () => {
+    getPrStatusMock.mockResolvedValueOnce({ number: 42, state: 'OPEN', readyToMerge: false })
+
+    const res = await app.request('/api/workspaces/ws-1/merge-pr', { method: 'POST' })
+
+    expect(res.status).toBe(409)
+    expect(((await res.json()) as { code: string }).code).toBe('pr_not_ready')
+    expect(mergeRequestMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /api/workspaces/:id/change-source-branch', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    changeSourceBranchMock.mockReset()
+    vi.mocked(agentManager.hasController).mockReturnValue(false)
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace as never)
+  })
+
+  it('change-source-branch calls the service and returns its status', async () => {
+    changeSourceBranchMock.mockResolvedValueOnce({ status: 'done', forcePushNeeded: true, commitCount: 2 })
+    const res = await app.request('/api/workspaces/ws-1/change-source-branch', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ newBase: 'develop' }),
+    })
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body).toMatchObject({ status: 'done', forcePushNeeded: true })
+    expect(changeSourceBranchMock).toHaveBeenCalledWith(expect.any(String), 'develop')
+  })
+
+  it('refuses a new base name git would read as an option', async () => {
+    const res = await app.request('/api/workspaces/ws-1/change-source-branch', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ newBase: '--upload-pack=/tmp/evil.sh' }),
+    })
+    expect(res.status).toBe(400)
+    expect(((await res.json()) as { error: string }).error).toContain('Invalid source branch name')
+    expect(changeSourceBranchMock).not.toHaveBeenCalled()
+  })
+
+  it('change-source-branch maps too-many to a 409', async () => {
+    changeSourceBranchMock.mockResolvedValueOnce({ status: 'too-many', forcePushNeeded: false, commitCount: 80 })
+    const res = await app.request('/api/workspaces/ws-1/change-source-branch', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ newBase: 'develop' }),
+    })
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect((body as { code: string }).code).toBe('too_many_commits')
+  })
+})
+
+describe('POST /api/workspaces/:id/cancel-source-change', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace as never)
+  })
+
+  it('happy path — restores branch and updates source branch', async () => {
+    vi.mocked(gitOps.listBackupBranches).mockReturnValue(['kobo-backup/feature-test-123'])
+    const res = await app.request('/api/workspaces/ws-1/cancel-source-change', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ previousBase: 'main' }),
+    })
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body).toMatchObject({ success: true, restoredFrom: 'kobo-backup/feature-test-123' })
+    expect(gitOps.restoreBranchFromBackup).toHaveBeenCalled()
+    expect(workspaceService.updateWorkspaceSourceBranch).toHaveBeenCalledWith('ws-1', 'main')
+  })
+
+  it('refuses a previous base git would read as an option', async () => {
+    // This value is persisted as the workspace source branch and later reaches
+    // `git fetch origin <sourceBranch>` — including from the Diff tab, with no
+    // further user action.
+    vi.mocked(gitOps.listBackupBranches).mockReturnValue(['kobo-backup/feature-test-123'])
+    const res = await app.request('/api/workspaces/ws-1/cancel-source-change', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ previousBase: '--upload-pack=/tmp/evil.sh' }),
+    })
+    expect(res.status).toBe(400)
+    expect(((await res.json()) as { error: string }).error).toContain('Invalid source branch name')
+    expect(workspaceService.updateWorkspaceSourceBranch).not.toHaveBeenCalled()
+    expect(gitOps.restoreBranchFromBackup).not.toHaveBeenCalled()
+  })
+
+  it('no backup — returns 409 with code no_backup', async () => {
+    vi.mocked(gitOps.listBackupBranches).mockReturnValue([])
+    const res = await app.request('/api/workspaces/ws-1/cancel-source-change', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ previousBase: 'main' }),
+    })
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect((body as { code: string }).code).toBe('no_backup')
+    expect(gitOps.restoreBranchFromBackup).not.toHaveBeenCalled()
+  })
+
+  it('answers 500 with backup_list_failed when the backup list cannot be read', async () => {
+    vi.mocked(gitOps.listBackupBranches).mockImplementation(() => {
+      throw new Error("Failed to list backup branches for 'feature': index.lock exists")
+    })
+    const res = await app.request('/api/workspaces/ws-1/cancel-source-change', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ previousBase: 'main' }),
+    })
+    expect(res.status).toBe(500)
+    expect((await res.json()) as { code: string }).toMatchObject({ code: 'backup_list_failed' })
+    expect(gitOps.restoreBranchFromBackup).not.toHaveBeenCalled()
+  })
+
+  it('missing previousBase — returns 400', async () => {
+    const res = await app.request('/api/workspaces/ws-1/cancel-source-change', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+    expect(res.status).toBe(400)
+  })
+})
+
+describe('POST /api/workspaces/:id/force-push', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace as never)
+    vi.mocked(gitOps.pushBranchAsync).mockReset()
+    vi.mocked(gitOps.pushBranchAsync).mockResolvedValue({ upToDate: false })
+    vi.mocked(gitOps.getOngoingGitOperation).mockReturnValue(null)
+  })
+
+  it('returns 409 operation_in_progress and does not push during a rebase', async () => {
+    vi.mocked(gitOps.getOngoingGitOperation).mockReturnValue('rebase')
+    const res = await app.request('/api/workspaces/ws-1/force-push', { method: 'POST' })
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({
+      error: expect.any(String),
+      code: 'operation_in_progress',
+      operation: 'rebase',
+    })
+    expect(gitOps.pushBranchAsync).not.toHaveBeenCalled()
+  })
+
+  it('returns upToDate=true and a "nothing to push" trace when the remote already had everything', async () => {
+    vi.mocked(gitOps.pushBranchAsync).mockResolvedValue({ upToDate: true })
+    vi.mocked(workspaceService.getActiveSession).mockReturnValue({ id: 's-1' } as never)
+    const res = await app.request('/api/workspaces/ws-1/force-push', { method: 'POST' })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ success: true, upToDate: true })
+    const { emit } = await import('../server/services/websocket-service.js')
+    expect(vi.mocked(emit)).toHaveBeenCalledWith(
+      'ws-1',
+      'user:message',
+      expect.objectContaining({
+        content: `Nothing to push: branch ${fakeWorkspace.workingBranch} is already up to date on origin`,
+      }),
+      's-1',
+    )
+  })
+
+  it('calls pushBranch with force:true and returns success', async () => {
+    const res = await app.request('/api/workspaces/ws-1/force-push', { method: 'POST' })
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body).toMatchObject({ success: true, upToDate: false })
+    expect(gitOps.pushBranchAsync).toHaveBeenCalledWith(fakeWorkspace.worktreePath, fakeWorkspace.workingBranch, {
+      force: true,
+    })
+  })
+
+  it('returns 404 when workspace not found', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(undefined as never)
+    const res = await app.request('/api/workspaces/does-not-exist/force-push', { method: 'POST' })
+    expect(res.status).toBe(404)
+  })
+
+  it('returns 500 when pushBranch throws', async () => {
+    vi.mocked(gitOps.pushBranchAsync).mockImplementation(() => {
+      throw new Error('remote rejected')
+    })
+    const res = await app.request('/api/workspaces/ws-1/force-push', { method: 'POST' })
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect((body as { error: string }).error).toContain('remote rejected')
+  })
+})
+
+describe('chat history routes', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(chatHistoryService.listChatHistory).mockReturnValue([])
+  })
+
+  it('GET /:id/chat-history returns { history: [] } for a workspace with no history', async () => {
+    const res = await app.request('/api/workspaces/ws-1/chat-history')
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ history: [] })
+    expect(chatHistoryService.listChatHistory).toHaveBeenCalledWith('ws-1')
+  })
+
+  it('GET /:id/chat-history returns 404 for an unknown workspace', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null)
+    const res = await app.request('/api/workspaces/does-not-exist/chat-history')
+    expect(res.status).toBe(404)
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toMatch(/not found/i)
+    expect(chatHistoryService.listChatHistory).not.toHaveBeenCalled()
+  })
+
+  it('POST /:id/chat-history adds a message and GET returns it', async () => {
+    // Simulate the service appending to history: after POST, listChatHistory returns the message.
+    vi.mocked(chatHistoryService.listChatHistory).mockReturnValue(['hello world'])
+    const postRes = await app.request('/api/workspaces/ws-1/chat-history', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: 'hello world' }),
+    })
+    expect(postRes.status).toBe(204)
+    expect(chatHistoryService.pushChatHistory).toHaveBeenCalledWith('ws-1', 'hello world')
+
+    const getRes = await app.request('/api/workspaces/ws-1/chat-history')
+    expect(getRes.status).toBe(200)
+    expect(await getRes.json()).toEqual({ history: ['hello world'] })
+  })
+
+  it('POST /:id/chat-history rejects an empty body with 400', async () => {
+    const res = await app.request('/api/workspaces/ws-1/chat-history', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+    expect(res.status).toBe(400)
+    expect(chatHistoryService.pushChatHistory).not.toHaveBeenCalled()
+  })
+
+  it('POST /:id/chat-history returns 404 for an unknown workspace', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null)
+    const res = await app.request('/api/workspaces/does-not-exist/chat-history', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: 'x' }),
+    })
+    expect(res.status).toBe(404)
+    expect(chatHistoryService.pushChatHistory).not.toHaveBeenCalled()
+  })
+
+  it('POST /:id/chat-history returns 400 when workspace is archived', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      archivedAt: '2026-04-05T10:00:00.000Z',
+    })
+    const res = await app.request('/api/workspaces/ws-1/chat-history', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: 'hello' }),
+    })
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toMatch(/archived/i)
+    expect(chatHistoryService.pushChatHistory).not.toHaveBeenCalled()
+  })
+})
+
+describe('save-file', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(agentManager.getAgentStatus).mockReturnValue(null)
+  })
+
+  it('POST /:id/save-file returns 404 for an unknown workspace', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValueOnce(null)
+    const res = await app.request('/api/workspaces/no-such/save-file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: 'a.txt', content: 'hi', baseSha: 'abc' }),
+    })
+    expect(res.status).toBe(404)
+  })
+
+  it('POST /:id/save-file returns 400 when the workspace is archived', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValueOnce({
+      ...fakeWorkspace,
+      archivedAt: '2025-01-01T00:00:00Z',
+    })
+    const res = await app.request('/api/workspaces/ws-1/save-file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: 'a.txt', content: 'hi', baseSha: 'abc' }),
+    })
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toMatch(/archived/i)
+  })
+
+  it('POST /:id/save-file returns 409 when the agent is running', async () => {
+    vi.mocked(agentManager.getAgentStatus).mockReturnValueOnce('running')
+    const res = await app.request('/api/workspaces/ws-1/save-file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: 'a.txt', content: 'hi', baseSha: 'abc' }),
+    })
+    expect(res.status).toBe(409)
+  })
+
+  it('POST /:id/save-file returns 400 when path is missing or empty', async () => {
+    const res = await app.request('/api/workspaces/ws-1/save-file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: 'hi', baseSha: 'abc' }),
+    })
+    expect(res.status).toBe(400)
+  })
+
+  it('POST /:id/save-file returns 400 when content is not a string', async () => {
+    const res = await app.request('/api/workspaces/ws-1/save-file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: 'a.txt', content: 42, baseSha: 'abc' }),
+    })
+    expect(res.status).toBe(400)
+  })
+
+  it('POST /:id/save-file returns 400 when baseSha is missing', async () => {
+    const res = await app.request('/api/workspaces/ws-1/save-file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: 'a.txt', content: 'hi' }),
+    })
+    expect(res.status).toBe(400)
+  })
+
+  it('POST /:id/save-file returns 204 on a successful save', async () => {
+    vi.mocked(fileEditorService.saveWorkspaceFile).mockReturnValueOnce({ status: 'saved' })
+    const res = await app.request('/api/workspaces/ws-1/save-file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: 'a.txt', content: 'hi', baseSha: 'abc' }),
+    })
+    expect(res.status).toBe(204)
+  })
+
+  it('POST /:id/save-file returns 412 with currentSha on conflict', async () => {
+    vi.mocked(fileEditorService.saveWorkspaceFile).mockReturnValueOnce({
+      status: 'conflict',
+      currentSha: 'fresh-sha',
+    })
+    const res = await app.request('/api/workspaces/ws-1/save-file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: 'a.txt', content: 'hi', baseSha: 'stale-sha' }),
+    })
+    expect(res.status).toBe(412)
+    const body = (await res.json()) as { error: string; currentSha: string }
+    expect(body.error).toMatch(/changed on disk/i)
+    expect(body.currentSha).toBe('fresh-sha')
+  })
+
+  it('POST /:id/save-file returns 500 when the service throws (e.g. path traversal)', async () => {
+    vi.mocked(fileEditorService.saveWorkspaceFile).mockImplementationOnce(() => {
+      throw new Error("Path '../etc/passwd' escapes the worktree")
+    })
+    const res = await app.request('/api/workspaces/ws-1/save-file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: '../etc/passwd', content: 'x', baseSha: 'abc' }),
+    })
+    expect(res.status).toBe(500)
+  })
+})
+
+describe('POST /api/workspaces/:id/start-ci-fix', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  function mockFailingCiSnapshot(overrides: Record<string, unknown> = {}) {
+    return {
+      number: 42,
+      title: 'fix something',
+      url: 'https://github.com/org/repo/pull/42',
+      state: 'OPEN',
+      base: 'develop',
+      reviewDecision: null,
+      author: { login: 'me' },
+      assignees: [],
+      reviewers: [],
+      labels: [],
+      ci: {
+        rollup: 'FAILURE',
+        checks: [
+          { name: 'lint', conclusion: 'FAILURE', status: 'COMPLETED', detailsUrl: 'https://ci/1' },
+          { name: 'tests', conclusion: 'FAILURE', status: 'COMPLETED', detailsUrl: null },
+          { name: 'fast', conclusion: 'SUCCESS', status: 'COMPLETED', detailsUrl: null },
+        ],
+      },
+      updatedAt: '2026-05-01T00:00:00.000Z',
+      unresolvedReviewThreadsCount: 0,
+      mergeable: null,
+      readyToMerge: false,
+      ...overrides,
+    }
+  }
+
+  it('returns 404 when workspace is unknown', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null)
+    const res = await app.request('/api/workspaces/ghost/start-ci-fix', { method: 'POST' })
+    expect(res.status).toBe(404)
+  })
+
+  it('returns 400 when workspace is archived', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      archivedAt: '2026-04-01T00:00:00.000Z',
+    } as never)
+    const res = await app.request('/api/workspaces/ws-1/start-ci-fix', { method: 'POST' })
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toMatch(/archived/i)
+  })
+
+  it('returns 400 when no failing CI is detected', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace as never)
+    const prWatcher = await import('../server/services/pr-watcher-service.js')
+    vi.mocked(prWatcher.refreshPrSnapshot).mockResolvedValueOnce(null)
+    vi.mocked(prWatcher.getAllPrSnapshots).mockReturnValue({})
+
+    const res = await app.request('/api/workspaces/ws-1/start-ci-fix', { method: 'POST' })
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toMatch(/no failing ci/i)
+  })
+
+  it('returns 400 when CI is not in FAILURE state', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace as never)
+    const prWatcher = await import('../server/services/pr-watcher-service.js')
+    vi.mocked(prWatcher.refreshPrSnapshot).mockResolvedValueOnce(
+      mockFailingCiSnapshot({ ci: { rollup: 'SUCCESS', checks: [] } }) as never,
+    )
+
+    const res = await app.request('/api/workspaces/ws-1/start-ci-fix', { method: 'POST' })
+    expect(res.status).toBe(400)
+  })
+
+  it('returns 400 when no ciFixPromptTemplate is configured', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace as never)
+    const prWatcher = await import('../server/services/pr-watcher-service.js')
+    vi.mocked(prWatcher.refreshPrSnapshot).mockResolvedValueOnce(mockFailingCiSnapshot() as never)
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'auto',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        ciFixPromptTemplate: '',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
+
+    const res = await app.request('/api/workspaces/ws-1/start-ci-fix', { method: 'POST' })
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toMatch(/no ci-fix prompt template/i)
+  })
+
+  it('sends the rendered template to the active agent and returns ok', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace as never)
+    vi.mocked(workspaceService.getActiveSession).mockReturnValue({
+      id: 'sess-1',
+      workspaceId: 'ws-1',
+      pid: null,
+      claudeSessionId: null,
+      status: 'idle',
+      startedAt: null,
+      endedAt: null,
+      name: null,
+    } as never)
+    const prWatcher = await import('../server/services/pr-watcher-service.js')
+    vi.mocked(prWatcher.refreshPrSnapshot).mockResolvedValueOnce(mockFailingCiSnapshot() as never)
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'auto',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        ciFixPromptTemplate: 'Fix CI on PR {{pr_url}}\n{{failed_jobs}}',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
+
+    const res = await app.request('/api/workspaces/ws-1/start-ci-fix', { method: 'POST' })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { ok: boolean; failedChecksCount: number }
+    expect(body.ok).toBe(true)
+    expect(body.failedChecksCount).toBe(2)
+
+    expect(agentManager.sendMessageForFallback).toHaveBeenCalledTimes(1)
+    const [, prompt] = vi.mocked(agentManager.sendMessageForFallback).mock.calls[0]
+    expect(prompt).toContain('https://github.com/org/repo/pull/42')
+    expect(prompt).toContain('- lint')
+    expect(prompt).toContain('- tests')
+    expect(prompt).not.toContain('- fast')
+    expect(agentManager.startAgent).not.toHaveBeenCalled()
+    expect(wsService.emit).toHaveBeenCalledWith(
+      'ws-1',
+      'user:message',
+      expect.objectContaining({ content: prompt, sender: 'user' }),
+      'delivered-session-id',
+    )
+  })
+
+  it('starts a fresh resume session when lifecycle-safe delivery reports stopped', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace as never)
+    vi.mocked(workspaceService.getActiveSession).mockReturnValue(null)
+    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce({ status: 'stopped' })
+    const prWatcher = await import('../server/services/pr-watcher-service.js')
+    vi.mocked(prWatcher.refreshPrSnapshot).mockResolvedValueOnce(mockFailingCiSnapshot() as never)
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'auto',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        ciFixPromptTemplate: 'fix it',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
+
+    const res = await app.request('/api/workspaces/ws-1/start-ci-fix', { method: 'POST' })
+    expect(res.status).toBe(200)
+    expect(agentManager.startAgent).toHaveBeenCalledTimes(1)
+    // resume=true → 5th positional arg
+    expect(vi.mocked(agentManager.startAgent).mock.calls[0][4]).toBe(true)
+    expect(wsService.emit).toHaveBeenCalledWith(
+      'ws-1',
+      'user:message',
+      expect.objectContaining({ sender: 'user' }),
+      'mock-agent-session-id',
+    )
+  })
+
+  it('returns a clean error without a ghost message or concurrent start when delivery rejects', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace as never)
+    vi.mocked(workspaceService.getActiveSession).mockReturnValue(null)
+    vi.mocked(agentManager.sendMessageForFallback).mockRejectedValueOnce(new Error('replacement rejected'))
+    const prWatcher = await import('../server/services/pr-watcher-service.js')
+    vi.mocked(prWatcher.refreshPrSnapshot).mockResolvedValueOnce(mockFailingCiSnapshot() as never)
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'auto',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        ciFixPromptTemplate: 'fix it',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
+
+    const res = await app.request('/api/workspaces/ws-1/start-ci-fix', { method: 'POST' })
+
+    expect(res.status).toBe(500)
+    expect((await res.json()).error).toBe('Failed to dispatch CI-fix prompt: replacement rejected')
+    expect(agentManager.startAgent).not.toHaveBeenCalled()
+    expect(wsService.emit).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /api/workspaces/:id/git/commit-with-agent', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('does not resume when commit-with-agent delivery reaches a live controller', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(gitOps.getWorkingTreeStatus).mockReturnValue({ staged: 0, modified: 1, untracked: 0 })
+    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce({
+      status: 'sent',
+      sessionId: 'delivered-session-id',
+    })
+
+    const res = await app.request('/api/workspaces/ws-1/git/commit-with-agent', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ ok: true, messageSent: true })
+    expect(agentManager.startAgent).not.toHaveBeenCalled()
+    expect(wsService.emit).toHaveBeenCalledOnce()
+    expect(wsService.emit).toHaveBeenCalledWith(
+      'ws-1',
+      'user:message',
+      expect.objectContaining({ sender: 'user' }),
+      'delivered-session-id',
+    )
+  })
+
+  it('resumes the agent when commit-with-agent delivery reports stopped', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(gitOps.getWorkingTreeStatus).mockReturnValue({ staged: 0, modified: 1, untracked: 0 })
+    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce({ status: 'stopped' })
+
+    const res = await app.request('/api/workspaces/ws-1/git/commit-with-agent', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ ok: true, messageSent: true })
+    expect(agentManager.startAgent).toHaveBeenCalledOnce()
+    expect(vi.mocked(agentManager.startAgent).mock.calls[0][4]).toBe(true)
+    expect(wsService.emit).toHaveBeenCalledOnce()
+    expect(wsService.emit).toHaveBeenCalledWith(
+      'ws-1',
+      'user:message',
+      expect.objectContaining({ sender: 'user' }),
+      'mock-agent-session-id',
+    )
+  })
+
+  it('returns 409 without starting or persisting a ghost prompt when commit delivery rejects', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(gitOps.getWorkingTreeStatus).mockReturnValue({ staged: 0, modified: 1, untracked: 0 })
+    vi.mocked(agentManager.sendMessageForFallback).mockRejectedValueOnce(new Error('replacement rejected'))
+
+    const res = await app.request('/api/workspaces/ws-1/git/commit-with-agent', { method: 'POST' })
+
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toBe('Unable to ask the agent to commit: replacement rejected')
+    expect(agentManager.startAgent).not.toHaveBeenCalled()
+    expect(wsService.emit).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /api/workspaces/:id/git/resolve-with-agent', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('does not resume when resolve-with-agent delivery reaches a live controller', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce({
+      status: 'sent',
+      sessionId: 'delivered-session-id',
+    })
+
+    const res = await app.request('/api/workspaces/ws-1/git/resolve-with-agent', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ operation: 'merge', files: ['src/conflicted.ts'] }),
+    })
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ ok: true, messageSent: true })
+    expect(agentManager.startAgent).not.toHaveBeenCalled()
+    expect(wsService.emit).toHaveBeenCalledOnce()
+    expect(wsService.emit).toHaveBeenCalledWith(
+      'ws-1',
+      'user:message',
+      expect.objectContaining({ sender: 'user' }),
+      'delivered-session-id',
+    )
+  })
+
+  it('resumes the agent when resolve-with-agent delivery reports stopped', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce({ status: 'stopped' })
+
+    const res = await app.request('/api/workspaces/ws-1/git/resolve-with-agent', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ operation: 'merge', files: ['src/conflicted.ts'] }),
+    })
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ ok: true, messageSent: true })
+    expect(agentManager.startAgent).toHaveBeenCalledOnce()
+    expect(vi.mocked(agentManager.startAgent).mock.calls[0][4]).toBe(true)
+    expect(wsService.emit).toHaveBeenCalledOnce()
+    expect(wsService.emit).toHaveBeenCalledWith(
+      'ws-1',
+      'user:message',
+      expect.objectContaining({ sender: 'user' }),
+      'mock-agent-session-id',
+    )
+  })
+
+  it('reports messageSent false without starting or persisting a ghost prompt when delivery rejects', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(agentManager.sendMessageForFallback).mockRejectedValueOnce(new Error('replacement rejected'))
+
+    const res = await app.request('/api/workspaces/ws-1/git/resolve-with-agent', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ operation: 'merge', files: ['src/conflicted.ts'] }),
+    })
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ ok: true, messageSent: false })
+    expect(agentManager.startAgent).not.toHaveBeenCalled()
+    expect(wsService.emit).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /:id/rebase & /:id/merge dirty-worktree handling', () => {
+  beforeEach(() => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+  })
+
+  it('maps DirtyWorktreeError to 409 with code dirty_worktree on rebase', async () => {
+    vi.mocked(gitOps.rebaseBranchAsync).mockImplementation(() => {
+      throw new gitOps.DirtyWorktreeError('rebase', { staged: 0, modified: 1, untracked: 0 })
+    })
+    const res = await app.request('/api/workspaces/ws-1/rebase', { method: 'POST' })
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.code).toBe('dirty_worktree')
+    expect(body.operation).toBe('rebase')
+    expect(body.status).toEqual({ staged: 0, modified: 1, untracked: 0 })
+  })
+
+  it('maps DirtyWorktreeError to 409 with code dirty_worktree on merge', async () => {
+    vi.mocked(gitOps.mergeBranchAsync).mockImplementation(() => {
+      throw new gitOps.DirtyWorktreeError('merge', { staged: 1, modified: 0, untracked: 0 })
+    })
+    const res = await app.request('/api/workspaces/ws-1/merge', { method: 'POST' })
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.code).toBe('dirty_worktree')
+    expect(body.operation).toBe('merge')
+    expect(body.status).toEqual({ staged: 1, modified: 0, untracked: 0 })
+  })
+
+  it('passes autostash:true to rebaseBranch when ?autostash=1', async () => {
+    vi.mocked(gitOps.rebaseBranchAsync).mockResolvedValue(undefined)
+    const res = await app.request('/api/workspaces/ws-1/rebase?autostash=1', { method: 'POST' })
+    expect(res.status).toBe(200)
+    expect(gitOps.rebaseBranchAsync).toHaveBeenCalledWith(fakeWorkspace.worktreePath, fakeWorkspace.sourceBranch, {
+      autostash: true,
+    })
+  })
+
+  it('passes autostash:false to rebaseBranch when no query param', async () => {
+    vi.mocked(gitOps.rebaseBranchAsync).mockResolvedValue(undefined)
+    const res = await app.request('/api/workspaces/ws-1/rebase', { method: 'POST' })
+    expect(res.status).toBe(200)
+    expect(gitOps.rebaseBranchAsync).toHaveBeenCalledWith(fakeWorkspace.worktreePath, fakeWorkspace.sourceBranch, {
+      autostash: false,
+    })
+  })
+
+  it('passes autostash:true to mergeBranch when ?autostash=1', async () => {
+    vi.mocked(gitOps.mergeBranchAsync).mockResolvedValue(undefined)
+    const res = await app.request('/api/workspaces/ws-1/merge?autostash=1', { method: 'POST' })
+    expect(res.status).toBe(200)
+    expect(gitOps.mergeBranchAsync).toHaveBeenCalledWith(fakeWorkspace.worktreePath, fakeWorkspace.sourceBranch, {
+      autostash: true,
+    })
+  })
+
+  it('passes autostash:false to mergeBranch when no query param', async () => {
+    vi.mocked(gitOps.mergeBranchAsync).mockResolvedValue(undefined)
+    const res = await app.request('/api/workspaces/ws-1/merge', { method: 'POST' })
+    expect(res.status).toBe(200)
+    expect(gitOps.mergeBranchAsync).toHaveBeenCalledWith(fakeWorkspace.worktreePath, fakeWorkspace.sourceBranch, {
+      autostash: false,
+    })
+  })
+})
+
+describe('POST /:id/git/continue', () => {
+  beforeEach(() => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+  })
+
+  it('continues an in-progress Git operation', async () => {
+    vi.mocked(gitOps.continueOngoingGitOperation).mockReturnValue('rebase')
+
+    const res = await app.request('/api/workspaces/ws-1/git/continue', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    expect(gitOps.continueOngoingGitOperation).toHaveBeenCalledWith(fakeWorkspace.worktreePath)
+  })
+})
+
+describe('POST /:id/git/commit-all', () => {
+  beforeEach(() => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+  })
+
+  it('commits all changes and returns success', async () => {
+    vi.mocked(gitOps.commitAllChanges).mockReturnValue(undefined)
+    const res = await app.request('/api/workspaces/ws-1/git/commit-all', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message: 'chore: snapshot' }),
+    })
+    expect(res.status).toBe(200)
+    expect(gitOps.commitAllChanges).toHaveBeenCalledWith(fakeWorkspace.worktreePath, 'chore: snapshot')
+  })
+
+  it('rejects a blank commit message with 400', async () => {
+    const res = await app.request('/api/workspaces/ws-1/git/commit-all', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message: '   ' }),
+    })
+    expect(res.status).toBe(400)
+    expect(gitOps.commitAllChanges).not.toHaveBeenCalled()
+  })
+
+  it('returns 404 when the workspace does not exist', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null)
+    const res = await app.request('/api/workspaces/nope/git/commit-all', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message: 'chore: snapshot' }),
+    })
+    expect(res.status).toBe(404)
+    expect(gitOps.commitAllChanges).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /:id/git/discard', () => {
+  beforeEach(() => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+  })
+
+  it('discards working-tree changes and returns success', async () => {
+    vi.mocked(gitOps.discardWorkingTreeChanges).mockReturnValue(undefined)
+    const res = await app.request('/api/workspaces/ws-1/git/discard', { method: 'POST' })
+    expect(res.status).toBe(200)
+    expect(gitOps.discardWorkingTreeChanges).toHaveBeenCalledWith(fakeWorkspace.worktreePath)
+  })
+
+  it('returns 404 when the workspace does not exist', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null)
+    const res = await app.request('/api/workspaces/nope/git/discard', { method: 'POST' })
+    expect(res.status).toBe(404)
+  })
+})
+
+describe('GET /:id/diff mode=commits', () => {
+  beforeEach(() => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(gitOps.commitExists).mockReturnValue(true)
+  })
+
+  it('returns the file list between two commits', async () => {
+    vi.mocked(gitOps.getChangedFilesBetween).mockReturnValue([{ path: 'a.txt', status: 'modified' }])
+    const res = await app.request('/api/workspaces/ws-1/diff?mode=commits&from=aaa&to=bbb')
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.mode).toBe('commits')
+    expect(body.from).toBe('aaa')
+    expect(body.to).toBe('bbb')
+    expect(body.files).toEqual([{ path: 'a.txt', status: 'modified' }])
+    expect(gitOps.getChangedFilesBetween).toHaveBeenCalledWith(fakeWorkspace.worktreePath, 'aaa', 'bbb')
+  })
+
+  it('400 when from or to is missing', async () => {
+    const res = await app.request('/api/workspaces/ws-1/diff?mode=commits&from=aaa')
+    expect(res.status).toBe(400)
+  })
+
+  it('400 when the to ref is invalid', async () => {
+    vi.mocked(gitOps.commitExists).mockImplementation((_repo, ref) => ref !== 'bad')
+    const res = await app.request('/api/workspaces/ws-1/diff?mode=commits&from=aaa&to=bad')
+    expect(res.status).toBe(400)
+  })
+
+  it('falls back to the empty-tree base when from does not resolve (root commit)', async () => {
+    vi.mocked(gitOps.commitExists).mockImplementation((_repo, ref) => ref !== 'aaa^')
+    vi.mocked(gitOps.getChangedFilesBetween).mockReturnValue([{ path: 'a.txt', status: 'added' }])
+    const res = await app.request('/api/workspaces/ws-1/diff?mode=commits&from=aaa%5E&to=aaa')
+    expect(res.status).toBe(200)
+    expect(gitOps.getChangedFilesBetween).toHaveBeenCalledWith(
+      fakeWorkspace.worktreePath,
+      '4b825dc642cb6eb9a060e54bf8d69288fbee4904',
+      'aaa',
+    )
+  })
+})
+
+describe('GET /:id/diff-file mode=commits', () => {
+  beforeEach(() => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(gitOps.commitExists).mockReturnValue(true)
+  })
+
+  it('returns original/modified from each ref, no modifiedSha', async () => {
+    vi.mocked(gitOps.getFileAtRef).mockImplementation((_repo, ref) => (ref === 'aaa' ? 'old' : 'new'))
+    const res = await app.request('/api/workspaces/ws-1/diff-file?mode=commits&from=aaa&to=bbb&path=a.txt')
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.original).toBe('old')
+    expect(body.modified).toBe('new')
+    expect(body.mode).toBe('commits')
+    expect(body.modifiedSha).toBeUndefined()
+    expect(gitOps.getFileAtRef).toHaveBeenCalledWith(fakeWorkspace.worktreePath, 'aaa', 'a.txt')
+    expect(gitOps.getFileAtRef).toHaveBeenCalledWith(fakeWorkspace.worktreePath, 'bbb', 'a.txt')
+  })
+
+  it('400 when from or to is missing', async () => {
+    const res = await app.request('/api/workspaces/ws-1/diff-file?mode=commits&to=bbb&path=a.txt')
+    expect(res.status).toBe(400)
+  })
+
+  it('400 when the to ref is invalid', async () => {
+    vi.mocked(gitOps.commitExists).mockImplementation((_repo, ref) => ref !== 'bad')
+    const res = await app.request('/api/workspaces/ws-1/diff-file?mode=commits&from=aaa&to=bad&path=a.txt')
+    expect(res.status).toBe(400)
+  })
+
+  it('falls back to the empty-tree base when from does not resolve (root commit)', async () => {
+    vi.mocked(gitOps.commitExists).mockImplementation((_repo, ref) => ref !== 'aaa^')
+    vi.mocked(gitOps.getFileAtRef).mockReturnValue('content')
+    const res = await app.request('/api/workspaces/ws-1/diff-file?mode=commits&from=aaa%5E&to=aaa&path=a.txt')
+    expect(res.status).toBe(200)
+    expect(gitOps.getFileAtRef).toHaveBeenCalledWith(
+      fakeWorkspace.worktreePath,
+      '4b825dc642cb6eb9a060e54bf8d69288fbee4904',
+      'a.txt',
+    )
+  })
+})
+
+describe('GET /api/workspaces/:id/working-tree-files', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+  })
+
+  it('returns the working-tree files', async () => {
+    vi.mocked(gitOps.getWorkingTreeFiles).mockReturnValue([
+      { path: 'a.txt', staged: true, modified: false, untracked: false },
+      { path: 'b.txt', staged: false, modified: true, untracked: false },
+    ])
+    const res = await app.request('/api/workspaces/ws-1/working-tree-files')
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.files).toHaveLength(2)
+    expect(body.files[0].path).toBe('a.txt')
+  })
+
+  it('returns 404 when workspace not found', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null as never)
+    const res = await app.request('/api/workspaces/unknown/working-tree-files')
+    expect(res.status).toBe(404)
+  })
+})
+
+describe('POST /api/workspaces/:id/open-terminal', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+  })
+
+  it('returns 404 when workspace not found', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null as never)
+    const res = await app.request('/api/workspaces/unknown/open-terminal', { method: 'POST' })
+    expect(res.status).toBe(404)
+  })
+
+  it('returns 400 when terminalCommand is empty or whitespace-only', async () => {
+    vi.mocked(settingsService.getGlobalSettings).mockReturnValue(
+      makeGlobalSettings({
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        editorCommand: '',
+        browserNotifications: true,
+        audioNotifications: true,
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+        notionMcpKey: '',
+        sentryMcpKey: '',
+        tags: [],
+        worktreesPath: '.worktrees',
+        worktreesPrefixByProject: false,
+        terminalCommand: '   ', // whitespace-only must be treated as unconfigured (400, not 500)
+      }),
+    )
+    const res = await app.request('/api/workspaces/ws-1/open-terminal', { method: 'POST' })
+    expect(res.status).toBe(400)
+  })
+
+  it('spawns the terminal with cwd = worktree and substitutes {path}', async () => {
+    vi.mocked(settingsService.getGlobalSettings).mockReturnValue(
+      makeGlobalSettings({
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        editorCommand: '',
+        browserNotifications: true,
+        audioNotifications: true,
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+        notionMcpKey: '',
+        sentryMcpKey: '',
+        tags: [],
+        worktreesPath: '.worktrees',
+        worktreesPrefixByProject: false,
+        terminalCommand: 'gnome-terminal --working-directory={path}',
+      }),
+    )
+    vi.mocked(fs.existsSync).mockReturnValue(true)
+    const res = await app.request('/api/workspaces/ws-1/open-terminal', { method: 'POST' })
+    expect(res.status).toBe(200)
+    expect(spawnMock).toHaveBeenCalledWith(
+      'gnome-terminal',
+      [`--working-directory=${fakeWorkspace.worktreePath}`],
+      expect.objectContaining({ cwd: fakeWorkspace.worktreePath, detached: true, stdio: 'ignore' }),
+    )
+  })
+})
+
+describe('GET /api/workspaces/:id/sessions/:sessionId/summary', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace as never)
+  })
+
+  it('reports why the session ended, with its counters', async () => {
+    const getDbMock = vi.mocked((await import('../server/db/index.js')).getDb)
+    getDbMock.mockReturnValue({
+      prepare: vi
+        .fn()
+        .mockReturnValueOnce({
+          get: () => ({
+            id: 'sess-1',
+            engine: 'claude-code',
+            model: 'opus',
+            status: 'error',
+            end_reason: 'watchdog',
+            started_at: '2026-01-01T10:00:00.000Z',
+            ended_at: '2026-01-01T10:05:00.000Z',
+          }),
+        })
+        .mockReturnValueOnce({
+          get: () => ({ tool_calls: 12, errors: 2, input_tokens: 900, output_tokens: 300 }),
+        }),
+    } as never)
+
+    const res = await app.request('/api/workspaces/ws-1/sessions/sess-1/summary')
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({
+      sessionId: 'sess-1',
+      endReason: 'watchdog',
+      durationMs: 5 * 60_000,
+      toolCalls: 12,
+      errors: 2,
+    })
+  })
+
+  it('404s on an unknown session', async () => {
+    const getDbMock = vi.mocked((await import('../server/db/index.js')).getDb)
+    getDbMock.mockReturnValue({ prepare: vi.fn().mockReturnValue({ get: () => undefined }) } as never)
+
+    const res = await app.request('/api/workspaces/ws-1/sessions/nope/summary')
+
+    expect(res.status).toBe(404)
+  })
+})
+
+describe('GET /api/workspaces/:id/comparison', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  const memberA = { id: 'w1', name: 'task (claude-code)', engine: 'claude-code', comparisonId: 'cmp_1' }
+  const memberB = { id: 'w2', name: 'task (codex)', engine: 'codex', comparisonId: 'cmp_1' }
+
+  it('returns every member of the comparison with its git stats and task progress', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(memberA as never)
+    vi.mocked(workspaceService.listComparisonMembers).mockReturnValue([memberA, memberB] as never)
+    vi.mocked(prWatcher.getAllGitStats).mockReturnValue({
+      w1: { insertions: 10, deletions: 2 },
+      w2: { insertions: 40, deletions: 30 },
+    } as never)
+    // How finely each engine planned the same task is the first thing the
+    // comparison shows, before any code exists: 16 tasks against 5.
+    vi.mocked(workspaceService.listTasks).mockImplementation(
+      (id: string) =>
+        (id === 'w1'
+          ? [{ status: 'done' }, { status: 'done' }, { status: 'pending' }]
+          : [{ status: 'in_progress' }]) as never,
+    )
+
+    const res = await app.request('/api/workspaces/w1/comparison')
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      comparisonId: string
+      members: Array<{
+        workspace: { id: string }
+        gitStats: { insertions: number } | null
+        tasks: { done: number; total: number }
+        activity: { sessions: number; questions: number }
+      }>
+    }
+    expect(body.comparisonId).toBe('cmp_1')
+    expect(body.members.map((m) => m.workspace.id)).toEqual(['w1', 'w2'])
+    expect(body.members[1].gitStats?.insertions).toBe(40)
+    expect(body.members.map((m) => m.tasks)).toEqual([
+      { done: 2, total: 3 },
+      { done: 0, total: 1 },
+    ])
+    expect(body.members.map((m) => m.activity.sessions)).toEqual([2, 1])
+    expect(body.members[0].activity.questions).toBe(1)
+  })
+
+  it('reports a null stat rather than inventing zeros when nothing was measured yet', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(memberA as never)
+    vi.mocked(workspaceService.listComparisonMembers).mockReturnValue([memberA] as never)
+    vi.mocked(prWatcher.getAllGitStats).mockReturnValue({} as never)
+
+    const res = await app.request('/api/workspaces/w1/comparison')
+
+    const body = (await res.json()) as { members: Array<{ gitStats: unknown }> }
+    // Zeros would read as "this engine changed nothing", which is a different claim.
+    expect(body.members[0].gitStats).toBeNull()
+  })
+
+  it('answers with an empty comparison for a workspace that belongs to none', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ id: 'w9', comparisonId: null } as never)
+
+    const res = await app.request('/api/workspaces/w9/comparison')
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ comparisonId: null, members: [] })
+    expect(workspaceService.listComparisonMembers).not.toHaveBeenCalled()
+  })
+
+  it('404s on an unknown workspace', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null)
+
+    const res = await app.request('/api/workspaces/missing/comparison')
+
+    expect(res.status).toBe(404)
+  })
+})
+
+describe('GET /api/workspaces/:id/preset', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('returns the preset derived from the workspace', async () => {
+    const templateService = await import('../server/services/workspace-template-service.js')
+    vi.mocked(templateService.presetFromWorkspace).mockReturnValue({ engine: 'codex', tasks: ['a'] })
+
+    const res = await app.request('/api/workspaces/ws-1/preset')
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ preset: { engine: 'codex', tasks: ['a'] } })
+    expect(templateService.presetFromWorkspace).toHaveBeenCalledWith('ws-1')
+  })
+
+  it('404s on an unknown workspace', async () => {
+    const templateService = await import('../server/services/workspace-template-service.js')
+    vi.mocked(templateService.presetFromWorkspace).mockReturnValue(null)
+
+    const res = await app.request('/api/workspaces/missing/preset')
+
+    expect(res.status).toBe(404)
+  })
+})
+
+describe('compacting workspaces reject user prompts before side effects', () => {
+  it.each([
+    'start',
+    'switch-engine',
+    'git/commit-with-agent',
+    'git/resolve-with-agent',
+    'open-pr',
+    'start-review',
+    'start-ci-fix',
+  ])('rejects %s with a retriable conflict', async (action) => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(makeWorkspace({ status: 'compacting' }))
+    const res = await app.request(`/api/workspaces/${fakeWorkspace.id}/${action}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: 'New prompt', force: true, newSession: true }),
+    })
+    expect(res.status).toBe(409)
+    expect(await res.json()).toMatchObject({ code: 'compacting' })
+    expect(agentManager.stopAgentAndWait).not.toHaveBeenCalled()
+    expect(agentManager.startAgent).not.toHaveBeenCalled()
+    expect(agentManager.sendMessageForFallback).not.toHaveBeenCalled()
+    expect(wakeupService.cancel).not.toHaveBeenCalled()
+    expect(wsService.emit).not.toHaveBeenCalled()
+  })
+})
+
+it('rejects a client-forced compacting status without changing workspace state', async () => {
+  vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+  const res = await app.request(`/api/workspaces/${fakeWorkspace.id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status: 'compacting' }),
+  })
+  expect(res.status).toBe(400)
+  expect(workspaceService.updateWorkspaceFields).not.toHaveBeenCalled()
+  expect(workspaceService.updateWorkspaceStatus).not.toHaveBeenCalled()
+})
+
+describe('GET automatic admission', () => {
+  it('returns the shared reason and capacity without launching or consuming schedules', async () => {
+    const admission = await import('../server/services/auto-loop-service.js')
+    const status = { allowed: false, reason: 'capacity' as const, running: 2, limit: 2 }
+    const read = vi.spyOn(admission, 'getAutomaticAdmissionStatus').mockReturnValue(status)
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    try {
+      const response = await app.request(`/api/workspaces/${fakeWorkspace.id}/automatic-admission`)
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual(status)
+      expect(read).toHaveBeenCalledWith(fakeWorkspace.id)
+    } finally {
+      read.mockRestore()
+    }
+  })
+  it('returns 404 for a missing workspace', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null)
+    expect((await app.request('/api/workspaces/missing/automatic-admission')).status).toBe(404)
+  })
+})

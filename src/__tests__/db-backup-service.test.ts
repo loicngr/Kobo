@@ -1,0 +1,227 @@
+import fs, { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import os, { tmpdir } from 'node:os'
+import path, { join } from 'node:path'
+import Database from 'better-sqlite3'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  _resetBackupSequenceForTests,
+  createDailyDbBackupIfNeeded,
+  startDailyDbBackupScheduler,
+} from '../server/services/db-backup-service.js'
+
+const DAILY_MS = 24 * 60 * 60 * 1000
+
+let tmpDir: string
+let dbPath: string
+let db: Database.Database
+
+beforeEach(() => {
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'at-db-backup-'))
+  dbPath = path.join(tmpDir, 'kobo.db')
+  db = new Database(dbPath)
+  db.exec('CREATE TABLE t (id INTEGER); INSERT INTO t VALUES (1);')
+  _resetBackupSequenceForTests()
+})
+
+afterEach(() => {
+  try {
+    db.close()
+  } catch {
+    // ignore
+  }
+  if (tmpDir && fs.existsSync(tmpDir)) {
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  }
+})
+
+function listBackupFiles(): string[] {
+  return fs.readdirSync(tmpDir).filter((f) => f.startsWith('kobo.db.backup-'))
+}
+
+describe('createDailyDbBackupIfNeeded', () => {
+  it('creates a backup when no prior backup exists', async () => {
+    const result = await createDailyDbBackupIfNeeded(db, dbPath)
+    expect(result.created).not.toBeNull()
+    expect(fs.existsSync(result.created as string)).toBe(true)
+    expect(listBackupFiles()).toHaveLength(1)
+  })
+
+  it('writes a filename matching kobo.db.backup-<ISO>-<seq>', async () => {
+    const result = await createDailyDbBackupIfNeeded(db, dbPath)
+    const basename = path.basename(result.created as string)
+    expect(basename).toMatch(/^kobo\.db\.backup-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-\d+$/)
+  })
+
+  it('skips backup when a recent backup (<24h) already exists', async () => {
+    await createDailyDbBackupIfNeeded(db, dbPath)
+    const second = await createDailyDbBackupIfNeeded(db, dbPath)
+    expect(second.created).toBeNull()
+    expect(listBackupFiles()).toHaveLength(1)
+  })
+
+  it('creates a new backup when the most recent is older than 24h', async () => {
+    const oldBackup = path.join(tmpDir, 'kobo.db.backup-2020-01-01T00-00-00-000Z-1')
+    fs.writeFileSync(oldBackup, 'stale')
+    const oldTime = new Date(Date.now() - (DAILY_MS + 60_000))
+    fs.utimesSync(oldBackup, oldTime, oldTime)
+
+    const result = await createDailyDbBackupIfNeeded(db, dbPath)
+    expect(result.created).not.toBeNull()
+    expect(listBackupFiles()).toHaveLength(2)
+  })
+
+  it('rotates backups keeping the N most recent', async () => {
+    const now = Date.now()
+    for (let i = 0; i < 10; i++) {
+      const p = path.join(tmpDir, `kobo.db.backup-2024-${String(i + 1).padStart(2, '0')}-01T00-00-00-000Z-${i}`)
+      fs.writeFileSync(p, `${i}`)
+      const mtime = new Date(now - (i + 2) * DAILY_MS)
+      fs.utimesSync(p, mtime, mtime)
+    }
+
+    const result = await createDailyDbBackupIfNeeded(db, dbPath, 7)
+    expect(result.created).not.toBeNull()
+    expect(result.deleted.length).toBe(4)
+    expect(listBackupFiles()).toHaveLength(7)
+  })
+
+  it('ignores non-backup files in the directory', async () => {
+    fs.writeFileSync(path.join(tmpDir, 'kobo.db-wal'), 'wal')
+    fs.writeFileSync(path.join(tmpDir, 'kobo.db-shm'), 'shm')
+    fs.writeFileSync(path.join(tmpDir, 'settings.json'), '{}')
+    fs.writeFileSync(path.join(tmpDir, 'random.txt'), 'unrelated')
+
+    const result = await createDailyDbBackupIfNeeded(db, dbPath)
+    expect(result.created).not.toBeNull()
+    expect(fs.existsSync(path.join(tmpDir, 'random.txt'))).toBe(true)
+    expect(fs.existsSync(path.join(tmpDir, 'settings.json'))).toBe(true)
+    expect(listBackupFiles()).toHaveLength(1)
+  })
+
+  it('backup file is a usable SQLite database containing the source data', async () => {
+    const result = await createDailyDbBackupIfNeeded(db, dbPath)
+    expect(result.created).not.toBeNull()
+
+    const restored = new Database(result.created as string, { readonly: true })
+    const row = restored.prepare('SELECT id FROM t').get() as { id: number }
+    expect(row.id).toBe(1)
+    restored.close()
+  })
+
+  it('never throws — returns null created on error', async () => {
+    const badPath = path.join(tmpDir, 'subdir-does-not-exist', 'kobo.db')
+    const result = await createDailyDbBackupIfNeeded(db, badPath)
+    expect(result.created).toBeNull()
+  })
+})
+
+describe('createPreMigrationBackup', () => {
+  it('creates a backup file with the premigration prefix regardless of the daily throttle', async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'kobo-premig-'))
+    const dbPath = join(tmpDir, 'kobo.db')
+    const db = new Database(dbPath)
+    // Seed a daily backup that would normally throttle
+    const now = Date.now()
+    writeFileSync(join(tmpDir, `kobo.db.backup-${new Date(now).toISOString()}-0`), 'stub')
+
+    const { createPreMigrationBackup } = await import('../server/services/db-backup-service.js')
+    const result = await createPreMigrationBackup(db, dbPath, 'v10')
+    expect(result.created).toMatch(/kobo\.db\.premigration-v10-/)
+    expect(existsSync(result.created!)).toBe(true)
+
+    rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  it('does NOT rotate/delete previous premigration backups', async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'kobo-premig-'))
+    const dbPath = join(tmpDir, 'kobo.db')
+    const db = new Database(dbPath)
+    const existing = join(tmpDir, 'kobo.db.premigration-v9-2025-01-01T00-00-00-000Z-1')
+    writeFileSync(existing, 'stub')
+
+    const { createPreMigrationBackup } = await import('../server/services/db-backup-service.js')
+    await createPreMigrationBackup(db, dbPath, 'v10')
+    expect(existsSync(existing)).toBe(true)
+
+    rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  it('rotates its own backups instead of growing one full DB copy per migration', async () => {
+    const { createPreMigrationBackup } = await import('../server/services/db-backup-service.js')
+    for (const tag of ['v10', 'v11', 'v12', 'v13', 'v14', 'v15']) {
+      await createPreMigrationBackup(db, dbPath, tag, 3)
+    }
+
+    const remaining = fs.readdirSync(path.dirname(dbPath)).filter((f) => f.startsWith('kobo.db.premigration-'))
+    expect(remaining).toHaveLength(3)
+  })
+
+  it('never rotates the daily backups away', async () => {
+    const { createDailyDbBackupIfNeeded, createPreMigrationBackup } = await import(
+      '../server/services/db-backup-service.js'
+    )
+    await createDailyDbBackupIfNeeded(db, dbPath)
+    const result = await createPreMigrationBackup(db, dbPath, 'v10', 1)
+
+    expect(result.deleted).toEqual([])
+    expect(fs.readdirSync(path.dirname(dbPath)).filter((f) => f.startsWith('kobo.db.backup-'))).toHaveLength(1)
+  })
+})
+
+describe('daily backup scheduler', () => {
+  it('rechecks without restarting and waits for an in-flight backup on shutdown', async () => {
+    vi.useFakeTimers()
+    let finish!: () => void
+    const backup = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            finish = resolve
+          }),
+      )
+      .mockResolvedValue(undefined)
+    const scheduler = startDailyDbBackupScheduler(backup, 1000)
+    try {
+      expect(backup).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(backup).toHaveBeenCalledTimes(1)
+      finish()
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(backup).toHaveBeenCalledTimes(2)
+      let finishLast!: () => void
+      backup.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            finishLast = resolve
+          }),
+      )
+      await vi.advanceTimersByTimeAsync(1000)
+      let stopped = false
+      const stopping = scheduler.stop().then(() => {
+        stopped = true
+      })
+      await Promise.resolve()
+      expect(stopped).toBe(false)
+      finishLast()
+      await stopping
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(backup).toHaveBeenCalledTimes(3)
+    } finally {
+      await scheduler.stop()
+      vi.useRealTimers()
+    }
+  })
+  it('retries after a failed attempt', async () => {
+    vi.useFakeTimers()
+    const backup = vi.fn().mockRejectedValueOnce(new Error('full disk')).mockResolvedValue(undefined)
+    const scheduler = startDailyDbBackupScheduler(backup, 1000)
+    try {
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(backup).toHaveBeenCalledTimes(2)
+    } finally {
+      await scheduler.stop()
+      vi.useRealTimers()
+    }
+  })
+})

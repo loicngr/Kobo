@@ -1,0 +1,10 @@
+node_modules
+src/client/node_modules
+dist
+src/client/dist
+.git
+.worktrees
+data
+docs/superpowers
+*.log
+.DS_Store

@@ -1,0 +1,288 @@
+import { Hono } from 'hono'
+import { isValidSkillSuite } from '../../shared/skill-suite-prompts.js'
+import { isWorkflowPolicy } from '../../shared/workflow-policy.js'
+import { getDb } from '../db/index.js'
+import { getBackendPort } from '../services/agent/orchestrator.js'
+import {
+  DEFAULT_NOTION_INITIAL_PROMPT,
+  DEFAULT_SENTRY_INITIAL_PROMPT,
+} from '../services/initial-prompt-template-service.js'
+import { getMcpConnectionInfo } from '../services/mcp-connection-info-service.js'
+import { generateToken, getLanUrls } from '../services/network-access-service.js'
+import { DEFAULT_REVIEW_PROMPT_TEMPLATE } from '../services/review-template-service.js'
+import { DEFAULT_CHANGE_SOURCE_BRANCH_SCRIPT } from '../services/settings-defaults.js'
+import * as settingsService from '../services/settings-service.js'
+import {
+  type ConfigBundle,
+  DEFAULT_CI_FIX_PROMPT_TEMPLATE,
+  DEFAULT_FINALIZATION_PROMPT,
+  DEFAULT_GIT_CONVENTIONS,
+  DEFAULT_PR_PROMPT_TEMPLATE,
+  type GlobalSettings,
+  type ProjectSettings,
+} from '../services/settings-service.js'
+import { getSuitePrompts } from '../services/skill-suite-prompts.js'
+import { listTemplates, replaceAllTemplates } from '../services/templates-service.js'
+import { countPrunableWsEvents } from '../services/ws-events-retention-service.js'
+
+/** Hono sub-router for global and per-project settings CRUD. */
+const app = new Hono()
+
+// GET /api/settings — return full settings, credentials masked
+app.get('/', (c) => {
+  try {
+    const settings = settingsService.getSettings()
+    return c.json({ ...settings, global: settingsService.redactGlobalSecrets(settings.global) })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// GET /api/settings/global — return global settings, credentials masked
+app.get('/global', (c) => {
+  try {
+    const global = settingsService.getGlobalSettings()
+    return c.json(settingsService.redactGlobalSecrets(global))
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// GET /api/settings/skill-suite-prompts/:suite — source presets that can be
+// copied field-by-field into a custom suite before the user edits them.
+app.get('/skill-suite-prompts/:suite', (c) => {
+  const suite = c.req.param('suite')
+  if (!isValidSkillSuite(suite)) {
+    return c.json({ error: `Unknown skill suite: '${suite}'` }, 400)
+  }
+  return c.json(getSuitePrompts(suite, {}))
+})
+
+// GET /api/settings/defaults — expose the in-code DEFAULT_* constants for
+// global text-template settings (PR / review / git conventions / Notion /
+// Sentry initial prompts) so the UI can offer a "reset to default" button
+// without duplicating the strings on the frontend.
+app.get('/defaults', (c) => {
+  return c.json({
+    prPromptTemplate: DEFAULT_PR_PROMPT_TEMPLATE,
+    reviewPromptTemplate: DEFAULT_REVIEW_PROMPT_TEMPLATE,
+    ciFixPromptTemplate: DEFAULT_CI_FIX_PROMPT_TEMPLATE,
+    finalizationPrompt: DEFAULT_FINALIZATION_PROMPT,
+    gitConventions: DEFAULT_GIT_CONVENTIONS,
+    notionInitialPromptTemplate: DEFAULT_NOTION_INITIAL_PROMPT,
+    sentryInitialPromptTemplate: DEFAULT_SENTRY_INITIAL_PROMPT,
+    changeSourceBranchScript: DEFAULT_CHANGE_SOURCE_BRANCH_SCRIPT,
+  })
+})
+
+// GET /api/settings/ws-events-retention-preview?days=<n>&keep=<n>
+// Count what a retention window WOULD delete, without deleting anything. Backs
+// the confirmation dialog: enabling retention on a year-old database destroys
+// months of conversation in one go, and the user is entitled to the number
+// before agreeing to it.
+app.get('/ws-events-retention-preview', (c) => {
+  try {
+    const days = Number.parseInt(c.req.query('days') ?? '', 10)
+    const keep = Number.parseInt(c.req.query('keep') ?? '', 10)
+    if (!Number.isInteger(days) || days < 0 || !Number.isInteger(keep) || keep < 0) {
+      return c.json({ error: 'days and keep must be non-negative integers' }, 400)
+    }
+    const db = getDb()
+    const total = (db.prepare('SELECT COUNT(*) AS c FROM ws_events').get() as { c: number }).c
+    const deletable = countPrunableWsEvents(db, { retentionDays: days, keepPerWorkspace: keep })
+    return c.json({ deletable, total })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// GET /api/settings/mcp — protected connection metadata, without credentials
+app.get('/mcp', (c) => {
+  return c.json(getMcpConnectionInfo(getBackendPort(), settingsService.getGlobalSettings(), getDb().name))
+})
+
+// GET /api/settings/network — network access state + LAN URLs
+app.get('/network', (c) => {
+  try {
+    const global = settingsService.getGlobalSettings()
+    return c.json({
+      enabled: global.networkAccessEnabled,
+      token: global.networkAccessToken,
+      behindProxy: global.networkAccessBehindProxy,
+      urls: getLanUrls(getBackendPort()),
+    })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// GET /api/settings/network/ping — token validation probe (behind the gate)
+app.get('/network/ping', (c) => c.json({ ok: true }))
+
+// POST /api/settings/network — toggle enabled / regenerate token
+app.post('/network', async (c) => {
+  try {
+    const body = await c.req
+      .json<{ enabled?: boolean; regenerate?: boolean; behindProxy?: boolean }>()
+      .catch(() => null)
+    // `{}` is a valid request here, so a parse failure must not become one.
+    if (!body) return c.json({ error: 'Invalid JSON body' }, 400)
+    const current = settingsService.getGlobalSettings()
+    const patch: { networkAccessEnabled?: boolean; networkAccessToken?: string; networkAccessBehindProxy?: boolean } =
+      {}
+    let restartRequired = false
+
+    if (typeof body.enabled === 'boolean' && body.enabled !== current.networkAccessEnabled) {
+      patch.networkAccessEnabled = body.enabled
+      restartRequired = true
+      if (body.enabled && !current.networkAccessToken) {
+        patch.networkAccessToken = generateToken()
+      }
+    }
+    if (body.regenerate) {
+      patch.networkAccessToken = generateToken()
+    }
+    if (typeof body.behindProxy === 'boolean' && body.behindProxy !== current.networkAccessBehindProxy) {
+      patch.networkAccessBehindProxy = body.behindProxy
+    }
+
+    const updated = settingsService.updateNetworkAccessSettings(patch)
+    return c.json({
+      enabled: updated.networkAccessEnabled,
+      token: updated.networkAccessToken,
+      behindProxy: updated.networkAccessBehindProxy,
+      urls: getLanUrls(getBackendPort()),
+      restartRequired,
+    })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// GET /api/settings/mcp-servers — list active MCP servers from Claude config
+app.get('/mcp-servers', (c) => {
+  try {
+    const servers = settingsService.listActiveClaudeMcpServers()
+    return c.json(servers)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// PUT /api/settings/global — update global settings
+app.put('/global', async (c) => {
+  try {
+    const body = await c.req.json<Partial<GlobalSettings>>().catch(() => null)
+    // `{}` merges nothing but still rewrites settings.json; a parse failure
+    // must answer 400 rather than do that.
+    if (!body) return c.json({ error: 'Invalid JSON body' }, 400)
+    if (body.workflowPolicy !== undefined && !isWorkflowPolicy(body.workflowPolicy))
+      return c.json({ error: 'Invalid workflowPolicy' }, 400)
+    const updated = settingsService.updateGlobalSettings(body)
+    // The client assigns this response straight into its store, so echoing the
+    // real credentials back would undo the masking on GET the first time
+    // anyone saves anything.
+    return c.json(settingsService.redactGlobalSecrets(updated))
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    const status = err instanceof Error && err.name === 'InvalidWorktreesPathError' ? 400 : 500
+    return c.json({ error: message }, status)
+  }
+})
+
+// GET /api/settings/projects — list all projects
+app.get('/projects', (c) => {
+  try {
+    const projects = settingsService.listProjects()
+    return c.json(projects)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// GET /api/settings/projects/:encodedPath — get project by path
+app.get('/projects/:encodedPath', (c) => {
+  try {
+    const encodedPath = c.req.param('encodedPath')
+    const projectPath = Buffer.from(encodedPath, 'base64url').toString()
+    const project = settingsService.getProjectSettings(projectPath)
+
+    if (!project) {
+      return c.json({ error: `Project not found: '${projectPath}'` }, 404)
+    }
+
+    return c.json(project)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// PUT /api/settings/projects/:encodedPath — add or update project
+app.put('/projects/:encodedPath', async (c) => {
+  try {
+    const encodedPath = c.req.param('encodedPath')
+    const projectPath = Buffer.from(encodedPath, 'base64url').toString()
+    const body = await c.req.json<Partial<Omit<ProjectSettings, 'path'>>>().catch(() => null)
+    // `{}` CREATES a project entry with defaults; a malformed body must not.
+    if (!body) return c.json({ error: 'Invalid JSON body' }, 400)
+    if (body.workflowPolicy !== undefined && !isWorkflowPolicy(body.workflowPolicy))
+      return c.json({ error: 'Invalid workflowPolicy' }, 400)
+    const project = settingsService.upsertProject(projectPath, body)
+    return c.json(project)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// DELETE /api/settings/projects/:encodedPath — remove project
+app.delete('/projects/:encodedPath', (c) => {
+  try {
+    const encodedPath = c.req.param('encodedPath')
+    const projectPath = Buffer.from(encodedPath, 'base64url').toString()
+    settingsService.deleteProject(projectPath)
+    return new Response(null, { status: 204 })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// GET /api/settings/export — download a JSON bundle of settings + templates (MCP keys stripped)
+app.get('/export', (c) => {
+  try {
+    const bundle = settingsService.exportConfigBundle(listTemplates() as unknown as Array<Record<string, unknown>>)
+    return c.json(bundle)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// POST /api/settings/import — replace settings + templates from an uploaded bundle
+app.post('/import', async (c) => {
+  try {
+    const body = (await c.req.json()) as ConfigBundle
+    // Validate settings first — throws on malformed payload before we touch disk.
+    settingsService.importConfigBundle(body)
+    if (body.templates !== undefined) {
+      // Accept missing templates (backward-compatible). Otherwise validate and replace.
+      replaceAllTemplates(body.templates as unknown[])
+    }
+    return c.json({ ok: true })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    const isValidation = message.includes('Invalid bundle') || message.includes('Invalid template')
+    return c.json({ error: message }, isValidation ? 400 : 500)
+  }
+})
+
+export default app

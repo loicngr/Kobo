@@ -1,0 +1,524 @@
+import { Hono } from 'hono'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+// ── Mocks ────────────────────────────────────────────────────────────────────
+
+vi.mock('../server/services/settings-service.js', async (importOriginal) => ({
+  // Real redaction: masking the credentials is the point of these routes, so
+  // stubbing it would make the assertions below vacuous.
+  redactGlobalSecrets: (await importOriginal<typeof import('../server/services/settings-service.js')>())
+    .redactGlobalSecrets,
+  getSettings: vi.fn(),
+  getGlobalSettings: vi.fn(),
+  updateGlobalSettings: vi.fn(),
+  updateNetworkAccessSettings: vi.fn(),
+  listActiveClaudeMcpServers: vi.fn(),
+  listProjects: vi.fn(),
+  getProjectSettings: vi.fn(),
+  upsertProject: vi.fn(),
+  deleteProject: vi.fn(),
+}))
+
+vi.mock('../server/services/network-access-service.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../server/services/network-access-service.js')>()),
+  generateToken: vi.fn(() => 'fresh-token'),
+  getLanUrls: vi.fn(() => ['http://192.168.1.5:3300']),
+  getLanHostnames: vi.fn(() => ['192.168.1.5']),
+  resolveProxyHostname: vi.fn(() => null),
+}))
+
+vi.mock('../server/services/agent/orchestrator.js', () => ({
+  getBackendPort: vi.fn(() => 3300),
+}))
+
+vi.mock('../server/db/index.js', () => ({
+  getDb: vi.fn(() => ({
+    name: '/tmp/kobo-custom-db/kobo.db',
+    prepare: vi.fn(() => ({ get: vi.fn(() => ({ c: 0 })) })),
+  })),
+}))
+
+vi.mock('../server/services/ws-events-retention-service.js', () => ({
+  countPrunableWsEvents: vi.fn(() => 0),
+}))
+
+// ── Imports (after mocks) ────────────────────────────────────────────────────
+
+import router from '../server/routes/settings.js'
+import * as settingsService from '../server/services/settings-service.js'
+import { MASKED_SECRET } from '../shared/consts.js'
+import { makeGlobalSettings, makeProjectSettings } from './helpers/fixtures.js'
+
+// ── App setup ────────────────────────────────────────────────────────────────
+
+const app = new Hono()
+app.route('/api/settings', router)
+
+// ── Fixtures ─────────────────────────────────────────────────────────────────
+
+const fakeGlobalSettings = makeGlobalSettings({ prPromptTemplate: '' })
+
+const fakeProject = makeProjectSettings({
+  path: '/home/user/project',
+  displayName: 'My Project',
+  defaultSourceBranch: 'main',
+  defaultModel: 'claude-opus-4-6',
+  prPromptTemplate: '',
+  devServer: {
+    startCommand: '',
+    stopCommand: '',
+  },
+})
+
+const fakeSettings = {
+  schemaVersion: 1,
+  global: fakeGlobalSettings,
+  projects: [fakeProject],
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function encodeProjectPath(projectPath: string): string {
+  return Buffer.from(projectPath).toString('base64url')
+}
+
+beforeEach(() => {
+  vi.clearAllMocks()
+})
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+
+describe('GET /api/settings', () => {
+  it('returns full settings', async () => {
+    vi.mocked(settingsService.getSettings).mockReturnValue(fakeSettings)
+
+    const res = await app.request('/api/settings')
+    expect(res.status).toBe(200)
+    const data = await res.json()
+    expect(data).toEqual(fakeSettings)
+    expect(settingsService.getSettings).toHaveBeenCalledOnce()
+  })
+
+  it('masks the stored credentials instead of returning them', async () => {
+    vi.mocked(settingsService.getSettings).mockReturnValue({
+      ...fakeSettings,
+      global: { ...fakeSettings.global, notionMcpKey: 'ntn_real_key', sentryMcpKey: '' },
+    } as never)
+
+    const res = await app.request('/api/settings')
+
+    expect(res.status).toBe(200)
+    const data = (await res.json()) as { global: Record<string, string> }
+    expect(data.global.notionMcpKey).toBe(MASKED_SECRET)
+    expect(data.global.sentryMcpKey).toBe('')
+    expect(JSON.stringify(data)).not.toContain('ntn_real_key')
+  })
+
+  it('returns 500 on service error', async () => {
+    vi.mocked(settingsService.getSettings).mockImplementation(() => {
+      throw new Error('File read error')
+    })
+
+    const res = await app.request('/api/settings')
+    expect(res.status).toBe(500)
+    const data = await res.json()
+    expect(data.error).toBe('File read error')
+  })
+})
+
+describe('GET /api/settings/global', () => {
+  it('returns global settings', async () => {
+    vi.mocked(settingsService.getGlobalSettings).mockReturnValue(fakeGlobalSettings)
+
+    const res = await app.request('/api/settings/global')
+    expect(res.status).toBe(200)
+    const data = await res.json()
+    expect(data).toEqual(fakeGlobalSettings)
+    expect(settingsService.getGlobalSettings).toHaveBeenCalledOnce()
+  })
+
+  it('masks the stored credentials instead of returning them', async () => {
+    vi.mocked(settingsService.getGlobalSettings).mockReturnValue({
+      ...fakeGlobalSettings,
+      bitbucketToken: 'bb_real_token',
+    } as never)
+
+    const res = await app.request('/api/settings/global')
+
+    expect(res.status).toBe(200)
+    const data = (await res.json()) as Record<string, string>
+    expect(data.bitbucketToken).toBe(MASKED_SECRET)
+    expect(JSON.stringify(data)).not.toContain('bb_real_token')
+  })
+})
+
+describe('GET /api/settings/skill-suite-prompts/:suite', () => {
+  it('returns the selected preset prompts for custom-suite composition', async () => {
+    const res = await app.request('/api/settings/skill-suite-prompts/ecc')
+
+    expect(res.status).toBe(200)
+    await expect(res.json()).resolves.toMatchObject({
+      reviewTemplate: expect.stringContaining('ecc:code-review'),
+      autoLoopReviewGate: expect.stringContaining('ecc:code-reviewer'),
+      brainstormingInstruction: expect.stringContaining('ecc:plan'),
+    })
+  })
+
+  it('rejects an unknown skill suite', async () => {
+    const res = await app.request('/api/settings/skill-suite-prompts/unknown')
+
+    expect(res.status).toBe(400)
+    await expect(res.json()).resolves.toEqual({ error: "Unknown skill suite: 'unknown'" })
+  })
+})
+
+describe('GET /api/settings/mcp-servers', () => {
+  it('returns active MCP servers only', async () => {
+    vi.mocked(settingsService.listActiveClaudeMcpServers).mockReturnValue([
+      { key: 'notion', command: 'npx', args: ['-y', '@notionhq/notion-mcp-server'] },
+      { key: 'sentry', command: 'npx', args: ['-y', '@sentry/mcp-server'] },
+    ])
+
+    const res = await app.request('/api/settings/mcp-servers')
+    expect(res.status).toBe(200)
+    const data = await res.json()
+    expect(data).toEqual([
+      { key: 'notion', command: 'npx', args: ['-y', '@notionhq/notion-mcp-server'] },
+      { key: 'sentry', command: 'npx', args: ['-y', '@sentry/mcp-server'] },
+    ])
+  })
+
+  it('returns 500 on service error', async () => {
+    vi.mocked(settingsService.listActiveClaudeMcpServers).mockImplementation(() => {
+      throw new Error('Read failed')
+    })
+
+    const res = await app.request('/api/settings/mcp-servers')
+    expect(res.status).toBe(500)
+    const data = await res.json()
+    expect(data.error).toBe('Read failed')
+  })
+})
+
+describe('malformed JSON bodies', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  // `{}` is a valid request for every one of these routes, so a parse failure
+  // silently turned into `{}` used to write defaults to disk and answer 200.
+  it.each([
+    ['PUT', '/api/settings/global', () => settingsService.updateGlobalSettings],
+    [
+      'PUT',
+      `/api/settings/projects/${Buffer.from('/home/user/project').toString('base64url')}`,
+      () => settingsService.upsertProject,
+    ],
+    ['POST', '/api/settings/network', () => settingsService.updateNetworkAccessSettings],
+  ] as const)('%s %s answers 400 and writes nothing', async (method, url, writer) => {
+    const res = await app.request(url, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: '{ not json',
+    })
+
+    expect(res.status).toBe(400)
+    expect(writer()).not.toHaveBeenCalled()
+  })
+})
+
+describe('PUT /api/settings/global', () => {
+  it('updates global settings', async () => {
+    const updated = makeGlobalSettings({ prPromptTemplate: 'New template' })
+    vi.mocked(settingsService.updateGlobalSettings).mockReturnValue(updated)
+
+    const res = await app.request('/api/settings/global', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ defaultModel: 'claude-sonnet-4-20250514' }),
+    })
+
+    expect(res.status).toBe(200)
+    const data = await res.json()
+    expect(data).toEqual(updated)
+    expect(settingsService.updateGlobalSettings).toHaveBeenCalledWith({ defaultModel: 'claude-sonnet-4-20250514' })
+  })
+
+  it('masks the stored credentials in the response it echoes back', async () => {
+    // The client assigns this response straight into its settings store, so an
+    // unmasked echo would undo the masking on GET the first time anyone saves.
+    vi.mocked(settingsService.updateGlobalSettings).mockReturnValue({
+      ...fakeGlobalSettings,
+      notionMcpKey: 'ntn_real_key',
+    } as never)
+
+    const res = await app.request('/api/settings/global', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ defaultModel: 'claude-sonnet-4-20250514' }),
+    })
+
+    expect(res.status).toBe(200)
+    const data = (await res.json()) as Record<string, string>
+    expect(data.notionMcpKey).toBe(MASKED_SECRET)
+    expect(JSON.stringify(data)).not.toContain('ntn_real_key')
+  })
+
+  it('returns 500 on service error', async () => {
+    vi.mocked(settingsService.updateGlobalSettings).mockImplementation(() => {
+      throw new Error('Write failed')
+    })
+
+    const res = await app.request('/api/settings/global', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ defaultModel: 'bad' }),
+    })
+
+    expect(res.status).toBe(500)
+    const data = await res.json()
+    expect(data.error).toBe('Write failed')
+  })
+
+  it('returns 400 when the worktrees path is invalid', async () => {
+    vi.mocked(settingsService.updateGlobalSettings).mockImplementation(() => {
+      const err = new Error('Worktrees path cannot contain parent directory traversal (`..`)')
+      err.name = 'InvalidWorktreesPathError'
+      throw err
+    })
+
+    const res = await app.request('/api/settings/global', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ worktreesPath: '../outside' }),
+    })
+
+    expect(res.status).toBe(400)
+    const data = await res.json()
+    expect(data.error).toContain('parent directory traversal')
+  })
+})
+
+describe('GET /api/settings/projects', () => {
+  it('returns project list', async () => {
+    vi.mocked(settingsService.listProjects).mockReturnValue([fakeProject])
+
+    const res = await app.request('/api/settings/projects')
+    expect(res.status).toBe(200)
+    const data = await res.json()
+    expect(data).toEqual([fakeProject])
+    expect(settingsService.listProjects).toHaveBeenCalledOnce()
+  })
+
+  it('returns empty array when no projects', async () => {
+    vi.mocked(settingsService.listProjects).mockReturnValue([])
+
+    const res = await app.request('/api/settings/projects')
+    expect(res.status).toBe(200)
+    const data = await res.json()
+    expect(data).toEqual([])
+  })
+})
+
+describe('GET /api/settings/projects/:encodedPath', () => {
+  it('returns project settings for valid path', async () => {
+    vi.mocked(settingsService.getProjectSettings).mockReturnValue(fakeProject)
+    const encoded = encodeProjectPath('/home/user/project')
+
+    const res = await app.request(`/api/settings/projects/${encoded}`)
+    expect(res.status).toBe(200)
+    const data = await res.json()
+    expect(data).toEqual(fakeProject)
+    expect(settingsService.getProjectSettings).toHaveBeenCalledWith('/home/user/project')
+  })
+
+  it('returns 404 for unknown project', async () => {
+    vi.mocked(settingsService.getProjectSettings).mockReturnValue(null)
+    const encoded = encodeProjectPath('/nonexistent/path')
+
+    const res = await app.request(`/api/settings/projects/${encoded}`)
+    expect(res.status).toBe(404)
+    const data = await res.json()
+    expect(data.error).toContain('Project not found')
+  })
+})
+
+describe('PUT /api/settings/projects/:encodedPath', () => {
+  it('upserts project settings', async () => {
+    vi.mocked(settingsService.upsertProject).mockReturnValue(fakeProject)
+    const encoded = encodeProjectPath('/home/user/project')
+
+    const res = await app.request(`/api/settings/projects/${encoded}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ displayName: 'My Project', defaultSourceBranch: 'main' }),
+    })
+
+    expect(res.status).toBe(200)
+    const data = await res.json()
+    expect(data).toEqual(fakeProject)
+    expect(settingsService.upsertProject).toHaveBeenCalledWith('/home/user/project', {
+      displayName: 'My Project',
+      defaultSourceBranch: 'main',
+    })
+  })
+
+  it('returns 500 on service error', async () => {
+    vi.mocked(settingsService.upsertProject).mockImplementation(() => {
+      throw new Error('Validation failed')
+    })
+    const encoded = encodeProjectPath('/home/user/project')
+
+    const res = await app.request(`/api/settings/projects/${encoded}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ displayName: '' }),
+    })
+
+    expect(res.status).toBe(500)
+    const data = await res.json()
+    expect(data.error).toBe('Validation failed')
+  })
+})
+
+describe('DELETE /api/settings/projects/:encodedPath', () => {
+  it('deletes project and returns 204', async () => {
+    vi.mocked(settingsService.deleteProject).mockReturnValue(undefined as any)
+    const encoded = encodeProjectPath('/home/user/project')
+
+    const res = await app.request(`/api/settings/projects/${encoded}`, { method: 'DELETE' })
+    expect(res.status).toBe(204)
+    expect(settingsService.deleteProject).toHaveBeenCalledWith('/home/user/project')
+  })
+
+  it('returns 500 on service error', async () => {
+    vi.mocked(settingsService.deleteProject).mockImplementation(() => {
+      throw new Error('Delete failed')
+    })
+    const encoded = encodeProjectPath('/home/user/project')
+
+    const res = await app.request(`/api/settings/projects/${encoded}`, { method: 'DELETE' })
+    expect(res.status).toBe(500)
+    const data = await res.json()
+    expect(data.error).toBe('Delete failed')
+  })
+})
+
+describe('network routes', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('GET /network returns state + urls', async () => {
+    vi.mocked(settingsService.getGlobalSettings).mockReturnValue({
+      networkAccessEnabled: true,
+      networkAccessToken: 'tok',
+      networkAccessBehindProxy: false,
+    } as never)
+    const res = await app.request('/api/settings/network')
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({
+      enabled: true,
+      token: 'tok',
+      behindProxy: false,
+      urls: ['http://192.168.1.5:3300'],
+    })
+  })
+
+  it('POST /network enabling generates a token and flags restartRequired', async () => {
+    vi.mocked(settingsService.getGlobalSettings).mockReturnValue({
+      networkAccessEnabled: false,
+      networkAccessToken: '',
+    } as never)
+    vi.mocked(settingsService.updateNetworkAccessSettings).mockImplementation(
+      (patch) => ({ networkAccessEnabled: true, networkAccessToken: 'fresh-token', ...patch }) as never,
+    )
+    const res = await app.request('/api/settings/network', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: true }),
+    })
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.restartRequired).toBe(true)
+    expect(body.token).toBe('fresh-token')
+    expect(settingsService.updateNetworkAccessSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ networkAccessEnabled: true, networkAccessToken: 'fresh-token' }),
+    )
+  })
+
+  it('POST /network regenerate replaces the token without restart', async () => {
+    vi.mocked(settingsService.getGlobalSettings).mockReturnValue({
+      networkAccessEnabled: true,
+      networkAccessToken: 'old',
+    } as never)
+    vi.mocked(settingsService.updateNetworkAccessSettings).mockImplementation(
+      (patch) => ({ networkAccessEnabled: true, networkAccessToken: 'old', ...patch }) as never,
+    )
+    const res = await app.request('/api/settings/network', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ regenerate: true }),
+    })
+    const body = await res.json()
+    expect(body.restartRequired).toBe(false)
+    expect(body.token).toBe('fresh-token')
+  })
+
+  it('POST /network sets behindProxy without requiring a restart', async () => {
+    vi.mocked(settingsService.getGlobalSettings).mockReturnValue({
+      networkAccessEnabled: true,
+      networkAccessToken: 'tok',
+      networkAccessBehindProxy: false,
+    } as never)
+    vi.mocked(settingsService.updateNetworkAccessSettings).mockImplementation(
+      (patch) =>
+        ({ networkAccessEnabled: true, networkAccessToken: 'tok', networkAccessBehindProxy: false, ...patch }) as never,
+    )
+    const res = await app.request('/api/settings/network', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ behindProxy: true }),
+    })
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.behindProxy).toBe(true)
+    expect(body.restartRequired).toBe(false)
+    expect(settingsService.updateNetworkAccessSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ networkAccessBehindProxy: true }),
+    )
+  })
+
+  it('GET /network/ping returns ok', async () => {
+    const res = await app.request('/api/settings/network/ping')
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ ok: true })
+  })
+})
+
+describe('GET /ws-events-retention-preview', () => {
+  it('refuses a negative window instead of counting something absurd', async () => {
+    const res = await app.request('/api/settings/ws-events-retention-preview?days=-1&keep=0')
+    expect(res.status).toBe(400)
+  })
+
+  it('counts zero when the window is 0 — retention disabled deletes nothing', async () => {
+    const res = await app.request('/api/settings/ws-events-retention-preview?days=0&keep=0')
+    expect(res.status).toBe(200)
+    expect((await res.json()) as { deletable: number }).toMatchObject({ deletable: 0 })
+  })
+})
+
+describe('GET /api/settings/mcp', () => {
+  it('returns backend connection metadata without credentials or forwarded origins', async () => {
+    vi.mocked(settingsService.getGlobalSettings).mockReturnValue(
+      makeGlobalSettings({ networkAccessEnabled: true, networkAccessToken: 'never-in-metadata' }),
+    )
+    const res = await app.request('/api/settings/mcp', {
+      headers: { 'X-Forwarded-Host': 'untrusted.example', 'X-Forwarded-Proto': 'https' },
+    })
+    expect(res.status).toBe(200)
+    const info = await res.json()
+    expect(info.localUrl).toBe('http://127.0.0.1:3300/api/mcp')
+    expect(info.lanUrls).toEqual(['http://192.168.1.5:3300/api/mcp'])
+    expect(info.stdio?.env.KOBO_DB_PATH).toBe('/tmp/kobo-custom-db/kobo.db')
+    expect(JSON.stringify(info)).not.toContain('never-in-metadata')
+    expect(JSON.stringify(info)).not.toContain('untrusted.example')
+  })
+})

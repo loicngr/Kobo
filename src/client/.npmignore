@@ -1,0 +1,5 @@
+# Empty — intentionally overrides src/client/.gitignore for npm publish so
+# src/client/dist/spa/ (the built Quasar SPA) ends up in the tarball. The root
+# package.json `files` field is the authoritative allowlist for what is
+# published; we just need this file to exist so npm doesn't fall back to the
+# nested .gitignore here.

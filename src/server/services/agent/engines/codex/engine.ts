@@ -1,0 +1,723 @@
+import type { ChildProcess } from 'node:child_process'
+import { getPackageVersion } from '../../../../utils/paths.js'
+import { isWorkspacePermissionAllowed } from '../../../workspace-permission-policy-service.js'
+import { createStreamingBatcher } from '../../streaming-batcher.js'
+import { createTurnLiveness } from '../../turn-liveness.js'
+import {
+  AGENT_NO_LONGER_RUNNING_TEXT,
+  type AgentEngine,
+  type AgentEvent,
+  type EngineProcess,
+  type StartOptions,
+} from '../types.js'
+import { CODEX_CAPABILITIES } from './capabilities.js'
+import { createAppServerClient } from './client.js'
+import {
+  createMapperState,
+  emitSessionStarted,
+  handleAgentMessageDelta,
+  handleItemCompleted,
+  handleItemStarted,
+  handleRateLimitsUpdated,
+  handleTurnCompleted,
+  QUOTA_PATTERN,
+  tryEmitQuota,
+} from './event-mapper.js'
+import { buildCodexOptions } from './options-builder.js'
+import type {
+  AgentMessageDeltaNotification,
+  ErrorNotification,
+  FileChangeItem,
+  ItemCompletedNotification,
+  ItemStartedNotification,
+  ThreadStartResponse,
+  TurnCompletedNotification,
+} from './protocol/types.js'
+import { buildResponseForResolve, handleServerRequest, type PendingApproval } from './server-requests.js'
+import { spawnAppServer } from './spawn.js'
+
+/** Long enough for normal tool work, short enough to recover a lost turn event. */
+export const CODEX_TURN_IDLE_TIMEOUT_MS = 120_000
+export const CODEX_TOOL_IDLE_TIMEOUT_MS = 30 * 60_000
+export const CODEX_GRACEFUL_INTERRUPT_TIMEOUT_MS = 3_000
+/** Grace given to a SIGTERM before the child is killed outright. */
+const CODEX_FORCE_KILL_TIMEOUT_MS = 3_000
+// Safety net while `turnLiveness` is paused for background subagents: that
+// pause is deliberately unbounded (a legitimate subagent can run long), but
+// if a thread never reports a terminal status (dropped notification, or the
+// sub-thread's own process hanging), nothing else would ever resume it or
+// resolve `turnDonePromise` — the session would hang forever. Generous
+// window, refreshed on every observed subagent-thread status change.
+export const CODEX_SUBAGENT_STALL_TIMEOUT_MS = 10 * 60_000
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/** A sent signal is only a request; resolve true exclusively on confirmed exit. */
+function signalAndWaitForExit(child: ChildProcess, signal: NodeJS.Signals, timeoutMs: number): Promise<boolean> {
+  if (child.exitCode !== null || child.signalCode !== null || child.pid === undefined) return Promise.resolve(true)
+  return new Promise((resolve, reject) => {
+    const cleanup = (): void => {
+      clearTimeout(timer)
+      child.removeListener('exit', onExit)
+    }
+    const onExit = (): void => {
+      cleanup()
+      resolve(true)
+    }
+    const timer = setTimeout(() => {
+      cleanup()
+      resolve(false)
+    }, timeoutMs)
+    timer.unref?.()
+    // Install before signalling so an immediate exit cannot be missed.
+    child.once('exit', onExit)
+    try {
+      child.kill(signal)
+    } catch (err) {
+      cleanup()
+      reject(err)
+    }
+  })
+}
+
+class CodexTurnTimeoutError extends Error {
+  constructor() {
+    super('Codex stopped reporting activity for this turn')
+    this.name = 'CodexTurnTimeoutError'
+  }
+}
+
+/**
+ * Heuristic for detecting a stale/expired thread id on `thread/resume`.
+ * Canonical wording isn't captured yet — when matched, the engine emits
+ * `error/resume_failed` so the orchestrator can restart with a fresh thread.
+ */
+export const RESUME_FAILED_PATTERN =
+  /(thread\b.*\bnot found|session\b.*\bnot found|no\s+(such\s+)?thread|thread.*expired|conversation\b.*\bnot found|invalid\s+thread\s+id)/i
+
+export function createCodexEngine(): AgentEngine {
+  return {
+    id: 'codex',
+    displayName: 'OpenAI Codex',
+    capabilities: CODEX_CAPABILITIES,
+
+    async start(options: StartOptions, onEvent: (ev: AgentEvent) => void): Promise<EngineProcess> {
+      const { threadParams, input, isResume, collaborationMode } = buildCodexOptions({
+        prompt: options.prompt,
+        model: options.model,
+        effort: options.effort,
+        agentPermissionMode: options.agentPermissionMode ?? 'bypass',
+        resumeFromEngineSessionId: options.resumeFromEngineSessionId,
+        workingDir: options.workingDir,
+        mcpServers: options.mcpServers,
+      })
+
+      const mapperState = createMapperState()
+      const abortController = new AbortController()
+      const pendingByCallId = new Map<string, PendingApproval>()
+      let iteratorRunning = false
+      let userInterrupted = false
+      let discoveredSessionId: string | undefined = options.resumeFromEngineSessionId
+      let activeTurnId: string | undefined
+      let steerChain: Promise<void> = Promise.resolve()
+      let gracefulInterruptPromise: Promise<void> | undefined
+      let readySettled = false
+      let resolveReady!: () => void
+      let rejectReady!: (error: Error) => void
+      const readyPromise = new Promise<void>((resolve, reject) => {
+        resolveReady = resolve
+        rejectReady = reject
+      })
+      void readyPromise.catch(() => {})
+
+      const emitDirect = (ev: AgentEvent): void => {
+        try {
+          onEvent(ev)
+        } catch (err) {
+          console.error('[codex-engine] onEvent handler threw:', err)
+        }
+      }
+      const streamingBatcher = createStreamingBatcher(emitDirect)
+      const pendingToolCalls = new Set<string>()
+      const safeEmit = (ev: AgentEvent): void => {
+        if (ev.kind === 'tool:call') pendingToolCalls.add(ev.toolCallId)
+        if (ev.kind === 'tool:result') pendingToolCalls.delete(ev.toolCallId)
+        if (ev.kind === 'tool:call' || ev.kind === 'tool:result') {
+          turnLiveness.setTimeoutMs(pendingToolCalls.size ? CODEX_TOOL_IDLE_TIMEOUT_MS : CODEX_TURN_IDLE_TIMEOUT_MS)
+        }
+        streamingBatcher.push(ev)
+      }
+
+      let rejectChildFailure!: (error: Error) => void
+      const childFailurePromise = new Promise<never>((_resolve, reject) => {
+        rejectChildFailure = reject
+      })
+      void childFailurePromise.catch(() => {})
+
+      const child = spawnAppServer({ cwd: options.workingDir, env: options.env, signal: abortController.signal })
+      let childExited = false
+      let resolveChildExited!: () => void
+      const childExitedPromise = new Promise<void>((resolve) => {
+        resolveChildExited = resolve
+      })
+      const confirmChildExited = (): void => {
+        childExited = true
+        resolveChildExited()
+      }
+      let shutdownPromise: Promise<void> | undefined
+      const terminateChild = (): Promise<void> => {
+        if (childExited) return Promise.resolve()
+        shutdownPromise ??= (async () => {
+          if (!(await signalAndWaitForExit(child, 'SIGTERM', CODEX_FORCE_KILL_TIMEOUT_MS))) {
+            console.warn('[codex] app-server ignored SIGTERM — sending SIGKILL')
+            if (!(await signalAndWaitForExit(child, 'SIGKILL', CODEX_FORCE_KILL_TIMEOUT_MS))) {
+              throw new Error('Codex app-server did not exit after SIGKILL')
+            }
+          }
+          confirmChildExited()
+        })()
+        return shutdownPromise
+      }
+
+      child.on('error', (error: NodeJS.ErrnoException) => {
+        const isExpectedAbort =
+          abortController.signal.aborted && (error.code === 'ABORT_ERR' || error.name === 'AbortError')
+        if (isExpectedAbort) return
+        if (child.pid === undefined) confirmChildExited()
+        console.error('[codex] child process error:', error)
+        rejectChildFailure(error)
+      })
+      child.once('exit', (code, signal) => {
+        confirmChildExited()
+        if (!iteratorRunning || abortController.signal.aborted) return
+        const detail = code === null ? `signal ${signal ?? 'unknown'}` : `code ${code}`
+        rejectChildFailure(new Error(`Codex app-server exited unexpectedly with ${detail}`))
+      })
+
+      const waitForChild = <T>(operation: Promise<T>): Promise<T> => Promise.race([operation, childFailurePromise])
+
+      if (child.stderr) {
+        child.stderr.setEncoding('utf8')
+        child.stderr.on('data', (chunk: string) => {
+          const text = chunk.toString()
+          if (QUOTA_PATTERN.test(text)) {
+            tryEmitQuota(mapperState, safeEmit, text.trim())
+          } else {
+            console.warn('[codex] stderr:', text.trimEnd())
+          }
+        })
+      }
+
+      let resolveTurnDone!: () => void
+      let rejectTurnDone!: (err: Error) => void
+      const activeSubagentThreads = new Map<string, { toolCallId: string; description?: string; taskType?: string }>()
+      let waitingForBackgroundSubagents = false
+      let watchdogEnded = false
+      const turnDonePromise = new Promise<void>((resolve, reject) => {
+        resolveTurnDone = resolve
+        rejectTurnDone = reject
+      })
+      let subagentStallTimer: ReturnType<typeof setTimeout> | undefined
+      const clearSubagentStallWatchdog = (): void => {
+        if (!subagentStallTimer) return
+        clearTimeout(subagentStallTimer)
+        subagentStallTimer = undefined
+      }
+      // Re-armed on every observed subagent-thread status change so the
+      // deadline tracks the last activity, not the start of the wait.
+      const armSubagentStallWatchdog = (): void => {
+        clearSubagentStallWatchdog()
+        if (!waitingForBackgroundSubagents || pendingByCallId.size > 0 || activeSubagentThreads.size === 0) return
+        subagentStallTimer = setTimeout(() => {
+          subagentStallTimer = undefined
+          console.warn(
+            `[codex-engine] Background subagent thread(s) still tracked active ${CODEX_SUBAGENT_STALL_TIMEOUT_MS}ms after the turn completed — forcing session drain.`,
+          )
+          activeSubagentThreads.clear()
+          // Forced, unclean termination (a thread may still be alive
+          // server-side) — never report it as a normal completion, so
+          // auto-loop doesn't treat an orphaned run as forward progress.
+          watchdogEnded = true
+          safeEmit({
+            kind: 'error',
+            category: 'other',
+            code: 'subagent_idle_timeout',
+            message: 'Session force-ended: background subagents stopped reporting activity (watchdog).',
+          })
+          if (waitingForBackgroundSubagents) resolveTurnDone()
+        }, CODEX_SUBAGENT_STALL_TIMEOUT_MS)
+        subagentStallTimer.unref?.()
+      }
+      const finishBackgroundSubagent = (threadId: string, alreadyEmittedToolCallId?: string): void => {
+        const tracked = activeSubagentThreads.get(threadId)
+        if (!tracked) return
+        activeSubagentThreads.delete(threadId)
+        if (tracked.toolCallId !== alreadyEmittedToolCallId) {
+          safeEmit({
+            kind: 'subagent:progress',
+            toolCallId: tracked.toolCallId,
+            status: 'done',
+            description: tracked.description,
+            taskType: tracked.taskType,
+          })
+        }
+        if (waitingForBackgroundSubagents) {
+          if (activeSubagentThreads.size === 0) {
+            clearSubagentStallWatchdog()
+            resolveTurnDone()
+          } else {
+            armSubagentStallWatchdog()
+          }
+        }
+      }
+      const turnLiveness = createTurnLiveness({
+        timeoutMs: CODEX_TURN_IDLE_TIMEOUT_MS,
+        onTimeout() {
+          watchdogEnded = true
+          safeEmit({
+            kind: 'error',
+            category: 'other',
+            code: 'stream_idle_timeout',
+            message: 'Codex stopped reporting activity for this turn',
+          })
+          rejectTurnDone(new CodexTurnTimeoutError())
+        },
+      })
+      void turnDonePromise.catch(() => {})
+      abortController.signal.addEventListener('abort', () => {
+        const err = new Error('AbortError')
+        err.name = 'AbortError'
+        rejectTurnDone(err)
+      })
+
+      const fileChanges = new Map<string, FileChangeItem>()
+      const isParentTurn = (threadId: string | undefined, turnId?: string): boolean =>
+        (!threadId || threadId === discoveredSessionId) && (!activeTurnId || !turnId || turnId === activeTurnId)
+      const otherTurnMappers = new Map<string, ReturnType<typeof createMapperState>>()
+      const mapTurnEvents = (
+        notification: { threadId: string; turnId: string },
+        map: (state: ReturnType<typeof createMapperState>) => AgentEvent[],
+      ): AgentEvent[] => {
+        if (isParentTurn(notification.threadId, notification.turnId)) return map(mapperState)
+        const key = JSON.stringify([notification.threadId, notification.turnId])
+        let state = otherTurnMappers.get(key)
+        if (!state) {
+          state = createMapperState()
+          otherTurnMappers.set(key, state)
+        }
+        // Child output remains visible, but its failures/compaction/markers
+        // cannot control the parent session or its auto-loop lifecycle.
+        return map(state).filter((event) => event.kind !== 'error' && !event.kind.startsWith('session:'))
+      }
+      const itemKey = (threadId: string, turnId: string, itemId: string): string =>
+        JSON.stringify([threadId, turnId, itemId])
+      const client = createAppServerClient({
+        stdin: child.stdin!,
+        stdout: child.stdout!,
+        clientInfo: { name: 'kobo', version: getPackageVersion() },
+
+        onNotification(method: string, params: unknown) {
+          turnLiveness.activity()
+          const notification = params as { threadId?: string; turnId?: string }
+          if (notification?.threadId && activeSubagentThreads.has(notification.threadId)) {
+            armSubagentStallWatchdog()
+          }
+          // Ignored notifications — harmless bookkeeping by the server
+          if (method === 'mcpServer/startupStatus/updated') {
+            const status = (params ?? {}) as Record<string, unknown>
+            const rawStatus = String(status.status ?? status.state ?? 'starting').toLowerCase()
+            const normalized =
+              rawStatus.includes('error') || rawStatus.includes('fail')
+                ? 'error'
+                : rawStatus.includes('ready') || rawStatus.includes('running')
+                  ? 'ready'
+                  : 'starting'
+            const serverName = String(status.serverName ?? status.name ?? status.id ?? 'MCP')
+            const rawMessage = typeof status.message === 'string' ? status.message : undefined
+            const message = rawMessage?.replace(/(token|api[_-]?key|secret)\s*[:=]\s*\S+/gi, '$1=[redacted]')
+            safeEmit({ kind: 'mcp:status', serverName, status: normalized, message })
+            return
+          }
+          if (method === 'thread/status/changed') {
+            const notification = params as { threadId?: string; status?: { type?: string } }
+            if (notification.threadId && notification.status?.type !== 'active') {
+              finishBackgroundSubagent(notification.threadId)
+            }
+            return
+          }
+          if (method === 'thread/started' || method === 'remoteControl/status/changed' || method === 'turn/started') {
+            return
+          }
+
+          if (method === 'item/started') {
+            const n = params as ItemStartedNotification
+            if (n.item.type === 'fileChange') fileChanges.set(itemKey(n.threadId, n.turnId, n.item.id), n.item)
+            const events = mapTurnEvents(n, (state) => handleItemStarted(n.item, state))
+            for (const ev of events) safeEmit(ev)
+            if (n.item.type === 'collabAgentToolCall' && n.item.tool === 'spawnAgent') {
+              const progress = events.find(
+                (event): event is Extract<AgentEvent, { kind: 'subagent:progress' }> =>
+                  event.kind === 'subagent:progress',
+              )
+              if (progress) {
+                for (const threadId of n.item.receiverThreadIds) {
+                  activeSubagentThreads.set(threadId, {
+                    toolCallId: progress.toolCallId,
+                    description: progress.description,
+                    taskType: progress.taskType,
+                  })
+                }
+              }
+            }
+            return
+          }
+
+          if (method === 'item/completed') {
+            const n = params as ItemCompletedNotification
+            if (n.item.type === 'fileChange') fileChanges.set(itemKey(n.threadId, n.turnId, n.item.id), n.item)
+            const events = mapTurnEvents(n, (state) => handleItemCompleted(n.item, state))
+            for (const ev of events) safeEmit(ev)
+            if (n.item.type === 'collabAgentToolCall') {
+              const progress = events.find(
+                (event): event is Extract<AgentEvent, { kind: 'subagent:progress' }> =>
+                  event.kind === 'subagent:progress',
+              )
+              for (const [threadId, agentState] of Object.entries(n.item.agentsStates)) {
+                if (agentState.status === 'pendingInit' || agentState.status === 'running') {
+                  if (progress) {
+                    activeSubagentThreads.set(threadId, {
+                      toolCallId: progress.toolCallId,
+                      description: progress.description,
+                      taskType: progress.taskType,
+                    })
+                  }
+                } else {
+                  finishBackgroundSubagent(threadId, progress?.status === 'done' ? progress.toolCallId : undefined)
+                }
+              }
+            }
+            return
+          }
+
+          if (method === 'item/agentMessage/delta') {
+            const n = params as AgentMessageDeltaNotification
+            for (const ev of mapTurnEvents(n, (state) => handleAgentMessageDelta(n, state))) safeEmit(ev)
+            return
+          }
+
+          if (method === 'turn/completed') {
+            const n = params as TurnCompletedNotification
+            for (const key of fileChanges.keys()) {
+              const [threadId, turnId] = JSON.parse(key)
+              if (threadId === n.threadId && turnId === n.turn.id) fileChanges.delete(key)
+            }
+            if (isParentTurn(n.threadId, n.turn.id)) {
+              for (const ev of handleTurnCompleted(n, mapperState)) safeEmit(ev)
+              if (n.turn?.status === 'completed' && activeSubagentThreads.size > 0) {
+                waitingForBackgroundSubagents = true
+                turnLiveness.pause()
+                armSubagentStallWatchdog()
+              } else {
+                if (n.turn?.status === 'completed') safeEmit({ kind: 'turn:completed' })
+                resolveTurnDone()
+              }
+            }
+            return
+          }
+
+          if (method === 'thread/tokenUsage/updated') {
+            const p = params as {
+              tokenUsage: {
+                last: {
+                  inputTokens: number
+                  outputTokens: number
+                  reasoningOutputTokens: number
+                  cachedInputTokens: number
+                }
+              }
+            }
+            if (p?.tokenUsage?.last) {
+              const last = p.tokenUsage.last
+              safeEmit({
+                kind: 'usage',
+                inputTokens: last.inputTokens,
+                outputTokens: last.outputTokens + last.reasoningOutputTokens,
+                cacheRead: last.cachedInputTokens,
+              })
+            }
+            return
+          }
+
+          if (method === 'account/rateLimits/updated') {
+            for (const ev of handleRateLimitsUpdated(params, mapperState)) safeEmit(ev)
+            return
+          }
+
+          if (method === 'error') {
+            const n = params as ErrorNotification
+            if (!isParentTurn(n.threadId, n.turnId)) return
+            if (n.willRetry) return
+            const msg = n?.error?.message ?? 'unknown error'
+            if (QUOTA_PATTERN.test(msg)) {
+              tryEmitQuota(mapperState, safeEmit, msg)
+            } else {
+              mapperState.sawErrorResult = true
+              safeEmit({ kind: 'error', category: 'other', message: msg })
+            }
+            return
+          }
+        },
+
+        onServerRequest(id: number | string, method: string, params: unknown) {
+          handleServerRequest({
+            requestId: id,
+            method,
+            params,
+            emit: safeEmit,
+            register(callId, pending) {
+              pendingByCallId.set(callId, pending)
+              turnLiveness.pause()
+              clearSubagentStallWatchdog()
+            },
+            respondError: (reqId, code, message) => client.peer.respondError(reqId, code, message),
+            respond: (reqId, result) => client.peer.respond(reqId, result),
+            resolveFileChange: (params) => {
+              if (
+                typeof params.threadId !== 'string' ||
+                typeof params.turnId !== 'string' ||
+                typeof params.itemId !== 'string'
+              )
+                return undefined
+              const item = fileChanges.get(itemKey(params.threadId, params.turnId, params.itemId))
+              return item ? { changes: item.changes, cwd: options.workingDir } : undefined
+            },
+            autoApprove: (toolName, payload) =>
+              isWorkspacePermissionAllowed(options.workspaceId, { engine: 'codex', toolName, payload }),
+          })
+        },
+
+        onDisconnect: rejectChildFailure,
+        onError(err: Error) {
+          console.error('[codex] JSON-RPC transport error:', err)
+          rejectTurnDone(err)
+        },
+      })
+
+      const iteratorPromise = (async () => {
+        iteratorRunning = true
+        try {
+          // Armed BEFORE the handshake (D2). Previously the probe only started
+          // once `turn/start` had answered, leaving initialize / thread.start /
+          // turn.start entirely uncovered — the exact window where a broken
+          // install hangs.
+          turnLiveness.start()
+          await waitForChild(client.connect())
+
+          let threadResponse: ThreadStartResponse
+          if (isResume && options.resumeFromEngineSessionId) {
+            threadResponse = await waitForChild(
+              client.resumeThread({
+                threadId: options.resumeFromEngineSessionId,
+                cwd: options.workingDir,
+                persistExtendedHistory: false,
+                ...(threadParams.model != null ? { model: threadParams.model } : {}),
+                ...(threadParams.approvalPolicy != null ? { approvalPolicy: threadParams.approvalPolicy } : {}),
+                ...(threadParams.sandbox != null ? { sandbox: threadParams.sandbox } : {}),
+                ...(threadParams.modelReasoningEffort != null
+                  ? { modelReasoningEffort: threadParams.modelReasoningEffort }
+                  : {}),
+                ...(threadParams.config != null ? { config: threadParams.config } : {}),
+              }),
+            )
+          } else {
+            threadResponse = await waitForChild(client.startThread(threadParams))
+            discoveredSessionId = threadResponse.thread.id
+          }
+
+          // "auto" is a Kōbō sentinel, never a provider model identifier. The
+          // collaboration override must use the model the app-server resolved.
+          const model = threadParams.model ?? threadResponse.model
+          if (typeof model !== 'string' || !model.trim() || model === 'auto') {
+            throw new Error('Codex did not return a resolved model. Select an explicit model or update the Codex CLI.')
+          }
+
+          for (const ev of emitSessionStarted(discoveredSessionId!, mapperState)) safeEmit(ev)
+
+          // collaborationMode is sticky server-side — always send it explicitly,
+          // never omit (would leave a Bypass turn stuck in a previous Plan mode).
+          const initialTurn = await waitForChild(
+            client.startTurn({
+              threadId: discoveredSessionId!,
+              input,
+              collaborationMode: { ...collaborationMode, settings: { ...collaborationMode.settings, model } },
+            }),
+          )
+          activeTurnId = initialTurn.turn.id
+          turnLiveness.activity()
+          readySettled = true
+          resolveReady()
+
+          await waitForChild(turnDonePromise)
+          turnLiveness.stop()
+
+          const reason = mapperState.sawErrorResult
+            ? 'error'
+            : mapperState.sawTurnInterrupted
+              ? 'killed'
+              : watchdogEnded
+                ? 'watchdog'
+                : 'completed'
+          safeEmit({
+            kind: 'session:ended',
+            reason,
+            exitCode: reason === 'completed' ? 0 : null,
+          })
+        } catch (err) {
+          turnLiveness.stop()
+          const error = err as Error
+          const message = error.message ?? String(err)
+          if (!readySettled) {
+            readySettled = true
+            rejectReady(error)
+          }
+          const isAbort = userInterrupted || error.name === 'AbortError' || abortController.signal.aborted
+          const isResumeAttempt = options.resumeFromEngineSessionId !== undefined
+
+          if (isAbort) {
+            safeEmit({ kind: 'session:ended', reason: 'killed', exitCode: null })
+          } else if (error.name === 'CodexTurnTimeoutError') {
+            safeEmit({
+              kind: 'session:ended',
+              reason: mapperState.sawErrorResult ? 'error' : 'watchdog',
+              exitCode: null,
+            })
+          } else if (QUOTA_PATTERN.test(message)) {
+            tryEmitQuota(mapperState, safeEmit, message)
+            safeEmit({ kind: 'session:ended', reason: 'error', exitCode: null })
+          } else if (isResumeAttempt && RESUME_FAILED_PATTERN.test(message)) {
+            safeEmit({ kind: 'error', category: 'resume_failed', message })
+            safeEmit({ kind: 'session:ended', reason: 'error', exitCode: null })
+          } else {
+            safeEmit({ kind: 'error', category: 'spawn_failed', message })
+            safeEmit({ kind: 'session:ended', reason: 'error', exitCode: null })
+          }
+        } finally {
+          turnLiveness.stop()
+          clearSubagentStallWatchdog()
+          streamingBatcher.close()
+          iteratorRunning = false
+          // Drain any outstanding approval/elicitation request (SDK terminated
+          // while awaiting a human decision) — without a response, Codex's own
+          // process would otherwise wait forever for a reply that never comes.
+          for (const pending of pendingByCallId.values()) {
+            try {
+              client.peer.respondError(pending.requestId, -32000, 'session ended')
+            } catch {
+              // best-effort
+            }
+          }
+          fileChanges.clear()
+          otherTurnMappers.clear()
+          pendingByCallId.clear()
+          pendingToolCalls.clear()
+          client.close()
+          await terminateChild().catch((error) => console.error('[codex] runtime shutdown unconfirmed:', error))
+        }
+      })()
+
+      const engineProcess: EngineProcess = {
+        ready: readyPromise,
+        closed: Promise.all([iteratorPromise, childExitedPromise]).then(() => {}),
+        get pid() {
+          return child.pid
+        },
+        get engineSessionId() {
+          return discoveredSessionId
+        },
+        isAlive(): boolean {
+          return iteratorRunning || !childExited
+        },
+        sendMessage(text: string): Promise<void> {
+          const steer = async (): Promise<void> => {
+            await readyPromise
+            // `readyPromise` only ever resolves once, on the FIRST turn
+            // reaching `turn/start` — it says nothing about whether the
+            // session has since ended. A one-prompt-one-turn session that
+            // completed naturally (or was stopped) already ran the `finally`
+            // block below: `client.close()` tore down the JSON-RPC peer and
+            // `child.kill('SIGTERM')` killed the process. Without this check
+            // a message typed after that point would either write to an
+            // already-closed peer or sit for the full 120s JSON-RPC timeout
+            // before failing — and neither shape was recognised as "resume
+            // instead of rejecting". Fail fast instead, reusing the same
+            // substring Claude's engine throws once its stdin is closed, so
+            // the orchestrator's existing pattern covers this case too.
+            if (!iteratorRunning) {
+              throw new Error(`Codex ${AGENT_NO_LONGER_RUNNING_TEXT}`)
+            }
+            if (!discoveredSessionId || !activeTurnId) {
+              throw new Error('Codex session is not ready to receive a message')
+            }
+            const response = await client.steerTurn({
+              threadId: discoveredSessionId,
+              expectedTurnId: activeTurnId,
+              input: [{ type: 'text', text, text_elements: [] }],
+            })
+            activeTurnId = response.turnId
+          }
+          const queued = steerChain.then(steer)
+          steerChain = queued.catch(() => {})
+          return queued
+        },
+        interrupt() {
+          userInterrupted = true
+          if (gracefulInterruptPromise) return
+          gracefulInterruptPromise = (async () => {
+            if (discoveredSessionId && activeTurnId) {
+              await Promise.race([
+                client.interruptTurn({ threadId: discoveredSessionId, turnId: activeTurnId }).catch(() => {}),
+                wait(CODEX_GRACEFUL_INTERRUPT_TIMEOUT_MS),
+              ])
+            }
+            await Promise.race([turnDonePromise.catch(() => {}), wait(CODEX_GRACEFUL_INTERRUPT_TIMEOUT_MS)])
+            if (iteratorRunning) abortController.abort()
+          })()
+        },
+        async stop() {
+          engineProcess.interrupt()
+          await gracefulInterruptPromise
+          try {
+            await iteratorPromise
+          } catch {
+            // swallow — best effort
+          }
+          try {
+            child.stdin?.end()
+          } catch {
+            // swallow
+          }
+          await terminateChild()
+        },
+        resolvePendingUserInput(callId: string, response): boolean {
+          const pending = pendingByCallId.get(callId)
+          if (!pending) return false
+          pendingByCallId.delete(callId)
+          // Only resume the idle-timeout clock once every outstanding
+          // approval has been answered — a sibling request may still be
+          // waiting on a human decision.
+          if (pendingByCallId.size === 0) {
+            if (waitingForBackgroundSubagents) armSubagentStallWatchdog()
+            else turnLiveness.resume()
+          }
+          const result = buildResponseForResolve(pending, response)
+          client.peer.respond(pending.requestId, result)
+          return true
+        },
+      }
+
+      return engineProcess
+    },
+  }
+}

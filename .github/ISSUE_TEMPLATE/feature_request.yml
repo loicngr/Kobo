@@ -1,0 +1,59 @@
+name: Feature request
+description: Suggest a new capability or improvement
+title: "[feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion. The more context you give on the "why", the better we can evaluate it.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the use case or pain point that motivates this request.
+      placeholder: When I'm running a long agent session I can't tell which subagents are still active…
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: How you'd like it to work. Mockups or pseudo-code welcome.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you've considered
+      description: Any workarounds you've tried, or other approaches you rejected.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of Kōbō does this touch?
+      options:
+        - Backend (Hono / services)
+        - Frontend (Vue / Quasar)
+        - MCP server (kobo-tasks)
+        - Database / migrations
+        - Notion integration
+        - Dev server orchestration
+        - Git / PR workflow
+        - Internationalization (i18n)
+        - CI / tooling
+        - Other
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Preflight checklist
+      options:
+        - label: I have searched existing issues and discussions for duplicates
+          required: true

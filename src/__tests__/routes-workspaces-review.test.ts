@@ -1,0 +1,882 @@
+import { Hono } from 'hono'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import * as reviewReturns from '../server/services/review-return-service.js'
+
+// ── Mocks (kept in sync with routes-workspaces.test.ts) ──────────────────────
+
+vi.mock('../server/services/workspace-service.js', () => ({
+  createWorkspace: vi.fn(),
+  getWorkspace: vi.fn(),
+  getWorkspaceWithTasks: vi.fn(),
+  listWorkspaces: vi.fn(),
+  updateWorkspaceStatus: vi.fn(),
+  updateWorkspaceName: vi.fn(),
+  updateWorkingBranch: vi.fn(),
+  updateWorktreePath: vi.fn(),
+  updateWorkspaceModel: vi.fn(),
+  updateWorkspaceEngineConfiguration: vi.fn(),
+  updateWorkspaceReasoningEffort: vi.fn(),
+  updateAgentPermissionMode: vi.fn(),
+  deleteWorkspace: vi.fn(),
+  createTask: vi.fn(),
+  getTask: vi.fn(),
+  listTasks: vi.fn(),
+  updateTaskStatus: vi.fn(),
+  updateTaskTitle: vi.fn(),
+  deleteTask: vi.fn(),
+  listSessions: vi.fn(),
+  getLatestSession: vi.fn(),
+  getActiveSession: vi.fn(),
+  createIdleSession: vi.fn(),
+  renameSession: vi.fn(),
+  deleteSession: vi.fn(),
+  archiveWorkspace: vi.fn(),
+  unarchiveWorkspace: vi.fn(),
+  listArchivedWorkspaces: vi.fn(),
+  markWorkspaceRead: vi.fn(),
+  markWorkspaceUnread: vi.fn(),
+  setFavorite: vi.fn(),
+  unsetFavorite: vi.fn(),
+  setWorkspaceTags: vi.fn(),
+}))
+
+vi.mock('../server/services/review-return-service.js', () => ({
+  getReviewReturn: vi.fn().mockReturnValue(null),
+  registerReviewReturn: vi.fn(),
+  restoreReviewConfiguration: vi.fn().mockReturnValue(null),
+}))
+
+vi.mock('../server/services/worktree-service.js', () => ({
+  createWorktree: vi.fn(),
+  removeWorktree: vi.fn(),
+}))
+
+vi.mock('../server/services/agent/orchestrator.js', () => ({
+  startAgent: vi.fn().mockReturnValue({ agentSessionId: 'mock-agent-session-id' }),
+  stopAgent: vi.fn(),
+  stopAgentAndWait: vi.fn().mockResolvedValue('not-running'),
+  sendMessage: vi.fn(),
+  sendMessageForFallback: vi.fn().mockResolvedValue({ status: 'sent', sessionId: 'delivered-session-id' }),
+  getAgentStatus: vi.fn().mockReturnValue(null),
+  getActiveSessionId: vi.fn().mockReturnValue('active-session-id'),
+}))
+
+vi.mock('../server/services/agent/engines/registry.js', async () => {
+  const { CLAUDE_CODE_CAPABILITIES } = await import('../server/services/agent/engines/claude-code/capabilities.js')
+  const { CODEX_CAPABILITIES } = await import('../server/services/agent/engines/codex/capabilities.js')
+  return {
+    listEngines: vi.fn().mockReturnValue([
+      { id: 'claude-code', capabilities: CLAUDE_CODE_CAPABILITIES },
+      { id: 'codex', capabilities: CODEX_CAPABILITIES },
+    ]),
+    resolveEngine: vi.fn(),
+  }
+})
+
+// execFile is promisified at module load. We mock execFile with a
+// [util.promisify.custom] property so that promisify returns our mock.
+const { execFilePromiseMock } = vi.hoisted(() => {
+  const execFilePromiseMock = vi.fn()
+  return { execFilePromiseMock }
+})
+vi.mock('node:child_process', async () => {
+  const actual = await vi.importActual<typeof import('node:child_process')>('node:child_process')
+  const mock = Object.assign(vi.fn(), {
+    [Symbol.for('nodejs.util.promisify.custom')]: execFilePromiseMock,
+  })
+  return {
+    ...actual,
+    execFile: mock,
+    execFileSync: vi.fn(),
+  }
+})
+
+vi.mock('../server/services/pr-template-service.js', () => ({
+  renderPrTemplate: vi.fn().mockReturnValue('rendered prompt'),
+}))
+
+vi.mock('../server/services/notion-service.js', () => ({
+  extractNotionPage: vi.fn(),
+  parseNotionUrl: vi.fn(),
+}))
+
+vi.mock('../server/services/sentry-service.js', () => ({
+  extractSentryIssue: vi.fn(),
+  parseSentryUrl: vi.fn(),
+}))
+
+vi.mock('../server/utils/git-ops.js', () => ({
+  fetchSourceBranch: vi.fn(),
+  deleteLocalBranch: vi.fn(),
+  deleteRemoteBranch: vi.fn(),
+  pushBranch: vi.fn(),
+  pullBranch: vi.fn(),
+  rebaseBranch: vi.fn(),
+  getFileAtRef: vi.fn().mockReturnValue(null),
+  getFileContent: vi.fn().mockReturnValue(null),
+  getCommitsBetween: vi.fn().mockReturnValue(''),
+  getDiffStatsBetween: vi.fn().mockReturnValue(''),
+  getCommitCount: vi.fn().mockReturnValue(0),
+  getStructuredDiffStatsBetween: vi.fn().mockReturnValue({ filesChanged: 0, insertions: 0, deletions: 0 }),
+  getUnpushedCount: vi.fn().mockReturnValue(0),
+  getUnpushedCountAsync: vi.fn().mockResolvedValue(0),
+  getWorkingTreeStatus: vi.fn().mockReturnValue({ staged: 0, modified: 0, untracked: 0 }),
+  getWorkingTreeDiffStats: vi.fn().mockReturnValue(''),
+  getChangedFiles: vi.fn().mockReturnValue([]),
+  getUnpushedChangedFiles: vi.fn().mockReturnValue([]),
+  listBranchCommits: vi.fn().mockReturnValue([]),
+  getCurrentBranch: vi.fn(),
+  moveWorktree: vi.fn(),
+  renameBranch: vi.fn(),
+  branchExists: vi.fn().mockReturnValue(false),
+}))
+
+vi.mock('../server/services/wakeup-service.js', () => ({
+  schedule: vi.fn(),
+  cancel: vi.fn(),
+  rehydrate: vi.fn(),
+  getPending: vi.fn(() => null),
+}))
+
+vi.mock('../server/services/pr-watcher-service.js', () => ({
+  getAllPrSnapshots: vi.fn(() => ({})),
+  refreshPrSnapshot: vi.fn(),
+  startPrWatcher: vi.fn(),
+  stopPrWatcher: vi.fn(),
+}))
+
+vi.mock('../server/services/websocket-service.js', () => ({
+  emit: vi.fn(),
+  emitEphemeral: vi.fn(),
+}))
+
+vi.mock('../server/services/dev-server-service.js', () => ({
+  stopDevServer: vi.fn(),
+  startDevServer: vi.fn(),
+  getStatus: vi.fn(),
+  getDevServerLogs: vi.fn(),
+}))
+
+vi.mock('../server/db/index.js', () => ({
+  getDb: vi.fn().mockReturnValue({
+    prepare: vi.fn().mockReturnValue({
+      run: vi.fn(),
+      get: vi.fn(),
+      all: vi.fn().mockReturnValue([]),
+    }),
+  }),
+}))
+
+vi.mock('../server/services/settings-service.js', () => ({
+  getEffectiveSettings: vi.fn(),
+  getGlobalSettings: vi.fn(),
+  getProjectSettings: vi.fn(),
+}))
+
+vi.mock('../server/services/setup-script-service.js', () => ({
+  runSetupScript: vi.fn(),
+}))
+
+vi.mock('node:fs', async () => {
+  const actual = await vi.importActual<typeof import('node:fs')>('node:fs')
+  const mocked = {
+    ...actual,
+    mkdirSync: vi.fn(),
+    writeFileSync: vi.fn(),
+    existsSync: vi.fn().mockReturnValue(false),
+    readFileSync: vi.fn().mockReturnValue(''),
+    appendFileSync: vi.fn(),
+  }
+  return {
+    ...mocked,
+    default: mocked,
+  }
+})
+
+// ── Imports (after mocks) ────────────────────────────────────────────────────
+
+import router from '../server/routes/workspaces.js'
+import * as agentManager from '../server/services/agent/orchestrator.js'
+import { DEFAULT_REVIEW_PROMPT_TEMPLATE } from '../server/services/review-template-service.js'
+import * as settingsService from '../server/services/settings-service.js'
+import * as wsService from '../server/services/websocket-service.js'
+import * as workspaceService from '../server/services/workspace-service.js'
+import * as gitOps from '../server/utils/git-ops.js'
+import { makeEffectiveSettings, makeWorkspace } from './helpers/fixtures.js'
+
+// ── App setup ────────────────────────────────────────────────────────────────
+
+const app = new Hono()
+app.route('/api/workspaces', router)
+
+// ── Fixtures ─────────────────────────────────────────────────────────────────
+
+const fakeWorkspace = makeWorkspace({
+  id: 'ws-1',
+  name: 'Test Workspace',
+  projectPath: '/tmp/project',
+  sourceBranch: 'main',
+  workingBranch: 'feature/test',
+  worktreePath: '/tmp/project/.worktrees/feature/test',
+  worktreeOwned: true,
+  status: 'idle' as const,
+  notionUrl: null,
+  notionPageId: null,
+  model: 'claude-opus-4-7',
+  reasoningEffort: 'auto',
+  agentPermissionMode: 'bypass' as const,
+  devServerStatus: 'stopped',
+  hasUnread: false,
+  archivedAt: null,
+  createdAt: '2026-01-01T00:00:00.000Z',
+  updatedAt: '2026-01-01T00:00:00.000Z',
+})
+
+const fakeSession = {
+  id: 'sess-1',
+  workspaceId: 'ws-1',
+  startedAt: '2026-01-01T00:00:00.000Z',
+  endedAt: null,
+  exitCode: null,
+  prompt: 'test prompt',
+}
+
+const TEMPLATE_WITH_PROJECT = 'PROJECT TEMPLATE — branch {{branch_name}} base {{base_commit}}'
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  vi.mocked(reviewReturns.getReviewReturn).mockReturnValue(null)
+  vi.mocked(agentManager.startAgent).mockReturnValue({ agentSessionId: 'mock-agent-session-id' } as never)
+  vi.mocked(workspaceService.updateWorkspaceEngineConfiguration).mockImplementation(
+    (id, engine, model, reasoningEffort, agentPermissionMode) => ({
+      ...fakeWorkspace,
+      id,
+      engine,
+      model,
+      reasoningEffort,
+      agentPermissionMode,
+    }),
+  )
+  vi.mocked(agentManager.stopAgentAndWait).mockResolvedValue('not-running')
+
+  // Default execFile behaviour: git fetch + git rev-parse both succeed.
+  execFilePromiseMock.mockImplementation(async (cmd: string, args: string[]) => {
+    if (cmd === 'git' && args[0] === 'fetch') {
+      return { stdout: '', stderr: '' }
+    }
+    if (cmd === 'git' && args[0] === 'rev-parse') {
+      return { stdout: 'abc1234deadbeef\n', stderr: '' }
+    }
+    return { stdout: '', stderr: '' }
+  })
+
+  vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+  vi.mocked(workspaceService.getActiveSession).mockReturnValue(fakeSession as never)
+
+  vi.mocked(gitOps.getCommitsBetween).mockReturnValue('feat: do thing\nfix: bug')
+  vi.mocked(gitOps.getDiffStatsBetween).mockReturnValue(' 2 files changed, 10 insertions(+), 3 deletions(-)')
+  vi.mocked(gitOps.getWorkingTreeDiffStats).mockReturnValue('')
+
+  vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+    makeEffectiveSettings({
+      model: 'auto',
+      dangerouslySkipPermissions: true,
+      prPromptTemplate: '',
+      reviewPromptTemplate: DEFAULT_REVIEW_PROMPT_TEMPLATE,
+      gitConventions: '',
+      sourceBranch: 'main',
+      devServer: null,
+      setupScript: '',
+      notionStatusProperty: '',
+      notionInProgressStatus: '',
+    }),
+  )
+  vi.mocked(settingsService.getGlobalSettings).mockReturnValue({
+    defaultModelByEngine: { 'claude-code': 'auto', codex: 'auto' },
+    dangerouslySkipPermissions: true,
+    prPromptTemplate: '',
+    reviewPromptTemplate: DEFAULT_REVIEW_PROMPT_TEMPLATE,
+    gitConventions: '',
+    editorCommand: '',
+    browserNotifications: true,
+    audioNotifications: true,
+    notionStatusProperty: '',
+    notionInProgressStatus: '',
+    defaultPermissionMode: 'plan',
+    notionMcpKey: '',
+    sentryMcpKey: '',
+    tags: [],
+    worktreesPath: '.worktrees',
+    worktreesPrefixByProject: false,
+    skillSuite: 'superpowers',
+    customReviewTemplate: '',
+    customAutoLoopReviewGate: '',
+    customAutoLoopGroomingIntro: '',
+    customQaPromptTemplate: '',
+  } as never)
+})
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+
+describe('POST /api/workspaces/:id/start-review', () => {
+  it('returns 404 when workspace is missing', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null as never)
+
+    const res = await app.request('/api/workspaces/missing/start-review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+
+    expect(res.status).toBe(404)
+    const data = await res.json()
+    expect(data.error).toContain("Workspace 'missing' not found")
+  })
+
+  it('dispatches through the lifecycle-safe sender and emits user:message without resuming', async () => {
+    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce({
+      status: 'sent',
+      sessionId: 'recipient-session',
+    })
+
+    const res = await app.request('/api/workspaces/ws-1/start-review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+
+    expect(res.status).toBe(200)
+    const data = await res.json()
+    expect(data).toEqual({ ok: true, messageSent: true, newSession: false })
+
+    expect(agentManager.sendMessageForFallback).toHaveBeenCalledTimes(1)
+    const [wsId, prompt] = vi.mocked(agentManager.sendMessageForFallback).mock.calls[0]
+    expect(wsId).toBe('ws-1')
+    expect(typeof prompt).toBe('string')
+    expect((prompt as string).length).toBeGreaterThan(0)
+
+    // wsService.emit called with user:message and the rendered prompt
+    expect(wsService.emit).toHaveBeenCalledWith(
+      'ws-1',
+      'user:message',
+      expect.objectContaining({ content: prompt, sender: 'user' }),
+      'recipient-session',
+    )
+
+    // No fallback start
+    expect(agentManager.startAgent).not.toHaveBeenCalled()
+  })
+
+  it('falls back to startAgent(resume=true) only when delivery reports stopped', async () => {
+    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce({ status: 'stopped' })
+
+    const res = await app.request('/api/workspaces/ws-1/start-review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+
+    expect(res.status).toBe(200)
+    const data = await res.json()
+    expect(data.messageSent).toBe(true)
+    expect(data.newSession).toBe(false)
+
+    expect(agentManager.startAgent).toHaveBeenCalledTimes(1)
+    const args = vi.mocked(agentManager.startAgent).mock.calls[0]
+    // signature: (workspaceId, workingDir, prompt, model?, resume, agentPermissionMode?, existingSessionId?, reasoningEffort?)
+    expect(args[0]).toBe('ws-1')
+    expect(args[1]).toBe(fakeWorkspace.worktreePath)
+    expect(typeof args[2]).toBe('string')
+    expect(args[3]).toBe(fakeWorkspace.model)
+    expect(args[4]).toBe(true) // resume
+    expect(args[5]).toBe(fakeWorkspace.agentPermissionMode)
+    expect(args[6]).toBeUndefined()
+    expect(args[7]).toBe(fakeWorkspace.reasoningEffort)
+
+    expect(workspaceService.updateWorkspaceStatus).toHaveBeenCalledWith('ws-1', 'executing')
+    expect(wsService.emit).toHaveBeenCalledWith(
+      'ws-1',
+      'user:message',
+      expect.objectContaining({ sender: 'user' }),
+      'mock-agent-session-id',
+    )
+  })
+
+  it('returns 500 when stopped delivery cannot start a resume', async () => {
+    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce({ status: 'stopped' })
+    vi.mocked(agentManager.startAgent).mockImplementation(() => {
+      throw new Error('boom: cannot start')
+    })
+
+    const res = await app.request('/api/workspaces/ws-1/start-review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+
+    expect(res.status).toBe(500)
+    const data = await res.json()
+    expect(data.error).toContain('boom: cannot start')
+  })
+
+  it('newSession=true with running agent stops then starts a fresh session', async () => {
+    const callOrder: string[] = []
+    vi.mocked(agentManager.stopAgentAndWait).mockImplementation(async () => {
+      callOrder.push('stopAgent')
+      return 'stopped'
+    })
+    vi.mocked(agentManager.startAgent).mockImplementation(() => {
+      callOrder.push('startAgent')
+      return { agentSessionId: 'fresh' } as never
+    })
+
+    const res = await app.request('/api/workspaces/ws-1/start-review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ newSession: true }),
+    })
+
+    expect(res.status).toBe(200)
+    const data = await res.json()
+    expect(data).toEqual({ ok: true, messageSent: true, newSession: true })
+
+    expect(callOrder).toEqual(['stopAgent', 'startAgent'])
+    expect(agentManager.sendMessageForFallback).not.toHaveBeenCalled()
+
+    const args = vi.mocked(agentManager.startAgent).mock.calls[0]
+    expect(args[4]).toBe(false) // resume=false
+    expect(workspaceService.updateWorkspaceStatus).toHaveBeenCalledWith('ws-1', 'executing')
+  })
+
+  it('newSession=true without running agent still starts fresh (stopAgent best-effort)', async () => {
+    // Absence is an explicit successful outcome, distinct from a failed stop.
+    vi.mocked(agentManager.stopAgentAndWait).mockImplementation(async () => {
+      return 'not-running'
+    })
+    vi.mocked(agentManager.startAgent).mockReturnValue({ agentSessionId: 'fresh' } as never)
+
+    const res = await app.request('/api/workspaces/ws-1/start-review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ newSession: true }),
+    })
+
+    expect(res.status).toBe(200)
+    expect(agentManager.startAgent).toHaveBeenCalledTimes(1)
+    const args = vi.mocked(agentManager.startAgent).mock.calls[0]
+    expect(args[4]).toBe(false) // resume=false
+    expect(workspaceService.updateWorkspaceStatus).toHaveBeenCalledWith('ws-1', 'executing')
+  })
+
+  it('newSession=true: stop failure prevents starting a replacement', async () => {
+    vi.mocked(agentManager.stopAgentAndWait).mockImplementation(async () => {
+      throw new Error('stop failed')
+    })
+    vi.mocked(agentManager.startAgent).mockReturnValue({ agentSessionId: 'fresh' } as never)
+
+    const res = await app.request('/api/workspaces/ws-1/start-review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ newSession: true }),
+    })
+
+    expect(res.status).toBe(500)
+    // Both called: stop first (and threw), then start.
+    expect(agentManager.stopAgentAndWait).toHaveBeenCalledTimes(1)
+    expect(agentManager.startAgent).not.toHaveBeenCalled()
+  })
+
+  it('uses customReviewTemplate when skillSuite === custom (suite-aware path)', async () => {
+    // Since the skill-suite refactor, the active review template is resolved
+    // from `global.skillSuite` + `global.customReviewTemplate` via
+    // `getActiveReviewTemplate()`. The legacy per-project/global
+    // `reviewPromptTemplate` field is orphan and no longer read.
+    vi.mocked(settingsService.getGlobalSettings).mockReturnValue({
+      defaultModelByEngine: { 'claude-code': 'auto', codex: 'auto' },
+      dangerouslySkipPermissions: true,
+      prPromptTemplate: '',
+      reviewPromptTemplate: DEFAULT_REVIEW_PROMPT_TEMPLATE,
+      gitConventions: '',
+      editorCommand: '',
+      browserNotifications: true,
+      audioNotifications: true,
+      notionStatusProperty: '',
+      notionInProgressStatus: '',
+      defaultPermissionMode: 'plan',
+      notionMcpKey: '',
+      sentryMcpKey: '',
+      tags: [],
+      worktreesPath: '.worktrees',
+      worktreesPrefixByProject: false,
+      skillSuite: 'custom',
+      customReviewTemplate: TEMPLATE_WITH_PROJECT,
+      customAutoLoopReviewGate: '',
+      customAutoLoopGroomingIntro: '',
+      customQaPromptTemplate: '',
+    } as never)
+    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce({
+      status: 'sent',
+      sessionId: 'delivered-session-id',
+    })
+
+    const res = await app.request('/api/workspaces/ws-1/start-review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+
+    expect(res.status).toBe(200)
+    const [, prompt] = vi.mocked(agentManager.sendMessageForFallback).mock.calls[0]
+    expect(prompt as string).toContain('PROJECT TEMPLATE')
+    expect(prompt as string).toContain('feature/test')
+    expect(prompt as string).toContain('abc1234deadbeef')
+  })
+
+  it('falls back to DEFAULT_REVIEW_PROMPT_TEMPLATE when effective template is empty', async () => {
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'auto',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        reviewPromptTemplate: '',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
+    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce({
+      status: 'sent',
+      sessionId: 'delivered-session-id',
+    })
+
+    const res = await app.request('/api/workspaces/ws-1/start-review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+
+    expect(res.status).toBe(200)
+    const [, prompt] = vi.mocked(agentManager.sendMessageForFallback).mock.calls[0]
+    // DEFAULT template starts with "You are reviewing code changes…"
+    expect(prompt as string).toContain('You are reviewing code changes')
+    expect(prompt as string).toContain('Test Workspace')
+  })
+
+  it('returns 500 with explicit message when git rev-parse fails', async () => {
+    execFilePromiseMock.mockImplementation(async (cmd: string, args: string[]) => {
+      if (cmd === 'git' && args[0] === 'fetch') {
+        return { stdout: '', stderr: '' }
+      }
+      if (cmd === 'git' && args[0] === 'rev-parse') {
+        throw new Error("fatal: ambiguous argument 'origin/main': unknown revision")
+      }
+      return { stdout: '', stderr: '' }
+    })
+
+    const res = await app.request('/api/workspaces/ws-1/start-review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+
+    expect(res.status).toBe(500)
+    const data = await res.json()
+    expect(data.error).toContain('Cannot resolve base commit for branch main')
+    expect(data.error).toContain('ambiguous argument')
+
+    // Pipeline never reached the dispatch stage
+    expect(agentManager.sendMessageForFallback).not.toHaveBeenCalled()
+    expect(agentManager.startAgent).not.toHaveBeenCalled()
+    // And no user:message ghost in the chat
+    expect(wsService.emit).not.toHaveBeenCalled()
+  })
+
+  it('inserts the working-tree separator only when working-tree stats are non-empty', async () => {
+    vi.mocked(gitOps.getWorkingTreeDiffStats).mockReturnValue(' src/foo.ts | 5 +++--\n')
+    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce({
+      status: 'sent',
+      sessionId: 'delivered-session-id',
+    })
+
+    const res = await app.request('/api/workspaces/ws-1/start-review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+
+    expect(res.status).toBe(200)
+    const [, prompt] = vi.mocked(agentManager.sendMessageForFallback).mock.calls[0]
+    expect(prompt as string).toContain('— Working tree (uncommitted) —')
+    expect(prompt as string).toContain('src/foo.ts | 5 +++--')
+  })
+
+  it('omits the working-tree separator when working-tree stats are empty', async () => {
+    vi.mocked(gitOps.getWorkingTreeDiffStats).mockReturnValue('')
+    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce({
+      status: 'sent',
+      sessionId: 'delivered-session-id',
+    })
+
+    const res = await app.request('/api/workspaces/ws-1/start-review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+
+    expect(res.status).toBe(200)
+    const [, prompt] = vi.mocked(agentManager.sendMessageForFallback).mock.calls[0]
+    expect(prompt as string).not.toContain('— Working tree (uncommitted) —')
+  })
+
+  it('trims whitespace from additionalInstructions before rendering', async () => {
+    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce({
+      status: 'sent',
+      sessionId: 'delivered-session-id',
+    })
+
+    const res = await app.request('/api/workspaces/ws-1/start-review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ additionalInstructions: '   focus on perf   ' }),
+    })
+
+    expect(res.status).toBe(200)
+    const [, prompt] = vi.mocked(agentManager.sendMessageForFallback).mock.calls[0]
+    expect(prompt as string).toContain('focus on perf')
+    expect(prompt as string).not.toContain('   focus on perf   ')
+  })
+
+  it('newSession=true emits user:message with the freshly created session id (not the old one)', async () => {
+    // Active session before dispatch is the OLD one (sess-1, from beforeEach).
+    // startAgent returns the NEW session id; emit should use that, not sess-1.
+    vi.mocked(agentManager.startAgent).mockReturnValue({ agentSessionId: 'sess-fresh' } as never)
+
+    const res = await app.request('/api/workspaces/ws-1/start-review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ newSession: true }),
+    })
+
+    expect(res.status).toBe(200)
+
+    // emit was called exactly once, with the FRESH session id, not the old one.
+    expect(wsService.emit).toHaveBeenCalledTimes(1)
+    expect(wsService.emit).toHaveBeenCalledWith(
+      'ws-1',
+      'user:message',
+      expect.objectContaining({ content: expect.any(String), sender: 'user' }),
+      'sess-fresh',
+    )
+    expect(wsService.emit).not.toHaveBeenCalledWith('ws-1', 'user:message', expect.anything(), 'sess-1')
+  })
+
+  it('does not emit user:message when dispatch fails (no ghost message in chat)', async () => {
+    vi.mocked(agentManager.sendMessageForFallback).mockRejectedValueOnce(
+      new Error('Timed out waiting for agent controller turnover'),
+    )
+
+    const res = await app.request('/api/workspaces/ws-1/start-review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+
+    expect(res.status).toBe(500)
+    expect((await res.json()).error).toBe(
+      'Failed to dispatch review prompt: Timed out waiting for agent controller turnover',
+    )
+    expect(agentManager.startAgent).not.toHaveBeenCalled()
+    expect(wsService.emit).not.toHaveBeenCalled()
+  })
+})
+
+describe('review LLM configuration', () => {
+  const codex = { engine: 'codex', model: 'gpt-5.4', reasoningEffort: 'high', agentPermissionMode: 'strict' }
+  it.each([codex, { model: 'claude-sonnet-4-6' }, { reasoningEffort: 'high' }, { agentPermissionMode: 'plan' }])(
+    'forces a fresh session for changed settings: %j',
+    async (configuration) => {
+      const response = await app.request('/api/workspaces/ws-1/start-review', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...configuration, newSession: false }),
+      })
+      expect(response.status).toBe(200)
+      expect(await response.json()).toMatchObject({ newSession: true })
+      const expected = { ...fakeWorkspace, ...configuration }
+      expect(workspaceService.updateWorkspaceEngineConfiguration).toHaveBeenCalledWith(
+        'ws-1',
+        expected.engine,
+        expected.model,
+        expected.reasoningEffort,
+        expected.agentPermissionMode,
+      )
+      expect(agentManager.startAgent).toHaveBeenCalledWith(
+        'ws-1',
+        fakeWorkspace.worktreePath,
+        expect.any(String),
+        expected.model,
+        false,
+        expected.agentPermissionMode,
+        undefined,
+        expected.reasoningEffort,
+      )
+      expect(agentManager.sendMessageForFallback).not.toHaveBeenCalled()
+      expect(vi.mocked(agentManager.stopAgentAndWait).mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(workspaceService.updateWorkspaceEngineConfiguration).mock.invocationCallOrder[0]!,
+      )
+    },
+  )
+  it('continues the session when the explicit settings are unchanged', async () => {
+    const response = await app.request('/api/workspaces/ws-1/start-review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        engine: fakeWorkspace.engine,
+        model: fakeWorkspace.model,
+        reasoningEffort: fakeWorkspace.reasoningEffort,
+        agentPermissionMode: fakeWorkspace.agentPermissionMode,
+      }),
+    })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ newSession: false })
+    expect(workspaceService.updateWorkspaceEngineConfiguration).not.toHaveBeenCalled()
+    expect(agentManager.stopAgentAndWait).not.toHaveBeenCalled()
+  })
+  it.each([
+    { engine: 'unknown' },
+    { engine: 'codex', model: 'claude-opus-4-7' },
+    { model: '' },
+    { reasoningEffort: 'invalid' },
+    { agentPermissionMode: 'invalid' },
+    { additionalInstructions: 12 },
+    { newSession: 'true' },
+    { returnToSession: 'true' },
+    null,
+    [],
+  ])('rejects invalid review input before any side effects: %j', async (body) => {
+    const response = await app.request('/api/workspaces/ws-1/start-review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    expect(response.status).toBe(400)
+    expect(execFilePromiseMock).not.toHaveBeenCalled()
+    expect(agentManager.startAgent).not.toHaveBeenCalled()
+    expect(agentManager.stopAgentAndWait).not.toHaveBeenCalled()
+    expect(workspaceService.updateWorkspaceEngineConfiguration).not.toHaveBeenCalled()
+  })
+  it('does not change configuration when the previous agent cannot stop', async () => {
+    vi.mocked(agentManager.stopAgentAndWait).mockResolvedValueOnce('timeout')
+    const response = await app.request('/api/workspaces/ws-1/start-review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(codex),
+    })
+    expect(response.status).toBe(409)
+    expect(workspaceService.updateWorkspaceEngineConfiguration).not.toHaveBeenCalled()
+    expect(agentManager.startAgent).not.toHaveBeenCalled()
+  })
+  it('restores original configuration when starting the selected engine throws', async () => {
+    vi.mocked(agentManager.startAgent).mockImplementationOnce(() => {
+      throw new Error('cannot start')
+    })
+    const response = await app.request('/api/workspaces/ws-1/start-review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(codex),
+    })
+    expect(response.status).toBe(500)
+    expect(workspaceService.updateWorkspaceEngineConfiguration).toHaveBeenLastCalledWith(
+      'ws-1',
+      fakeWorkspace.engine,
+      fakeWorkspace.model,
+      fakeWorkspace.reasoningEffort,
+      fakeWorkspace.agentPermissionMode,
+    )
+    expect(wsService.emit).not.toHaveBeenCalled()
+  })
+})
+
+describe('review return option', () => {
+  it('registers the exact current session before starting a fresh review', async () => {
+    vi.mocked(workspaceService.getActiveSession).mockReturnValue({
+      ...fakeSession,
+      engineSessionId: 'original-native',
+      engine: fakeWorkspace.engine,
+    } as never)
+    vi.mocked(workspaceService.createIdleSession).mockReturnValue({ id: 'review-session' } as never)
+    vi.mocked(agentManager.startAgent).mockReturnValue({ agentSessionId: 'review-session' } as never)
+    const response = await app.request('/api/workspaces/ws-1/start-review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ engine: 'codex', model: 'gpt-5.4', returnToSession: true, newSession: false }),
+    })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ newSession: true })
+    expect(reviewReturns.registerReviewReturn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceId: 'ws-1',
+        originalSessionId: 'sess-1',
+        reviewSessionId: 'review-session',
+        original: expect.objectContaining({ engine: fakeWorkspace.engine, model: fakeWorkspace.model }),
+        review: expect.objectContaining({ engine: 'codex', model: 'gpt-5.4' }),
+      }),
+    )
+    expect(vi.mocked(reviewReturns.registerReviewReturn).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(agentManager.startAgent).mock.invocationCallOrder[0]!,
+    )
+    expect(agentManager.startAgent).toHaveBeenCalledWith(
+      'ws-1',
+      fakeWorkspace.worktreePath,
+      expect.stringContaining('standalone summary'),
+      'gpt-5.4',
+      false,
+      'bypass',
+      'review-session',
+      'auto',
+    )
+    expect(wsService.emit).toHaveBeenCalledWith('ws-1', 'user:message', expect.anything(), 'review-session')
+  })
+  it('refuses a return to a session without native conversation before stopping anything', async () => {
+    const response = await app.request('/api/workspaces/ws-1/start-review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ returnToSession: true }),
+    })
+    expect(response.status).toBe(400)
+    expect(agentManager.stopAgentAndWait).not.toHaveBeenCalled()
+    expect(execFilePromiseMock).not.toHaveBeenCalled()
+  })
+  it('refuses overlapping reviews with a pending return', async () => {
+    vi.mocked(reviewReturns.getReviewReturn).mockReturnValue({ workspaceId: 'ws-1' } as never)
+    const response = await app.request('/api/workspaces/ws-1/start-review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    })
+    expect(response.status).toBe(409)
+    expect(agentManager.stopAgentAndWait).not.toHaveBeenCalled()
+  })
+})
+
+it('starts fresh when the actual running model differs from unchanged workspace settings', async () => {
+  vi.mocked(workspaceService.getActiveSession).mockReturnValue({
+    ...fakeSession,
+    model: 'claude-sonnet-4-6',
+    engine: 'claude-code',
+  } as never)
+  const response = await app.request('/api/workspaces/ws-1/start-review', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: fakeWorkspace.model }),
+  })
+  expect(response.status).toBe(200)
+  expect(await response.json()).toMatchObject({ newSession: true })
+  expect(agentManager.sendMessageForFallback).not.toHaveBeenCalled()
+  expect(workspaceService.updateWorkspaceEngineConfiguration).not.toHaveBeenCalled()
+})

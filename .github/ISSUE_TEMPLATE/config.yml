@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Kōbō documentation
+    url: https://github.com/loicngr/Kobo#readme
+    about: Setup, configuration, and usage
+  - name: Report a security vulnerability privately
+    url: https://github.com/loicngr/Kobo/security/advisories/new
+    about: Do not disclose vulnerabilities or credentials in public issues

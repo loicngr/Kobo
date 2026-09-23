@@ -1,0 +1,148 @@
+# Kōbō — Makefile
+#
+# Mirrors `.github/workflows/ci.yml` and `release.yml` so the full CI pipeline
+# can be reproduced locally before pushing. Targets stop on the first failing
+# step (set -e via the recipe shell).
+#
+# Quick reference:
+#   make ci          # everything CI runs on a PR (audit + lint + tsc + tests)
+#   make release     # CI gates + build + version-not-yet-published guard
+#   make test        # backend + client tests only
+#   make lint        # biome lint only
+#   make audit       # npm audit on all three trees
+#   make install     # `npm ci` on all three trees (CI-equivalent install)
+#   make build       # production build (client + server)
+#   make clean       # rm dist/
+
+# Resolve bash via PATH (NixOS doesn't ship /bin/bash; Ubuntu CI does).
+SHELL := /usr/bin/env bash
+.SHELLFLAGS := -eu -o pipefail -c
+
+CLIENT_DIR := src/client
+PWA_DIR := $(CLIENT_DIR)/src-pwa
+PACKAGE_NAME := @loicngr/kobo
+
+.DEFAULT_GOAL := help
+
+.PHONY: help
+help:
+	@echo "Kōbō — local CI/release runner"
+	@echo ""
+	@echo "Targets:"
+	@echo "  make ci         Run the full PR pipeline, step for step (install + audit + lint + type checks + build + tests)"
+	@echo "  make release    Run CI + build + verify version is not already published"
+	@echo "  make install    npm ci on all three trees"
+	@echo "  make audit      npm audit --audit-level=high on all three trees"
+	@echo "  make lint       biome check"
+	@echo "  make typecheck  tsc --noEmit (backend), tests, vue-tsc (client)"
+	@echo "  make test       backend + client vitest suites"
+	@echo "  make test-back  backend tests only"
+	@echo "  make test-front client tests only"
+	@echo "  make build      production build"
+	@echo "  make clean      remove build artefacts"
+
+# ── Install ────────────────────────────────────────────────────────────────────
+
+.PHONY: install install-root install-client install-pwa
+install: install-root install-client install-pwa
+
+install-root:
+	npm ci
+
+install-client:
+	cd $(CLIENT_DIR) && npm ci
+
+install-pwa:
+	cd $(PWA_DIR) && npm ci
+
+# ── Audit (mirrors CI `--audit-level=high`) ────────────────────────────────────
+
+.PHONY: audit audit-root audit-client audit-pwa
+audit: audit-root audit-client audit-pwa
+
+audit-root:
+	npm audit --audit-level=high
+
+audit-client:
+	cd $(CLIENT_DIR) && npm audit --audit-level=high
+
+audit-pwa:
+	cd $(PWA_DIR) && npm audit --audit-level=high
+
+# ── Lint / typecheck ───────────────────────────────────────────────────────────
+
+.PHONY: lint typecheck typecheck-back typecheck-tests typecheck-front
+lint:
+	npm run lint
+
+typecheck: typecheck-back typecheck-tests typecheck-front
+
+typecheck-back:
+	npx tsc --noEmit
+
+# Mirrors the "Type check (tests)" step of ci.yml: test fixtures drift from the
+# real types silently unless something type-checks them.
+typecheck-tests:
+	npm run typecheck:tests
+
+typecheck-front:
+	cd $(CLIENT_DIR) && npm run type-check
+
+# ── Tests ──────────────────────────────────────────────────────────────────────
+
+.PHONY: test test-back test-front
+test: test-back test-front
+
+test-back:
+	npm test
+
+test-front:
+	cd $(CLIENT_DIR) && npm test
+
+# ── Build ──────────────────────────────────────────────────────────────────────
+
+.PHONY: build clean
+build:
+	npm run build
+
+clean:
+	rm -rf dist
+	rm -rf $(CLIENT_DIR)/dist
+
+# ── Pipelines ──────────────────────────────────────────────────────────────────
+
+# Mirrors `.github/workflows/ci.yml` step-for-step, in the same order: install,
+# audit, lint, the three type checks, build, then the two test suites. Anything
+# added to the workflow must be added here too, or a red CI is found after the
+# push instead of before.
+.PHONY: ci
+ci: install audit lint typecheck build test
+	@echo ""
+	@echo "✓ CI pipeline passed locally."
+
+# Mirrors `.github/workflows/release.yml` up to (but NOT including) `npm publish`
+# / `git push` / GitHub release creation. Those side-effecting steps are left to
+# the GitHub Actions runner — running them from a developer machine would mint
+# tags and publish packages without provenance.
+.PHONY: release release-version-check
+release: ci release-version-check
+	@echo ""
+	@echo "✓ Release pipeline passed locally (publish steps skipped — push main to trigger CI)."
+
+release-version-check:
+	@version=$$(node -p "require('./package.json').version"); \
+	tag="v$$version"; \
+	if git ls-remote --exit-code --tags origin "refs/tags/$$tag" >/dev/null 2>&1; then \
+	  echo "::error::Tag $$tag already exists. Bump package.json before merging to main."; \
+	  exit 1; \
+	fi; \
+	if npm view "$(PACKAGE_NAME)@$$version" version >/dev/null 2>&1; then \
+	  echo "::error::$(PACKAGE_NAME)@$$version is already published. Bump package.json before merging to main."; \
+	  exit 1; \
+	fi; \
+	echo "✓ Version $$version not yet released."
+
+# Explicit live-engine check; requires credentials and never runs in ci.
+.PHONY: test-mcp-live
+test-mcp-live:
+	npm run test:mcp:live

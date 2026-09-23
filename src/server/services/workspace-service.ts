@@ -1,0 +1,1343 @@
+import type Database from 'better-sqlite3'
+import { nanoid } from 'nanoid'
+import { parseTaskVerification, type TaskRole, type TaskVerification } from '../../shared/task-verification.js'
+import {
+  isWorkflowPolicy,
+  LEGACY_WORKFLOW_POLICY,
+  resolveWorkflowPolicy,
+  type WorkflowPolicy,
+} from '../../shared/workflow-policy.js'
+import { getDb } from '../db/index.js'
+import { isValidBranchName } from '../utils/git-ops.js'
+import { resolveWorkspaceWorktreePath } from '../utils/worktree-paths.js'
+import * as orchestrator from './agent/orchestrator.js'
+import * as autoLoopService from './auto-loop-service.js'
+import * as cronService from './cron-service.js'
+import * as quotaBackoffService from './quota-backoff-service.js'
+import { SESSION_RECENCY_ORDER } from './session-activity-service.js'
+import { createTaskRecord, deleteTaskRecord, type UpdateTaskMutation, updateTaskRecord } from './task-mutations.js'
+import * as wakeupService from './wakeup-service.js'
+import { emitEphemeral } from './websocket-service.js'
+
+/** Lifecycle states for a workspace. Transitions are validated against VALID_TRANSITIONS. */
+export type WorkspaceStatus =
+  | 'created'
+  | 'extracting'
+  | 'brainstorming'
+  | 'executing'
+  | 'compacting'
+  | 'awaiting-user'
+  | 'completed'
+  | 'idle'
+  | 'error'
+  | 'quota'
+
+/** Lifecycle states for a task within a workspace. */
+export type TaskStatus = 'pending' | 'in_progress' | 'done'
+
+/**
+ * Unified agent permission mode — one value maps 1:1 to the Claude Agent SDK
+ * `permissionMode` field:
+ *   - `plan`        → SDK `plan` (read-only, AskUserQuestion still works).
+ *   - `bypass`      → SDK `bypassPermissions` (+ allowDangerouslySkipPermissions).
+ *   - `strict`      → SDK `acceptEdits` (auto-accept edits, allow/deny list for the rest).
+ *   - `interactive` → SDK `default` + Kōbō's PreToolUse defer hook (asks the user).
+ */
+export type AgentPermissionMode = 'plan' | 'bypass' | 'strict' | 'interactive'
+
+/** @deprecated Pre-unification mode value, kept only for legacy DB rows. */
+export type LegacyPermissionMode = 'auto-accept' | 'plan'
+
+/** A workspace — the primary unit of work in Kobo. */
+export interface Workspace {
+  workflowPolicy: WorkflowPolicy
+  id: string
+  name: string
+  projectPath: string
+  sourceBranch: string
+  workingBranch: string
+  status: WorkspaceStatus
+  notionUrl: string | null
+  notionPageId: string | null
+  sentryUrl: string | null
+  /** URL of the PR/MR this workspace was created from (PR Checkout Workspace feature). Null when not created that way. */
+  prUrl: string | null
+  model: string
+  /**
+   * Model used ONLY for the initial brainstorming session of a workspace
+   * created with auto-loop enabled. Null = feature unused; every session
+   * (brainstorming and every auto-loop iteration) uses `model`.
+   */
+  brainstormModel: string | null
+  reasoningEffort: string
+  /** Unified SDK-aligned permission mode (plan | bypass | strict | interactive). */
+  agentPermissionMode: AgentPermissionMode
+  devServerStatus: string
+  hasUnread: boolean
+  archivedAt: string | null
+  favoritedAt: string | null
+  prWatchDisabledAt: string | null
+  tags: string[]
+  description: string | null
+  agentDescription: string | null
+  /**
+   * Brainstorm prompt assembled at workspace-creation time and held in the DB
+   * so it survives a setup-script crash. Cleared by the agent-start path once
+   * successfully consumed; null otherwise (= nothing pending or already used).
+   */
+  initialPrompt: string | null
+  /**
+   * pr.updatedAt snapshot stored when the user clicked "Marquer comme vu" on
+   * the changes-requested badge. The badge stays hidden as long as the
+   * latest pr-watcher snapshot's updatedAt <= this value; any newer
+   * activity on the PR (commit, comment, re-review) invalidates the
+   * dismiss and surfaces the badge again. Null = never dismissed.
+   */
+  prChangesDismissedAt: string | null
+  /** Same as `prChangesDismissedAt` but for the CI failure badge. */
+  prCiFailureDismissedAt: string | null
+  /** ISO timestamp at which the worktree was purged from disk (history kept
+   *  in DB). Null = worktree still present. Orthogonal to `archivedAt`. */
+  worktreePurgedAt: string | null
+  /** JSON blob with restore metadata captured at purge time (PR number,
+   *  forge, merge commit sha, original paths). Reserved for a future
+   *  unpurge feature — read but never modified by V1. */
+  worktreePurgeRestoreData: string | null
+  /** Groups the workspaces created to run one task on two engines. Null for
+   *  a workspace created on its own, which is nearly all of them. */
+  comparisonId: string | null
+  engine: string
+  autoLoop: boolean
+  autoLoopReady: boolean
+  noProgressStreak: number
+  worktreePath: string
+  worktreeOwned: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+/** A sub-item of a workspace, optionally flagged as an acceptance criterion. */
+export interface Task {
+  id: string
+  workspaceId: string
+  title: string
+  status: TaskStatus
+  isAcceptanceCriterion: boolean
+  sortOrder: number
+  role: TaskRole
+  verification: TaskVerification | null
+  createdAt: string
+  updatedAt: string
+}
+
+/** A workspace with its associated tasks eagerly loaded. */
+export interface WorkspaceWithTasks extends Workspace {
+  tasks: Task[]
+}
+
+/** Input payload for creating a new workspace. */
+export interface CreateWorkspaceInput {
+  workflowPolicy?: Partial<WorkflowPolicy>
+  name: string
+  projectPath: string
+  sourceBranch: string
+  workingBranch: string
+  notionUrl?: string
+  notionPageId?: string
+  sentryUrl?: string
+  prUrl?: string
+  model?: string
+  brainstormModel?: string
+  reasoningEffort?: string
+  agentPermissionMode?: AgentPermissionMode
+  engine?: string
+  worktreePath?: string
+  worktreeOwned?: boolean
+  worktreesPath?: string
+  /** Set only by the engine-comparison flow, which creates one workspace per
+   *  engine and needs them to find each other afterwards. */
+  comparisonId?: string
+}
+
+/** Input payload for creating a new task. */
+export interface CreateTaskInput {
+  title: string
+  isAcceptanceCriterion?: boolean
+  sortOrder?: number
+  afterTaskId?: string
+  role?: TaskRole
+}
+
+/** Allowed status transitions per current status. Enforced by updateWorkspaceStatus. */
+const VALID_TRANSITIONS: Record<WorkspaceStatus, WorkspaceStatus[]> = {
+  created: ['extracting', 'brainstorming', 'idle', 'error'],
+  // `quota` is reachable from every state that can be running a live session.
+  // It used to be missing here and on `brainstorming`, so an auto-loop
+  // workspace with a distinct brainstormModel silently lost its backoff: the
+  // transition threw, the error was swallowed, and the very next lines
+  // cancelled the timer that had just been armed.
+  extracting: ['compacting', 'extracting', 'brainstorming', 'idle', 'error', 'awaiting-user', 'quota'],
+  brainstorming: ['compacting', 'executing', 'completed', 'idle', 'error', 'awaiting-user', 'quota'],
+  executing: ['compacting', 'completed', 'idle', 'error', 'quota', 'awaiting-user'],
+  'awaiting-user': ['compacting', 'executing', 'brainstorming', 'extracting', 'idle', 'error', 'completed', 'quota'],
+  compacting: ['extracting', 'brainstorming', 'executing', 'awaiting-user', 'completed', 'idle', 'error', 'quota'],
+  completed: ['idle', 'executing'],
+  idle: ['executing', 'brainstorming', 'extracting', 'error'],
+  error: ['idle', 'executing', 'brainstorming', 'extracting'],
+  // `awaiting-user` is reachable from `quota` too: a resumed quota-backoff
+  // session can hit an interactive tool-approval/question before its status
+  // flips to `executing` — the same reasoning as the entering-quota comment
+  // above, just for the other direction.
+  // `error` is the escape hatch when the retry machinery itself fails: the
+  // status is moved to `quota` before the backoff is armed, so a failure in
+  // between would otherwise strand the workspace there — no timer, and no
+  // banner either, since QuotaBackoffBanner needs a backoff row to render.
+  quota: ['idle', 'executing', 'awaiting-user', 'error'],
+}
+
+interface WorkspaceRow {
+  workflow_policy: string | null
+  id: string
+  name: string
+  project_path: string
+  source_branch: string
+  working_branch: string
+  status: string
+  notion_url: string | null
+  notion_page_id: string | null
+  sentry_url: string | null
+  pr_url: string | null
+  model: string
+  brainstorm_model: string | null
+  reasoning_effort: string
+  permission_mode: string
+  agent_permission_mode: string | null
+  dev_server_status: string
+  has_unread: number
+  archived_at: string | null
+  favorited_at: string | null
+  pr_watch_disabled_at: string | null
+  tags: string | null
+  engine: string | null
+  auto_loop: number | null
+  auto_loop_ready: number | null
+  no_progress_streak: number | null
+  permission_profile: string | null
+  worktree_path: string | null
+  worktree_owned: number
+  description: string | null
+  agent_description: string | null
+  initial_prompt: string | null
+  pr_changes_dismissed_at: string | null
+  pr_ci_failure_dismissed_at: string | null
+  worktree_purged_at: string | null
+  worktree_purge_restore_data: string | null
+  comparison_id: string | null
+  created_at: string
+  updated_at: string
+}
+
+interface TaskRow {
+  id: string
+  workspace_id: string
+  title: string
+  status: string
+  is_acceptance_criterion: number
+  sort_order: number
+  role: TaskRole
+  verification: string | null
+  created_at: string
+  updated_at: string
+}
+
+// NOTE: `engine` is stored as a plain TEXT column and returned as a `string` on
+// the `Workspace` interface rather than the stricter `EngineId` union. The DB
+// is untyped, so we intentionally do not narrow here — validation against
+// `listEngines()` is expected to happen at workspace creation (see the
+// routes/engines handler) and when resolving an engine at agent-start time.
+/**
+ * Coerce a raw `agent_permission_mode` cell into the typed union.
+ * Falls back to `bypass` for unknown / null values — guarantees callers
+ * always get a valid SDK-mappable mode regardless of legacy or corrupted rows.
+ */
+function coerceAgentPermissionMode(raw: string | null): AgentPermissionMode {
+  if (raw === 'plan' || raw === 'bypass' || raw === 'strict' || raw === 'interactive') {
+    return raw
+  }
+  return 'bypass'
+}
+
+function mapWorkspace(row: WorkspaceRow): Workspace {
+  let workflowPolicy = { ...LEGACY_WORKFLOW_POLICY }
+  if (row.workflow_policy) {
+    try {
+      workflowPolicy = resolveWorkflowPolicy(JSON.parse(row.workflow_policy))
+    } catch {
+      workflowPolicy = resolveWorkflowPolicy()
+    }
+  }
+  return {
+    workflowPolicy,
+    id: row.id,
+    name: row.name,
+    projectPath: row.project_path,
+    sourceBranch: row.source_branch,
+    workingBranch: row.working_branch,
+    status: row.status as WorkspaceStatus,
+    notionUrl: row.notion_url,
+    notionPageId: row.notion_page_id,
+    sentryUrl: row.sentry_url,
+    prUrl: row.pr_url,
+    model: row.model,
+    brainstormModel: row.brainstorm_model,
+    reasoningEffort: row.reasoning_effort ?? 'auto',
+    agentPermissionMode: coerceAgentPermissionMode(row.agent_permission_mode),
+    devServerStatus: row.dev_server_status,
+    hasUnread: row.has_unread === 1,
+    archivedAt: row.archived_at,
+    favoritedAt: row.favorited_at,
+    prWatchDisabledAt: row.pr_watch_disabled_at,
+    tags: parseTags(row.tags),
+    description: row.description,
+    agentDescription: row.agent_description,
+    initialPrompt: row.initial_prompt,
+    prChangesDismissedAt: row.pr_changes_dismissed_at,
+    prCiFailureDismissedAt: row.pr_ci_failure_dismissed_at,
+    worktreePurgedAt: row.worktree_purged_at,
+    worktreePurgeRestoreData: row.worktree_purge_restore_data,
+    comparisonId: row.comparison_id ?? null,
+    engine: row.engine ?? 'claude-code',
+    autoLoop: row.auto_loop === 1,
+    autoLoopReady: row.auto_loop_ready === 1,
+    noProgressStreak: row.no_progress_streak ?? 0,
+    worktreePath: row.worktree_path ?? '',
+    worktreeOwned: row.worktree_owned === 1,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
+}
+
+/** Parse the JSON-serialized tags column to a string[]. Returns [] on null/invalid. */
+function parseTags(raw: string | null): string[] {
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((t): t is string => typeof t === 'string')
+  } catch {
+    return []
+  }
+}
+
+function mapTask(row: TaskRow): Task {
+  return {
+    id: row.id,
+    workspaceId: row.workspace_id,
+    title: row.title,
+    status: row.status as TaskStatus,
+    isAcceptanceCriterion: row.is_acceptance_criterion === 1,
+    sortOrder: row.sort_order,
+    role: row.role,
+    verification: parseTaskVerification(row.verification),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
+}
+
+/** Insert a new workspace into the database and return it. */
+export function createWorkspace(data: CreateWorkspaceInput): Workspace {
+  const db = getDb()
+  const now = new Date().toISOString()
+  const id = nanoid()
+
+  const computedWorktreePath =
+    data.worktreePath ?? resolveWorkspaceWorktreePath(data.projectPath, data.workingBranch, data.worktreesPath)
+  const owned = data.worktreeOwned ?? true
+  if (data.workflowPolicy !== undefined && !isWorkflowPolicy(data.workflowPolicy))
+    throw new Error('Invalid workflowPolicy')
+  const workflowPolicy = resolveWorkflowPolicy(data.workflowPolicy)
+
+  // Mirror the unified mode into the legacy columns so older readers (in-flight
+  // requests during deploy, external scripts) still see a sane value.
+  const unifiedMode: AgentPermissionMode = data.agentPermissionMode ?? 'bypass'
+  const legacyMode = unifiedMode === 'plan' ? 'plan' : 'auto-accept'
+  const legacyProfile = unifiedMode === 'plan' ? 'bypass' : unifiedMode
+
+  db.prepare(`
+    INSERT INTO workspaces (
+      id, name, project_path, source_branch, working_branch, status,
+      notion_url, notion_page_id, sentry_url, pr_url, worktree_path, worktree_owned,
+      model, brainstorm_model, reasoning_effort, permission_mode, permission_profile, agent_permission_mode, engine, comparison_id, created_at, updated_at, workflow_policy
+    ) VALUES (?, ?, ?, ?, ?, 'created', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    data.name,
+    data.projectPath,
+    data.sourceBranch,
+    data.workingBranch,
+    data.notionUrl ?? null,
+    data.notionPageId ?? null,
+    data.sentryUrl ?? null,
+    data.prUrl ?? null,
+    computedWorktreePath,
+    owned ? 1 : 0,
+    data.model ?? 'claude-opus-4-8',
+    data.brainstormModel ?? null,
+    data.reasoningEffort ?? 'auto',
+    legacyMode,
+    legacyProfile,
+    unifiedMode,
+    data.engine ?? 'claude-code',
+    // Empty string is not a group: it would silently gather every workspace
+    // created with a blank id into one comparison.
+    data.comparisonId?.trim() ? data.comparisonId : null,
+    now,
+    now,
+    JSON.stringify(workflowPolicy),
+  )
+
+  return getWorkspace(id) as Workspace
+}
+
+/** Fetch a single workspace by ID, or null if not found. */
+export function getWorkspace(id: string): Workspace | null {
+  const db = getDb()
+  const row = db.prepare('SELECT * FROM workspaces WHERE id = ?').get(id) as WorkspaceRow | undefined
+  return row ? mapWorkspace(row) : null
+}
+
+/**
+ * Every workspace sharing a comparison id, oldest first — the order they were
+ * created in, which is the order the engines were picked.
+ *
+ * An empty or missing id matches nothing: `comparison_id` is NULL for the vast
+ * majority of workspaces, and returning them all here would be a footgun.
+ */
+export function listComparisonMembers(comparisonId: string): Workspace[] {
+  if (!comparisonId.trim()) return []
+  const rows = getDb()
+    // rowid breaks created_at ties in insertion order; the nanoid id is random.
+    .prepare('SELECT * FROM workspaces WHERE comparison_id = ? ORDER BY created_at, rowid')
+    .all(comparisonId) as WorkspaceRow[]
+  return rows.map(mapWorkspace)
+}
+
+/** List all workspaces, optionally including archived ones. Ordered by most recently updated. */
+export function listWorkspaces(includeArchived = false): Workspace[] {
+  const db = getDb()
+  const sql = includeArchived
+    ? 'SELECT * FROM workspaces ORDER BY updated_at DESC'
+    : 'SELECT * FROM workspaces WHERE archived_at IS NULL ORDER BY updated_at DESC'
+  const rows = db.prepare(sql).all() as WorkspaceRow[]
+  return rows.map(mapWorkspace)
+}
+
+/** List only archived workspaces, ordered by archive date descending. */
+export function listArchivedWorkspaces(): Workspace[] {
+  const db = getDb()
+  const rows = db
+    .prepare('SELECT * FROM workspaces WHERE archived_at IS NOT NULL ORDER BY archived_at DESC')
+    .all() as WorkspaceRow[]
+  return rows.map(mapWorkspace)
+}
+
+/** Transition a workspace to a new status, validating against VALID_TRANSITIONS. */
+export function updateWorkspaceStatus(id: string, status: WorkspaceStatus): Workspace {
+  const db = getDb()
+  const workspace = getWorkspace(id)
+
+  if (!workspace) {
+    throw new Error(`Workspace '${id}' not found`)
+  }
+
+  // Self-transition is a no-op. Some failure paths fan out (e.g. engine emits
+  // an error event AND the process exits non-zero), and both try to mark the
+  // workspace 'error' — the second call shouldn't throw.
+  if (workspace.status === status) {
+    return workspace
+  }
+
+  const allowedTransitions = VALID_TRANSITIONS[workspace.status]
+  if (!allowedTransitions.includes(status)) {
+    throw new Error(
+      `Invalid status transition from '${workspace.status}' to '${status}'. Allowed: ${allowedTransitions.join(', ')}`,
+    )
+  }
+
+  const now = new Date().toISOString()
+  db.prepare('UPDATE workspaces SET status = ?, updated_at = ? WHERE id = ?').run(status, now, id)
+
+  if (status === 'compacting' || workspace.status === 'compacting') {
+    emitEphemeral(id, 'workspace:status', { status })
+  }
+  return getWorkspace(id) as Workspace
+}
+
+const WORKSPACE_NAME_MAX_LENGTH = 200
+
+function sanitizeWorkspaceName(name: string): string {
+  const noControl = Array.from(name, (c) => {
+    const code = c.charCodeAt(0)
+    return code < 32 || code === 127 ? ' ' : c
+  }).join('')
+  const sanitized = noControl.replace(/\s+/g, ' ').trim()
+  if (!sanitized) throw new Error('Workspace name cannot be empty')
+  if (sanitized.length > WORKSPACE_NAME_MAX_LENGTH) {
+    throw new Error(`Workspace name cannot exceed ${WORKSPACE_NAME_MAX_LENGTH} characters`)
+  }
+  return sanitized
+}
+
+function normalizeWorkspaceDescription(description: string | null): string | null {
+  const trimmed = description == null ? null : description.trim()
+  if (trimmed !== null && trimmed.length > 200) {
+    throw new Error(`Description must be 200 characters or fewer (got ${trimmed.length})`)
+  }
+  return trimmed && trimmed.length > 0 ? trimmed : null
+}
+
+/** Update a workspace's display name. */
+export function updateWorkspaceName(id: string, name: string): Workspace {
+  const sanitized = sanitizeWorkspaceName(name)
+  const db = getDb()
+  const now = new Date().toISOString()
+  const result = db.prepare('UPDATE workspaces SET name = ?, updated_at = ? WHERE id = ?').run(sanitized, now, id)
+  if (result.changes === 0) {
+    throw new Error(`Workspace '${id}' not found`)
+  }
+  return getWorkspace(id) as Workspace
+}
+
+/** Update the Claude model used by a workspace's agent. */
+export function updateWorkspaceModel(id: string, model: string): Workspace {
+  const db = getDb()
+  const now = new Date().toISOString()
+  const result = db.prepare('UPDATE workspaces SET model = ?, updated_at = ? WHERE id = ?').run(model, now, id)
+  if (result.changes === 0) {
+    throw new Error(`Workspace '${id}' not found`)
+  }
+  return getWorkspace(id) as Workspace
+}
+
+/** Update the reasoning effort used by a workspace's agent. */
+export function updateWorkspaceReasoningEffort(id: string, reasoningEffort: string): Workspace {
+  const db = getDb()
+  const now = new Date().toISOString()
+  const result = db
+    .prepare('UPDATE workspaces SET reasoning_effort = ?, updated_at = ? WHERE id = ?')
+    .run(reasoningEffort, now, id)
+  if (result.changes === 0) {
+    throw new Error(`Workspace '${id}' not found`)
+  }
+  return getWorkspace(id) as Workspace
+}
+
+/** Atomically change the engine configuration used by future workspace turns. */
+export function updateWorkspaceEngineConfiguration(
+  id: string,
+  engine: string,
+  model: string,
+  reasoningEffort: string,
+  agentPermissionMode: AgentPermissionMode,
+): Workspace {
+  const db = getDb()
+  const now = new Date().toISOString()
+  const legacyMode = agentPermissionMode === 'plan' ? 'plan' : 'auto-accept'
+  const legacyProfile = agentPermissionMode === 'plan' ? 'bypass' : agentPermissionMode
+  const result = db
+    .prepare(
+      `UPDATE workspaces
+       SET engine = ?, model = ?, reasoning_effort = ?, agent_permission_mode = ?,
+           permission_mode = ?, permission_profile = ?, updated_at = ?
+       WHERE id = ?`,
+    )
+    .run(engine, model, reasoningEffort, agentPermissionMode, legacyMode, legacyProfile, now, id)
+  if (result.changes === 0) throw new Error(`Workspace '${id}' not found`)
+  return getWorkspace(id) as Workspace
+}
+
+/**
+ * Update the working branch for a workspace. Used both after ticket-ID
+ * injection at creation time and after the rename-branch / resync-branch
+ * endpoints. Rejects empty / whitespace-only names.
+ */
+export function updateWorkingBranch(id: string, workingBranch: string): Workspace {
+  const sanitized = workingBranch.trim()
+  if (!sanitized) {
+    throw new Error('Branch name cannot be empty')
+  }
+  const db = getDb()
+  const now = new Date().toISOString()
+  const result = db
+    .prepare('UPDATE workspaces SET working_branch = ?, updated_at = ? WHERE id = ?')
+    .run(sanitized, now, id)
+  if (result.changes === 0) {
+    throw new Error(`Workspace '${id}' not found`)
+  }
+  return getWorkspace(id) as Workspace
+}
+
+/**
+ * Update the source branch in the database. Called by the PR watcher when
+ * GitHub reports a different `baseRefName` for the workspace's PR.
+ * Does NOT touch the worktree — the user (or the agent) decides when to
+ * rebase the local branch onto the new base.
+ */
+export function updateWorkspaceSourceBranch(id: string, sourceBranch: string): Workspace {
+  const sanitized = sourceBranch.trim()
+  if (!sanitized) {
+    throw new Error('Source branch cannot be empty')
+  }
+  // The stored value reaches `git fetch origin <sourceBranch>` as a bare
+  // argument, from paths as ordinary as opening the Diff tab, so a name git
+  // would read as an option must never land here. Guarding the writer rather
+  // than each route covers the pr-watcher too, which takes the base the forge
+  // reports — and a leading dash is a perfectly valid ref name upstream.
+  if (!isValidBranchName(sanitized)) {
+    throw new Error(`Invalid source branch name: ${sanitized}`)
+  }
+  const db = getDb()
+  const now = new Date().toISOString()
+  const result = db
+    .prepare('UPDATE workspaces SET source_branch = ?, updated_at = ? WHERE id = ?')
+    .run(sanitized, now, id)
+  if (result.changes === 0) {
+    throw new Error(`Workspace '${id}' not found`)
+  }
+  return getWorkspace(id) as Workspace
+}
+
+/** Update the on-disk worktree path. Used by rename / resync-branch on owned worktrees. */
+export function updateWorktreePath(id: string, newPath: string): Workspace {
+  const db = getDb()
+  const now = new Date().toISOString()
+  const result = db
+    .prepare('UPDATE workspaces SET worktree_path = ?, updated_at = ? WHERE id = ?')
+    .run(newPath, now, id)
+  if (result.changes === 0) {
+    throw new Error(`Workspace '${id}' not found`)
+  }
+  return getWorkspace(id) as Workspace
+}
+
+/**
+ * Update the agent's unified permission mode (plan | bypass | strict | interactive).
+ *
+ * Also writes the legacy `permission_mode` and `permission_profile` columns to
+ * keep them coherent with the new value — they remain readable by legacy code
+ * paths during deploy. The unified column is the source of truth.
+ */
+export function updateAgentPermissionMode(id: string, mode: AgentPermissionMode): Workspace {
+  const db = getDb()
+  const now = new Date().toISOString()
+  const legacyMode = mode === 'plan' ? 'plan' : 'auto-accept'
+  const legacyProfile = mode === 'plan' ? 'bypass' : mode
+  const result = db
+    .prepare(
+      'UPDATE workspaces SET agent_permission_mode = ?, permission_mode = ?, permission_profile = ?, updated_at = ? WHERE id = ?',
+    )
+    .run(mode, legacyMode, legacyProfile, now, id)
+  if (result.changes === 0) {
+    throw new Error(`Workspace '${id}' not found`)
+  }
+  return getWorkspace(id) as Workspace
+}
+
+/**
+ * Update a workspace's short description (≤ 200 chars after trim).
+ * Empty string (after trim) or `null` clears the column.
+ *
+ * Emits an ephemeral `workspace:description-updated` WebSocket event so every
+ * subscribed client (sidebar + the workspace header) refreshes in real-time
+ * without a manual reload. The truth lives in the DB; sync replay on
+ * reconnect re-fetches via GET /api/workspaces.
+ *
+ * @throws when the description exceeds 200 chars after trim or the workspace
+ *   does not exist.
+ */
+export function updateWorkspaceDescription(id: string, description: string | null): Workspace {
+  const stored = normalizeWorkspaceDescription(description)
+  const db = getDb()
+  const result = db
+    .prepare('UPDATE workspaces SET description = ?, updated_at = ? WHERE id = ?')
+    .run(stored, new Date().toISOString(), id)
+  if (result.changes === 0) {
+    throw new Error(`Workspace '${id}' not found`)
+  }
+  emitEphemeral(id, 'workspace:description-updated', { description: stored })
+  return getWorkspace(id) as Workspace
+}
+
+export interface WorkspaceFieldUpdates {
+  workflowPolicy?: WorkflowPolicy
+  status?: WorkspaceStatus
+  model?: string
+  reasoningEffort?: string
+  agentPermissionMode?: AgentPermissionMode
+  name?: string
+  description?: string | null
+}
+
+/** Validate and persist a multi-field API update with one atomic SQL statement. */
+export function updateWorkspaceFields(id: string, fields: WorkspaceFieldUpdates): Workspace {
+  const workspace = getWorkspace(id)
+  if (!workspace) throw new Error(`Workspace '${id}' not found`)
+
+  const assignments: string[] = []
+  const values: unknown[] = []
+  if (fields.workflowPolicy !== undefined) {
+    if (!isWorkflowPolicy(fields.workflowPolicy)) throw new Error('Invalid workflowPolicy')
+    assignments.push('workflow_policy = ?')
+    values.push(JSON.stringify(resolveWorkflowPolicy(workspace.workflowPolicy, fields.workflowPolicy)))
+  }
+  if (fields.model !== undefined) {
+    if (typeof fields.model !== 'string' || !fields.model.trim()) throw new Error('model must be a non-empty string')
+    assignments.push('model = ?')
+    values.push(fields.model.trim())
+  }
+  if (fields.reasoningEffort !== undefined) {
+    if (typeof fields.reasoningEffort !== 'string' || !fields.reasoningEffort.trim()) {
+      throw new Error('reasoningEffort must be a non-empty string')
+    }
+    assignments.push('reasoning_effort = ?')
+    values.push(fields.reasoningEffort.trim())
+  }
+  if (fields.agentPermissionMode !== undefined) {
+    if (!['plan', 'bypass', 'strict', 'interactive'].includes(fields.agentPermissionMode)) {
+      throw new Error('Invalid agentPermissionMode')
+    }
+    const legacyMode = fields.agentPermissionMode === 'plan' ? 'plan' : 'auto-accept'
+    const legacyProfile = fields.agentPermissionMode === 'plan' ? 'bypass' : fields.agentPermissionMode
+    assignments.push('agent_permission_mode = ?', 'permission_mode = ?', 'permission_profile = ?')
+    values.push(fields.agentPermissionMode, legacyMode, legacyProfile)
+  }
+  if (fields.status !== undefined) {
+    const allowed = VALID_TRANSITIONS[workspace.status]
+    if (!allowed || (fields.status !== workspace.status && !allowed.includes(fields.status))) {
+      throw new Error(
+        `Invalid status transition from '${workspace.status}' to '${fields.status}'. Allowed: ${allowed?.join(', ') ?? ''}`,
+      )
+    }
+    assignments.push('status = ?')
+    values.push(fields.status)
+  }
+  if (fields.name !== undefined) {
+    if (typeof fields.name !== 'string') throw new Error('name must be a string')
+    assignments.push('name = ?')
+    values.push(sanitizeWorkspaceName(fields.name))
+  }
+  const hasDescription = Object.hasOwn(fields, 'description')
+  let storedDescription: string | null | undefined
+  if (hasDescription) {
+    if (fields.description !== null && typeof fields.description !== 'string') {
+      throw new Error('description must be a string or null')
+    }
+    storedDescription = normalizeWorkspaceDescription(fields.description ?? null)
+    assignments.push('description = ?')
+    values.push(storedDescription)
+  }
+  if (assignments.length === 0) return workspace
+
+  assignments.push('updated_at = ?')
+  values.push(new Date().toISOString(), id)
+  const result = getDb()
+    .prepare(`UPDATE workspaces SET ${assignments.join(', ')} WHERE id = ?`)
+    .run(...values)
+  if (result.changes === 0) throw new Error(`Workspace '${id}' not found`)
+  if (hasDescription) emitEphemeral(id, 'workspace:description-updated', { description: storedDescription ?? null })
+  return getWorkspace(id) as Workspace
+}
+
+/**
+ * Update a workspace's agent-side description (≤ 200 chars after trim).
+ * Empty string (after trim) or `null` clears the column.
+ *
+ * Mirror of `updateWorkspaceDescription` but writes the `agent_description`
+ * column, which is exclusively the agent's to set via the
+ * `set_workspace_agent_description` MCP tool. The user's `description`
+ * column is untouched.
+ *
+ * Emits an ephemeral `workspace:agent-description-updated` event so every
+ * subscribed client (sidebar fallback display + workspace header read-only
+ * line) refreshes in real-time.
+ *
+ * @throws when the description exceeds 200 chars after trim or the workspace
+ *   does not exist.
+ */
+export function updateWorkspaceAgentDescription(id: string, description: string | null): Workspace {
+  const trimmed = description == null ? null : description.trim()
+  if (trimmed !== null && trimmed.length > 200) {
+    throw new Error(`Description must be 200 characters or fewer (got ${trimmed.length})`)
+  }
+  const stored = trimmed && trimmed.length > 0 ? trimmed : null
+  const db = getDb()
+  const result = db
+    .prepare('UPDATE workspaces SET agent_description = ?, updated_at = ? WHERE id = ?')
+    .run(stored, new Date().toISOString(), id)
+  if (result.changes === 0) {
+    throw new Error(`Workspace '${id}' not found`)
+  }
+  emitEphemeral(id, 'workspace:agent-description-updated', { agentDescription: stored })
+  return getWorkspace(id) as Workspace
+}
+
+/**
+ * Persist the brainstorm prompt for a workspace so it survives across restarts
+ * and a failed setup script. Pass `null` to clear it after consumption.
+ */
+export function setInitialPrompt(id: string, prompt: string | null): void {
+  const db = getDb()
+  const result = db
+    .prepare('UPDATE workspaces SET initial_prompt = ?, updated_at = ? WHERE id = ?')
+    .run(prompt, new Date().toISOString(), id)
+  if (result.changes === 0) {
+    throw new Error(`Workspace '${id}' not found`)
+  }
+}
+
+/** Shortcut for `setInitialPrompt(id, null)`. */
+export function clearInitialPrompt(id: string): void {
+  setInitialPrompt(id, null)
+}
+
+/**
+ * Record that the user dismissed a PR attention badge ("changes requested"
+ * or "CI failure"). `prUpdatedAt` is the timestamp of the PR snapshot at the
+ * moment of the click — the badge stays hidden until the watcher observes a
+ * fresher updatedAt.
+ */
+export type PrAttentionKind = 'changes-requested' | 'ci-failed'
+
+export function dismissPrAttention(id: string, kind: PrAttentionKind, prUpdatedAt: string): void {
+  const column = kind === 'changes-requested' ? 'pr_changes_dismissed_at' : 'pr_ci_failure_dismissed_at'
+  const db = getDb()
+  const result = db
+    .prepare(`UPDATE workspaces SET ${column} = ?, updated_at = ? WHERE id = ?`)
+    .run(prUpdatedAt, new Date().toISOString(), id)
+  if (result.changes === 0) {
+    throw new Error(`Workspace '${id}' not found`)
+  }
+}
+
+/**
+ * Undo a PR-attention dismiss — clears the dismissed-at column so the
+ * changes-requested / CI-failure badge surfaces again ("mark as unseen").
+ * The inverse of {@link dismissPrAttention}.
+ */
+export function restorePrAttention(id: string, kind: PrAttentionKind): void {
+  const column = kind === 'changes-requested' ? 'pr_changes_dismissed_at' : 'pr_ci_failure_dismissed_at'
+  const db = getDb()
+  const result = db
+    .prepare(`UPDATE workspaces SET ${column} = NULL, updated_at = ? WHERE id = ?`)
+    .run(new Date().toISOString(), id)
+  if (result.changes === 0) {
+    throw new Error(`Workspace '${id}' not found`)
+  }
+}
+
+/** Restore metadata captured at purge time, useful when (later) we want to
+ *  rebuild the worktree from the merged PR / GitLab MR. Read-only field. */
+export interface WorktreePurgeRestoreData {
+  prNumber: number | null
+  prUrl: string | null
+  forge: 'github' | 'gitlab' | 'bitbucket-community' | 'none' | null
+  mergeCommitSha: string | null
+  headCommitSha?: string | null
+  originalWorktreePath: string
+  originalSourceBranch: string
+  originalWorkingBranch: string
+}
+
+export function markWorktreePurged(id: string, restoreData: WorktreePurgeRestoreData): void {
+  const db = getDb()
+  const now = new Date().toISOString()
+  const result = db
+    .prepare(
+      'UPDATE workspaces SET worktree_purged_at = ?, worktree_purge_restore_data = ?, updated_at = ? WHERE id = ?',
+    )
+    .run(now, JSON.stringify(restoreData), now, id)
+  if (result.changes === 0) {
+    throw new Error(`Workspace '${id}' not found`)
+  }
+}
+
+export function restoreWorktreeFromDisk(id: string): Workspace {
+  const db = getDb()
+  const workspace = getWorkspace(id)
+  if (!workspace) {
+    throw new Error(`Workspace '${id}' not found`)
+  }
+  const now = new Date().toISOString()
+  db.prepare(
+    'UPDATE workspaces SET worktree_purged_at = NULL, worktree_purge_restore_data = NULL, archived_at = NULL, updated_at = ? WHERE id = ?',
+  ).run(now, id)
+  return getWorkspace(id) as Workspace
+}
+
+/** Update the dev-server status column for a workspace. */
+export function updateDevServerStatus(id: string, status: string): void {
+  const db = getDb()
+  db.prepare('UPDATE workspaces SET dev_server_status = ? WHERE id = ?').run(status, id)
+}
+
+/** Mark a workspace as read (has_unread = 0). */
+export function markWorkspaceRead(id: string): void {
+  const db = getDb()
+  db.prepare('UPDATE workspaces SET has_unread = 0 WHERE id = ?').run(id)
+}
+
+/** Mark a workspace as unread (has_unread = 1). */
+export function markWorkspaceUnread(id: string): void {
+  const db = getDb()
+  db.prepare('UPDATE workspaces SET has_unread = 1 WHERE id = ?').run(id)
+}
+
+/** Delete a workspace and cascade-delete its tasks. */
+export function deleteWorkspace(id: string): void {
+  // Cancel any pending wakeup first so the in-memory timer is cleared.
+  // The DB row is removed via ON DELETE CASCADE, but the timer would
+  // otherwise fire and hit an empty workspace.
+  wakeupService.cancel(id, 'deleted')
+
+  // Same for any pending quota backoff. Best-effort: failure must not
+  // block delete. The DB row is also removed via ON DELETE CASCADE.
+  try {
+    quotaBackoffService.cancel(id, 'deleted')
+  } catch (err) {
+    console.error('[workspace-service] cancel quota backoff on delete failed:', err)
+  }
+
+  // Cancel every pending cron BEFORE the FK cascade removes the rows so
+  // in-memory setTimeout timers are cleared. Best-effort: failure must not
+  // block delete.
+  try {
+    cronService.cancelAllForWorkspace(id, 'deleted')
+  } catch (err) {
+    console.error('[workspace-service] cancel crons on delete failed:', err)
+  }
+
+  // Drop the cached rate_limit.info so memory doesn't leak on workspace
+  // churn. The Map has no FK to clean up for it automatically.
+  orchestrator.forgetRateLimitInfo(id)
+  orchestrator.forgetTasksDoneSnapshot(id)
+  orchestrator.forgetResumeFailed(id)
+  orchestrator.forgetPendingQueue(id)
+  orchestrator.forgetPreAwaitStatus(id)
+  orchestrator.forgetSessionId(id)
+  autoLoopService.forgetAutoLoopState(id)
+
+  const db = getDb()
+  db.prepare('DELETE FROM workspaces WHERE id = ?').run(id)
+}
+
+/** Create a new task under a workspace. Throws if the workspace does not exist. */
+export function createTask(workspaceId: string, data: CreateTaskInput): Task {
+  const db = getDb()
+  if (!db.prepare('SELECT 1 FROM workspaces WHERE id = ?').get(workspaceId)) {
+    throw new Error(`Workspace not found: '${workspaceId}'`)
+  }
+  return mapTask(createTaskRecord(db, workspaceId, data))
+}
+
+/** Fetch a single task by ID scoped to a workspace, or null if not found. */
+export function getTask(taskId: string, workspaceId: string): Task | null {
+  const db = getDb()
+  const row = db.prepare('SELECT * FROM tasks WHERE id = ? AND workspace_id = ?').get(taskId, workspaceId) as
+    | TaskRow
+    | undefined
+  return row ? mapTask(row) : null
+}
+
+/** List all tasks for a workspace, ordered by sort_order ascending. */
+export function listTasks(workspaceId: string): Task[] {
+  const db = getDb()
+  const rows = db
+    .prepare('SELECT * FROM tasks WHERE workspace_id = ? ORDER BY sort_order ASC, rowid ASC')
+    .all(workspaceId) as TaskRow[]
+  return rows.map(mapTask)
+}
+
+/** Update task fields atomically through the same completion policy as MCP. */
+export function updateTask(taskId: string, data: UpdateTaskMutation): Task {
+  const db = getDb()
+  const existing = db.prepare('SELECT workspace_id FROM tasks WHERE id = ?').get(taskId) as
+    | { workspace_id: string }
+    | undefined
+  if (!existing) throw new Error(`Task '${taskId}' not found`)
+  return mapTask(updateTaskRecord(db, existing.workspace_id, taskId, data))
+}
+
+/** Update a task's status; auto-loop completion requires successful verification. */
+export function updateTaskStatus(taskId: string, status: TaskStatus, verification?: unknown): Task {
+  return updateTask(taskId, { status, ...(verification !== undefined ? { verification } : {}) })
+}
+
+/** Update a task's title and invalidate obsolete verification. */
+export function updateTaskTitle(taskId: string, title: string): Task {
+  return updateTask(taskId, { title })
+}
+
+/** Delete a task by ID. */
+export function deleteTask(taskId: string): void {
+  const db = getDb()
+  const existing = db.prepare('SELECT workspace_id FROM tasks WHERE id = ?').get(taskId) as
+    | { workspace_id: string }
+    | undefined
+  if (existing) deleteTaskRecord(db, existing.workspace_id, taskId)
+}
+
+/** Fetch a workspace with all its tasks eagerly loaded. */
+export function getWorkspaceWithTasks(id: string): WorkspaceWithTasks | null {
+  const workspace = getWorkspace(id)
+  if (!workspace) return null
+  const tasks = listTasks(id)
+  return { ...workspace, tasks }
+}
+
+/** Archive a workspace (set archived_at). Throws if already archived. */
+export function archiveWorkspace(id: string): Workspace {
+  const db = getDb()
+  const workspace = getWorkspace(id)
+  if (!workspace) {
+    throw new Error(`Workspace '${id}' not found`)
+  }
+  if (workspace.archivedAt) {
+    throw new Error(`Workspace '${id}' is already archived`)
+  }
+
+  // Cancel any pending wakeup — archived workspaces should not wake up.
+  wakeupService.cancel(id, 'archived')
+
+  // Cancel any pending quota backoff — archived workspaces should not auto-resume.
+  // Best-effort: failure here must not block archive.
+  try {
+    quotaBackoffService.cancel(id, 'archive')
+  } catch (err) {
+    console.error('[workspace-service] cancel quota backoff on archive failed:', err)
+  }
+
+  // Cancel every pending cron — archived workspaces must not fire scheduled
+  // prompts. Best-effort: failure here must not block archive.
+  try {
+    cronService.cancelAllForWorkspace(id, 'archive')
+  } catch (err) {
+    console.error('[workspace-service] cancel crons on archive failed:', err)
+  }
+
+  // Disable auto-loop — archived workspaces should not keep looping.
+  // Idempotent: no-op if auto_loop was already 0.
+  autoLoopService.disable(id, 'user-action')
+
+  const now = new Date().toISOString()
+  db.prepare('UPDATE workspaces SET archived_at = ?, updated_at = ? WHERE id = ?').run(now, now, id)
+  return getWorkspace(id) as Workspace
+}
+
+/** Unarchive a workspace (clear archived_at), restoring its previous status. */
+export function unarchiveWorkspace(id: string): Workspace {
+  const db = getDb()
+  const workspace = getWorkspace(id)
+  if (!workspace) {
+    throw new Error(`Workspace '${id}' not found`)
+  }
+  if (!workspace.archivedAt) {
+    throw new Error(`Workspace '${id}' is not archived`)
+  }
+
+  const now = new Date().toISOString()
+  db.prepare('UPDATE workspaces SET archived_at = NULL, updated_at = ? WHERE id = ?').run(now, id)
+  return getWorkspace(id) as Workspace
+}
+
+/** Mark a workspace as a favorite. Idempotent — refreshes the timestamp if already favorited. */
+export function setFavorite(id: string): Workspace {
+  const db = getDb()
+  const now = new Date().toISOString()
+  const result = db.prepare('UPDATE workspaces SET favorited_at = ?, updated_at = ? WHERE id = ?').run(now, now, id)
+  if (result.changes === 0) {
+    throw new Error(`Workspace '${id}' not found`)
+  }
+  return getWorkspace(id) as Workspace
+}
+
+/** Flip the `auto_loop_ready` flag for a workspace. Used by the grooming MCP tool + the "Force ready" override. */
+export function setAutoLoopReady(id: string, ready: boolean): Workspace {
+  const workspace = getWorkspace(id)
+  if (!workspace) throw new Error(`Workspace '${id}' not found`)
+  const db = getDb()
+  db.prepare('UPDATE workspaces SET auto_loop_ready = ? WHERE id = ?').run(ready ? 1 : 0, id)
+  return getWorkspace(id) as Workspace
+}
+
+/** Remove a workspace from favorites. Idempotent: safe to call on a non-favorite, though `updated_at` still refreshes. */
+export function unsetFavorite(id: string): Workspace {
+  const db = getDb()
+  const now = new Date().toISOString()
+  const result = db.prepare('UPDATE workspaces SET favorited_at = NULL, updated_at = ? WHERE id = ?').run(now, id)
+  if (result.changes === 0) {
+    throw new Error(`Workspace '${id}' not found`)
+  }
+  return getWorkspace(id) as Workspace
+}
+
+/** Skip the PR watcher's forge (gh/glab) call for this workspace every tick — no PR-status fetch,
+ *  no auto-archive-on-merge, no auto-purge. Local git stats keep updating regardless. */
+export function setPrWatchDisabled(id: string): Workspace {
+  const db = getDb()
+  const now = new Date().toISOString()
+  const result = db
+    .prepare('UPDATE workspaces SET pr_watch_disabled_at = ?, updated_at = ? WHERE id = ?')
+    .run(now, now, id)
+  if (result.changes === 0) {
+    throw new Error(`Workspace '${id}' not found`)
+  }
+  return getWorkspace(id) as Workspace
+}
+
+/** Resume PR-watcher forge polling for this workspace. */
+export function setPrWatchEnabled(id: string): Workspace {
+  const db = getDb()
+  const now = new Date().toISOString()
+  const result = db
+    .prepare('UPDATE workspaces SET pr_watch_disabled_at = NULL, updated_at = ? WHERE id = ?')
+    .run(now, id)
+  if (result.changes === 0) {
+    throw new Error(`Workspace '${id}' not found`)
+  }
+  return getWorkspace(id) as Workspace
+}
+
+/** Maximum tag length (characters) and max number of tags per workspace. */
+export const MAX_TAG_LENGTH = 50
+export const MAX_WORKSPACE_TAGS = 50
+
+/** Replace the workspace's tag list. Trims, dedupes, caps length per tag and count total. */
+export function setWorkspaceTags(id: string, tags: string[]): Workspace {
+  const normalized = Array.from(
+    new Set(
+      tags
+        .map((t) => (typeof t === 'string' ? t.trim() : ''))
+        .filter((t) => t.length > 0 && t.length <= MAX_TAG_LENGTH),
+    ),
+  ).slice(0, MAX_WORKSPACE_TAGS)
+  const db = getDb()
+  const now = new Date().toISOString()
+  const result = db
+    .prepare('UPDATE workspaces SET tags = ?, updated_at = ? WHERE id = ?')
+    .run(JSON.stringify(normalized), now, id)
+  if (result.changes === 0) {
+    throw new Error(`Workspace '${id}' not found`)
+  }
+  return getWorkspace(id) as Workspace
+}
+
+// ── Agent Sessions ────────────────────────────────────────────────────────────
+
+/** A persisted record of an agent engine invocation for a workspace. */
+export interface AgentSession {
+  id: string
+  workspaceId: string
+  pid: number | null
+  engineSessionId: string | null
+  engine: string | null
+  status: string
+  model: string | null
+  startedAt: string
+  endedAt: string | null
+  /** Negative values retain rolled-back targets in history without implicit selection. */
+  activationOrder?: number
+  name: string | null
+}
+
+interface AgentSessionRow {
+  id: string
+  workspace_id: string
+  pid: number | null
+  engine_session_id: string | null
+  engine: string | null
+  status: string
+  model: string | null
+  started_at: string
+  ended_at: string | null
+  activation_order: number
+  name: string | null
+}
+
+function mapSession(row: AgentSessionRow): AgentSession {
+  return {
+    id: row.id,
+    workspaceId: row.workspace_id,
+    pid: row.pid,
+    engineSessionId: row.engine_session_id,
+    engine: row.engine,
+    status: row.status,
+    model: row.model,
+    startedAt: row.started_at,
+    endedAt: row.ended_at,
+    activationOrder: row.activation_order,
+    name: row.name,
+  }
+}
+
+/** List all agent sessions for a workspace, most recent first. */
+export function listSessions(workspaceId: string): AgentSession[] {
+  const db = getDb()
+  const rows = db
+    .prepare('SELECT * FROM agent_sessions WHERE workspace_id = ? ORDER BY started_at DESC')
+    .all(workspaceId) as AgentSessionRow[]
+  return rows.map(mapSession)
+}
+
+/** Get the most recent agent session for a workspace, or null if none exist. */
+export function getLatestSession(workspaceId: string): AgentSession | null {
+  const db = getDb()
+  const row = db
+    .prepare('SELECT * FROM agent_sessions WHERE workspace_id = ? ORDER BY started_at DESC LIMIT 1')
+    .get(workspaceId) as AgentSessionRow | undefined
+  return row ? mapSession(row) : null
+}
+
+/**
+ * Return the "active" session for tagging events like push/pull/open-pr traces
+ * or resumed chat messages. Skips idle sessions (never started) and prefers a
+ * running session, falling back to the last used session (any non-idle status).
+ * Starts and handoff rollbacks persist activation order independently of execution dates.
+ * Legacy sessions fall back to their last start/end time.
+ */
+export function getActiveSession(workspaceId: string): AgentSession | null {
+  const db = getDb()
+  // Prefer a running session first (the agent the user is actively interacting with)
+  const running = db
+    .prepare(
+      "SELECT * FROM agent_sessions WHERE workspace_id = ? AND status = 'running' ORDER BY started_at DESC LIMIT 1",
+    )
+    .get(workspaceId) as AgentSessionRow | undefined
+  if (running) return mapSession(running)
+  // Otherwise the last used non-idle session (completed, error, quota, etc.)
+  const latestNonIdle = db
+    .prepare(
+      `SELECT * FROM agent_sessions WHERE workspace_id = ? AND status != 'idle' AND activation_order >= 0 ORDER BY ${SESSION_RECENCY_ORDER} LIMIT 1`,
+    )
+    .get(workspaceId) as AgentSessionRow | undefined
+  return latestNonIdle ? mapSession(latestNonIdle) : null
+}
+
+/** Create an idle agent session (no Claude process yet) for a workspace. */
+export function createIdleSession(workspaceId: string): AgentSession {
+  const db = getDb()
+  const workspace = getWorkspace(workspaceId)
+  if (!workspace) throw new Error(`Workspace '${workspaceId}' not found`)
+  const id = nanoid()
+  const now = new Date().toISOString()
+  db.prepare(
+    'INSERT INTO agent_sessions (id, workspace_id, pid, engine, status, model, started_at) VALUES (?, ?, NULL, ?, ?, ?, ?)',
+  ).run(id, workspaceId, workspace.engine, 'idle', workspace.model, now)
+  return {
+    id,
+    workspaceId,
+    pid: null,
+    engineSessionId: null,
+    engine: workspace.engine,
+    status: 'idle',
+    model: workspace.model,
+    startedAt: now,
+    endedAt: null,
+    name: null,
+  }
+}
+
+/** Rename an agent session. Returns the updated session or null if not found. */
+export function renameSession(sessionId: string, workspaceId: string, name: string): AgentSession | null {
+  const db = getDb()
+  const result = db
+    .prepare('UPDATE agent_sessions SET name = ? WHERE id = ? AND workspace_id = ?')
+    .run(name, sessionId, workspaceId)
+  if (result.changes === 0) return null
+  const row = db.prepare('SELECT * FROM agent_sessions WHERE id = ?').get(sessionId) as AgentSessionRow | undefined
+  return row ? mapSession(row) : null
+}
+
+/** Delete a stopped session and only the persisted conversation attached to it. */
+export function deleteSession(sessionId: string, workspaceId: string): boolean {
+  const db = getDb()
+  const session = db
+    .prepare('SELECT status, engine FROM agent_sessions WHERE id = ? AND workspace_id = ?')
+    .get(sessionId, workspaceId) as { status: string; engine: string | null } | undefined
+  if (!session) return false
+  if (session.status === 'running') {
+    throw new Error(`Cannot delete active session '${sessionId}'`)
+  }
+  const transaction = db.transaction(() => {
+    db.prepare('DELETE FROM ws_events WHERE workspace_id = ? AND session_id = ?').run(workspaceId, sessionId)
+    db.prepare('DELETE FROM agent_sessions WHERE id = ? AND workspace_id = ?').run(sessionId, workspaceId)
+    const workspace = getWorkspace(workspaceId)
+    if (workspace?.engine === session.engine) {
+      const fallback = db
+        .prepare(
+          'SELECT engine, model FROM agent_sessions WHERE workspace_id = ? AND engine IS NOT NULL ORDER BY started_at DESC LIMIT 1',
+        )
+        .get(workspaceId) as { engine: string; model: string | null } | undefined
+      if (fallback) {
+        db.prepare('UPDATE workspaces SET engine = ?, model = COALESCE(?, model), updated_at = ? WHERE id = ?').run(
+          fallback.engine,
+          fallback.model,
+          new Date().toISOString(),
+          workspaceId,
+        )
+      }
+    }
+  })
+  transaction()
+  return true
+}
+
+/**
+ * Recompute one session's persisted metrics from the events that remain, on an
+ * explicit database handle.
+ *
+ * Until v36 an `AFTER DELETE ... FOR EACH ROW` trigger did this per deleted
+ * row, re-aggregating the whole session every time — 79.7 s for 20 000 events,
+ * with the SQLite write lock held throughout. The trigger is gone; every code
+ * path that deletes `agent:event` rows while KEEPING the session calls this
+ * once, at the end of its transaction.
+ */
+export function recomputeSessionMetricsOn(db: Database.Database, workspaceId: string, sessionId: string): void {
+  db.prepare('DELETE FROM session_event_metrics WHERE workspace_id = ? AND session_id = ?').run(workspaceId, sessionId)
+  db.prepare(
+    `INSERT INTO session_event_metrics (
+       workspace_id, session_id, tool_calls, errors, input_tokens, output_tokens
+     )
+     SELECT
+       e.workspace_id,
+       e.session_id,
+       SUM(CASE WHEN json_extract(e.payload, '$.kind') = 'tool:call' THEN 1 ELSE 0 END),
+       SUM(CASE
+         WHEN json_extract(e.payload, '$.kind') = 'error'
+           OR (json_extract(e.payload, '$.kind') = 'tool:result'
+             AND json_extract(e.payload, '$.isError') = 1)
+         THEN 1 ELSE 0
+       END),
+       MAX(CASE
+         WHEN json_extract(e.payload, '$.kind') = 'usage'
+           AND json_type(e.payload, '$.inputTokens') IN ('integer', 'real')
+         THEN CAST(json_extract(e.payload, '$.inputTokens') AS INTEGER) ELSE 0
+       END),
+       MAX(CASE
+         WHEN json_extract(e.payload, '$.kind') = 'usage'
+           AND json_type(e.payload, '$.outputTokens') IN ('integer', 'real')
+         THEN CAST(json_extract(e.payload, '$.outputTokens') AS INTEGER) ELSE 0
+       END)
+     FROM ws_events e
+     JOIN agent_sessions s ON s.id = e.session_id AND s.workspace_id = e.workspace_id
+     WHERE e.workspace_id = ?
+       AND e.session_id = ?
+       AND e.type = 'agent:event'
+       AND json_valid(e.payload)
+     GROUP BY e.workspace_id, e.session_id`,
+  ).run(workspaceId, sessionId)
+}
+
+/** Same, on the singleton connection. */
+export function recomputeSessionMetrics(workspaceId: string, sessionId: string): void {
+  recomputeSessionMetricsOn(getDb(), workspaceId, sessionId)
+}

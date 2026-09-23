@@ -1,0 +1,248 @@
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import Database from 'better-sqlite3'
+import { Hono } from 'hono'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { runMigrations } from '../server/db/migrations.js'
+import { initSchema } from '../server/db/schema.js'
+
+// settings-service refuses to read settings in test mode without isolation.
+// The /health endpoint reads global settings to surface integration config —
+// stub the surface to a safe empty value.
+vi.mock('../server/services/settings-service.js', () => ({
+  getGlobalSettings: vi.fn(() => ({
+    notionMcpKey: '',
+    sentryMcpKey: '',
+    editorCommand: '',
+    worktreesPath: '',
+    worktreesPrefixByProject: false,
+  })),
+  getProjectSettings: vi.fn(() => null),
+  SETTINGS_SCHEMA_VERSION: 1,
+}))
+
+vi.mock('../server/services/agent/integration-mcp.js', () => ({ hasIntegrationMcpConfig: vi.fn(() => false) }))
+
+let tmpDir: string
+let dbPath: string
+let app: Hono
+
+async function resetDb(): Promise<void> {
+  const { closeDb } = await import('../server/db/index.js')
+  closeDb()
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'at-routes-health-test-'))
+  dbPath = path.join(tmpDir, 'test.db')
+  const db = new Database(dbPath)
+  db.pragma('journal_mode=WAL')
+  db.pragma('foreign_keys=ON')
+  initSchema(db)
+  // The /health endpoint reads schema_migrations to compute the current
+  // schemaVersion. initSchema creates the data tables; runMigrations creates
+  // the schema_migrations table itself and stamps the latest version.
+  runMigrations(db)
+  db.close()
+}
+
+describe('GET /api/health/report — active state', () => {
+  beforeEach(async () => {
+    const { hasIntegrationMcpConfig } = await import('../server/services/agent/integration-mcp.js')
+    vi.mocked(hasIntegrationMcpConfig).mockReturnValue(false)
+    await resetDb()
+    const { getDb } = await import('../server/db/index.js')
+    getDb(dbPath)
+    const healthRouter = (await import('../server/routes/health.js')).default
+    app = new Hono()
+    app.route('/api/health', healthRouter)
+  })
+
+  afterEach(async () => {
+    const { closeDb } = await import('../server/db/index.js')
+    closeDb()
+    if (tmpDir && fs.existsSync(tmpDir)) {
+      fs.rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  it('reports direct connections even without a selected Claude MCP key', async () => {
+    const { hasIntegrationMcpConfig } = await import('../server/services/agent/integration-mcp.js')
+    vi.mocked(hasIntegrationMcpConfig).mockReturnValue(true)
+    const response = await app.request('/api/health/report')
+    const report = await response.json()
+    expect(report.integrations.notion.configured).toBe(true)
+    expect(report.integrations.sentry.configured).toBe(true)
+  })
+
+  it('returns an `active` object with five empty arrays for an empty DB', async () => {
+    const res = await app.request('/api/health/report')
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { active: Record<string, unknown[]> }
+    expect(body.active).toBeDefined()
+    expect(body.active.quotaBackoffs).toEqual([])
+    expect(body.active.pendingWakeups).toEqual([])
+    expect(body.active.autoLoopActive).toEqual([])
+    expect(body.active.agentSessionsAlive).toEqual([])
+    expect(body.active.devServersRunning).toEqual([])
+  })
+
+  it('lists pending quota backoffs joined with workspace name, ordered by target_at', async () => {
+    const { createWorkspace } = await import('../server/services/workspace-service.js')
+    const w1 = createWorkspace({
+      name: 'A',
+      projectPath: '/tmp/p',
+      sourceBranch: 'main',
+      workingBranch: 'feature/a',
+    })
+    const w2 = createWorkspace({
+      name: 'B',
+      projectPath: '/tmp/p',
+      sourceBranch: 'main',
+      workingBranch: 'feature/b',
+    })
+    const { getDb } = await import('../server/db/index.js')
+    const db = getDb()
+    // Insert two backoffs — w2 fires sooner.
+    db.prepare(
+      `INSERT INTO pending_quota_backoffs (workspace_id, target_at, resets_at, source, retry_count, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(w1.id, '2026-05-07T10:00:00Z', null, 'fallback_ladder', 1, '2026-05-07T08:00:00Z')
+    db.prepare(
+      `INSERT INTO pending_quota_backoffs (workspace_id, target_at, resets_at, source, retry_count, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(w2.id, '2026-05-07T09:00:00Z', '2026-05-07T09:00:00Z', 'rate_limit_info', 0, '2026-05-07T08:00:00Z')
+
+    const res = await app.request('/api/health/report')
+    const body = (await res.json()) as { active: { quotaBackoffs: Array<{ workspaceId: string; name: string }> } }
+    expect(body.active.quotaBackoffs).toHaveLength(2)
+    expect(body.active.quotaBackoffs[0]).toMatchObject({ workspaceId: w2.id, name: 'B' })
+    expect(body.active.quotaBackoffs[1]).toMatchObject({ workspaceId: w1.id, name: 'A' })
+  })
+
+  it('lists workspaces with auto_loop=1, ignoring archived ones', async () => {
+    const { createWorkspace, archiveWorkspace } = await import('../server/services/workspace-service.js')
+    const armed = createWorkspace({
+      name: 'Armed',
+      projectPath: '/tmp/p',
+      sourceBranch: 'main',
+      workingBranch: 'feature/armed',
+    })
+    const archived = createWorkspace({
+      name: 'Archived',
+      projectPath: '/tmp/p',
+      sourceBranch: 'main',
+      workingBranch: 'feature/arc',
+    })
+    const off = createWorkspace({
+      name: 'Off',
+      projectPath: '/tmp/p',
+      sourceBranch: 'main',
+      workingBranch: 'feature/off',
+    })
+    const { getDb } = await import('../server/db/index.js')
+    const db = getDb()
+    db.prepare('UPDATE workspaces SET auto_loop = 1, auto_loop_ready = 1 WHERE id = ?').run(armed.id)
+    db.prepare('UPDATE workspaces SET auto_loop = 1, auto_loop_ready = 0 WHERE id = ?').run(archived.id)
+    archiveWorkspace(archived.id)
+    void off // off keeps auto_loop=0
+
+    const res = await app.request('/api/health/report')
+    const body = (await res.json()) as { active: { autoLoopActive: Array<{ name: string; ready: boolean }> } }
+    expect(body.active.autoLoopActive).toHaveLength(1)
+    expect(body.active.autoLoopActive[0]).toMatchObject({ name: 'Armed', ready: true })
+  })
+
+  it('lists running dev servers, ignoring archived workspaces', async () => {
+    const { createWorkspace } = await import('../server/services/workspace-service.js')
+    const live = createWorkspace({
+      name: 'Live',
+      projectPath: '/tmp/p',
+      sourceBranch: 'main',
+      workingBranch: 'feature/live',
+    })
+    const stopped = createWorkspace({
+      name: 'Stopped',
+      projectPath: '/tmp/p',
+      sourceBranch: 'main',
+      workingBranch: 'feature/stop',
+    })
+    const { getDb } = await import('../server/db/index.js')
+    const db = getDb()
+    db.prepare("UPDATE workspaces SET dev_server_status = 'running' WHERE id = ?").run(live.id)
+    db.prepare("UPDATE workspaces SET dev_server_status = 'stopped' WHERE id = ?").run(stopped.id)
+
+    const res = await app.request('/api/health/report')
+    const body = (await res.json()) as { active: { devServersRunning: Array<{ name: string }> } }
+    expect(body.active.devServersRunning).toHaveLength(1)
+    expect(body.active.devServersRunning[0]?.name).toBe('Live')
+  })
+})
+
+describe('GET /api/health/report — forge CLI probes', () => {
+  beforeEach(async () => {
+    await resetDb()
+    const { getDb } = await import('../server/db/index.js')
+    getDb(dbPath)
+    const healthRouter = (await import('../server/routes/health.js')).default
+    app = new Hono()
+    app.route('/api/health', healthRouter)
+  })
+
+  afterEach(async () => {
+    const { closeDb } = await import('../server/db/index.js')
+    closeDb()
+    if (tmpDir && fs.existsSync(tmpDir)) {
+      fs.rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  it('reports the forge CLIs alongside the agent CLIs', async () => {
+    const res = await app.request('/api/health/report')
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      claudeCli: { available: boolean }
+      forgeCli?: { gh?: { available: boolean }; glab?: { available: boolean } }
+    }
+    // La moitié « intégrer » du produit (PR, MR, surveillance de CI) dépend
+    // entièrement de `gh` ou `glab`, et rien ne les sondait.
+    expect(body.forgeCli).toBeDefined()
+    expect(typeof body.forgeCli?.gh?.available).toBe('boolean')
+    expect(typeof body.forgeCli?.glab?.available).toBe('boolean')
+  })
+})
+
+describe('GET /api/health/logs', () => {
+  beforeEach(async () => {
+    await resetDb()
+    const { getDb } = await import('../server/db/index.js')
+    getDb(dbPath)
+    process.env.KOBO_HOME = tmpDir
+    const { _resetLoggerForTest } = await import('../server/utils/logger.js')
+    _resetLoggerForTest()
+    const healthRouter = (await import('../server/routes/health.js')).default
+    app = new Hono()
+    app.route('/api/health', healthRouter)
+  })
+
+  it('returns the most recent entries, newest first', async () => {
+    const { logError, logInfo } = await import('../server/utils/logger.js')
+    logInfo('boot', 'started')
+    logError('purge', 'worktree removal failed')
+
+    const res = await app.request('/api/health/logs?limit=10')
+
+    expect(res.status).toBe(200)
+    const data = (await res.json()) as { entries: Array<{ scope: string; message: string }> }
+    expect(data.entries[0]).toMatchObject({ scope: 'purge', message: 'worktree removal failed' })
+  })
+
+  it('filters by level', async () => {
+    const { logError, logInfo } = await import('../server/utils/logger.js')
+    logInfo('boot', 'started')
+    logError('purge', 'worktree removal failed')
+
+    const res = await app.request('/api/health/logs?level=error')
+
+    const data = (await res.json()) as { entries: Array<{ message: string }> }
+    expect(data.entries.map((e) => e.message)).toEqual(['worktree removal failed'])
+  })
+})

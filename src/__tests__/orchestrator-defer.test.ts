@@ -1,0 +1,509 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { AgentEvent } from '../server/services/agent/engines/types.js'
+import { resetDb } from './helpers/reset-db.js'
+
+vi.mock('../server/services/websocket-service.js', () => ({
+  emit: vi.fn(),
+  emitEphemeral: vi.fn(),
+}))
+
+vi.mock('../server/services/settings-service.js', () => ({
+  getGlobalSettings: () => ({ notionEnabled: false, sentryEnabled: false }),
+  getEffectiveSettings: () => ({
+    model: 'claude-opus-4-7',
+    dangerouslySkipPermissions: true,
+    prPromptTemplate: '',
+    gitConventions: '',
+    sourceBranch: 'develop',
+    devServer: null,
+    setupScript: '',
+    notionStatusProperty: '',
+    notionInProgressStatus: '',
+  }),
+}))
+
+interface CapturedStart {
+  options: { resumeFromEngineSessionId?: string }
+  onEvent: (ev: AgentEvent) => void
+  resolvePendingUserInput: ReturnType<typeof vi.fn>
+}
+
+const captured: CapturedStart[] = []
+
+describe('Orchestrator — pending question (canUseTool)', () => {
+  beforeEach(async () => {
+    vi.resetModules()
+    await resetDb()
+    captured.length = 0
+    const { _registerEngineForTest } = await import('../server/services/agent/engines/registry.js')
+    _registerEngineForTest({
+      id: 'claude-code',
+      displayName: 'Claude Code',
+      capabilities: {
+        models: [{ id: 'auto', label: 'Auto' }],
+        permissionModes: ['bypass'],
+        supportsResume: true,
+        supportsMcp: true,
+        supportsSkills: true,
+        supportsSubagents: false,
+        supportsQuotaStatus: false,
+      },
+      async start(opts, onEvent) {
+        const resolvePendingUserInput = vi.fn().mockReturnValue(true)
+        captured.push({ options: opts as CapturedStart['options'], onEvent, resolvePendingUserInput })
+        return {
+          pid: 4242,
+          engineSessionId: 'engine-sess-1',
+          sendMessage() {},
+          interrupt() {},
+          async stop() {},
+          resolvePendingUserInput,
+        }
+      },
+    })
+  })
+
+  it('transitions to awaiting-user and stores pending entry on session:user-input-requested', async () => {
+    const { createWorkspace, updateWorkspaceStatus, getWorkspace } = await import(
+      '../server/services/workspace-service.js'
+    )
+    const ws = createWorkspace({
+      name: 'W',
+      projectPath: '/tmp',
+      sourceBranch: 'develop',
+      workingBranch: 'feature/w',
+    })
+    updateWorkspaceStatus(ws.id, 'brainstorming')
+    updateWorkspaceStatus(ws.id, 'executing')
+
+    const orch = await import('../server/services/agent/orchestrator.js')
+    const { startAgent, _getPendingDeferred } = orch
+    startAgent(ws.id, '/tmp', 'hi')
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(captured.length).toBe(1)
+    const onEvent = captured[0]?.onEvent
+    if (!onEvent) throw new Error('no onEvent')
+
+    onEvent({ kind: 'session:started', engineSessionId: 'engine-sess-1' })
+    onEvent({
+      kind: 'session:user-input-requested',
+      requestKind: 'question',
+      toolCallId: 'toolu_01abc',
+      toolName: 'AskUserQuestion',
+      payload: { questions: [{ q: 'a' }] },
+    })
+
+    expect(getWorkspace(ws.id)?.status).toBe('awaiting-user')
+    expect(_getPendingDeferred().get(ws.id)).toMatchObject({
+      toolCallId: 'toolu_01abc',
+      toolName: 'AskUserQuestion',
+    })
+  })
+
+  it('answerPendingQuestion resolves the engine callback and transitions back', async () => {
+    const { createWorkspace, updateWorkspaceStatus, getWorkspace } = await import(
+      '../server/services/workspace-service.js'
+    )
+    const ws = createWorkspace({
+      name: 'W2',
+      projectPath: '/tmp',
+      sourceBranch: 'develop',
+      workingBranch: 'feature/w2',
+    })
+    updateWorkspaceStatus(ws.id, 'brainstorming')
+    updateWorkspaceStatus(ws.id, 'executing')
+
+    const orch = await import('../server/services/agent/orchestrator.js')
+    const { startAgent, answerPendingQuestion, _getPendingDeferred } = orch
+    startAgent(ws.id, '/tmp', 'hi')
+    await Promise.resolve()
+    await Promise.resolve()
+    const cap = captured[0]
+    if (!cap) throw new Error('no capture')
+
+    cap.onEvent({ kind: 'session:started', engineSessionId: 'engine-sess-1' })
+    cap.onEvent({
+      kind: 'session:user-input-requested',
+      requestKind: 'question',
+      toolCallId: 'toolu_01abc',
+      toolName: 'AskUserQuestion',
+      payload: { questions: [{ q: 'a' }] },
+    })
+
+    expect(getWorkspace(ws.id)?.status).toBe('awaiting-user')
+    expect(_getPendingDeferred().has(ws.id)).toBe(true)
+
+    await answerPendingQuestion(ws.id, { q1: 'react' })
+
+    expect(_getPendingDeferred().has(ws.id)).toBe(false)
+    expect(getWorkspace(ws.id)?.status).toBe('executing')
+    // No new engine session should be started — the SDK iterator continues.
+    expect(captured.length).toBe(1)
+    expect(cap.resolvePendingUserInput).toHaveBeenCalledWith('toolu_01abc', {
+      kind: 'question',
+      answers: { q1: 'react' },
+    })
+  })
+
+  it('passes an inline free-form response through to the engine callback', async () => {
+    const { createWorkspace, updateWorkspaceStatus } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({
+      name: 'Free-form response',
+      projectPath: '/tmp',
+      sourceBranch: 'develop',
+      workingBranch: 'feature/free-form-response',
+    })
+    updateWorkspaceStatus(ws.id, 'brainstorming')
+    updateWorkspaceStatus(ws.id, 'executing')
+
+    const { startAgent, answerPendingQuestion } = await import('../server/services/agent/orchestrator.js')
+    startAgent(ws.id, '/tmp', 'hi')
+    await Promise.resolve()
+    await Promise.resolve()
+    const cap = captured.at(-1)
+    if (!cap) throw new Error('no capture')
+
+    cap.onEvent({ kind: 'session:started', engineSessionId: 'engine-sess-free-form' })
+    cap.onEvent({
+      kind: 'session:user-input-requested',
+      requestKind: 'question',
+      toolCallId: 'toolu_free_form',
+      toolName: 'AskUserQuestion',
+      payload: { questions: [{ question: 'Quel détail ?', options: [] }] },
+    })
+
+    await answerPendingQuestion(ws.id, { 'Quel détail ?': 'Autre' }, 'toolu_free_form', {
+      response: 'Tester sur un appareil physique.',
+    })
+
+    expect(cap.resolvePendingUserInput).toHaveBeenCalledWith('toolu_free_form', {
+      kind: 'question',
+      answers: { 'Quel détail ?': 'Autre' },
+      response: 'Tester sur un appareil physique.',
+    })
+  })
+
+  it('does not persist a secret Codex answer in the workspace conversation', async () => {
+    const { createWorkspace, updateWorkspaceStatus } = await import('../server/services/workspace-service.js')
+    const { emit } = await import('../server/services/websocket-service.js')
+    const ws = createWorkspace({
+      name: 'Secret question',
+      projectPath: '/tmp',
+      sourceBranch: 'develop',
+      workingBranch: 'feature/secret-question',
+    })
+    updateWorkspaceStatus(ws.id, 'brainstorming')
+    updateWorkspaceStatus(ws.id, 'executing')
+
+    const { startAgent, answerPendingQuestion } = await import('../server/services/agent/orchestrator.js')
+    startAgent(ws.id, '/tmp', 'hi')
+    await Promise.resolve()
+    await Promise.resolve()
+    const cap = captured[0]
+    if (!cap) throw new Error('no capture')
+
+    cap.onEvent({ kind: 'session:started', engineSessionId: 'engine-sess-secret' })
+    cap.onEvent({
+      kind: 'session:user-input-requested',
+      requestKind: 'question',
+      toolCallId: 'toolu_secret',
+      toolName: 'AskUserQuestion',
+      payload: { questions: [{ id: 'token', question: 'Token', isSecret: true, options: [] }] },
+    })
+    vi.mocked(emit).mockClear()
+
+    await answerPendingQuestion(ws.id, { token: 'secret-value' })
+
+    expect(emit).not.toHaveBeenCalled()
+  })
+
+  it('blocks auto-loop with reason=awaiting-clarification when awaitingFreeForm is true', async () => {
+    const { createWorkspace, updateWorkspaceStatus } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({
+      name: 'WFF',
+      projectPath: '/tmp',
+      sourceBranch: 'develop',
+      workingBranch: 'feature/wff',
+    })
+    updateWorkspaceStatus(ws.id, 'brainstorming')
+    updateWorkspaceStatus(ws.id, 'executing')
+    // Arm auto-loop directly in the DB (skip the spawn path).
+    const { getDb } = await import('../server/db/index.js')
+    getDb().prepare('UPDATE workspaces SET auto_loop = 1, auto_loop_ready = 1 WHERE id = ?').run(ws.id)
+
+    const orch = await import('../server/services/agent/orchestrator.js')
+    const autoLoopService = await import('../server/services/auto-loop-service.js')
+    const { startAgent, answerPendingQuestion } = orch
+    startAgent(ws.id, '/tmp', 'hi')
+    await Promise.resolve()
+    await Promise.resolve()
+    const cap = captured[0]
+    if (!cap) throw new Error('no capture')
+    cap.onEvent({ kind: 'session:started', engineSessionId: 'engine-sess-1' })
+    cap.onEvent({
+      kind: 'session:user-input-requested',
+      requestKind: 'question',
+      toolCallId: 'toolu_ff',
+      toolName: 'AskUserQuestion',
+      payload: { questions: [{ q: 'a' }] },
+    })
+
+    expect(autoLoopService.getStatus(ws.id).auto_loop).toBe(true)
+    await answerPendingQuestion(ws.id, { 'Q?': 'free text' }, 'toolu_ff', { awaitingFreeForm: true })
+    expect(autoLoopService.getStatus(ws.id)).toMatchObject({ auto_loop: true, state: 'blocked' })
+  })
+
+  it('leaves auto-loop on when awaitingFreeForm is false', async () => {
+    const { createWorkspace, updateWorkspaceStatus } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({
+      name: 'WNF',
+      projectPath: '/tmp',
+      sourceBranch: 'develop',
+      workingBranch: 'feature/wnf',
+    })
+    updateWorkspaceStatus(ws.id, 'brainstorming')
+    updateWorkspaceStatus(ws.id, 'executing')
+    const { getDb } = await import('../server/db/index.js')
+    getDb().prepare('UPDATE workspaces SET auto_loop = 1, auto_loop_ready = 1 WHERE id = ?').run(ws.id)
+
+    const orch = await import('../server/services/agent/orchestrator.js')
+    const autoLoopService = await import('../server/services/auto-loop-service.js')
+    const { startAgent, answerPendingQuestion } = orch
+    startAgent(ws.id, '/tmp', 'hi')
+    await Promise.resolve()
+    await Promise.resolve()
+    const cap = captured[0]
+    if (!cap) throw new Error('no capture')
+    cap.onEvent({ kind: 'session:started', engineSessionId: 'engine-sess-1' })
+    cap.onEvent({
+      kind: 'session:user-input-requested',
+      requestKind: 'question',
+      toolCallId: 'toolu_nf',
+      toolName: 'AskUserQuestion',
+      payload: { questions: [{ q: 'a' }] },
+    })
+
+    await answerPendingQuestion(ws.id, { 'Q?': 'Option A' }, 'toolu_nf', { awaitingFreeForm: false })
+    expect(autoLoopService.getStatus(ws.id).auto_loop).toBe(true)
+  })
+
+  it('throws when no pending question is queued', async () => {
+    const { createWorkspace } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({
+      name: 'W3',
+      projectPath: '/tmp',
+      sourceBranch: 'develop',
+      workingBranch: 'feature/w3',
+    })
+    const { answerPendingQuestion } = await import('../server/services/agent/orchestrator.js')
+    await expect(answerPendingQuestion(ws.id, { a: 'b' })).rejects.toThrow(/No deferred tool use pending/)
+  })
+
+  it('throws when there is no active controller', async () => {
+    const { createWorkspace, updateWorkspaceStatus } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({
+      name: 'W4',
+      projectPath: '/tmp',
+      sourceBranch: 'develop',
+      workingBranch: 'feature/w4',
+    })
+    updateWorkspaceStatus(ws.id, 'brainstorming')
+    updateWorkspaceStatus(ws.id, 'executing')
+
+    const orch = await import('../server/services/agent/orchestrator.js')
+    const { startAgent, answerPendingQuestion } = orch
+    startAgent(ws.id, '/tmp', 'hi')
+    await Promise.resolve()
+    await Promise.resolve()
+    const cap = captured[0]
+    if (!cap) throw new Error('no capture')
+    cap.onEvent({ kind: 'session:started', engineSessionId: 'engine-sess-1' })
+    cap.onEvent({
+      kind: 'session:user-input-requested',
+      requestKind: 'question',
+      toolCallId: 'toolu_zz',
+      toolName: 'AskUserQuestion',
+      payload: { questions: [] },
+    })
+    // Simulate the engine ending so the controller is removed before the user answers.
+    cap.onEvent({ kind: 'session:ended', reason: 'killed', exitCode: null })
+
+    await expect(answerPendingQuestion(ws.id, { x: 'y' })).rejects.toThrow()
+  })
+
+  it('stopAgent normalizes awaiting-user → idle and purges queue + persisted requests', async () => {
+    const { createWorkspace, updateWorkspaceStatus, getWorkspace } = await import(
+      '../server/services/workspace-service.js'
+    )
+    const ws = createWorkspace({
+      name: 'W5',
+      projectPath: '/tmp',
+      sourceBranch: 'develop',
+      workingBranch: 'feature/w5',
+    })
+    updateWorkspaceStatus(ws.id, 'brainstorming')
+    updateWorkspaceStatus(ws.id, 'executing')
+
+    const orch = await import('../server/services/agent/orchestrator.js')
+    const { startAgent, stopAgent, _getPendingDeferred } = orch
+    startAgent(ws.id, '/tmp', 'hi')
+    await Promise.resolve()
+    await Promise.resolve()
+    const cap = captured[0]
+    if (!cap) throw new Error('no capture')
+    cap.onEvent({ kind: 'session:started', engineSessionId: 'engine-sess-1' })
+    cap.onEvent({
+      kind: 'session:user-input-requested',
+      requestKind: 'question',
+      toolCallId: 'toolu_kill',
+      toolName: 'AskUserQuestion',
+      payload: { questions: [] },
+    })
+
+    expect(getWorkspace(ws.id)?.status).toBe('awaiting-user')
+    expect(_getPendingDeferred().get(ws.id)).toBeDefined()
+
+    stopAgent(ws.id)
+
+    expect(getWorkspace(ws.id)?.status).toBe('idle')
+    expect(_getPendingDeferred().get(ws.id)).toBeUndefined()
+  })
+
+  it('does not attempt invalid idle → completed transition when session:ended fires after stopAgent', async () => {
+    const { createWorkspace, updateWorkspaceStatus, getWorkspace } = await import(
+      '../server/services/workspace-service.js'
+    )
+    const ws = createWorkspace({
+      name: 'W6',
+      projectPath: '/tmp',
+      sourceBranch: 'develop',
+      workingBranch: 'feature/w6',
+    })
+    updateWorkspaceStatus(ws.id, 'brainstorming')
+    updateWorkspaceStatus(ws.id, 'executing')
+
+    const orch = await import('../server/services/agent/orchestrator.js')
+    const { startAgent, stopAgent } = orch
+    startAgent(ws.id, '/tmp', 'hi')
+    await Promise.resolve()
+    await Promise.resolve()
+    const cap = captured[0]
+    if (!cap) throw new Error('no capture')
+    cap.onEvent({ kind: 'session:started', engineSessionId: 'engine-sess-1' })
+    cap.onEvent({
+      kind: 'session:user-input-requested',
+      requestKind: 'question',
+      toolCallId: 'toolu_race',
+      toolName: 'AskUserQuestion',
+      payload: { questions: [] },
+    })
+    expect(getWorkspace(ws.id)?.status).toBe('awaiting-user')
+
+    // stopAgent transitions awaiting-user → idle synchronously; the controller
+    // stays registered in `stopping` state until the engine actually dies. The
+    // engine's stop() then resolves async and emits session:ended — at which
+    // point onSessionEnded must NOT try to transition idle → completed.
+    stopAgent(ws.id)
+    expect(getWorkspace(ws.id)?.status).toBe('idle')
+
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      cap.onEvent({ kind: 'session:ended', reason: 'killed', exitCode: null })
+
+      const invalidTransitionLogged = errSpy.mock.calls.some((call) => {
+        const msg = String(call[0] ?? '')
+        return msg.includes('Failed to update workspace status on exit')
+      })
+      expect(invalidTransitionLogged).toBe(false)
+      expect(getWorkspace(ws.id)?.status).toBe('idle')
+    } finally {
+      errSpy.mockRestore()
+    }
+  })
+
+  it.each(['executing', 'brainstorming', 'extracting'] as const)(
+    'stopAgent normalizes %s → idle, not just awaiting-user',
+    async (activeStatus) => {
+      const { createWorkspace, updateWorkspaceStatus, getWorkspace } = await import(
+        '../server/services/workspace-service.js'
+      )
+      const ws = createWorkspace({
+        name: `W-${activeStatus}`,
+        projectPath: '/tmp',
+        sourceBranch: 'develop',
+        workingBranch: `feature/${activeStatus}`,
+      })
+      // `created` can only reach `executing` via `brainstorming` per
+      // VALID_TRANSITIONS; the other two targets are reachable directly.
+      if (activeStatus === 'executing') {
+        updateWorkspaceStatus(ws.id, 'brainstorming')
+      }
+      updateWorkspaceStatus(ws.id, activeStatus)
+
+      const orch = await import('../server/services/agent/orchestrator.js')
+      const { startAgent, stopAgent } = orch
+      startAgent(ws.id, '/tmp', 'hi')
+      await Promise.resolve()
+      await Promise.resolve()
+      const cap = captured[captured.length - 1]
+      if (!cap) throw new Error('no capture')
+      cap.onEvent({ kind: 'session:started', engineSessionId: 'engine-sess-1' })
+
+      expect(getWorkspace(ws.id)?.status).toBe(activeStatus)
+
+      stopAgent(ws.id)
+
+      expect(getWorkspace(ws.id)?.status).toBe('idle')
+    },
+  )
+
+  it('does not run the awaiting-user-only cleanup (persisted user-input-requested purge) when stopping from executing', async () => {
+    const { createWorkspace, updateWorkspaceStatus, getWorkspace } = await import(
+      '../server/services/workspace-service.js'
+    )
+    const { getDb } = await import('../server/db/index.js')
+    const ws = createWorkspace({
+      name: 'W-executing-no-purge',
+      projectPath: '/tmp',
+      sourceBranch: 'develop',
+      workingBranch: 'feature/w-executing-no-purge',
+    })
+    updateWorkspaceStatus(ws.id, 'brainstorming')
+    updateWorkspaceStatus(ws.id, 'executing')
+
+    const orch = await import('../server/services/agent/orchestrator.js')
+    const { startAgent, stopAgent } = orch
+    const { agentSessionId } = startAgent(ws.id, '/tmp', 'hi')
+    await Promise.resolve()
+    await Promise.resolve()
+    const cap = captured[captured.length - 1]
+    if (!cap) throw new Error('no capture')
+    cap.onEvent({ kind: 'session:started', engineSessionId: 'engine-sess-1' })
+
+    // Simulate a persisted user-input-requested event lingering from an
+    // earlier, unrelated interaction on this same session (matched by the
+    // real DB agent_sessions id, exactly what purgeAllPersistedUserInputRequests
+    // filters on). The awaiting-user-specific purge must NOT run here — the
+    // workspace never entered `awaiting-user` for this stop.
+    const db = getDb()
+    db.prepare(
+      `INSERT INTO ws_events (id, workspace_id, type, payload, session_id, created_at)
+       VALUES (?, ?, 'agent:event', ?, ?, ?)`,
+    ).run(
+      'evt-fixture-1',
+      ws.id,
+      JSON.stringify({ kind: 'session:user-input-requested', toolCallId: 'toolu_leftover' }),
+      agentSessionId,
+      new Date().toISOString(),
+    )
+
+    stopAgent(ws.id)
+
+    expect(getWorkspace(ws.id)?.status).toBe('idle')
+    const remaining = db.prepare('SELECT COUNT(*) as c FROM ws_events WHERE id = ?').get('evt-fixture-1') as {
+      c: number
+    }
+    expect(remaining.c).toBe(1)
+  })
+})

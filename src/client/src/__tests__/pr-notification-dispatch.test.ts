@@ -1,0 +1,131 @@
+import { createPinia, setActivePinia } from 'pinia'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+vi.mock('quasar', () => ({ Notify: { create: vi.fn() } }))
+vi.mock('src/utils/notifications', () => ({ notify: vi.fn() }))
+
+import { Notify } from 'quasar'
+import { notify } from 'src/utils/notifications'
+import { type GlobalSettings, useSettingsStore } from '../stores/settings'
+import { useWebSocketStore } from '../stores/websocket'
+import { useWorkspaceStore } from '../stores/workspace'
+
+const CASES = [
+  ['pr:ci-failed', 'audioPrCiFailedSound', 'ready.wav'],
+  ['pr:ci-recovered', 'audioPrCiRecoveredSound', 'ready.wav'],
+  ['pr:changes-requested', 'audioPrChangesRequestedSound', 'ready.wav'],
+  ['pr:approved', 'audioPrApprovedSound', 'neutral.wav'],
+  ['pr:merge-conflict', 'audioPrMergeConflictSound', 'ready.wav'],
+  ['pr:ready-to-merge', 'audioPrReadyToMergeSound', 'ready.wav'],
+  ['pr:merged', 'audioPrMergedSound', 'ready.wav'],
+] as const satisfies ReadonlyArray<[string, keyof GlobalSettings, string]>
+
+describe('PR notification WebSocket dispatch', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+    vi.spyOn(useWorkspaceStore(), 'refreshPrSnapshot').mockResolvedValue(undefined as never)
+    // These tests cover the dispatch once a user has opted into each event.
+    // Fresh settings deliberately leave all PR sounds disabled.
+    Object.assign(useSettingsStore().global, {
+      audioPrCiFailedEnabled: true,
+      audioPrCiRecoveredEnabled: true,
+      audioPrChangesRequestedEnabled: true,
+      audioPrApprovedEnabled: true,
+      audioPrMergeConflictEnabled: true,
+      audioPrReadyToMergeEnabled: true,
+      audioPrMergedEnabled: true,
+    })
+  })
+
+  it.each(CASES)('routes %s through its own setting', (eventType, settingKey, sound) => {
+    const settings = useSettingsStore()
+    settings.global[settingKey] = sound
+
+    useWebSocketStore()._routeMessage({
+      type: eventType,
+      workspaceId: 'w1',
+      payload: { prNumber: 42, prUrl: 'https://example.test/pr/42' },
+    })
+
+    expect(notify).toHaveBeenLastCalledWith(expect.any(String), undefined, 'w1', sound, 1, true)
+  })
+
+  it('disables CI-failure audio without suppressing the browser notification', () => {
+    useSettingsStore().global.audioPrCiFailedEnabled = false
+
+    useWebSocketStore()._routeMessage({
+      type: 'pr:ci-failed',
+      workspaceId: 'w1',
+      payload: { prNumber: 42, prUrl: 'https://example.test/pr/42' },
+    })
+
+    expect(notify).toHaveBeenCalledWith(expect.any(String), undefined, 'w1', undefined, 1, false)
+  })
+
+  it('expires the CI-failure toast after four seconds', () => {
+    useWebSocketStore()._routeMessage({
+      type: 'pr:ci-failed',
+      workspaceId: 'w1',
+      payload: { prNumber: 42 },
+    })
+
+    expect(Notify.create).toHaveBeenCalledWith(expect.objectContaining({ timeout: 4000 }))
+  })
+
+  it('keeps workspace and dismiss actions on CI-failure toasts', () => {
+    useWebSocketStore()._routeMessage({
+      type: 'pr:ci-failed',
+      workspaceId: 'w1',
+      payload: { prNumber: 42 },
+    })
+
+    const call = vi.mocked(Notify.create).mock.calls.at(-1)?.[0] as {
+      actions?: Array<{ label?: string; handler?: () => void }>
+    }
+    expect(call.actions?.map((action) => action.label)).toEqual(['Open workspace', 'Dismiss'])
+
+    call.actions?.[0]?.handler?.()
+    expect(window.location.hash).toBe('#/workspace/w1')
+  })
+
+  it.each(['pr:merge-conflict', 'pr:changes-requested'] as const)(
+    'expires the formerly sticky %s toast after six seconds',
+    (type) => {
+      useWebSocketStore()._routeMessage({
+        type,
+        workspaceId: 'w1',
+        payload: { prNumber: 42 },
+      })
+
+      expect(Notify.create).toHaveBeenLastCalledWith(expect.objectContaining({ timeout: 6000 }))
+    },
+  )
+
+  it('uses the approved event volume instead of the general volume', () => {
+    const settings = useSettingsStore().global
+    settings.audioNotificationVolume = 0.9
+    settings.audioPrApprovedSound = 'neutral.wav'
+    settings.audioPrApprovedVolume = 0.35
+
+    useWebSocketStore()._routeMessage({
+      type: 'pr:approved',
+      workspaceId: 'w1',
+      payload: { prNumber: 42, prUrl: 'https://example.test/pr/42' },
+    })
+
+    expect(notify).toHaveBeenLastCalledWith(expect.any(String), undefined, 'w1', 'neutral.wav', 0.35, true)
+  })
+
+  it.each(['inherit', 'unknown.mp3', ''])('inherits for stored value %j', (selection) => {
+    useSettingsStore().global.audioPrApprovedSound = selection
+
+    useWebSocketStore()._routeMessage({
+      type: 'pr:approved',
+      workspaceId: 'w1',
+      payload: { prNumber: 42, prUrl: 'https://example.test/pr/42' },
+    })
+
+    expect(notify).toHaveBeenLastCalledWith(expect.any(String), undefined, 'w1', undefined, 1, true)
+  })
+})

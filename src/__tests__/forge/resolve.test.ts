@@ -1,0 +1,99 @@
+// src/__tests__/forge/resolve.test.ts
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+const getProjectSettingsMock = vi.fn()
+vi.mock('../../server/services/settings-service.js', () => ({
+  getProjectSettings: (p: string) => getProjectSettingsMock(p),
+}))
+
+const execFileSyncMock = vi.fn()
+vi.mock('node:child_process', () => ({
+  execFileSync: (...args: unknown[]) => execFileSyncMock(...args),
+}))
+
+import { _clearForgeCache, forgeFromRemoteUrl, resolveForge } from '../../server/services/forge/resolve.js'
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  // Auto-detection is cached per project path, and every case below uses the
+  // same one.
+  _clearForgeCache()
+})
+
+describe('resolveForge — remote read failures', () => {
+  beforeEach(() => {
+    _clearForgeCache()
+    execFileSyncMock.mockReset()
+  })
+
+  it('does not cache a failed remote read, so the next tick can succeed', async () => {
+    getProjectSettingsMock.mockReturnValue({ forge: 'auto' })
+    execFileSyncMock.mockImplementationOnce(() => {
+      throw new Error('git timed out')
+    })
+    expect(resolveForge('/p')).toBe('none')
+
+    execFileSyncMock.mockReturnValueOnce('git@github.com:acme/app.git\n')
+    expect(resolveForge('/p')).toBe('github')
+    expect(execFileSyncMock).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('forgeFromRemoteUrl', () => {
+  it('detects github from an https remote', () => {
+    expect(forgeFromRemoteUrl('https://github.com/o/r.git')).toBe('github')
+  })
+
+  it('detects github from an ssh remote', () => {
+    expect(forgeFromRemoteUrl('git@github.com:o/r.git')).toBe('github')
+  })
+
+  it('detects gitlab.com', () => {
+    expect(forgeFromRemoteUrl('https://gitlab.com/o/r.git')).toBe('gitlab')
+  })
+
+  it('detects a self-hosted gitlab host', () => {
+    expect(forgeFromRemoteUrl('git@gitlab.mycorp.com:o/r.git')).toBe('gitlab')
+  })
+
+  it('detects Bitbucket Cloud and Data Center hosts', () => {
+    expect(forgeFromRemoteUrl('git@bitbucket.org:team/repo.git')).toBe('bitbucket-community')
+    expect(forgeFromRemoteUrl('https://bitbucket.mycorp.example/scm/team/repo.git')).toBe('bitbucket-community')
+  })
+
+  it('returns none for an unrecognised host', () => {
+    expect(forgeFromRemoteUrl('https://example.com/o/r.git')).toBe('none')
+  })
+
+  it('returns none for an empty url', () => {
+    expect(forgeFromRemoteUrl('')).toBe('none')
+  })
+})
+
+describe('resolveForge', () => {
+  it('returns the explicit project setting, ignoring the remote', () => {
+    getProjectSettingsMock.mockReturnValue({ forge: 'gitlab' })
+    execFileSyncMock.mockReturnValue('https://github.com/o/r.git\n')
+    expect(resolveForge('/p')).toBe('gitlab')
+  })
+
+  it('auto-detects from the remote when the setting is "auto"', () => {
+    getProjectSettingsMock.mockReturnValue({ forge: 'auto' })
+    execFileSyncMock.mockReturnValue('https://github.com/o/r.git\n')
+    expect(resolveForge('/p')).toBe('github')
+  })
+
+  it('returns none when auto and there is no remote', () => {
+    getProjectSettingsMock.mockReturnValue({ forge: 'auto' })
+    execFileSyncMock.mockImplementation(() => {
+      throw new Error('no remote')
+    })
+    expect(resolveForge('/p')).toBe('none')
+  })
+
+  it('defaults to auto-detection when project settings are null', () => {
+    getProjectSettingsMock.mockReturnValue(null)
+    execFileSyncMock.mockReturnValue('git@gitlab.com:o/r.git\n')
+    expect(resolveForge('/p')).toBe('gitlab')
+  })
+})

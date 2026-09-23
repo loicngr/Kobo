@@ -1,0 +1,5156 @@
+import { execFile as execFileCb, execFileSync, spawn } from 'node:child_process'
+import { promisify } from 'node:util'
+import { nanoid } from 'nanoid'
+import type { HandoffDecision } from '../../shared/session-handoff.js'
+import {
+  isWorkflowPolicy,
+  resolveWorkflowPolicy,
+  WORKFLOW_ACTIONS,
+  type WorkflowPolicy,
+} from '../../shared/workflow-policy.js'
+import { getSearchIndexStatus, searchEvents } from '../services/search-service.js'
+import {
+  createSessionHandoff,
+  decideSessionHandoff,
+  getCurrentSessionHandoff,
+  SessionHandoffError,
+  submitSessionHandoff,
+  waitForSessionHandoff,
+} from '../services/session-handoff-service.js'
+import { AgentStopError, assertAgentStopped } from '../utils/agent-stop-result.js'
+import { withGitRepoLock } from '../utils/git-repo-lock.js'
+import { isWorkspaceLifecycleBusy, workspaceLifecycleReason } from '../utils/workspace-lifecycle-guard.js'
+import autoLoopMessagesRoutes from './auto-loop-messages.js'
+
+const execFileAsync = promisify(execFileCb)
+
+import fs from 'node:fs'
+import path from 'node:path'
+import { Hono } from 'hono'
+import { bodyLimit } from 'hono/body-limit'
+import { MAX_ATTACHMENT_REQUEST_BYTES } from '../../shared/attachments.js'
+import { AUTO_LOOP_HARD_RULES, buildAutoLoopGroomingSteps, buildGroomingIntro } from '../../shared/auto-loop-prompts.js'
+import { getDb } from '../db/index.js'
+import { migrationGuard } from '../middleware/migration-guard.js'
+import { listEngines } from '../services/agent/engines/registry.js'
+import * as agentManager from '../services/agent/orchestrator.js'
+import * as archiveScriptService from '../services/archive-script-service.js'
+import {
+  AttachmentRequestError,
+  attachmentReference,
+  readWorkspaceCreationRequest,
+  removeAttachments,
+  type SavedAttachment,
+  saveAttachments,
+} from '../services/attachment-service.js'
+import * as autoLoopService from '../services/auto-loop-service.js'
+import { changeSourceBranch } from '../services/change-source-branch-service.js'
+import { listChatHistory, pushChatHistory } from '../services/chat-history-service.js'
+import { type CiFixCheck, renderCiFixTemplate } from '../services/ci-fix-template-service.js'
+import { computeWorkspaceActivityStats } from '../services/comparison-stats-service.js'
+import * as cronService from '../services/cron-service.js'
+import * as devServerService from '../services/dev-server-service.js'
+import { buildEngineHandoff } from '../services/engine-handoff-service.js'
+import { saveWorkspaceFile, shaOf } from '../services/file-editor-service.js'
+import { getForgeProvider } from '../services/forge/registry.js'
+import { resolveForge } from '../services/forge/resolve.js'
+import { ForgeUnavailableError, type PullRequestSummary } from '../services/forge/types.js'
+import { computeGitStats } from '../services/git-stats-service.js'
+import {
+  DEFAULT_NOTION_INITIAL_PROMPT,
+  DEFAULT_SENTRY_INITIAL_PROMPT,
+  renderNotionInitialPrompt,
+  renderSentryInitialPrompt,
+} from '../services/initial-prompt-template-service.js'
+import * as notionService from '../services/notion-service.js'
+import { renderPrTemplate } from '../services/pr-template-service.js'
+import {
+  clearPrSnapshotCache,
+  getAllGitStats,
+  getAllPrSnapshots,
+  refreshPrSnapshot,
+} from '../services/pr-watcher-service.js'
+import * as quotaBackoffService from '../services/quota-backoff-service.js'
+import { ReviewRequestError, startWorkspaceReview } from '../services/review-service.js'
+import * as sentryService from '../services/sentry-service.js'
+import * as settingsService from '../services/settings-service.js'
+import { runSetupScript } from '../services/setup-script-service.js'
+import { getSuitePrompts } from '../services/skill-suite-prompts.js'
+import { TaskValidationError, type UpdateTaskMutation } from '../services/task-mutations.js'
+import * as terminalService from '../services/terminal-service.js'
+import * as wakeupService from '../services/wakeup-service.js'
+import * as wsService from '../services/websocket-service.js'
+import * as permissionPolicyService from '../services/workspace-permission-policy-service.js'
+import type { AgentPermissionMode, Workspace, WorkspaceStatus } from '../services/workspace-service.js'
+import * as workspaceService from '../services/workspace-service.js'
+import { presetFromWorkspace } from '../services/workspace-template-service.js'
+import * as purgeWorktreeService from '../services/worktree-purge-service.js'
+import { restorePurgedWorktree, WorktreeRestoreError } from '../services/worktree-restore-service.js'
+import * as worktreeService from '../services/worktree-service.js'
+import { resolveUniqueBranchAndPath } from '../utils/branch-resolver.js'
+import * as gitOps from '../utils/git-ops.js'
+import { logError } from '../utils/logger.js'
+import { slugifyProjectName } from '../utils/project-slug.js'
+import * as safePath from '../utils/safe-path.js'
+import { WorkspaceLifecycleBusyError, withWorkspaceLifecycleGuard } from '../utils/workspace-lifecycle-guard.js'
+import { resolveExtractedName } from '../utils/workspace-name.js'
+import { resolveSiblingWorkspaceWorktreePath } from '../utils/worktree-paths.js'
+
+/** Lifecycle conflicts can be retried once the current owner has stopped. */
+/** Symlink-resolved path, or the lexically resolved one when it does not exist. */
+function realPathOrResolved(p: string): string {
+  try {
+    return fs.realpathSync(p)
+  } catch {
+    return path.resolve(p)
+  }
+}
+
+function workspaceErrorStatus(err: unknown): 409 | 500 {
+  return err instanceof AgentStopError || err instanceof WorkspaceLifecycleBusyError ? 409 : 500
+}
+
+/** Hono sub-router for workspace CRUD, tasks, agents, Git and PR creation. */
+const app = new Hono()
+
+// Transfers reserve the writer across multiple HTTP requests and engine invocations.
+app.use('/:id/*', async (c, next) => {
+  const id = c.req.param('id')!
+  const route = c.req.path.split(`/api/workspaces/${id}/`)[1] ?? ''
+  if (
+    !['GET', 'HEAD', 'OPTIONS'].includes(c.req.method) &&
+    workspaceLifecycleReason(id) === 'session-handoff' &&
+    !route.startsWith('session-handoffs') &&
+    ![
+      'stop',
+      'mark-read',
+      'chat-history',
+      'deferred-tool-use/answer',
+      'deferred-tool-use/cancel',
+      'deferred-permission/decision',
+    ].includes(route)
+  ) {
+    return c.json(
+      {
+        error: 'A session transfer is pending. Finish or cancel it before changing this workspace.',
+        code: 'workspace-busy',
+      },
+      409,
+    )
+  }
+  await next()
+})
+
+// These handlers own teardown across awaits; purge/delete/restore own their guard in the service.
+for (const route of ['/:id/archive', '/:id/run-setup-script', '/:id/cancel-source-change', '/:id/rollback-file']) {
+  app.use(route, async (c, next) => {
+    try {
+      await withWorkspaceLifecycleGuard(c.req.param('id')!, next)
+    } catch (err) {
+      if (err instanceof WorkspaceLifecycleBusyError) return c.json({ error: err.message, code: err.code }, 409)
+      throw err
+    }
+  })
+}
+
+// User prompt actions must reject before cancelling timers, stopping engines,
+// creating a PR or persisting input. The orchestrator also checks at delivery.
+for (const route of [
+  '/:id/start',
+  '/:id/switch-engine',
+  '/:id/git/commit-with-agent',
+  '/:id/git/resolve-with-agent',
+  '/:id/open-pr',
+  '/:id/start-review',
+  '/:id/start-ci-fix',
+]) {
+  app.use(route, async (c, next) => {
+    if (c.req.method === 'POST' && workspaceService.getWorkspace(c.req.param('id')!)?.status === 'compacting') {
+      return c.json(
+        {
+          code: 'compacting',
+          error: 'Workspace is compacting its context; wait until compaction finishes before sending a message',
+        },
+        409,
+      )
+    }
+    await next()
+  })
+}
+
+/** Tracks workspaces currently running a setup script to prevent concurrent executions. */
+const setupScriptRunning = new Set<string>()
+
+/**
+ * Ordered, named steps of `POST /api/workspaces`. The handler already runs
+ * these sequentially; naming them is what lets the create page say WHAT it is
+ * waiting on instead of showing an undifferentiated spinner for what can be
+ * several minutes (a user-supplied setup script runs inside this request).
+ */
+export const CREATE_WORKSPACE_STEPS = [
+  'validate',
+  'fetch-source-branch',
+  'inspect-worktree',
+  'extract-notion',
+  'extract-sentry',
+  'extract-pr',
+  'create-record',
+  'create-tasks',
+  'create-worktree',
+  'write-conventions',
+  'write-context-files',
+  'build-prompt',
+  'setup-script',
+  'start-agent',
+  // Never reached on a happy path. Emitted while the handler UNDOES a failed
+  // creation, so the page stops showing the last step it managed to reach.
+  'rollback',
+  'done',
+] as const
+
+export type CreateWorkspaceStep = (typeof CREATE_WORKSPACE_STEPS)[number]
+
+/**
+ * Emit one creation-progress beat.
+ *
+ * The channel is the client-supplied `creationId`, NOT a workspace id: while
+ * this handler runs, the workspace row may not exist yet and the client has
+ * no id to subscribe to (the POST response is still in flight). A WebSocket
+ * subscription is just a string in a Set, and `emitEphemeral` never persists,
+ * so there is no foreign key to satisfy — the existing machinery works as-is.
+ *
+ * No `creationId` (API consumers, tests) → no-op.
+ */
+function emitCreateProgress(creationId: string | undefined, step: CreateWorkspaceStep): void {
+  if (!creationId) return
+  try {
+    wsService.emitEphemeral(creationId, 'workspace:create-progress', {
+      creationId,
+      step,
+      index: CREATE_WORKSPACE_STEPS.indexOf(step),
+      total: CREATE_WORKSPACE_STEPS.length,
+    })
+  } catch (err) {
+    // Best-effort: a broken progress beat must never fail workspace creation.
+    console.error(`[workspaces] emitCreateProgress failed for step '${step}':`, err)
+  }
+}
+
+/**
+ * What a rollback provably cannot reach. The setup script may have installed
+ * dependencies in a global cache, started containers or written files outside
+ * the worktree — say so rather than implying a total undo.
+ */
+const SETUP_SCRIPT_ROLLBACK_CAVEAT =
+  ' The setup script had already run: anything it created outside the worktree (containers, global caches, files elsewhere) was NOT undone.'
+
+/** Terminal failure beat — names the step that broke, so the user never has to guess. */
+function emitCreateFailed(creationId: string | undefined, step: CreateWorkspaceStep, message: string): void {
+  if (!creationId) return
+  try {
+    wsService.emitEphemeral(creationId, 'workspace:create-failed', { creationId, step, message })
+  } catch (err) {
+    // Best-effort: a broken failure beat must never mask or replace the real error.
+    console.error(`[workspaces] emitCreateFailed failed for step '${step}':`, err)
+  }
+}
+
+/**
+ * Undo a creation that failed after the workspace row existed.
+ *
+ * Delegates to `deleteWorkspaceWithSideEffects` — the module's ONE demolition
+ * path — rather than growing a second cleanup that would drift from it. That
+ * function already stops the agent, stops the dev server, destroys the
+ * terminal, skips a worktree the user brought (`worktreeOwned === false`), and
+ * collects side-effect failures as warnings without ever throwing.
+ *
+ * It is declared with `async function` further down the file, so it is hoisted
+ * and callable from here.
+ *
+ * IMPORTANT: this is best-effort cleanup. It must NEVER throw, and it must
+ * NEVER become the error the caller reports — the original cause always wins.
+ */
+async function rollbackFailedCreation(
+  workspace: WorkspaceRow,
+  opts: { deleteLocalBranch: boolean; removeWorktree: boolean; attachments?: SavedAttachment[] },
+): Promise<string[]> {
+  try {
+    const warnings = await deleteWorkspaceWithSideEffects(workspace, {
+      deleteLocalBranch: opts.deleteLocalBranch,
+      removeWorktree: opts.removeWorktree,
+      // Nothing was ever pushed at this point in the creation flow.
+      deleteRemoteBranch: false,
+    })
+    if (!opts.removeWorktree && opts.attachments?.length && fs.existsSync(workspace.worktreePath)) {
+      warnings.push(...(await removeAttachments(workspace.worktreePath, opts.attachments)))
+    }
+    return warnings
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    console.error(`[workspaces] rollback of '${workspace.id}' failed:`, message)
+    return [`Rollback of workspace '${workspace.name}' failed: ${message}`]
+  }
+}
+
+/**
+ * Move a freshly created workspace to `brainstorming`, never throwing.
+ *
+ * This transition is cosmetic — the agent starts either way — but it sits
+ * inside the creation try block, so letting it throw would hand a live
+ * workspace to the rollback path and demolish it. The realistic trigger is a
+ * race: a long setup script leaves the row visible in the sidebar, the user
+ * clicks Start, the agent moves the workspace to `executing`, and
+ * `executing -> brainstorming` is then a rejected transition. Losing the
+ * status beat is a cosmetic bug; losing the worktree is data loss.
+ */
+function markBrainstormingBestEffort(workspaceId: string): void {
+  try {
+    workspaceService.updateWorkspaceStatus(workspaceId, 'brainstorming')
+  } catch (err) {
+    console.error(`[workspaces] could not mark '${workspaceId}' as brainstorming:`, err)
+  }
+}
+
+const VALID_AGENT_PERMISSION_MODES: AgentPermissionMode[] = ['plan', 'bypass', 'strict', 'interactive']
+const VALID_WORKSPACE_STATUSES: WorkspaceStatus[] = [
+  'created',
+  'extracting',
+  'brainstorming',
+  'executing',
+  'awaiting-user',
+  'completed',
+  'idle',
+  'error',
+  'quota',
+]
+
+function isAgentPermissionMode(value: unknown): value is AgentPermissionMode {
+  return typeof value === 'string' && (VALID_AGENT_PERMISSION_MODES as string[]).includes(value)
+}
+
+function isWorkspaceStatus(value: unknown): value is WorkspaceStatus {
+  return typeof value === 'string' && (VALID_WORKSPACE_STATUSES as string[]).includes(value)
+}
+
+async function deliverAgentPrompt(
+  workspace: Workspace,
+  workingDir: string,
+  prompt: string,
+): Promise<{ agentSessionId: string }> {
+  const delivery = await agentManager.sendMessageForFallback(workspace.id, prompt)
+  if (delivery.status === 'sent') return { agentSessionId: delivery.sessionId }
+
+  const agent = agentManager.startAgent(
+    workspace.id,
+    workingDir,
+    prompt,
+    workspace.model,
+    true,
+    workspace.agentPermissionMode,
+    undefined,
+    workspace.reasoningEffort,
+  )
+  workspaceService.updateWorkspaceStatus(workspace.id, 'executing')
+  return { agentSessionId: agent.agentSessionId }
+}
+
+/**
+ * Resolve the unified permission mode for a new workspace.
+ *
+ * Cascade: explicit body field → global default (validated) → 'bypass'.
+ *
+ * The per-engine default lives in `defaultPermissionModeByEngine[engineId]`
+ * (added in settings v20). If the engine id is missing or its entry is invalid,
+ * we fall back to 'bypass' (the safest non-plan default).
+ */
+function resolveCreateAgentPermissionMode(
+  bodyValue: unknown,
+  _projectPath: string,
+  globalSettings: { defaultPermissionModeByEngine?: Record<string, string> },
+  engineId: string,
+): AgentPermissionMode {
+  if (isAgentPermissionMode(bodyValue)) return bodyValue
+  const global = globalSettings.defaultPermissionModeByEngine?.[engineId]
+  if (isAgentPermissionMode(global)) return global
+  return 'bypass'
+}
+
+/**
+ * Extract the numeric PR/MR number from a forge URL.
+ *
+ * Strips any query string or fragment first (a comment-anchor link like
+ * `.../merge_requests/42#note_123` would otherwise have its trailing
+ * fragment digits greedily matched instead of the actual PR number), then
+ * takes the last path segment and requires it to be purely numeric. Throws
+ * a clear error rather than silently defaulting to 0 when the URL doesn't
+ * end on a plain PR/MR number (e.g. a "Files changed" sub-tab URL).
+ */
+function parsePrNumberFromUrl(prUrl: string): number {
+  const withoutQueryOrFragment = prUrl.split(/[?#]/)[0]
+  const segments = withoutQueryOrFragment.replace(/\/+$/, '').split('/')
+  const last = segments[segments.length - 1]
+  const number = Number(last)
+  if (!last || !Number.isInteger(number) || number <= 0) {
+    throw new Error(`Could not parse a pull request number from '${prUrl}'`)
+  }
+  return number
+}
+
+app.get('/', (c) => {
+  try {
+    const workspaces = workspaceService.listWorkspaces()
+    return c.json(workspaces)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+function handoffError(c: import('hono').Context, error: unknown) {
+  return c.json(
+    { error: error instanceof Error ? error.message : 'Session transfer failed' },
+    error instanceof SessionHandoffError
+      ? error.status
+      : error instanceof SyntaxError
+        ? 400
+        : workspaceErrorStatus(error),
+  )
+}
+app.post('/:id/session-handoffs', migrationGuard, async (c) => {
+  try {
+    return c.json({ handoff: createSessionHandoff(c.req.param('id'), await c.req.json()) }, 202)
+  } catch (error) {
+    return handoffError(c, error)
+  }
+})
+app.get('/:id/session-handoffs/current', (c) => {
+  if (!workspaceService.getWorkspace(c.req.param('id'))) return c.json({ error: 'Workspace not found' }, 404)
+  return c.json({ handoff: getCurrentSessionHandoff(c.req.param('id')) })
+})
+app.post('/:id/session-handoffs/:handoffId/decision', migrationGuard, async (c) => {
+  try {
+    const body = await c.req.json<{ action: HandoffDecision }>()
+    return c.json({ handoff: await decideSessionHandoff(c.req.param('id'), c.req.param('handoffId'), body.action) })
+  } catch (error) {
+    return handoffError(c, error)
+  }
+})
+app.post('/:id/session-handoffs/:handoffId/report', migrationGuard, async (c) => {
+  try {
+    const body = await c.req.json<{ token?: unknown; report?: unknown }>()
+    return c.json(submitSessionHandoff(c.req.param('id'), c.req.param('handoffId'), body.token, body.report))
+  } catch (error) {
+    return handoffError(c, error)
+  }
+})
+
+// POST /api/workspaces/:id/engine-handoff-preview — build an editable, deterministic handoff.
+app.post('/:id/engine-handoff-preview', migrationGuard, async (c) => {
+  try {
+    const id = c.req.param('id')
+    const body = await c.req.json<{ engine?: string }>().catch(() => ({}) as { engine?: string })
+    const workspace = workspaceService.getWorkspaceWithTasks(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    const engine = listEngines().find((item) => item.id === body.engine)
+    if (!engine) return c.json({ error: `Unknown engine '${body.engine ?? ''}'` }, 400)
+    return c.json({ handoff: buildEngineHandoff(workspace, workspace.engine, engine.id) })
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : 'Failed to build engine handoff' }, 500)
+  }
+})
+
+// POST /api/workspaces/:id/switch-engine — stop the current controller and start a fresh engine session.
+app.post('/:id/switch-engine', migrationGuard, async (c) => {
+  try {
+    const id = c.req.param('id')
+    const body = await c.req
+      .json<{
+        engine?: string
+        model?: string
+        reasoningEffort?: string
+        agentPermissionMode?: AgentPermissionMode
+        handoff?: string
+      }>()
+      .catch(
+        () =>
+          ({}) as {
+            engine?: string
+            model?: string
+            reasoningEffort?: string
+            agentPermissionMode?: AgentPermissionMode
+            handoff?: string
+          },
+      )
+    const workspace = workspaceService.getWorkspaceWithTasks(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    if (!body.engine || body.engine === workspace.engine) return c.json({ error: 'Choose a different engine' }, 400)
+    const engine = listEngines().find((item) => item.id === body.engine)
+    if (!engine) return c.json({ error: `Unknown engine '${body.engine}'` }, 400)
+    const model =
+      typeof body.model === 'string' && engine.capabilities.models.some((item) => item.id === body.model)
+        ? body.model
+        : engine.capabilities.models[0]?.id
+    if (!model) return c.json({ error: `Engine '${body.engine}' has no available model` }, 400)
+    if (
+      !isAgentPermissionMode(body.agentPermissionMode) ||
+      !engine.capabilities.permissionModes.includes(body.agentPermissionMode)
+    ) {
+      return c.json({ error: `Engine '${body.engine}' does not support the selected permission mode` }, 400)
+    }
+    const effort = typeof body.reasoningEffort === 'string' ? body.reasoningEffort : 'auto'
+    const handoff =
+      typeof body.handoff === 'string' && body.handoff.trim()
+        ? body.handoff.trim().slice(0, 30_000)
+        : buildEngineHandoff(workspace, workspace.engine, body.engine)
+
+    if (workspaceService.getWorkspace(workspace.id)?.status === 'compacting') {
+      return c.json(
+        {
+          code: 'compacting',
+          error: 'Workspace is compacting its context; wait until compaction finishes before sending a message',
+        },
+        409,
+      )
+    }
+
+    const operation = createSessionHandoff(
+      id,
+      {
+        requestId: nanoid(),
+        sourceSessionId: workspaceService.getActiveSession(id)?.id ?? null,
+        generateSummary: false,
+        target: { engine: body.engine, model, reasoningEffort: effort, agentPermissionMode: body.agentPermissionMode },
+      },
+      handoff,
+    )
+    const completed = await waitForSessionHandoff(operation.id)
+    return c.json({ workspace: workspaceService.getWorkspace(id), sessionId: completed.targetSessionId })
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : 'Failed to switch engine' }, 500)
+  }
+})
+
+// POST /api/workspaces — create workspace
+interface CreateWorkspaceBody {
+  workflowPolicy?: Partial<WorkflowPolicy>
+  name: string
+  projectPath: string
+  sourceBranch: string
+  workingBranch: string
+  notionUrl?: string
+  notionPageId?: string
+  sentryUrl?: string
+  prUrl?: string
+  model?: string
+  brainstormModel?: string
+  brainstormReasoningEffort?: string
+  reasoningEffort?: string
+  tasks?: string[]
+  acceptanceCriteria?: string[]
+  skipSetupScript?: boolean
+  description?: string
+  agentPermissionMode?: 'plan' | 'bypass' | 'strict' | 'interactive'
+  engine?: string
+  autoLoop?: boolean
+  autoLoopSessionMode?: 'per_task' | 'continuous'
+  worktreePath?: string
+  creationId?: string
+  comparisonId?: string
+}
+
+const creationBodyLimit = bodyLimit({
+  maxSize: MAX_ATTACHMENT_REQUEST_BYTES,
+  onError: (c) => c.json({ error: 'Workspace creation request is too large', step: 'validate' }, 413),
+})
+
+app.post('/', migrationGuard, creationBodyLimit, async (c) => {
+  // Declared outside the try so the outermost catch (any unforeseen throw,
+  // including a malformed request body) can still name a step instead of
+  // leaving the create-progress channel silent. Updated in lockstep with
+  // every `emitCreateProgress` call below via the assignment-expression
+  // argument, so it always reflects the last beat actually emitted.
+  let creationId: string | undefined
+  let currentStep: CreateWorkspaceStep = 'validate'
+  // The workspace row, as soon as it exists, so the outermost catch can undo a
+  // creation that broke on a step with no handler of its own. Only `name` ever
+  // changes afterwards (Notion / Sentry title), and the rollback uses it for
+  // log text alone — every field it acts on is fixed at creation time.
+  let createdWorkspace: WorkspaceRow | null = null
+  // Set only once WE created the worktree, which is also what created the
+  // branch. A failure before that point must not delete a branch we never made.
+  let createdBranch = false
+  let createdWorktree = false
+  let creationAttachments: SavedAttachment[] = []
+  // Hoisted out of the `build-prompt` block (declared with `const` there) so
+  // both rollback paths — the `start-agent` branch and the outermost catch —
+  // can read it to decide whether the setup-script caveat applies.
+  let setupScriptConfigured = false
+  try {
+    const { body, attachments } = await readWorkspaceCreationRequest<CreateWorkspaceBody>(c.req.raw)
+
+    if (body.workflowPolicy !== undefined && !isWorkflowPolicy(body.workflowPolicy))
+      return c.json({ error: 'Invalid workflowPolicy' }, 400)
+
+    // workingBranch is derived from git when worktreePath is provided, so
+    // it's not required in that flow. The other 3 fields stay mandatory.
+    if (!body.name || !body.projectPath || !body.sourceBranch) {
+      return c.json({ error: 'Missing required fields: name, projectPath, sourceBranch' }, 400)
+    }
+    if (!body.worktreePath && !body.workingBranch) {
+      return c.json({ error: 'Missing required field: workingBranch' }, 400)
+    }
+    // Only when the caller actually supplies it: when worktreePath is given
+    // instead, workingBranch is derived from git itself further down, not
+    // user input. A name starting with `-` would otherwise read as a git
+    // option (`--upload-pack=…`) rather than a branch name — see
+    // isValidBranchName's own doc comment for why this specific shape matters.
+    if (body.workingBranch && !gitOps.isValidBranchName(body.workingBranch)) {
+      return c.json({ error: `Invalid working branch name: ${body.workingBranch}` }, 400)
+    }
+    // Same reasoning for the source branch, which is always caller-supplied and
+    // reaches `git fetch <remote> <sourceBranch>` as a bare argument.
+    if (!gitOps.isValidBranchName(body.sourceBranch)) {
+      return c.json({ error: `Invalid source branch name: ${body.sourceBranch}` }, 400)
+    }
+    if (body.comparisonId !== undefined && typeof body.comparisonId !== 'string') {
+      return c.json({ error: 'comparisonId must be a string' }, 400)
+    }
+
+    creationId = typeof body.creationId === 'string' && body.creationId.length > 0 ? body.creationId : undefined
+    currentStep = 'validate'
+    emitCreateProgress(creationId, currentStep)
+
+    // Validate the engine id (if provided) against the registry. An unknown
+    // engine is rejected up-front so we don't create orphan workspaces that
+    // can't spawn an agent.
+    if (body.engine) {
+      const engines = listEngines()
+      const validEngineIds = engines.map((e) => e.id as string)
+      if (!validEngineIds.includes(body.engine)) {
+        const message = `Unknown engine '${body.engine}'. Valid engines: ${validEngineIds.join(', ')}`
+        emitCreateFailed(creationId, 'validate', message)
+        return c.json({ error: message, step: 'validate' }, 400)
+      }
+      // Cross-validate engine × permission mode: each engine declares which
+      // modes it supports via `capabilities.permissionModes`. The UI already
+      // filters, but API consumers can still send any combo. Reject up-front
+      // so we don't park workspaces in a permanently broken state (e.g. Codex
+      // workspaces with `interactive` mode hang on the first tool call).
+      if (body.agentPermissionMode) {
+        const engine = engines.find((e) => (e.id as string) === body.engine)
+        const supported = engine?.capabilities.permissionModes ?? []
+        if (!supported.includes(body.agentPermissionMode)) {
+          const message = `Engine '${body.engine}' does not support agentPermissionMode '${body.agentPermissionMode}'. Supported: ${supported.join(', ')}`
+          emitCreateFailed(creationId, 'validate', message)
+          return c.json({ error: message, step: 'validate' }, 400)
+        }
+      }
+    }
+
+    // Fetch the source branch from origin first. On failure this is non-fatal:
+    // fall back to the local source branch if it exists (offline / no remote),
+    // and only hard-block (422) when neither origin nor a local branch is usable.
+    // The reuse path (body.worktreePath) needs no base ref, so a failed fetch is
+    // simply logged there.
+    currentStep = 'fetch-source-branch'
+    emitCreateProgress(creationId, currentStep)
+    const isReuseRequest = !!body.worktreePath
+    let baseRef = `origin/${body.sourceBranch}`
+    let usedLocalFallback = false
+    try {
+      await gitOps.fetchSourceBranchOrThrowAsync(body.projectPath, body.sourceBranch)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      if (isReuseRequest) {
+        console.warn(
+          `[workspaces] fetch of '${body.sourceBranch}' from origin failed; reusing existing worktree, ignoring: ${message}`,
+        )
+      } else if (gitOps.localBranchExists(body.projectPath, body.sourceBranch)) {
+        baseRef = body.sourceBranch
+        usedLocalFallback = true
+        console.warn(
+          `[workspaces] fetch of '${body.sourceBranch}' from origin failed; falling back to local branch: ${message}`,
+        )
+      } else {
+        const failure = `${message} — and no local branch '${body.sourceBranch}' exists to fall back on`
+        emitCreateFailed(creationId, 'fetch-source-branch', failure)
+        return c.json({ error: failure, step: 'fetch-source-branch' }, 422)
+      }
+    }
+
+    // Reuse-existing-worktree path. When the caller passes `worktreePath`,
+    // Kobo "attaches" to a pre-existing worktree on disk instead of creating
+    // a new one. We validate four invariants up-front (path exists, belongs
+    // to this repo, is on a real branch, isn't already attached) and derive
+    // the working branch from git itself — the body.workingBranch is ignored.
+    let useReusedWorktree = false
+    let reusedDerivedBranch: string | null = null
+    if (body.worktreePath) {
+      currentStep = 'inspect-worktree'
+      emitCreateProgress(creationId, currentStep)
+    }
+    if (body.worktreePath) {
+      if (!fs.existsSync(body.worktreePath)) {
+        const failure = `Worktree path does not exist: ${body.worktreePath}`
+        emitCreateFailed(creationId, 'inspect-worktree', failure)
+        return c.json({ error: failure, step: 'inspect-worktree' }, 422)
+      }
+      try {
+        const commonDir = execFileSync(
+          'git',
+          ['-C', body.worktreePath, 'rev-parse', '--path-format=absolute', '--git-common-dir'],
+          { encoding: 'utf-8' },
+        ).trim()
+        // Git reports the common dir symlink-resolved while the project path may be
+        // reached through a link (macOS temp dirs: /var -> /private/var).
+        if (realPathOrResolved(commonDir) !== realPathOrResolved(path.join(body.projectPath, '.git'))) {
+          const failure = `Worktree '${body.worktreePath}' belongs to a different repository`
+          emitCreateFailed(creationId, 'inspect-worktree', failure)
+          return c.json({ error: failure, step: 'inspect-worktree' }, 422)
+        }
+        const branch = execFileSync('git', ['-C', body.worktreePath, 'rev-parse', '--abbrev-ref', 'HEAD'], {
+          encoding: 'utf-8',
+        }).trim()
+        if (!branch || branch === 'HEAD') {
+          const failure = 'Worktree is in detached HEAD state and cannot be attached'
+          emitCreateFailed(creationId, 'inspect-worktree', failure)
+          return c.json({ error: failure, step: 'inspect-worktree' }, 422)
+        }
+        reusedDerivedBranch = branch
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        const failure = `Failed to inspect worktree: ${message}`
+        emitCreateFailed(creationId, 'inspect-worktree', failure)
+        return c.json({ error: failure, step: 'inspect-worktree' }, 422)
+      }
+      // Validate the worktree isn't already attached to another workspace.
+      const dbForCheck = getDb()
+      const existing = dbForCheck.prepare('SELECT id FROM workspaces WHERE worktree_path = ?').get(body.worktreePath)
+      if (existing) {
+        const failure = 'This worktree is already attached to another Kōbō workspace'
+        emitCreateFailed(creationId, 'inspect-worktree', failure)
+        return c.json({ error: failure, step: 'inspect-worktree' }, 422)
+      }
+      useReusedWorktree = true
+    }
+
+    // Pre-flight: extract Notion / Sentry before any DB write. A throw here
+    // must not leave a half-built workspace behind, so we run extraction
+    // before createWorkspace and surface failures as 422.
+    let notionContent: notionService.NotionPageContent | null = null
+    if (body.notionUrl) {
+      currentStep = 'extract-notion'
+      emitCreateProgress(creationId, currentStep)
+      if (!settingsService.getGlobalSettings().notionEnabled) {
+        const failure = 'Notion integration is disabled in Settings'
+        emitCreateFailed(creationId, 'extract-notion', failure)
+        return c.json({ error: failure, step: 'extract-notion' }, 403)
+      }
+      try {
+        notionContent = await notionService.extractNotionPage(body.notionUrl)
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        const failure = `Failed to extract Notion page: ${message}`
+        emitCreateFailed(creationId, 'extract-notion', failure)
+        return c.json({ error: failure, step: 'extract-notion' }, 422)
+      }
+      const assigneeProperty = settingsService.getGlobalSettings().notionAssigneeProperty
+      if (assigneeProperty && body.notionUrl) {
+        const notionUrl = body.notionUrl
+        notionService
+          .assignNotionPageToSelf(notionUrl, assigneeProperty)
+          .then((result) => {
+            if (!result.assigned) {
+              console.warn(`[notion] Auto-assign skipped for ${notionUrl}: ${result.reason}`)
+            }
+          })
+          .catch((err) => console.error('[notion] Auto-assign threw unexpectedly:', err))
+      }
+    }
+
+    let sentryContent: sentryService.SentryIssueContent | null = null
+    if (body.sentryUrl) {
+      currentStep = 'extract-sentry'
+      emitCreateProgress(creationId, currentStep)
+      if (!settingsService.getGlobalSettings().sentryEnabled) {
+        const failure = 'Sentry integration is disabled in Settings'
+        emitCreateFailed(creationId, 'extract-sentry', failure)
+        return c.json({ error: failure, step: 'extract-sentry' }, 403)
+      }
+      try {
+        sentryContent = await sentryService.extractSentryIssue(body.sentryUrl)
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        const failure = `Failed to extract Sentry issue: ${message}`
+        emitCreateFailed(creationId, 'extract-sentry', failure)
+        return c.json({ error: failure, step: 'extract-sentry' }, 422)
+      }
+      if (sentryContent && sentryContent.assignee.length === 0) {
+        const sentryUrl = body.sentryUrl
+        sentryService
+          .assignSentryIssueToSelf(sentryUrl)
+          .then((result) => {
+            if (!result.assigned) {
+              console.warn(`[sentry] Auto-assign skipped for ${sentryUrl}: ${result.reason}`)
+            }
+          })
+          .catch((err) => console.error('[sentry] Auto-assign threw unexpectedly:', err))
+      }
+    }
+
+    // Pre-flight: extract the PR/MR before any DB write, mirroring the
+    // Notion / Sentry extraction above. A throw here must not leave a
+    // half-built workspace behind, so we run extraction before
+    // createWorkspace and surface failures as 422.
+    let prContent: PullRequestSummary | null = null
+    // Captured here so the write-context-files block below can reuse it
+    // instead of calling resolveForge/getForgeProvider (which shells out to
+    // git when the project's forge setting is 'auto') a second time.
+    let prForgeRequestTermShort: string | undefined
+    if (body.prUrl) {
+      currentStep = 'extract-pr'
+      emitCreateProgress(creationId, currentStep)
+      try {
+        const provider = getForgeProvider(resolveForge(body.projectPath))
+        prForgeRequestTermShort = provider.capabilities.requestTermShort
+        if (!provider.capabilities.canListPullRequests) {
+          throw new Error('This project has no forge that can list pull requests')
+        }
+        const number = parsePrNumberFromUrl(body.prUrl)
+        // Page through the full list rather than only the first 100 (by
+        // recency) — a PR the user explicitly picked by URL must never be
+        // reported "not found" just because it hasn't been touched recently.
+        let cursor: string | null = null
+        do {
+          const page: { items: PullRequestSummary[]; nextCursor: string | null } = await provider.listPullRequests(
+            body.projectPath,
+            { filter: 'all', perPage: 100, cursor },
+          )
+          prContent = page.items.find((item) => item.number === number) ?? null
+          cursor = page.nextCursor
+        } while (!prContent && cursor !== null)
+        if (!prContent) throw new Error(`Pull request #${number} not found`)
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        const failure = `Failed to read the pull request: ${message}`
+        emitCreateFailed(creationId, 'extract-pr', failure)
+        return c.json({ error: failure, step: 'extract-pr' }, 422)
+      }
+    }
+
+    // Create workspace record
+    const globalSettings = settingsService.getGlobalSettings()
+    // workingBranch may be updated after Notion extraction to inject the ticket ID,
+    // OR overridden by the branch derived from the existing worktree (reuse mode).
+    let workingBranch = useReusedWorktree && reusedDerivedBranch ? reusedDerivedBranch : body.workingBranch
+
+    // Inject ticket ID into the working branch BEFORE creating the workspace,
+    // so the worktree_path recorded in the DB reflects the FINAL branch name.
+    // Works with or without Notion: ticket ID comes from Notion extraction first,
+    // then Sentry, then falls back to a TK-XXXX pattern anywhere in the body.name.
+    // Skip when reusing an existing worktree — its branch is already real on disk
+    // and we MUST NOT rename it.
+    if (!useReusedWorktree) {
+      // Sentry's canonical identifier is the issue short-ID (e.g. "ACME-API-3"),
+      // which is what Sentry auto-close recognises in commit messages.
+      const detectedTicketId = notionContent?.ticketId || sentryContent?.issueId || body.name.match(/[A-Z]+-\d+/i)?.[0]
+      if (detectedTicketId && !workingBranch.toLowerCase().includes(detectedTicketId.toLowerCase())) {
+        // Sanitize + length-cap the ticket id: a Sentry issue id / title can carry
+        // odd characters (PHP namespace `Foo\Bar\Baz`) or be long, which would
+        // otherwise yield an invalid or too-long branch that fails `git worktree add`.
+        const ticketPrefix = gitOps.slugifyBranchSegment(detectedTicketId, 40).toUpperCase()
+        const slashIdx = workingBranch.indexOf('/')
+        const typePrefix = slashIdx >= 0 ? workingBranch.slice(0, slashIdx + 1) : 'feature/'
+        // Use Notion/Sentry title or body name for the slug — all have proper accented
+        // characters that NFD normalization can transliterate (é→e, ç→c, etc.)
+        const titleSource = notionContent?.title || sentryContent?.title || body.name
+        const titleSlug = titleSource
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/^-|-$/g, '')
+          .substring(0, 50)
+        const safeSlug = titleSlug || 'task'
+        // An engine comparison posts here once per engine with the same
+        // ticket: without the suffix both halves collapse onto one branch and
+        // the second gets a random hash instead of its engine.
+        const engineSuffix = body.comparisonId && body.engine ? `-${body.engine}` : ''
+        workingBranch = ticketPrefix
+          ? `${typePrefix}${ticketPrefix}--${safeSlug}${engineSuffix}`
+          : `${typePrefix}${safeSlug}${engineSuffix}`
+      }
+    }
+
+    // Compute the project slug once and reuse it for both the prospective
+    // path check and the actual worktree creation below.
+    const projectSettings = settingsService.getProjectSettings(body.projectPath)
+    const projectSlug = globalSettings.worktreesPrefixByProject
+      ? slugifyProjectName(projectSettings?.displayName ?? '', body.projectPath)
+      : undefined
+
+    // Resolve the prospective worktree path unconditionally so that:
+    //   1. createWorkspace always receives the correct slug-prefixed path and
+    //      never falls back to the no-slug resolver inside workspace-service.
+    //   2. When the requested branch / on-disk path is already taken we append
+    //      a short hash (e.g. `feature/foo-A45C`) instead of rejecting the
+    //      request — keeps the user's flow smooth at the cost of a longer
+    //      branch name. The same hash is applied to BOTH the branch and the
+    //      worktree path so they stay aligned.
+    currentStep = 'create-record'
+    emitCreateProgress(creationId, currentStep)
+    let workingBranchAdjusted = false
+    // Allocate the unique branch/path and create its checkout under one lock.
+    // Cleanup is deliberately outside: it acquires the same repository lock.
+    const creation = await withGitRepoLock(body.projectPath, async () => {
+      let prospectiveWorktreePath: string
+      if (useReusedWorktree) {
+        // Another attachment may have completed while this request waited for the lock.
+        const existing = getDb().prepare('SELECT id FROM workspaces WHERE worktree_path = ?').get(body.worktreePath)
+        if (existing) {
+          const failure = 'This worktree is already attached to another Kōbō workspace'
+          emitCreateFailed(creationId, 'inspect-worktree', failure)
+          return c.json({ error: failure, step: 'inspect-worktree' }, 422)
+        }
+        prospectiveWorktreePath = body.worktreePath as string
+      } else {
+        try {
+          const resolved = resolveUniqueBranchAndPath({
+            projectPath: body.projectPath,
+            baseBranch: workingBranch,
+            worktreesPath: globalSettings.worktreesPath,
+            projectSlug,
+          })
+          workingBranch = resolved.workingBranch
+          prospectiveWorktreePath = resolved.worktreePath
+          workingBranchAdjusted = resolved.adjusted
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err)
+          emitCreateFailed(creationId, 'create-record', message)
+          return c.json({ error: message, step: 'create-record' }, 409)
+        }
+      }
+
+      let workspace = workspaceService.createWorkspace({
+        name: body.name,
+        projectPath: body.projectPath,
+        sourceBranch: body.sourceBranch,
+        workingBranch,
+        notionUrl: body.notionUrl,
+        notionPageId: body.notionPageId,
+        sentryUrl: body.sentryUrl,
+        prUrl: body.prUrl,
+        worktreePath: prospectiveWorktreePath,
+        worktreeOwned: !useReusedWorktree,
+        model: body.model,
+        brainstormModel: body.brainstormModel,
+        reasoningEffort: body.reasoningEffort,
+        workflowPolicy: resolveWorkflowPolicy(
+          globalSettings.workflowPolicy,
+          projectSettings?.workflowPolicy,
+          body.workflowPolicy,
+        ),
+        agentPermissionMode: resolveCreateAgentPermissionMode(
+          body.agentPermissionMode,
+          body.projectPath,
+          globalSettings,
+          body.engine ?? 'claude-code',
+        ),
+        engine: body.engine,
+        // Set by the engine-comparison flow, which posts here once per engine
+        // with the same id so the resulting workspaces can find each other.
+        comparisonId: body.comparisonId,
+        ...(useReusedWorktree ? {} : { worktreesPath: globalSettings.worktreesPath }),
+      })
+      createdWorkspace = workspace
+
+      // Enable auto-loop before starting the initial brainstorming session so
+      // its model override is available when selecting that session's model.
+      if (body.autoLoop === true) {
+        const notionProducedTasks =
+          body.notionUrl !== undefined &&
+          notionContent != null &&
+          notionContent.todos.length > 0 &&
+          notionContent.gherkinFeatures.length > 0
+        const sessionMode = body.autoLoopSessionMode === 'continuous' ? 'continuous' : 'per_task'
+        const db = getDb()
+        db.prepare(
+          'UPDATE workspaces SET auto_loop = 1, auto_loop_ready = ?, auto_loop_session_mode = ? WHERE id = ?',
+        ).run(notionProducedTasks ? 1 : 0, sessionMode, workspace.id)
+        workspace = workspaceService.getWorkspace(workspace.id) ?? workspace
+        // Emit events so the frontend refreshes autoLoopStates without F5.
+        wsService.emitEphemeral(workspace.id, 'autoloop:enabled', {})
+        if (notionProducedTasks) {
+          wsService.emitEphemeral(workspace.id, 'autoloop:ready-flipped', {})
+        }
+      }
+
+      // Auto-tag the workspace based on its creation source — `notion` when
+      // imported from a Notion page, `sentry` when bootstrapped from a Sentry
+      // issue URL. Pre-seeded in the global tag catalogue via migration v9.
+      // Skip any tag the user has removed from the catalogue so we respect
+      // their choice (they may have pruned "notion"/"sentry" on purpose).
+      const catalogTags = new Set(globalSettings.tags ?? [])
+      const autoTags: string[] = []
+      if (body.notionUrl && catalogTags.has('notion')) autoTags.push('notion')
+      if (body.sentryUrl && catalogTags.has('sentry')) autoTags.push('sentry')
+      if (autoTags.length > 0) {
+        try {
+          const tagged = workspaceService.setWorkspaceTags(workspace.id, autoTags)
+          if (tagged) workspace = tagged
+        } catch (err) {
+          console.error('[workspaces] Failed to apply auto tags:', err)
+        }
+      }
+
+      // Update workspace name with Sentry issue title if the user did not provide
+      // a custom name and Notion hasn't already filled it. Prefix with the Sentry
+      // short-id (e.g. "SEKUR-IOS-9 | TypeError: …") so the workspace stays
+      // identifiable in the sidebar without opening the panel.
+      if (sentryContent?.title && !notionContent?.title) {
+        const prefix = sentryContent.issueId ? `${sentryContent.issueId} | ` : ''
+        const renamed = resolveExtractedName(workspace.name, `${prefix}${sentryContent.title}`)
+        if (renamed) workspace = workspaceService.updateWorkspaceName(workspace.id, renamed)
+      }
+
+      currentStep = 'create-tasks'
+      emitCreateProgress(creationId, currentStep)
+      // Create tasks from extracted Notion data
+      if (notionContent) {
+        let sortOrder = 0
+
+        for (const todo of notionContent.todos) {
+          workspaceService.createTask(workspace.id, {
+            title: todo.title,
+            isAcceptanceCriterion: false,
+            sortOrder: sortOrder++,
+          })
+        }
+
+        for (const feature of notionContent.gherkinFeatures) {
+          workspaceService.createTask(workspace.id, {
+            title: feature,
+            isAcceptanceCriterion: true,
+            sortOrder: sortOrder++,
+          })
+        }
+
+        // Update workspace name with Notion page title only if user didn't
+        // provide a custom name. Prefix with the Notion unique-id (e.g.
+        // Use the Notion page title when the user left the generic placeholder.
+        if (notionContent.title) {
+          const renamed = resolveExtractedName(workspace.name, notionContent.title)
+          if (renamed) workspace = workspaceService.updateWorkspaceName(workspace.id, renamed)
+        }
+      }
+
+      // Update workspace name with the PR/MR title if the user did not provide
+      // a custom name and neither Notion nor Sentry already claimed it. This
+      // makes the PR a THIRD context source, lowest priority of the three
+      // (Notion > Sentry > PR), consistent with the checks above.
+      if (prContent && !notionContent?.title && !sentryContent?.title) {
+        const renamed = resolveExtractedName(workspace.name, prContent.title)
+        if (renamed) workspace = workspaceService.updateWorkspaceName(workspace.id, renamed)
+      }
+
+      // Create manual tasks/criteria if no Notion content was extracted
+      if (!notionContent && (Array.isArray(body.tasks) || Array.isArray(body.acceptanceCriteria))) {
+        let sortOrder = 0
+        if (Array.isArray(body.tasks)) {
+          for (const title of body.tasks) {
+            if (typeof title === 'string' && title.trim()) {
+              workspaceService.createTask(workspace.id, {
+                title: title.trim(),
+                isAcceptanceCriterion: false,
+                sortOrder: sortOrder++,
+              })
+            }
+          }
+        }
+        if (Array.isArray(body.acceptanceCriteria)) {
+          for (const title of body.acceptanceCriteria) {
+            if (typeof title === 'string' && title.trim()) {
+              workspaceService.createTask(workspace.id, {
+                title: title.trim(),
+                isAcceptanceCriterion: true,
+                sortOrder: sortOrder++,
+              })
+            }
+          }
+        }
+      }
+
+      currentStep = 'create-worktree'
+      emitCreateProgress(creationId, currentStep)
+      // Create git worktree for the working branch — unless we're reusing an
+      // existing one, in which case the path is taken straight from the body.
+      let worktreePath: string
+      if (useReusedWorktree) {
+        worktreePath = body.worktreePath as string
+      } else {
+        try {
+          const created = await worktreeService.createWorktreeUnlocked(
+            body.projectPath,
+            workingBranch,
+            baseRef,
+            globalSettings.worktreesPath,
+            projectSlug,
+          )
+          worktreePath = created.worktreePath
+          // Not an assumption: `createWorktree` reports which git command it ran.
+          // It falls back to attaching an existing branch, and deleting that one
+          // on rollback would destroy commits the user made before Kobo existed.
+          createdBranch = created.branchCreated
+          createdWorktree = true
+        } catch (err) {
+          if (err instanceof worktreeService.WorktreeCreationError) {
+            createdWorktree = true
+            createdBranch = err.branchCreated
+          }
+          throw new Error(`Failed to create worktree: ${err instanceof Error ? err.message : String(err)}`, {
+            cause: err,
+          })
+        }
+      }
+
+      return { workspace, worktreePath }
+    })
+    if (creation instanceof Response) return creation
+    const { workspace } = creation
+    const { worktreePath } = creation
+
+    currentStep = 'write-conventions'
+    emitCreateProgress(creationId, currentStep)
+    // Ensure Kobo-generated files are gitignored. Check both the root
+    // .gitignore and .ai/.gitignore to avoid duplicate entries.
+    try {
+      const rootGitignorePath = path.join(worktreePath, '.gitignore')
+      const aiGitignorePath = path.join(worktreePath, '.ai', '.gitignore')
+
+      const rootContent = fs.existsSync(rootGitignorePath) ? fs.readFileSync(rootGitignorePath, 'utf-8') : ''
+      const rootLines = rootContent.split('\n').map((l: string) => l.trim())
+      const aiContent = fs.existsSync(aiGitignorePath) ? fs.readFileSync(aiGitignorePath, 'utf-8') : ''
+      const aiLines = aiContent.split('\n').map((l: string) => l.trim())
+
+      // Each entry: [pattern for root .gitignore, equivalent pattern in .ai/.gitignore]
+      const entries: [string, string][] = [
+        ['.ai/.git-conventions.md', '.git-conventions.md'],
+        ['.ai/thoughts/', 'thoughts/'],
+        ['.ai/images/', 'images/'],
+        ['.ai/attachments/', 'attachments/'],
+        ['.ai/.setup-script.tmp', '.setup-script.tmp'],
+        ['.ai/.cleanup-script.tmp', '.cleanup-script.tmp'],
+        ['.ai/.archive-script.tmp', '.archive-script.tmp'],
+        // A crash mid-hook leaves the temp script behind; the next agent
+        // would otherwise happily commit it.
+        ['.ai/.hook-*.tmp', '.hook-*.tmp'],
+        ['.mcp.json', ''],
+      ]
+
+      const toAdd: string[] = []
+      for (const [rootPattern, aiPattern] of entries) {
+        const inRoot = rootLines.includes(rootPattern)
+        const inAi = aiPattern && aiLines.includes(aiPattern)
+        if (!inRoot && !inAi) toAdd.push(rootPattern)
+      }
+
+      if (toAdd.length > 0) {
+        const separator = rootContent.length > 0 && !rootContent.endsWith('\n') ? '\n' : ''
+        fs.appendFileSync(rootGitignorePath, `${separator}${toAdd.join('\n')}\n`, 'utf-8')
+      }
+    } catch (err) {
+      logError('workspaces', 'Failed to update .gitignore', {
+        workspaceId: workspace.id,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+
+    // Write git conventions to the worktree if configured
+    const effectiveSettings = settingsService.getEffectiveSettings(body.projectPath)
+    if (effectiveSettings.gitConventions) {
+      try {
+        const aiDir = path.join(worktreePath, '.ai')
+        fs.mkdirSync(aiDir, { recursive: true })
+        const conventionsPath = path.join(aiDir, '.git-conventions.md')
+        fs.writeFileSync(conventionsPath, effectiveSettings.gitConventions, 'utf-8')
+      } catch (err) {
+        logError('workspaces', 'Failed to write .git-conventions.md', {
+          workspaceId: workspace.id,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+    }
+
+    // The setup script runs LATER (after the brainstorm prompt is built and
+    // persisted via setInitialPrompt). This guarantees the prompt survives a
+    // setup-script crash and can be replayed by /:id/start.
+    let setupScriptFailed = false
+    // Captured, not swallowed: a failed engine start used to reach only the
+    // server console while the route still answered 201 "created". A
+    // half-created workspace lies to the user, so this now drives a full
+    // rollback below instead of merely flipping the status to 'error'.
+    let agentStartError: string | null = null
+
+    currentStep = 'write-context-files'
+    emitCreateProgress(creationId, currentStep)
+    creationAttachments = await saveAttachments(worktreePath, attachments)
+    if (creationAttachments.length > 0) {
+      body.description = [body.description?.trim(), ...creationAttachments.map(attachmentReference)]
+        .filter(Boolean)
+        .join('\n\n')
+    }
+    // Save Notion content as markdown in worktree
+    let notionFilePath: string | null = null
+    if (notionContent && body.notionUrl) {
+      try {
+        const thoughtsDir = path.join(worktreePath, '.ai', 'thoughts')
+        fs.mkdirSync(thoughtsDir, { recursive: true })
+
+        // Derive filename from Notion ticket ID, or fallback to branch/name pattern
+        const notionTicketId = notionContent.ticketId
+        const fallbackMatch = `${workspace.name} ${workingBranch}`.match(/TK-\d+/i)
+        const filename = notionTicketId
+          ? `${notionTicketId.toUpperCase()}.md`
+          : fallbackMatch
+            ? `${fallbackMatch[0].toUpperCase()}.md`
+            : `PAGE-${notionService.parseNotionUrl(body.notionUrl).replace(/-/g, '')}.md`
+        notionFilePath = path.join(thoughtsDir, filename)
+
+        const today = new Date().toISOString().split('T')[0]
+        let md = `# ${workspace.name}\n\n`
+        md += `## Source\n\n`
+        md += `- Notion: ${body.notionUrl}\n`
+        md += `- Retrieved: ${today}\n\n`
+
+        // Persist the user's initial instructions (typed in the "Description"
+        // field at creation time) so the agent can refer back to them later —
+        // e.g. additional Notion sub-pages, parent PRs, constraints, etc.
+        if (body.description?.trim()) {
+          md += `## User instructions\n\n${body.description.trim()}\n\n`
+        }
+
+        if (notionContent.goal) {
+          md += `## Goal\n\n${notionContent.goal}\n\n`
+        }
+
+        if (notionContent.todos.length > 0) {
+          md += `## Tasks\n\n`
+          for (const todo of notionContent.todos) {
+            md += `- [${todo.checked ? 'x' : ' '}] ${todo.title}\n`
+          }
+          md += '\n'
+        }
+
+        if (notionContent.gherkinFeatures.length > 0) {
+          md += `## Acceptance Criteria\n\n`
+          for (const feature of notionContent.gherkinFeatures) {
+            md += `${feature}\n\n`
+          }
+        }
+
+        fs.writeFileSync(notionFilePath, md, 'utf-8')
+      } catch (err) {
+        logError('workspaces', 'Failed to save Notion content', {
+          workspaceId: workspace.id,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+    }
+
+    // --- Sentry file + task (extraction already done before worktree creation) --
+    let sentryFilePath: string | null = null
+
+    if (sentryContent) {
+      try {
+        const thoughtsDir = path.join(worktreePath, '.ai', 'thoughts')
+        fs.mkdirSync(thoughtsDir, { recursive: true })
+        // File is named SENTRY-<shortId>.md (e.g. SENTRY-ACME-API-3.md) — the
+        // Short-ID is the canonical Sentry identifier. Falls back to the numeric
+        // ID if the Short-ID could not be parsed from the MCP response.
+        const idForFile = sentryContent.issueId || sentryContent.issueNumericId
+        sentryFilePath = path.join(thoughtsDir, `SENTRY-${idForFile}.md`)
+
+        const today = new Date().toISOString().split('T')[0]
+        const tags = sentryContent.tags
+        const env = tags.environment ?? 'unknown'
+        const tagsBlock =
+          Object.entries(tags)
+            .map(([k, v]) => `- ${k}: ${v}`)
+            .join('\n') || '- (none)'
+        const spansBlock =
+          sentryContent.offendingSpans.length > 0 ? sentryContent.offendingSpans.map((s) => `- ${s}`).join('\n') : 'N/A'
+        const extra = sentryContent.extraContext || 'N/A'
+
+        const md =
+          `# Fix: ${sentryContent.title || sentryContent.issueId || sentryContent.issueNumericId}\n\n` +
+          `## Source\n` +
+          `- Sentry: ${body.sentryUrl}\n` +
+          `- Issue Short-ID: ${sentryContent.issueId} (use in commit messages for auto-close)\n` +
+          `- Issue numeric ID: ${sentryContent.issueNumericId}\n` +
+          `- Retrieved: ${today}\n\n` +
+          `## Summary\n` +
+          `- **Culprit**: ${sentryContent.culprit}\n` +
+          `- **Platform**: ${sentryContent.platform}\n` +
+          `- **Environment**: ${env}\n` +
+          `- **Occurrences**: ${sentryContent.occurrences} (first: ${sentryContent.firstSeen}, last: ${sentryContent.lastSeen})\n\n` +
+          `## Tags\n${tagsBlock}\n\n` +
+          `## Error Detail / Offending Spans\n${spansBlock}\n\n` +
+          `## Additional Context\n${extra}\n\n` +
+          `## MCP Tools for deeper analysis\n` +
+          `If you need more context, the following Sentry MCP tools are available:\n` +
+          `- \`get_sentry_resource(url, resourceType) [use the Kōbō-managed Sentry namespace supplied for this session]\` — fetch the issue, breadcrumbs, replay, or trace\n` +
+          `- \`search_issue_events(organizationSlug, issueId='${sentryContent.issueId}')\` — recent events for this issue\n` +
+          `- \`get_issue_tag_values(organizationSlug, issueId='${sentryContent.issueId}', key)\` — filter by tag (environment, user, browser, …)\n`
+
+        fs.writeFileSync(sentryFilePath, md, 'utf-8')
+
+        workspaceService.createTask(workspace.id, {
+          title: `Fix: ${sentryContent.title || sentryContent.issueId || `Sentry #${sentryContent.issueNumericId}`}`,
+          isAcceptanceCriterion: false,
+          sortOrder: 9999,
+        })
+      } catch (err) {
+        logError('workspaces', 'Failed to save Sentry content', {
+          workspaceId: workspace.id,
+          error: err instanceof Error ? err.message : String(err),
+        })
+        sentryFilePath = null
+      }
+    }
+    // ------------------------------------------------------------------------
+
+    // --- PR/MR file (extraction already done before worktree creation) -----
+    if (prContent && body.prUrl) {
+      try {
+        const thoughtsDir = path.join(worktreePath, '.ai', 'thoughts')
+        fs.mkdirSync(thoughtsDir, { recursive: true })
+        const today = new Date().toISOString().split('T')[0]
+        const term =
+          prForgeRequestTermShort ?? getForgeProvider(resolveForge(body.projectPath)).capabilities.requestTermShort
+        let md = `# ${prContent.title}\n\n`
+        md += `## Source\n\n`
+        md += `- ${term === 'MR' ? 'Merge request' : 'Pull request'}: ${body.prUrl}\n`
+        md += `- Author: ${prContent.author}\n`
+        md += `- Branches: ${prContent.headBranch} → ${prContent.baseBranch}\n`
+        md += `- Retrieved: ${today}\n\n`
+
+        // Persist the user's initial instructions, exactly like the Notion
+        // and Sentry context writes above — the description field is never
+        // overwritten, only incorporated under this heading.
+        if (body.description?.trim()) {
+          md += `## User instructions\n\n${body.description.trim()}\n\n`
+        }
+
+        fs.writeFileSync(path.join(thoughtsDir, `PR-${prContent.number}.md`), md, 'utf-8')
+      } catch (err) {
+        // Best-effort, like the Notion and Sentry context writes: never break
+        // creation because a context file could not be written.
+        logError('workspaces', 'Failed to save PR content', {
+          workspaceId: workspace.id,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+    }
+    // ------------------------------------------------------------------------
+
+    // Update Notion status if both property name and value are configured
+    const notionStatusProp = effectiveSettings.notionStatusProperty
+    const notionTargetStatus = effectiveSettings.notionInProgressStatus
+    if (
+      notionContent &&
+      body.notionUrl &&
+      notionStatusProp &&
+      notionTargetStatus &&
+      notionContent.status !== notionTargetStatus
+    ) {
+      notionService.updateNotionStatus(body.notionUrl, notionStatusProp, notionTargetStatus).catch((err) => {
+        console.error('[workspaces] Failed to update Notion status:', err)
+      })
+    }
+
+    // Build the initial agent prompt BEFORE the setup script runs so a crash
+    // there cannot lose user input (description, Notion/Sentry context, tasks).
+    // The prompt is persisted to workspace.initial_prompt; the agent-start path
+    // clears it once successfully consumed. The workspace status is moved to
+    // `brainstorming` LATER — either after a successful setup script, or
+    // directly if no setup script is configured. This keeps the
+    // VALID_TRANSITIONS contract intact (`created → extracting → brainstorming`
+    // vs `created → brainstorming` when setup is skipped).
+    {
+      currentStep = 'build-prompt'
+      emitCreateProgress(creationId, currentStep)
+      // Resolve the per-feature initial-prompt templates with single-fallback
+      // semantics: project || global is already handled inside getEffectiveSettings,
+      // and a whitespace-only string acts as a user escape hatch (skip injection).
+      // An empty string falls back to the hard-coded default below at injection time.
+      const notionTpl = effectiveSettings.notionInitialPromptTemplate || DEFAULT_NOTION_INITIAL_PROMPT
+      const sentryTpl = effectiveSettings.sentryInitialPromptTemplate || DEFAULT_SENTRY_INITIAL_PROMPT
+
+      // Build prompt with tasks and acceptance criteria
+      const allTasks = workspaceService.listTasks(workspace.id)
+      const todos = allTasks.filter((t) => !t.isAcceptanceCriterion)
+      const criteria = allTasks.filter((t) => t.isAcceptanceCriterion)
+
+      let brainstormPrompt = `You are working on: ${workspace.name}\n`
+
+      // Include ticket ID if found so the agent uses the correct reference
+      const ticketId = notionContent?.ticketId || `${workspace.name} ${workingBranch}`.match(/TK-\d+/i)?.[0]
+      if (ticketId) {
+        brainstormPrompt += `Ticket: ${ticketId.toUpperCase()}\n`
+      }
+
+      if (body.description) {
+        brainstormPrompt += `\nUser instructions:\n${body.description}\n`
+      }
+
+      if (notionContent?.goal) {
+        brainstormPrompt += `\nGoal: ${notionContent.goal}\n`
+      }
+
+      brainstormPrompt += `\nBranch: ${workingBranch}\nSource branch: ${body.sourceBranch}\nIMPORTANT: When creating a pull request, always use --base ${body.sourceBranch} to target the correct source branch.\n`
+      brainstormPrompt += `\nWorking directory: ${worktreePath}\n`
+
+      if (notionFilePath) {
+        brainstormPrompt += `\nNotion ticket: ${body.notionUrl}`
+        brainstormPrompt += `\nLocal copy: ${notionFilePath}\n`
+        if (notionFilePath !== null && notionTpl.trim().length > 0) {
+          const renderedNotion = renderNotionInitialPrompt(notionTpl, {
+            ticketId: notionContent?.ticketId ?? '',
+            notionUrl: body.notionUrl ?? '',
+            notionFilePath,
+          })
+          brainstormPrompt += `\n${renderedNotion}\n`
+        }
+      }
+
+      if (sentryFilePath && sentryContent) {
+        brainstormPrompt += `\nSentry issue: ${body.sentryUrl}`
+        brainstormPrompt += `\nIssue Short-ID: ${sentryContent.issueId} (canonical, use in commit messages for auto-close)`
+        brainstormPrompt += `\nIssue numeric ID: ${sentryContent.issueNumericId}`
+        brainstormPrompt += `\nLocal copy: ${sentryFilePath}\n`
+        brainstormPrompt +=
+          `\nFix workflow:\n` +
+          `1. Read the local Sentry file above for full context\n` +
+          `2. Locate the bug from the stacktrace / culprit\n` +
+          `3. Write a failing test that reproduces the bug (TDD)\n` +
+          `4. Implement the minimal fix\n` +
+          `5. Confirm the test passes, run related tests\n` +
+          `6. Commit referencing the Sentry Short-ID (e.g. "fix(scope): description (${sentryContent.issueId})") — Sentry auto-closes the issue when the commit is merged\n` +
+          `\nIf you need more context, Sentry MCP tools are available:\n` +
+          `- get_sentry_resource(url, resourceType) [use the Kōbō-managed Sentry namespace supplied for this session] — fetch the issue, breadcrumbs, replay or trace\n` +
+          `- search_issue_events(organizationSlug, issueId='${sentryContent.issueId}') — recent events\n` +
+          `- get_issue_tag_values(organizationSlug, issueId='${sentryContent.issueId}', key) — filter by tag\n`
+        if (sentryTpl.trim().length > 0) {
+          const renderedSentry = renderSentryInitialPrompt(sentryTpl, {
+            issueId: sentryContent.issueId,
+            sentryUrl: body.sentryUrl ?? '',
+            sentryFilePath,
+          })
+          brainstormPrompt += `\n${renderedSentry}\n`
+        }
+      }
+
+      if (todos.length > 0) {
+        brainstormPrompt += `\nTasks:\n${todos.map((t) => `- [${t.status === 'done' ? 'x' : ' '}] ${t.title}`).join('\n')}\n`
+      }
+
+      if (criteria.length > 0) {
+        brainstormPrompt += `\nAcceptance criteria:\n${criteria.map((t) => `- [${t.status === 'done' ? 'x' : ' '}] ${t.title}`).join('\n')}\n`
+      }
+
+      brainstormPrompt += `\nYou have access to MCP tools via the 'kobo-tasks' server. The bullets below are the main ones — your full kobo__ toolset is larger and is listed in your available tools; consult that list for the rest (dev-server control, search_codebase, documents, settings, session usage, …):\n`
+      brainstormPrompt += `- kobo__set_workspace_name(name) — rename THIS workspace (the title shown in the sidebar). Call this ONLY when the user explicitly asks you to rename the workspace — never on your own initiative. Whitespace-trimmed, non-empty; distinct from agent_description.\n`
+      if (criteria.length > 0 || todos.length > 0) {
+        brainstormPrompt += `- list_tasks() — list all tasks and criteria with their IDs and current status\n`
+        brainstormPrompt += `- mark_task_done(task_id) — mark a task or criterion as done\n`
+        brainstormPrompt += `\nAs you work, keep the task list up to date: call mark_task_done(task_id) as soon as you complete a task or validate a criterion — don't wait until the end. Call list_tasks() first to see the current IDs.\n`
+      }
+      if (body.notionUrl || body.sentryUrl) {
+        brainstormPrompt += `- get_ticket() — retrieve the mission's source-of-truth (source URL + extracted ticket/issue content), whether it comes from Notion or Sentry\n`
+      }
+      brainstormPrompt += `- kobo__set_workspace_agent_description(description) — keep the workspace's agent_description up to date as a short one-line summary of what you're currently doing or have just accomplished. The user sees this in the sidebar without opening the workspace. Update it whenever your focus shifts (e.g. "Investigating SERVICE-1600 → enriching local Notion file", then "Writing failing test for FacturX validator"). Plain text, max 200 chars. The current value is in kobo__get_workspace_info.\nThere is also a separate user-controlled \`description\` field on the workspace — DO NOT touch it. Only set_workspace_agent_description is yours to write; the user owns the other one.\n`
+      brainstormPrompt += `- kobo__cron_create(expression, prompt, label?, mode?, oneShot?) — schedule a (recurring or one-shot) trigger on THIS workspace. At each fire Kōbō waits for the workspace to be idle and then injects \`prompt\` as the next user message. \`expression\` is a standard 5-field cron (\`min hour dom month dow\`) or a helper (\`@hourly\`, \`@daily\`, \`@weekly\`, \`@monthly\`, \`@yearly\`). Examples: \`*/30 * * * *\` = every 30 min; \`0 9 * * 1\` = every Monday at 9am; \`0 14 7 6 *\` = 7 June at 14:00. \`mode\` is \`'resume'\` (default — every fire continues the SAME conversation that scheduled the cron, so you can chain follow-ups) or \`'fresh'\` (every fire starts a brand-new session with a clean context, ideal for periodic checks like CI watch). \`oneShot\` (default false): when true, the cron cancels itself after the first real fire — use this to trigger once at a specific time without recurring. Skip-if-active: occurrences fired while a session is running are skipped, the next is computed, and the cron continues. Persists across restarts. Returns a cron \`id\`.\n`
+      brainstormPrompt += `- kobo__cron_delete(id) — cancel a previously-armed cron by id (idempotent).\n`
+      brainstormPrompt += `- kobo__cron_list() — list every cron currently armed on THIS workspace, with their next/last fire times.\n`
+      brainstormPrompt += `- kobo__schedule_wakeup(delaySeconds, prompt, label?) — schedule a one-off follow-up turn on THIS workspace after a delay. End your turn normally; once the workspace is idle, Kōbō waits delaySeconds (clamped 60..21600 = 1min..6h) then resumes this same conversation by injecting prompt as your next message. Replaces any previously pending wakeup. Prefer this over the built-in ScheduleWakeup tool.\n`
+      brainstormPrompt += `- kobo__cancel_wakeup() — cancel the pending wakeup on this workspace (idempotent).\n`
+      brainstormPrompt += `\nForeground & waking yourself: you run in the FOREGROUND of an interactive session — do your work within the current turn. When a turn ends the workspace goes idle and NOTHING re-invokes you on its own: a background task or detached process finishing does not wake you. To wait for something (CI, a long build/install, a scheduled re-check) and continue later, schedule your own wake-up with kobo__schedule_wakeup (one-off delay) or kobo__cron_create (recurring/scheduled), then end the turn — Kōbō re-invokes you with your prompt when it fires.\n`
+
+      if (effectiveSettings.gitConventions) {
+        brainstormPrompt += `\n# Git conventions\nIMPORTANT: Before any git operation (commit, branch, rebase, merge, push), read and apply the conventions defined in \`.ai/.git-conventions.md\`. They are project-specific and override any default behavior. Re-read this file if you're unsure or if context was compacted.\n`
+      }
+
+      brainstormPrompt += `\nIMPORTANT: Start by reading CLAUDE.md and/or AGENTS.md at the project root if they exist — they contain project conventions and instructions you must follow.`
+
+      // Resolve the suite-specific brainstorming instruction (citing
+      // superpowers:brainstorming / writing-plans, or gstack /office-hours +
+      // /autoplan, etc.). The marker `[BRAINSTORM_COMPLETE]` stays universal —
+      // only the path to it changes per suite.
+      const globalSettings = settingsService.getGlobalSettings()
+      const suitePrompts = getSuitePrompts(globalSettings.skillSuite, {
+        brainstormingInstruction: globalSettings.customBrainstormingInstruction,
+      })
+
+      // gstack brain sync — load project-specific learnings (patterns, pitfalls,
+      // preferences) accumulated by /learn across prior sessions. Only when the
+      // active skill suite includes gstack, and only if the user has actually
+      // installed gstack locally (the binary may be absent — skip silently).
+      // Fast + idempotent; safe to run on every workspace boot.
+      if (
+        globalSettings.skillSuite === 'gstack' ||
+        globalSettings.skillSuite === 'superpowers+gstack' ||
+        globalSettings.skillSuite === 'superpowers+gstack+ecc'
+      ) {
+        brainstormPrompt += `\n\nIMPORTANT (gstack): Before brainstorming, check whether \`~/.claude/skills/gstack/bin/gstack-brain-sync\` exists. If it does, run it with \`--once\` to load gstack learnings (project-specific patterns, pitfalls, and preferences from prior sessions) into memory. If the binary is missing (gstack not installed in this environment), skip silently and continue — do NOT install anything and do NOT mention the absence. Fast and idempotent when present.`
+      }
+
+      if (body.autoLoop === true) {
+        // Auto-loop is armed — brainstorm must end with task seeding + mark-ready,
+        // NOT with implementation. The auto-loop will drive implementation after.
+        // The grooming steps + hard rules are shared with the PREP_AUTOLOOP_PROMPT
+        // sent by the "Prepare for auto-loop" button (src/shared/auto-loop-prompts.ts).
+        // Read per-project E2E settings so the grooming steps can include the
+        // E2E review pass when configured. We deliberately use
+        // `getProjectSettings` (NOT `getEffectiveSettings`) here because only
+        // project-level settings carry the `e2e` shape; if the project hasn't
+        // been registered yet, the empty default below is correct.
+        const projectSettingsForE2e = settingsService.getProjectSettings(body.projectPath)
+        const e2eSettings = projectSettingsForE2e?.e2e ?? { framework: '', skill: '', prompt: '' }
+        // Finalization cascades project || global (E2E stays project-only).
+        const finalizationSettings = settingsService.getEffectiveFinalization(body.projectPath)
+        brainstormPrompt += `\n\n${suitePrompts.brainstormingInstruction}
+
+Auto-loop mode is active for this workspace. After the plan is ready, DO NOT implement anything. Instead:
+
+${buildAutoLoopGroomingSteps(e2eSettings, finalizationSettings)}
+
+When the steps above are complete, output [BRAINSTORM_COMPLETE] on its own line and end your turn cleanly.
+
+${AUTO_LOOP_HARD_RULES}`
+      } else {
+        brainstormPrompt += `\n\n${suitePrompts.brainstormingInstruction}
+
+Once the brainstorming + planning steps above are complete and you have a saved plan file, output [BRAINSTORM_COMPLETE] on its own line BEFORE starting implementation. Kōbō uses that marker to transition the workspace from \`brainstorming\` to \`executing\`. Then proceed with implementation.`
+      }
+
+      // Persist the assembled prompt so a setup-script crash (or any later
+      // failure) doesn't lose the user's input. Cleared once the agent
+      // successfully ingests it below or by POST /:id/start on retry.
+      try {
+        workspaceService.setInitialPrompt(workspace.id, brainstormPrompt)
+      } catch (err) {
+        console.error('[workspaces] setInitialPrompt failed:', err)
+      }
+
+      // Setup script — runs AFTER the prompt is persisted so a crash here
+      // leaves the workspace in `error` state with `initial_prompt` ready for
+      // a retry via POST /:id/start. PR imports require an explicit false to
+      // run setup; ordinary worktree reuse continues to skip it unconditionally.
+      const allowSetupScript = prContent ? body.skipSetupScript === false : !useReusedWorktree && !body.skipSetupScript
+      setupScriptConfigured = Boolean(effectiveSettings.setupScript) && allowSetupScript
+      if (setupScriptConfigured) {
+        currentStep = 'setup-script'
+        emitCreateProgress(creationId, currentStep)
+        workspaceService.updateWorkspaceStatus(workspace.id, 'extracting')
+        wsService.emit(workspace.id, 'setup:output', { text: '[kobo] Running setup script...' })
+        try {
+          const result = await runSetupScript(workspace.id, worktreePath, effectiveSettings.setupScript, {
+            workspaceName: workspace.name,
+            branchName: workingBranch,
+            sourceBranch: body.sourceBranch,
+            projectPath: body.projectPath,
+          })
+          if (result.exitCode !== 0) {
+            workspaceService.updateWorkspaceStatus(workspace.id, 'error')
+            setupScriptFailed = true
+            emitCreateFailed(creationId, 'setup-script', `Setup script exited with code ${result.exitCode}`)
+          } else {
+            markBrainstormingBestEffort(workspace.id)
+          }
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err)
+          console.error(`[workspaces] Setup script error: ${message}`)
+          workspaceService.updateWorkspaceStatus(workspace.id, 'error')
+          setupScriptFailed = true
+          emitCreateFailed(creationId, 'setup-script', message)
+        }
+      } else {
+        // No setup step → go straight from `created` to `brainstorming`.
+        markBrainstormingBestEffort(workspace.id)
+      }
+
+      if (setupScriptFailed) {
+        wsService.emit(workspace.id, 'setup:output', {
+          text:
+            '[kobo] Setup script failed — the agent was NOT started. Your initial prompt has been saved. ' +
+            'Fix the setup script (Settings → Scripts) and click Start to retry with the original prompt.',
+        })
+        // This path keeps its deliberate recovery flow (workspace stays in
+        // `error`, prompt persisted, 201 response) — nothing is undone here.
+        // The step is already named on the create-progress channel by the
+        // `emitCreateFailed(creationId, 'setup-script', …)` calls above, at
+        // the point of detection (exit code / thrown error), so the create
+        // page never shows a mute spinner on this path.
+      } else {
+        currentStep = 'start-agent'
+        emitCreateProgress(creationId, currentStep)
+        try {
+          // The brainstorming session (this very first startAgent call) uses
+          // brainstormModel when the workspace was created with auto-loop
+          // enabled and a brainstorming-specific model was picked. Every
+          // subsequent auto-loop iteration always uses `workspace.model`
+          // (see auto-loop-service.ts's spawnNextIteration) — brainstormModel
+          // is consumed exactly once, here.
+          const initialSessionModel =
+            workspace.autoLoop && workspace.brainstormModel ? workspace.brainstormModel : workspace.model
+          const initialSessionEffort =
+            body.autoLoop === true && body.brainstormReasoningEffort
+              ? body.brainstormReasoningEffort
+              : workspace.reasoningEffort
+          const agent = agentManager.startAgent(
+            workspace.id,
+            worktreePath,
+            brainstormPrompt,
+            initialSessionModel,
+            false,
+            workspace.agentPermissionMode,
+            undefined,
+            initialSessionEffort,
+          )
+          // Persist the initial prompt in the feed so it's visible in the chat,
+          // tagged with the freshly created session id so the strict session filter shows it.
+          wsService.emit(
+            workspace.id,
+            'user:message',
+            { content: brainstormPrompt, sender: 'system-prompt' },
+            agent.agentSessionId,
+          )
+          // Agent successfully ingested the prompt — clear it so /:id/start
+          // doesn't replay it on a future restart.
+          try {
+            workspaceService.clearInitialPrompt(workspace.id)
+          } catch (err) {
+            console.error('[workspaces] clearInitialPrompt failed:', err)
+          }
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err)
+          console.error(`[workspaces] Failed to start agent: ${message}`)
+          agentStartError = message
+        }
+      }
+    }
+
+    // A workspace whose agent never started is a half-created object, and a
+    // half-created object is exactly what lies to the user. Undo everything
+    // and report the step that broke.
+    if (agentStartError) {
+      emitCreateProgress(creationId, 'rollback')
+      // A worktree the user brought is not ours to remove, and neither is the
+      // branch it was already sitting on. `deleteWorkspaceWithSideEffects`
+      // already guards the worktree via `worktreeOwned`; the branch flag is
+      // ours to set.
+      const rollbackWarnings = await rollbackFailedCreation(workspace, {
+        deleteLocalBranch: createdBranch,
+        removeWorktree: createdWorktree,
+        attachments: creationAttachments,
+      })
+
+      // The setup script has already run by this point — see the caveat's own
+      // comment for what that rollback cannot reach.
+      const setupCaveat = setupScriptConfigured ? SETUP_SCRIPT_ROLLBACK_CAVEAT : ''
+      const removed = createdBranch
+        ? 'The workspace, its worktree and its branch were removed.'
+        : createdWorktree
+          ? 'The workspace and its worktree were removed.'
+          : 'The half-created workspace was removed.'
+      const failure = `Failed to start the agent: ${agentStartError}. ${removed}${setupCaveat}`
+
+      emitCreateFailed(creationId, 'start-agent', failure)
+      return c.json({ error: failure, step: 'start-agent', rollback: { done: true, warnings: rollbackWarnings } }, 500)
+    }
+
+    // The agent is running. From here the workspace is a live object, not a
+    // half-created one, so it stops being the rollback's business: dropping the
+    // handle means a later throw (the read below, a header, a status beat)
+    // returns 500 without demolishing a worktree that already has an agent
+    // working in it. Failures before this line still roll back in full.
+    createdWorkspace = null
+
+    // Return created workspace with tasks
+    const workspaceWithTasks = workspaceService.getWorkspaceWithTasks(workspace.id)
+    if (workingBranchAdjusted) {
+      // Surface the auto-suffix via a custom header so the client can toast
+      // "Branch already existed — created <new-branch> instead". The actual
+      // resolved branch is on the returned workspace already.
+      c.header('X-Kobo-Branch-Adjusted', '1')
+    }
+    if (usedLocalFallback) {
+      c.header('X-Kobo-Source-Fallback', 'local')
+    }
+    // The `done` beat means "the sequence completed the way the user expects" —
+    // NOT merely "the HTTP response is about to return 201". A workspace whose
+    // setup script failed still gets a 201 (its record exists, in `error`
+    // status, ready for retry via POST /:id/start) because that path has a
+    // deliberate recovery flow — but the create-progress channel must not
+    // claim success on it: the corresponding emitCreateFailed above already
+    // named the real failure. A failed agent start never reaches this line at
+    // all (see the rollback branch above).
+    if (!setupScriptFailed) {
+      currentStep = 'done'
+      emitCreateProgress(creationId, currentStep)
+    }
+    return c.json(workspaceWithTasks, 201)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    // Anything past `create-record` left a row behind. Leaving it there is a
+    // half-created workspace whose existence lies to the user — and the client
+    // already tells them "the server undoes everything it created". Make that
+    // sentence true for every step, not only the two that had their own
+    // handler. Best-effort: the rollback never throws and never becomes the
+    // reported error.
+    if (createdWorkspace) {
+      emitCreateProgress(creationId, 'rollback')
+      const rollbackWarnings = await rollbackFailedCreation(createdWorkspace, {
+        deleteLocalBranch: createdBranch,
+        removeWorktree: createdWorktree,
+        attachments: creationAttachments,
+      })
+      logError('workspaces', 'Rolled back a creation that failed outside any per-step handler', {
+        workspaceId: createdWorkspace.id,
+        step: currentStep,
+        error: message,
+        ...(rollbackWarnings.length > 0 ? { rollbackWarnings } : {}),
+      })
+      // Say exactly what was undone — a claim of "everything" would be the
+      // very kind of comfortable lie this route is being fixed for.
+      const removed = createdBranch
+        ? ' The workspace, its worktree and its branch were removed.'
+        : ' The half-created workspace was removed.'
+      const cause = message.endsWith('.') ? message : `${message}.`
+      const failure = `${cause}${removed}${setupScriptConfigured ? SETUP_SCRIPT_ROLLBACK_CAVEAT : ''}`
+      emitCreateFailed(creationId, currentStep, failure)
+      return c.json({ error: failure, step: currentStep, rollback: { done: true, warnings: rollbackWarnings } }, 500)
+    }
+    emitCreateFailed(creationId, currentStep, message)
+    return c.json({ error: message, step: currentStep }, err instanceof AttachmentRequestError ? 400 : 500)
+  }
+})
+
+// POST /api/workspaces/:id/sessions — create a new idle agent session
+app.post('/:id/sessions', migrationGuard, (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+    if (workspace.archivedAt) {
+      return c.json({ error: `Workspace '${id}' is archived` }, 400)
+    }
+    if (agentManager.getAgentStatus(id) !== null) {
+      return c.json({ error: 'An agent is already running for this workspace' }, 409)
+    }
+    const session = workspaceService.createIdleSession(id)
+    return c.json(session, 201)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// GET /api/workspaces/:id/sessions — list sessions for a workspace
+app.get('/:id/sessions', (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    const sessions = workspaceService.listSessions(id)
+    return c.json(sessions)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// GET /api/workspaces/pr-states — batch snapshot of PR states known to the
+// pr-watcher service, keyed by workspace id. Used by the drawer to show a
+// small PR indicator without N separate `gh pr view` calls. Workspaces
+// without a PR are absent from the response (do NOT assume keys are
+// exhaustive over the workspace list).
+app.get('/pr-states', (c) => {
+  try {
+    return c.json(getAllPrSnapshots())
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// GET /api/workspaces/info — bulk snapshot for the 30s client refresh:
+// non-archived workspace rows + cached PR snapshots + cached git stats.
+// Pure read — no git/forge calls on the request path. Static route: must
+// stay before GET /:id.
+app.get('/info', (c) => {
+  try {
+    const workspaces = workspaceService.listWorkspaces(false)
+    return c.json({
+      workspaces,
+      pendingInputs: Object.fromEntries(
+        workspaces.map((workspace) => [workspace.id, agentManager.getPendingInputs(workspace.id)]),
+      ),
+      prSnapshots: getAllPrSnapshots(),
+      gitStats: getAllGitStats(),
+      // In-memory truth, not the `status` column: a workspace missing from
+      // this map has no agent, whatever its status claims.
+      agentLiveness: agentManager.getAllAgentLiveness(),
+    })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// GET /api/workspaces/:id/comparison — the workspaces running the same task on
+// another engine, with the diff each one produced. Reads the git-stats cache the
+// pr-watcher already maintains rather than shelling out to git twice per request.
+app.get('/:id/comparison', (c) => {
+  const id = c.req.param('id')
+  try {
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    if (!workspace.comparisonId) return c.json({ comparisonId: null, members: [] })
+
+    const stats = getAllGitStats()
+    const members = workspaceService.listComparisonMembers(workspace.comparisonId).map((member) => {
+      // Same count as the auto-loop badge: every task, acceptance criteria
+      // included. How finely each engine planned the task is visible before
+      // a single line of code is, and it colours every later number.
+      const tasks = workspaceService.listTasks(member.id)
+      return {
+        workspace: member,
+        // Null, not zeros: "not measured yet" and "changed nothing" are
+        // different answers, and only one of them is true here.
+        gitStats: stats[member.id] ?? null,
+        tasks: { done: tasks.filter((t) => t.status === 'done').length, total: tasks.length },
+        // What it took: messages, questions, tools, tokens, over every session.
+        activity: computeWorkspaceActivityStats(getDb(), member.id),
+      }
+    })
+    return c.json({ comparisonId: workspace.comparisonId, members })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// GET /api/workspaces/:id/preset — the create-form preset this workspace would
+// have been created from. Read-only: "Duplicate" prefills the form with it.
+app.get('/:id/preset', (c) => {
+  const id = c.req.param('id')
+  try {
+    const preset = presetFromWorkspace(id)
+    if (!preset) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    return c.json({ preset })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// POST /api/workspaces/pr-snapshot/refresh/:id — on-demand refresh of a single
+// workspace's PR snapshot, driven by the Git tab refresh button. Static prefix
+// keeps it ahead of `/:id` in the Hono matcher.
+app.post('/pr-snapshot/refresh/:id', async (c) => {
+  const id = c.req.param('id')
+  try {
+    const snapshot = await refreshPrSnapshot(id)
+    if (snapshot === null) {
+      return c.json({ error: 'No PR for this workspace' }, 404)
+    }
+    return c.json({ snapshot })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (/not found/i.test(message)) return c.json({ error: message }, 404)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// GET /api/workspaces/auto-loop-states — batch snapshot keyed by workspace id.
+// Used by the drawer + Pinia store. Static path — must be BEFORE /:id.
+app.get('/auto-loop-states', (c) => {
+  try {
+    const db = getDb()
+    // Task counts via LEFT JOIN so workspaces without tasks still appear with 0/0.
+    // Drives the sidebar AutoLoopChip badge (X / Y) for non-focused workspaces.
+    const rows = db
+      .prepare(
+        `SELECT w.id, w.auto_loop, w.auto_loop_ready, w.no_progress_streak,
+                COUNT(t.id) AS tasks_total,
+                SUM(CASE WHEN t.status = 'done' THEN 1 ELSE 0 END) AS tasks_done,
+                (SELECT COUNT(*) FROM pending_crons p WHERE p.workspace_id = w.id) AS crons_count
+         FROM workspaces w
+         LEFT JOIN tasks t ON t.workspace_id = w.id
+         WHERE w.archived_at IS NULL
+         GROUP BY w.id`,
+      )
+      .all() as Array<{
+      id: string
+      auto_loop: number
+      auto_loop_ready: number
+      no_progress_streak: number
+      tasks_total: number | null
+      tasks_done: number | null
+      crons_count: number | null
+    }>
+    const out: Record<
+      string,
+      {
+        auto_loop: boolean
+        auto_loop_ready: boolean
+        no_progress_streak: number
+        tasks_done: number
+        tasks_total: number
+        crons_count: number
+      }
+    > = {}
+    for (const r of rows) {
+      out[r.id] = {
+        ...autoLoopService.getStatus(r.id),
+        tasks_done: r.tasks_done ?? 0,
+        tasks_total: r.tasks_total ?? 0,
+        crons_count: r.crons_count ?? 0,
+      }
+    }
+    return c.json(out)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+app.route('/', autoLoopMessagesRoutes)
+
+// GET /api/workspaces/:id/auto-loop — current auto-loop status for one workspace.
+// Admission inspection never changes deadlines, pending schedules or lifecycle state.
+app.get('/:id/automatic-admission', (c) => {
+  const id = c.req.param('id')
+  if (!workspaceService.getWorkspace(id)) return c.json({ error: 'Workspace not found' }, 404)
+  return c.json(autoLoopService.getAutomaticAdmissionStatus(id))
+})
+
+app.get('/:id/auto-loop', (c) => {
+  try {
+    const id = c.req.param('id')
+    // getStatus returns a default row for an unknown id, so without this the
+    // caller gets a cheerful `auto_loop: false` for a workspace that does not
+    // exist — the neighbouring handlers all 404.
+    if (!workspaceService.getWorkspace(id)) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    return c.json(autoLoopService.getStatus(id))
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// POST /api/workspaces/:id/auto-loop — enable the loop (user toggle ON).
+app.post('/:id/auto-loop', (c) => {
+  try {
+    autoLoopService.enable(c.req.param('id'))
+    return c.json({ ok: true })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 400)
+  }
+})
+
+// DELETE /api/workspaces/:id/auto-loop — disable the loop (user toggle OFF).
+app.delete('/:id/auto-loop', (c) => {
+  try {
+    autoLoopService.disable(c.req.param('id'), 'user-action')
+    return c.json({ ok: true })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// POST /api/workspaces/:id/auto-loop-ready — force auto_loop_ready=true.
+// Used by the "Force ready (skip grooming)" UI button AND by the MCP tool
+// `kobo__mark_auto_loop_ready` at the end of a grooming session. Emits a
+// WS event so any live frontend refreshes the toggle state immediately.
+app.post('/:id/auto-loop-ready', (c) => {
+  try {
+    const id = c.req.param('id')
+    const ws = workspaceService.getWorkspace(id)
+    if (!ws) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    workspaceService.setAutoLoopReady(id, true)
+    wsService.emitEphemeral(id, 'autoloop:ready-flipped', {})
+    autoLoopService.onAutoLoopReadySet(id)
+    return c.json({ ok: true })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// GET /api/workspaces/:id/crons — list pending crons for a workspace.
+app.get('/:id/crons', (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    return c.json({ crons: cronService.listForWorkspace(id) })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// POST /api/workspaces/:id/crons — arm a new cron. Validates the expression
+// in the service layer; invalid expressions surface as a 400.
+app.post('/:id/crons', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>
+    const expression = typeof body.expression === 'string' ? body.expression : ''
+    const prompt = typeof body.prompt === 'string' ? body.prompt : ''
+    const label = typeof body.label === 'string' ? body.label : undefined
+    const rawMode = typeof body.mode === 'string' ? body.mode : 'resume'
+    if (rawMode !== 'resume' && rawMode !== 'fresh') {
+      return c.json({ error: "mode must be 'resume' or 'fresh'" }, 400)
+    }
+    const mode = rawMode as 'resume' | 'fresh'
+    const oneShot = body.oneShot === true
+    if (!expression || !prompt) {
+      return c.json({ error: 'expression and prompt are required' }, 400)
+    }
+    try {
+      // Mode controls how each fire is handled:
+      //   - 'resume' (default): pin the cron to the session that scheduled it,
+      //     so each fire resumes THAT conversation. Same pattern as wakeup.
+      //   - 'fresh': don't pin a session — every fire spawns a new session
+      //     with a clean context. Useful for periodic checks (e.g. CI watch)
+      //     that don't need conversation continuity.
+      // oneShot=true cancels the cron after the first real fire (skip-active
+      // ticks don't consume the one-shot — the cron retries at the next
+      // occurrence until it actually fires once).
+      // The DB encodes mode via `agent_session_id`: non-NULL = resume that
+      // session; NULL = fresh. When mode='resume' but no session is active
+      // at create time, fall back to NULL — fire will spawn fresh.
+      const agentSessionId = mode === 'resume' ? (agentManager.getActiveSessionId(id) ?? undefined) : undefined
+      const cron = cronService.arm(id, { expression, prompt, label, agentSessionId, oneShot })
+      return c.json({ cron }, 201)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      return c.json({ error: message }, 400)
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// DELETE /api/workspaces/:id/crons/:cronId — cancel a single cron. Idempotent:
+// returns 204 even when the cron does not exist (matches pending-wakeup style).
+app.delete('/:id/crons/:cronId', (c) => {
+  try {
+    const id = c.req.param('id')
+    const cronId = c.req.param('cronId')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    cronService.cancel(cronId, 'user')
+    return new Response(null, { status: 204 })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// GET /api/workspaces/:id/pending-wakeup — returns the pending wakeup or null.
+app.get('/:id/pending-wakeup', (c) => {
+  try {
+    const id = c.req.param('id')
+    const pending = wakeupService.getPending(id)
+    return c.json(pending)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// DELETE /api/workspaces/:id/pending-wakeup — user-initiated cancel ("×" button)
+// or agent-initiated cancel via the `kobo__cancel_wakeup` MCP tool.
+app.delete('/:id/pending-wakeup', (c) => {
+  try {
+    const id = c.req.param('id')
+    wakeupService.cancel(id, 'manual')
+    return c.json({ ok: true })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// GET /api/workspaces/:id/quota-backoff — returns the pending quota backoff or null.
+app.get('/:id/quota-backoff', (c) => {
+  try {
+    const id = c.req.param('id')
+    const ws = workspaceService.getWorkspace(id)
+    if (!ws) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    const pending = quotaBackoffService.getPending(id)
+    c.header('Cache-Control', 'no-store')
+    return c.json(pending)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// DELETE /api/workspaces/:id/quota-backoff — user-initiated cancel ("×" button).
+app.delete('/:id/quota-backoff', (c) => {
+  try {
+    const id = c.req.param('id')
+    const ws = workspaceService.getWorkspace(id)
+    if (!ws) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    quotaBackoffService.cancel(id, 'user')
+    return new Response(null, { status: 204 })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// POST /api/workspaces/:id/pending-wakeup — schedule a wakeup, either from
+// the `kobo__schedule_wakeup` MCP tool (agent, mode='resume') or from the UI
+// (manual, mode='fresh', default). Replaces any existing pending wakeup.
+app.post('/:id/pending-wakeup', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>
+    const delaySeconds = body.delaySeconds
+    const prompt = body.prompt
+    const reason = body.reason
+    const rawMode = typeof body.mode === 'string' ? body.mode : 'fresh'
+    if (typeof delaySeconds !== 'number' || !Number.isFinite(delaySeconds) || delaySeconds <= 0) {
+      return c.json({ error: 'delaySeconds must be a positive number' }, 400)
+    }
+    if (typeof prompt !== 'string' || prompt.trim().length === 0) {
+      return c.json({ error: 'prompt is required' }, 400)
+    }
+    if (reason !== undefined && typeof reason !== 'string') {
+      return c.json({ error: 'reason must be a string when provided' }, 400)
+    }
+    if (rawMode !== 'fresh' && rawMode !== 'resume') {
+      return c.json({ error: "mode must be 'fresh' or 'resume'" }, 400)
+    }
+    // 'resume' pins the active session so the wakeup resumes that conversation;
+    // 'fresh' (default) — or 'resume' with no active session — leaves it unpinned
+    // so the wakeup fires a brand-new session running `prompt`. This is what makes
+    // manual scheduling on an idle workspace possible (no more hard 409).
+    const agentSessionId = rawMode === 'resume' ? (agentManager.getActiveSessionId(id) ?? undefined) : undefined
+    wakeupService.schedule(id, delaySeconds, prompt as string, reason as string | undefined, agentSessionId)
+    const pending = wakeupService.getPending(id)
+    return c.json({ ok: true, pending })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// PATCH /api/workspaces/:id/sessions/:sessionId — rename a session
+app.patch('/:id/sessions/:sessionId', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const sessionId = c.req.param('sessionId')
+
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+
+    const body = await c.req.json<{ name?: string }>().catch(() => ({}) as { name?: string })
+    if (!body.name?.trim()) {
+      return c.json({ error: 'name is required and must not be empty' }, 400)
+    }
+
+    const updated = workspaceService.renameSession(sessionId, id, body.name.trim())
+    if (!updated) {
+      return c.json({ error: `Session '${sessionId}' not found` }, 404)
+    }
+
+    return c.json(updated)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// DELETE /api/workspaces/:id/sessions/:sessionId — remove a stopped session and its history.
+app.delete('/:id/sessions/:sessionId', migrationGuard, (c) => {
+  try {
+    const workspaceId = c.req.param('id')
+    const sessionId = c.req.param('sessionId')
+    const deleted = workspaceService.deleteSession(sessionId, workspaceId)
+    if (!deleted) return c.json({ error: `Session '${sessionId}' not found` }, 404)
+    return c.json({ ok: true, workspace: workspaceService.getWorkspace(workspaceId) })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, message.includes('active session') ? 409 : 500)
+  }
+})
+
+// POST /api/workspaces/:id/deferred-tool-use/answer — resume a deferred
+// AskUserQuestion call by feeding the user's answers back to the SDK.
+app.post('/:id/deferred-tool-use/answer', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const body = await c.req
+      .json<{ answers?: Record<string, string>; toolCallId?: string; awaitingFreeForm?: boolean; response?: string }>()
+      .catch(
+        () =>
+          ({}) as {
+            answers?: Record<string, string>
+            toolCallId?: string
+            awaitingFreeForm?: boolean
+            response?: string
+          },
+      )
+    if (!body?.answers || typeof body.answers !== 'object') {
+      return c.json({ error: 'answers payload required' }, 400)
+    }
+    await agentManager.answerPendingQuestion(id, body.answers, body.toolCallId, {
+      awaitingFreeForm: body.awaitingFreeForm === true,
+      ...(typeof body.response === 'string' ? { response: body.response } : {}),
+    })
+    return c.json({ ok: true })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'unknown'
+    // "No deferred tool use pending" is a benign race — the frontend
+    // self-heals on this string. Use 409 (Conflict) so dev tools don't
+    // surface it as a 400 validation failure.
+    const status = /no deferred tool use pending/i.test(message) ? 409 : 400
+    return c.json({ error: message }, status)
+  }
+})
+
+// POST /api/workspaces/:id/deferred-tool-use/cancel — cancel a deferred
+// AskUserQuestion. The SDK callback resolves with deny + a message; the
+// agent sees an error tool_result and adapts. Does NOT abort the session.
+app.post('/:id/deferred-tool-use/cancel', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const body = await c.req
+      .json<{ reason?: string; toolCallId?: string }>()
+      .catch(() => ({}) as { reason?: string; toolCallId?: string })
+    await agentManager.cancelPendingQuestion(id, body.reason, body.toolCallId)
+    return c.json({ ok: true })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'unknown'
+    const status = /no deferred tool use pending/i.test(message) ? 409 : 400
+    return c.json({ error: message }, status)
+  }
+})
+
+// POST /api/workspaces/:id/deferred-permission/decision — resume a deferred
+// interactive permission request with the user's allow/deny decision.
+app.post('/:id/deferred-permission/decision', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const body = await c.req
+      .json<{
+        toolCallId?: string
+        decision?: 'allow' | 'deny'
+        reason?: string
+        scope?: 'once' | 'turn' | 'operation' | 'tool'
+      }>()
+      .catch(
+        () =>
+          ({}) as {
+            toolCallId?: string
+            decision?: 'allow' | 'deny'
+            reason?: string
+            scope?: 'once' | 'turn' | 'operation' | 'tool'
+          },
+      )
+    if (!body?.toolCallId || typeof body.toolCallId !== 'string') {
+      return c.json({ error: 'toolCallId required' }, 400)
+    }
+    if (body.decision !== 'allow' && body.decision !== 'deny') {
+      return c.json({ error: "decision must be 'allow' or 'deny'" }, 400)
+    }
+    if (body.scope && !['once', 'turn', 'operation', 'tool'].includes(body.scope)) {
+      return c.json({ error: "scope must be 'once', 'turn', 'operation' or 'tool'" }, 400)
+    }
+    await agentManager.answerPendingPermission(id, {
+      toolCallId: body.toolCallId,
+      decision: body.decision,
+      reason: typeof body.reason === 'string' ? body.reason : undefined,
+      scope: body.scope,
+    })
+    return c.json({ ok: true })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'unknown'
+    const status = /no deferred tool use pending/i.test(message) ? 409 : 400
+    return c.json({ error: message }, status)
+  }
+})
+
+app.get('/:id/permission-rules', (c) => {
+  const id = c.req.param('id')
+  if (!workspaceService.getWorkspace(id)) return c.json({ error: `Workspace '${id}' not found` }, 404)
+  return c.json({ rules: permissionPolicyService.listWorkspacePermissionRules(id) })
+})
+
+app.delete('/:id/permission-rules/:ruleId', (c) => {
+  const id = c.req.param('id')
+  if (!workspaceService.getWorkspace(id)) return c.json({ error: `Workspace '${id}' not found` }, 404)
+  if (!permissionPolicyService.removeWorkspacePermissionRule(id, c.req.param('ruleId')))
+    return c.json({ error: 'Permission rule not found' }, 404)
+  return c.json({ ok: true })
+})
+
+// DELETE /api/workspaces/:id/events/:eventId — permanently dismiss a single
+// persisted ws_events row (used today by the agent error banner so a closed
+// error doesn't replay on F5 / reconnect). Defensive: only deletes if the row
+// exists in this workspace; idempotent on missing row (returns 200).
+app.delete('/:id/events/:eventId', (c) => {
+  try {
+    const workspaceId = c.req.param('id')
+    const eventId = c.req.param('eventId')
+    if (!workspaceService.getWorkspace(workspaceId)) {
+      return c.json({ error: `Workspace '${workspaceId}' not found` }, 404)
+    }
+    const db = getDb()
+    // Capture the session BEFORE deleting: since v36 there is no AFTER DELETE
+    // trigger, so the metrics of that session must be recomputed once, here.
+    // Transactional for the same reason deleteSession is: a crash between the
+    // delete and the recompute must not leave stale metrics behind.
+    const transaction = db.transaction(() => {
+      const row = db
+        .prepare('SELECT session_id FROM ws_events WHERE id = ? AND workspace_id = ?')
+        .get(eventId, workspaceId) as { session_id: string | null } | undefined
+      db.prepare('DELETE FROM ws_events WHERE id = ? AND workspace_id = ?').run(eventId, workspaceId)
+      if (row?.session_id) {
+        workspaceService.recomputeSessionMetrics(workspaceId, row.session_id)
+      }
+    })
+    transaction()
+    return c.json({ ok: true })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'unknown'
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// POST /api/workspaces/:id/tasks — create a new task
+app.post('/:id/tasks', async (c) => {
+  try {
+    const id = c.req.param('id')
+    if (!workspaceService.getWorkspace(id)) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    const body = await c.req.json<Partial<workspaceService.CreateTaskInput>>().catch(() => null)
+    if (!body || typeof body.title !== 'string' || !body.title.trim()) {
+      return c.json({ error: 'Title is required' }, 400)
+    }
+    const task = workspaceService.createTask(id, {
+      title: body.title.trim(),
+      isAcceptanceCriterion: body.isAcceptanceCriterion,
+      sortOrder: body.sortOrder,
+      afterTaskId: body.afterTaskId,
+      role: body.role,
+    })
+    return c.json(task, 201)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, err instanceof TaskValidationError ? 400 : workspaceErrorStatus(err))
+  }
+})
+
+// PATCH /api/workspaces/:id/tasks/:taskId — validate and apply every field atomically
+app.patch('/:id/tasks/:taskId', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const taskId = c.req.param('taskId')
+    if (!workspaceService.getWorkspace(id)) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    if (!workspaceService.getTask(taskId, id)) {
+      return c.json({ error: `Task '${taskId}' not found in workspace '${id}'` }, 404)
+    }
+    const body = await c.req.json<UpdateTaskMutation>().catch(() => null)
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return c.json({ error: 'Request body must be a JSON object' }, 400)
+    }
+    const fields: UpdateTaskMutation = {}
+    for (const key of [
+      'title',
+      'status',
+      'isAcceptanceCriterion',
+      'sortOrder',
+      'afterTaskId',
+      'verification',
+    ] as const) {
+      if (body[key] !== undefined) Object.assign(fields, { [key]: body[key] })
+    }
+    if (Object.keys(fields).length === 0) return c.json({ error: 'At least one task field is required' }, 400)
+    if (fields.title !== undefined && (typeof fields.title !== 'string' || !fields.title.trim())) {
+      return c.json({ error: 'Title cannot be empty' }, 400)
+    }
+    if (fields.status !== undefined && !['pending', 'in_progress', 'done'].includes(fields.status)) {
+      return c.json({ error: 'Invalid status. Must be one of: pending, in_progress, done' }, 400)
+    }
+    if (fields.title !== undefined) fields.title = fields.title.trim()
+    workspaceService.updateTask(taskId, fields)
+    return c.json({ ok: true })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, err instanceof TaskValidationError ? 400 : workspaceErrorStatus(err))
+  }
+})
+
+// DELETE /api/workspaces/:id/tasks/:taskId — delete a task
+app.delete('/:id/tasks/:taskId', (c) => {
+  try {
+    const id = c.req.param('id')
+    const taskId = c.req.param('taskId')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+
+    const task = workspaceService.getTask(taskId, id)
+    if (!task) {
+      return c.json({ error: `Task '${taskId}' not found in workspace '${id}'` }, 404)
+    }
+
+    workspaceService.deleteTask(taskId)
+    return new Response(null, { status: 204 })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// POST /api/workspaces/:id/tasks/notify-updated — broadcast generic task list change
+// Must be declared BEFORE /:id/tasks/:taskId/notify-done so Hono doesn't capture
+// "notify-updated" as a :taskId parameter.
+app.post('/:id/tasks/notify-updated', (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+    wsService.emit(id, 'task:updated', {})
+    return new Response(null, { status: 204 })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// POST /api/workspaces/:id/agent-description/notify-updated — broadcast
+// workspace:agent-description-updated after the MCP set_workspace_agent_description
+// handler wrote the column directly. Mirrors the notify-done / notify-updated
+// pattern: the route doesn't re-write, just emits the WS event so the sidebar
+// chip + workspace header italic line refresh in real time.
+app.post('/:id/agent-description/notify-updated', (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+    wsService.emitEphemeral(id, 'workspace:agent-description-updated', {
+      agentDescription: workspace.agentDescription,
+    })
+    return new Response(null, { status: 204 })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// POST /api/workspaces/:id/crons/notify-updated — broadcast cron list changed
+// after the MCP cron_create / cron_delete handlers wrote directly to DB.
+app.post('/:id/crons/notify-updated', (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    wsService.emitEphemeral(id, 'cron:updated', { crons: cronService.listForWorkspace(id) })
+    return new Response(null, { status: 204 })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// POST /api/workspaces/:id/tasks/:taskId/notify-done — broadcast task:updated event
+app.post('/:id/tasks/:taskId/notify-done', (c) => {
+  try {
+    const id = c.req.param('id')
+    const taskId = c.req.param('taskId')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+    wsService.emit(id, 'task:updated', { taskId, status: 'done' })
+    return new Response(null, { status: 204 })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// GET /api/workspaces/:id/history-search — the same logical-message index as global search.
+app.get('/:id/history-search', async (c) => {
+  try {
+    const id = c.req.param('id')
+    if (!workspaceService.getWorkspace(id)) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    const query = (c.req.query('q') ?? '').trim()
+    if (query.length < 2) return c.json({ results: [] })
+    const limit = Math.max(1, Math.min(parseInt(c.req.query('limit') ?? '30', 10) || 30, 100))
+    const results = await searchEvents(query, { workspaceId: id, includeArchived: true, limit }, c.req.raw.signal)
+    return c.json({
+      results: results.map((result) => ({
+        eventId: result.eventId,
+        sessionId: result.sessionId,
+        createdAt: result.timestamp,
+        kind: result.type === 'user:message' ? 'user' : 'agent',
+        snippet: result.snippet,
+      })),
+      partial: getSearchIndexStatus().state !== 'ready',
+    })
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : String(err) }, 503)
+  }
+})
+
+/**
+ * GET /api/workspaces/:id/sessions/:sessionId/summary — why a session ended.
+ *
+ * A session can stop for many reasons (quota, transient failure, drain
+ * watchdog, auto-loop stall, failed resume, manual stop, natural end) and none
+ * of them were legible after the fact: you had to read the event feed to work
+ * out what happened overnight. Everything here is already collected —
+ * `agent_sessions` and `session_event_metrics` — it was just never put in one
+ * place. Note that `end_reason` itself only records four values (completed /
+ * error / killed / watchdog); quota, stall and failed resume are visible
+ * through the workspace status and the auto-loop events, not through it.
+ */
+app.get('/:id/sessions/:sessionId/summary', (c) => {
+  try {
+    const id = c.req.param('id')
+    const sessionId = c.req.param('sessionId')
+    if (!workspaceService.getWorkspace(id)) return c.json({ error: `Workspace '${id}' not found` }, 404)
+
+    const db = getDb()
+    const session = db
+      .prepare(
+        `SELECT id, engine, model, status, end_reason, started_at, ended_at
+           FROM agent_sessions WHERE id = ? AND workspace_id = ?`,
+      )
+      .get(sessionId, id) as
+      | {
+          id: string
+          engine: string | null
+          model: string | null
+          status: string
+          end_reason: string | null
+          started_at: string
+          ended_at: string | null
+        }
+      | undefined
+    if (!session) return c.json({ error: `Session '${sessionId}' not found` }, 404)
+
+    const metrics = db
+      .prepare(
+        `SELECT tool_calls, errors, input_tokens, output_tokens
+           FROM session_event_metrics WHERE workspace_id = ? AND session_id = ?`,
+      )
+      .get(id, sessionId) as
+      | { tool_calls: number; errors: number; input_tokens: number; output_tokens: number }
+      | undefined
+
+    const startedAt = Date.parse(session.started_at)
+    const endedAt = session.ended_at ? Date.parse(session.ended_at) : null
+    return c.json({
+      sessionId: session.id,
+      engine: session.engine,
+      model: session.model,
+      status: session.status,
+      // Null for sessions that ended before this was recorded, and for one
+      // still running. The client says "unknown" rather than inventing a cause.
+      endReason: session.end_reason,
+      startedAt: session.started_at,
+      endedAt: session.ended_at,
+      durationMs: endedAt !== null && !Number.isNaN(startedAt) ? endedAt - startedAt : null,
+      toolCalls: metrics?.tool_calls ?? 0,
+      errors: metrics?.errors ?? 0,
+      inputTokens: metrics?.input_tokens ?? 0,
+      outputTokens: metrics?.output_tokens ?? 0,
+    })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// GET /api/workspaces/:id/session-metrics — compact observability data for the timeline.
+app.get('/:id/session-metrics', (c) => {
+  try {
+    const id = c.req.param('id')
+    if (!workspaceService.getWorkspace(id)) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    const db = getDb()
+    const sessions = workspaceService.listSessions(id)
+    interface SessionMetric {
+      sessionId: string
+      toolCalls: number
+      errors: number
+      inputTokens: number
+      outputTokens: number
+    }
+    const metrics = new Map<string, SessionMetric>(
+      sessions.map((session) => [
+        session.id,
+        { sessionId: session.id, toolCalls: 0, errors: 0, inputTokens: 0, outputTokens: 0 },
+      ]),
+    )
+    const rows = db
+      .prepare(
+        `SELECT session_id, tool_calls, errors, input_tokens, output_tokens
+         FROM session_event_metrics
+         WHERE workspace_id = ?`,
+      )
+      .all(id) as Array<{
+      session_id: string
+      tool_calls: number
+      errors: number
+      input_tokens: number
+      output_tokens: number
+    }>
+    for (const row of rows) {
+      const metric = metrics.get(row.session_id)
+      if (!metric) continue
+      metric.toolCalls = row.tool_calls
+      metric.errors = row.errors
+      metric.inputTokens = row.input_tokens
+      metric.outputTokens = row.output_tokens
+    }
+    return c.json({ sessions, metrics: [...metrics.values()] })
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+  }
+})
+
+// GET /api/workspaces/:id/diagnostic.json — portable, redacted-by-design event diagnostic.
+app.get('/:id/diagnostic.json', (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    const db = getDb()
+    const sessions = db
+      .prepare(
+        'SELECT id, engine_session_id, status, started_at, ended_at, model, name FROM agent_sessions WHERE workspace_id = ? ORDER BY started_at ASC',
+      )
+      .all(id)
+    // Bounded on purpose: better-sqlite3 is synchronous, so an unbounded read
+    // materialises every event the workspace ever produced and blocks the
+    // event loop while `c.json` serialises them. A diagnostic bundle wants a
+    // representative trace, not the entire history.
+    const DIAGNOSTIC_EVENT_LIMIT = 50_000
+    const events = db
+      .prepare(
+        'SELECT id, session_id, type, created_at FROM ws_events WHERE workspace_id = ? ORDER BY rowid ASC LIMIT ?',
+      )
+      .all(id, DIAGNOSTIC_EVENT_LIMIT)
+    const eventsTruncated = events.length === DIAGNOSTIC_EVENT_LIMIT
+    c.header(
+      'Content-Disposition',
+      `attachment; filename="${workspace.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase() || id}-diagnostic.json"`,
+    )
+    return c.json({
+      generatedAt: new Date().toISOString(),
+      workspace: { id, name: workspace.name, engine: workspace.engine },
+      sessions,
+      events,
+      eventsTruncated,
+    })
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+  }
+})
+
+// GET /api/workspaces/:id/events — paginated event history (must be before GET /:id for route ordering)
+app.get('/:id/events', (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+
+    const before = c.req.query('before') // event ID cursor
+    const around = c.req.query('around') // event ID to include in a focused history window
+    // optional: scope to a session view. Session views also include
+    // workspace-level rows where session_id IS NULL (legacy/pre-session items).
+    const session = c.req.query('session')
+    const parsedLimit = parseInt(c.req.query('limit') ?? '100', 10)
+    const limit = Math.max(1, Math.min(Number.isFinite(parsedLimit) ? parsedLimit : 100, 500))
+
+    const db = getDb()
+    let rows: Array<{
+      id: string
+      workspace_id: string
+      type: string
+      payload: string
+      session_id: string | null
+      created_at: string
+    }>
+
+    if (around) {
+      const targetRow = db.prepare('SELECT rowid FROM ws_events WHERE id = ? AND workspace_id = ?').get(around, id) as
+        | { rowid: number }
+        | undefined
+      if (!targetRow) return c.json({ events: [], hasMore: false })
+      const halfWindow = Math.floor(limit / 2)
+      rows = session
+        ? (db
+            .prepare(
+              'SELECT * FROM ws_events WHERE workspace_id = ? AND (session_id = ? OR session_id IS NULL) AND rowid BETWEEN ? AND ? ORDER BY rowid ASC',
+            )
+            .all(id, session, targetRow.rowid - halfWindow, targetRow.rowid + halfWindow) as typeof rows)
+        : (db
+            .prepare('SELECT * FROM ws_events WHERE workspace_id = ? AND rowid BETWEEN ? AND ? ORDER BY rowid ASC')
+            .all(id, targetRow.rowid - halfWindow, targetRow.rowid + halfWindow) as typeof rows)
+    } else if (before) {
+      // Get the rowid of the cursor event
+      const cursorRow = db.prepare('SELECT rowid FROM ws_events WHERE id = ?').get(before) as
+        | { rowid: number }
+        | undefined
+      if (!cursorRow) {
+        return c.json({ events: [], hasMore: false })
+      }
+      rows = session
+        ? (db
+            .prepare(
+              'SELECT * FROM ws_events WHERE workspace_id = ? AND (session_id = ? OR session_id IS NULL) AND rowid < ? ORDER BY rowid DESC LIMIT ?',
+            )
+            .all(id, session, cursorRow.rowid, limit) as typeof rows)
+        : (db
+            .prepare('SELECT * FROM ws_events WHERE workspace_id = ? AND rowid < ? ORDER BY rowid DESC LIMIT ?')
+            .all(id, cursorRow.rowid, limit) as typeof rows)
+    } else {
+      // No cursor — return events. When filtering by session, we want the
+      // MOST RECENT events of that session first (so the feed renders from
+      // the end), reversed to chronological order below.
+      rows = session
+        ? (db
+            .prepare(
+              'SELECT * FROM ws_events WHERE workspace_id = ? AND (session_id = ? OR session_id IS NULL) ORDER BY rowid DESC LIMIT ?',
+            )
+            .all(id, session, limit) as typeof rows)
+        : (db
+            .prepare('SELECT * FROM ws_events WHERE workspace_id = ? ORDER BY rowid DESC LIMIT ?')
+            .all(id, limit) as typeof rows)
+    }
+
+    // Reverse to chronological order (we queried DESC for "before" pagination,
+    // or for the "session + no cursor" case where we fetched the newest first).
+    if (!around) rows.reverse()
+
+    const events = rows.map((row) => {
+      let parsedPayload: unknown
+      try {
+        parsedPayload = JSON.parse(row.payload)
+      } catch {
+        parsedPayload = row.payload
+      }
+      return {
+        id: row.id,
+        workspaceId: row.workspace_id,
+        type: row.type,
+        payload: parsedPayload,
+        sessionId: row.session_id,
+        createdAt: row.created_at,
+      }
+    })
+
+    // Check if there are more older events beyond what we returned
+    let hasMore = false
+    if (rows.length > 0) {
+      if (before || around) {
+        const firstRow = db.prepare('SELECT rowid FROM ws_events WHERE id = ?').get(rows[0].id) as
+          | { rowid: number }
+          | undefined
+        if (firstRow) {
+          const older = session
+            ? (db
+                .prepare(
+                  'SELECT 1 as c FROM ws_events WHERE workspace_id = ? AND (session_id = ? OR session_id IS NULL) AND rowid < ? LIMIT 1',
+                )
+                .get(id, session, firstRow.rowid) as { c: number } | undefined)
+            : (db
+                .prepare('SELECT 1 as c FROM ws_events WHERE workspace_id = ? AND rowid < ? LIMIT 1')
+                .get(id, firstRow.rowid) as { c: number } | undefined)
+          hasMore = older !== undefined
+        }
+      } else {
+        // `LIMIT 1 OFFSET <page size>` answers "is there anything past this
+        // page?" by reading one row, where COUNT(*) walked every event the
+        // workspace ever produced — on each page, synchronously.
+        const beyond = session
+          ? (db
+              .prepare(
+                'SELECT 1 as c FROM ws_events WHERE workspace_id = ? AND (session_id = ? OR session_id IS NULL) LIMIT 1 OFFSET ?',
+              )
+              .get(id, session, rows.length) as { c: number } | undefined)
+          : (db.prepare('SELECT 1 as c FROM ws_events WHERE workspace_id = ? LIMIT 1 OFFSET ?').get(id, rows.length) as
+              | { c: number }
+              | undefined)
+        hasMore = beyond !== undefined
+      }
+    }
+
+    return c.json({ events, hasMore })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// GET /api/workspaces/archived — list archived workspaces (must be before GET /:id)
+app.get('/archived', (c) => {
+  try {
+    return c.json(workspaceService.listArchivedWorkspaces())
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// GET /:id/prep-autoloop-prompt — compose the project-aware grooming
+// prompt. Used by the "Prepare for auto-loop" button. Place BEFORE
+// `app.get('/:id', ...)` so the more-specific path wins.
+app.get('/:id/prep-autoloop-prompt', (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+
+    const projectSettings = settingsService.getProjectSettings(workspace.projectPath)
+    const e2eSettings = projectSettings?.e2e ?? { framework: '', skill: '', prompt: '' }
+    // Finalization cascades project || global (E2E stays project-only).
+    const finalizationSettings = settingsService.getEffectiveFinalization(workspace.projectPath)
+
+    const globalSettings = settingsService.getGlobalSettings()
+    const intro = buildGroomingIntro(globalSettings.skillSuite, globalSettings.customAutoLoopGroomingIntro)
+
+    const prompt = `${intro}
+
+${buildAutoLoopGroomingSteps(e2eSettings, finalizationSettings)}
+
+${AUTO_LOOP_HARD_RULES}`
+
+    return c.json({ prompt })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// GET /:id/chat-history — list up to 200 most recent chat-input messages
+// for this workspace, ordered newest-first. Placed BEFORE `app.get('/:id', …)`
+// so the more-specific path wins.
+app.get('/:id/chat-history', (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    return c.json({ history: listChatHistory(id) })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// POST /:id/chat-history — append a message to this workspace's history.
+// Body: { message: string }. 204 on success.
+app.post('/:id/chat-history', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    if (workspace.archivedAt) {
+      return c.json({ error: `Workspace '${id}' is archived` }, 400)
+    }
+    const body = (await c.req.json().catch(() => ({}))) as { message?: unknown }
+    if (typeof body.message !== 'string' || body.message.trim().length === 0) {
+      return c.json({ error: 'message is required' }, 400)
+    }
+    pushChatHistory(id, body.message)
+    return c.body(null, 204)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// POST /:id/save-file — persist edited file content from the diff viewer.
+// Body: { path, content, baseSha }. Refuses while the agent runs (409). When
+// the file's current sha differs from baseSha, returns 412 with `currentSha`.
+app.post('/:id/save-file', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    if (workspace.archivedAt) {
+      return c.json({ error: `Workspace '${id}' is archived` }, 400)
+    }
+    if (agentManager.getAgentStatus(id) !== null) {
+      return c.json({ error: 'Cannot save while the agent is running — stop it first' }, 409)
+    }
+
+    const body = (await c.req.json().catch(() => ({}))) as {
+      path?: unknown
+      content?: unknown
+      baseSha?: unknown
+    }
+    if (typeof body.path !== 'string' || body.path.trim().length === 0) {
+      return c.json({ error: 'path is required' }, 400)
+    }
+    if (typeof body.content !== 'string') {
+      return c.json({ error: 'content is required (string)' }, 400)
+    }
+    if (typeof body.baseSha !== 'string' || body.baseSha.length === 0) {
+      return c.json({ error: 'baseSha is required' }, 400)
+    }
+
+    const result = saveWorkspaceFile(workspace.worktreePath, body.path, body.content, body.baseSha)
+    if (result.status === 'conflict') {
+      return c.json({ error: 'File changed on disk', currentSha: result.currentSha }, 412)
+    }
+    return c.body(null, 204)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// GET /api/workspaces/:id — get workspace details with tasks
+app.get('/:id', (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspaceWithTasks(id)
+
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+
+    return c.json({ ...workspace, agentLiveness: agentManager.getAgentLiveness(id) })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// POST /api/workspaces/:id/favorite — mark workspace as favorite
+app.post('/:id/favorite', (c) => {
+  const { id } = c.req.param()
+  try {
+    const ws = workspaceService.setFavorite(id)
+    return c.json(ws)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Unknown error'
+    const status = msg.includes('not found') ? 404 : 500
+    return c.json({ error: msg }, status)
+  }
+})
+
+// DELETE /api/workspaces/:id/favorite — remove favorite from workspace
+app.delete('/:id/favorite', (c) => {
+  const { id } = c.req.param()
+  try {
+    const ws = workspaceService.unsetFavorite(id)
+    return c.json(ws)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Unknown error'
+    const status = msg.includes('not found') ? 404 : 500
+    return c.json({ error: msg }, status)
+  }
+})
+
+// POST /api/workspaces/:id/pr-watch-disabled — skip PR-watcher forge polling for this workspace
+app.post('/:id/pr-watch-disabled', (c) => {
+  const { id } = c.req.param()
+  try {
+    const ws = workspaceService.setPrWatchDisabled(id)
+    clearPrSnapshotCache(id)
+    return c.json(ws)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Unknown error'
+    const status = msg.includes('not found') ? 404 : 500
+    return c.json({ error: msg }, status)
+  }
+})
+
+// DELETE /api/workspaces/:id/pr-watch-disabled — resume PR-watcher forge polling, refresh immediately
+app.delete('/:id/pr-watch-disabled', async (c) => {
+  const { id } = c.req.param()
+  try {
+    const ws = workspaceService.setPrWatchEnabled(id)
+    const prSnapshot = await refreshPrSnapshot(id).catch(() => null)
+    return c.json({ workspace: ws, prSnapshot })
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Unknown error'
+    const status = msg.includes('not found') ? 404 : 500
+    return c.json({ error: msg }, status)
+  }
+})
+
+// PUT /api/workspaces/:id/tags — replace the workspace's tag list
+app.put('/:id/tags', async (c) => {
+  const { id } = c.req.param()
+  try {
+    const body = await c.req.json<{ tags?: unknown }>().catch(() => ({}) as { tags?: unknown })
+    if (!Array.isArray(body.tags)) {
+      return c.json({ error: 'tags must be an array of strings' }, 400)
+    }
+    if (body.tags.some((t) => typeof t !== 'string')) {
+      return c.json({ error: 'tags must contain only strings' }, 400)
+    }
+    const ws = workspaceService.setWorkspaceTags(id, body.tags as string[])
+    return c.json(ws)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Unknown error'
+    const status = msg.includes('not found') ? 404 : 500
+    return c.json({ error: msg }, status)
+  }
+})
+
+// PATCH /api/workspaces/:id — update workspace fields (status, model, agentPermissionMode, name)
+app.patch('/:id', migrationGuard, async (c) => {
+  if (workspaceLifecycleReason(c.req.param('id')) === 'session-handoff')
+    return c.json({ error: 'A session transfer is pending', code: 'workspace-busy' }, 409)
+  try {
+    const id = c.req.param('id')
+    const parsed: unknown = await c.req.json()
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return c.json({ error: 'Request body must be a JSON object' }, 400)
+    }
+    const body = parsed as Record<string, unknown>
+
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+
+    // agent_description is exclusively writable via the MCP tool, never via the API.
+    if ('agent_description' in (body as Record<string, unknown>)) {
+      return c.json({ error: 'agent_description must be set via the agent MCP tool, not via the API' }, 400)
+    }
+
+    if (body.workflowPolicy !== undefined && !isWorkflowPolicy(body.workflowPolicy))
+      return c.json({ error: 'Invalid workflowPolicy' }, 400)
+    if (body.workflowPolicy !== undefined) {
+      const policy = resolveWorkflowPolicy(workspace.workflowPolicy, body.workflowPolicy)
+      const changed = WORKFLOW_ACTIONS.some((action) => policy[action] !== workspace.workflowPolicy[action])
+      // A live engine already received its policy. Persisting a different one cannot
+      // revoke that prompt; wait for confirmed closure before accepting the change.
+      if (changed && (agentManager.hasController(id) || isWorkspaceLifecycleBusy(id))) {
+        return c.json(
+          {
+            error: 'Stop the agent and wait for workspace operations to finish before changing workflow preferences.',
+            code: 'workspace-busy',
+          },
+          409,
+        )
+      }
+    }
+    if (body.model !== undefined && (typeof body.model !== 'string' || !body.model.trim())) {
+      return c.json({ error: 'model must be a non-empty string' }, 400)
+    }
+    if (
+      body.reasoningEffort !== undefined &&
+      (typeof body.reasoningEffort !== 'string' || !body.reasoningEffort.trim())
+    ) {
+      return c.json({ error: 'reasoningEffort must be a non-empty string' }, 400)
+    }
+    if (body.agentPermissionMode !== undefined) {
+      if (!isAgentPermissionMode(body.agentPermissionMode)) {
+        return c.json(
+          { error: `Invalid agentPermissionMode. Must be one of: ${VALID_AGENT_PERMISSION_MODES.join(', ')}` },
+          400,
+        )
+      }
+      // Cross-validate against the engine's declared capabilities — see the
+      // POST route for the same guard. Prevents parking a workspace in a mode
+      // its engine cannot honour.
+      const engineId = workspace.engine
+      const engine = listEngines().find((e) => (e.id as string) === engineId)
+      const supported = engine?.capabilities.permissionModes ?? []
+      if (engine && !supported.includes(body.agentPermissionMode)) {
+        return c.json(
+          {
+            error: `Engine '${engineId}' does not support agentPermissionMode '${body.agentPermissionMode}'. Supported: ${supported.join(', ')}`,
+          },
+          400,
+        )
+      }
+    }
+    if (body.status !== undefined) {
+      if (!isWorkspaceStatus(body.status)) {
+        return c.json({ error: `Invalid status. Must be one of: ${VALID_WORKSPACE_STATUSES.join(', ')}` }, 400)
+      }
+      if (body.status === 'idle' && agentManager.hasController(id)) {
+        return c.json({ error: 'Cannot mark an active agent workspace idle; end or stop the agent session first' }, 409)
+      }
+    }
+    if (body.name !== undefined && typeof body.name !== 'string') {
+      return c.json({ error: 'name must be a string' }, 400)
+    }
+    if ('description' in body) {
+      const desc = body.description
+      if (desc !== null && typeof desc !== 'string') {
+        return c.json({ error: 'description must be a string or null' }, 400)
+      }
+    }
+    if (
+      body.status === undefined &&
+      body.workflowPolicy === undefined &&
+      body.model === undefined &&
+      body.reasoningEffort === undefined &&
+      body.agentPermissionMode === undefined &&
+      body.name === undefined &&
+      !('description' in body)
+    ) {
+      return c.json(
+        { error: 'Missing field: status, model, reasoningEffort, agentPermissionMode, name, or description' },
+        400,
+      )
+    }
+
+    return c.json(workspaceService.updateWorkspaceFields(id, body as workspaceService.WorkspaceFieldUpdates))
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (message.includes('not found')) {
+      return c.json({ error: message }, 404)
+    }
+    if (
+      message.includes('Invalid status transition') ||
+      message.includes('name cannot be empty') ||
+      message.includes('name cannot exceed') ||
+      message.includes('Description must be')
+    ) {
+      return c.json({ error: message }, 400)
+    }
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+/** Open the workspace worktree in the user's configured editor. */
+app.post('/:id/open-editor', (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+
+    const globalSettings = settingsService.getGlobalSettings()
+    if (!globalSettings.editorCommand) {
+      return c.json({ error: 'No editor command configured' }, 400)
+    }
+
+    const worktreePath = workspace.worktreePath
+    if (!fs.existsSync(worktreePath)) {
+      return c.json({ error: `Worktree path does not exist: ${worktreePath}` }, 400)
+    }
+
+    const child = spawn(globalSettings.editorCommand, [worktreePath], {
+      detached: true,
+      stdio: 'ignore',
+    })
+    // spawn errors fire async on the ChildProcess (ENOENT etc.) — without a
+    // handler the unhandled 'error' event crashes the whole Node process.
+    child.on('error', (err) => {
+      console.error(`[open-editor] spawn '${globalSettings.editorCommand}' failed:`, err.message)
+      wsService.emitEphemeral(workspace.id, 'editor:open-failed', {
+        command: globalSettings.editorCommand,
+        message: err.message,
+      })
+    })
+    child.unref()
+
+    return c.json({ success: true })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+/** Open the workspace worktree in the user's configured terminal emulator. */
+app.post('/:id/open-terminal', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+
+    const globalSettings = settingsService.getGlobalSettings()
+    if (!globalSettings.terminalCommand.trim()) {
+      return c.json({ error: 'No terminal command configured' }, 400)
+    }
+
+    const worktreePath = workspace.worktreePath
+    if (!fs.existsSync(worktreePath)) {
+      return c.json({ error: `Worktree path does not exist: ${worktreePath}` }, 400)
+    }
+
+    // Split on whitespace, then substitute the optional {path} placeholder. The
+    // terminal also gets cwd = worktree, so emulators that inherit the cwd
+    // (kitty, alacritty, wezterm) work with no placeholder, while those that
+    // need an explicit flag use {path} (gnome-terminal --working-directory={path}).
+    const tokens = globalSettings.terminalCommand
+      .trim()
+      .split(/\s+/)
+      .map((t) => t.replace(/\{path\}/g, worktreePath))
+    const [cmd, ...args] = tokens
+
+    // Await the spawn so a bad command (ENOENT) surfaces as a clear 400 instead of
+    // a fire-and-forget "success" — same pattern as open-file-manager.
+    try {
+      await waitForSpawn(cmd, args, { cwd: worktreePath })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      return c.json({ error: `Failed to launch terminal '${globalSettings.terminalCommand}': ${msg}` }, 400)
+    }
+
+    return c.json({ success: true })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+/** Open the workspace worktree in the user's configured file manager. */
+app.post('/:id/open-file-manager', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+
+    const globalSettings = settingsService.getGlobalSettings()
+    if (!globalSettings.fileManagerCommand) {
+      return c.json({ error: 'No file manager command configured' }, 400)
+    }
+
+    const worktreePath = workspace.worktreePath
+    if (!fs.existsSync(worktreePath)) {
+      return c.json({ error: `Worktree path does not exist: ${worktreePath}` }, 400)
+    }
+
+    // Spawn + await either 'spawn' (process started OK → detach and respond)
+    // or 'error' (ENOENT, permission denied → fail synchronously with a
+    // clear 400 so the client toast shows a useful message instead of a
+    // silent server log).
+    try {
+      await waitForSpawn(globalSettings.fileManagerCommand, [worktreePath])
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      return c.json({ error: `Failed to launch '${globalSettings.fileManagerCommand}': ${msg}` }, 400)
+    }
+
+    return c.json({ success: true })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+/** Spawn a detached process and resolve as soon as it has started (or reject
+ *  on launch failure). Caller doesn't await process completion. */
+function waitForSpawn(command: string, args: string[], options: { cwd?: string } = {}): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { detached: true, stdio: 'ignore', ...options })
+    let settled = false
+    child.once('spawn', () => {
+      if (settled) return
+      settled = true
+      child.unref()
+      resolve()
+    })
+    child.once('error', (err) => {
+      if (settled) return
+      settled = true
+      reject(err)
+    })
+  })
+}
+
+/** Re-run the project setup script in the workspace worktree. */
+app.post('/:id/run-setup-script', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+
+    if (setupScriptRunning.has(id)) {
+      return c.json({ error: 'Setup script is already running for this workspace' }, 409)
+    }
+    // Claim before the first await. Checking here and claiming after the agent
+    // stop below let two concurrent calls both pass the check and then run the
+    // user's script twice, concurrently, in the same worktree.
+    setupScriptRunning.add(id)
+
+    // Everything below releases the claim, including the validation failures:
+    // a workspace left marked as running would refuse every later attempt.
+    try {
+      // Stop the running agent before re-running the setup script — the script
+      // rewrites the worktree the agent may still be writing to.
+      try {
+        if (agentManager.getAgentStatus(id)) {
+          assertAgentStopped(await agentManager.stopAgentAndWait(id, undefined, 'setup'))
+        }
+      } catch (err) {
+        console.error(`[workspaces] stopAgentAndWait before setup script failed for '${id}':`, err)
+        throw err
+      }
+
+      const effectiveSettings = settingsService.getEffectiveSettings(workspace.projectPath)
+      if (!effectiveSettings.setupScript) {
+        return c.json({ error: 'No setup script configured' }, 400)
+      }
+
+      const worktreePath = workspace.worktreePath
+      if (!fs.existsSync(worktreePath)) {
+        return c.json({ error: `Worktree path does not exist: ${worktreePath}` }, 400)
+      }
+
+      const result = await runSetupScript(workspace.id, worktreePath, effectiveSettings.setupScript, {
+        workspaceName: workspace.name,
+        branchName: workspace.workingBranch,
+        sourceBranch: workspace.sourceBranch,
+        projectPath: workspace.projectPath,
+      })
+
+      if (result.exitCode !== 0) {
+        return c.json({ error: `Setup script failed with exit code ${result.exitCode}` }, 500)
+      }
+
+      return c.json({ success: true })
+    } finally {
+      setupScriptRunning.delete(id)
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// POST /api/workspaces/:id/archive — mark workspace as archived (soft-delete)
+app.post('/:id/archive', migrationGuard, async (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+    if (workspace.archivedAt) {
+      return c.json({ error: 'Already archived' }, 400)
+    }
+
+    try {
+      assertAgentStopped(await agentManager.stopAgentAndWait(id, undefined, 'archive'))
+    } catch (err) {
+      console.error(`[workspaces] stopAgentAndWait during archive failed for '${id}':`, err)
+      throw err
+    }
+
+    try {
+      await devServerService.stopDevServer(id)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      console.error(`[workspaces] stopDevServer during archive failed: ${message}`)
+      throw err
+    }
+
+    try {
+      terminalService.destroyTerminal(id)
+    } catch {
+      // Terminal may not exist — ignore
+    }
+
+    const updated = workspaceService.archiveWorkspace(id)
+
+    wsService.emitEphemeral(id, 'workspace:archived', { workspace: updated })
+
+    // Run the project's archive script (best-effort — never blocks the archive).
+    archiveScriptService.onWorkspaceArchived(id)
+
+    return c.json(updated)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// POST /api/workspaces/:id/purge-worktree
+app.post('/:id/purge-worktree', migrationGuard, async (c) => {
+  try {
+    const id = c.req.param('id')
+    const result = await purgeWorktreeService.purgeWorktree(id)
+    if (result.outcome === 'not-found') {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+    if (result.outcome === 'worktree-not-owned') {
+      return c.json(
+        {
+          error:
+            "This workspace attached to an external worktree (you own it). Kōbō refuses to delete files it didn't create.",
+        },
+        400,
+      )
+    }
+    const workspace = workspaceService.getWorkspace(id)
+    return c.json({ workspace, warnings: result.warnings, outcome: result.outcome })
+  } catch (err) {
+    if (err instanceof WorkspaceLifecycleBusyError) return c.json({ code: err.code, error: err.message }, 409)
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// Recreate the checkout before unarchiving; never starts agents or setup scripts.
+app.post('/:id/restore-worktree', migrationGuard, async (c) => {
+  try {
+    return c.json(await restorePurgedWorktree(c.req.param('id')))
+  } catch (err) {
+    if (err instanceof WorktreeRestoreError) {
+      const status =
+        err.code === 'not-found'
+          ? 404
+          : ['not-purged', 'workspace-busy', 'path-conflict', 'branch-in-use'].includes(err.code)
+            ? 409
+            : ['worktree-not-owned', 'project-unavailable', 'recovery-source-unavailable'].includes(err.code)
+              ? 422
+              : 500
+      return c.json({ code: err.code, error: err.message }, status)
+    }
+    return c.json({ code: 'git-failed', error: 'Unable to restore the worktree.' }, 500)
+  }
+})
+
+// POST /api/workspaces/:id/unarchive — restore an archived workspace
+app.post('/:id/unarchive', migrationGuard, (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+    if (!workspace.archivedAt) {
+      return c.json({ error: 'Not archived' }, 400)
+    }
+    // Refuse unarchive while the worktree is missing — the pr-watcher
+    // auto-restores once the user recreates the folder.
+    if (workspace.worktreePurgedAt) {
+      return c.json({ error: 'worktree-purged' }, 409)
+    }
+
+    const updated = workspaceService.unarchiveWorkspace(id)
+    wsService.emitEphemeral(id, 'workspace:unarchived', { workspace: updated })
+    return c.json(updated)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+type WorkspaceRow = NonNullable<ReturnType<typeof workspaceService.getWorkspace>>
+
+// Shared teardown for a single workspace: stops the agent, destroys the
+// terminal, removes the owned worktree, optionally deletes local/remote
+// branches, then deletes the DB row (cascades to tasks/sessions/events).
+// Every side-effect is best-effort — failures are collected as warnings
+// rather than thrown, so a bulk delete never aborts mid-batch. Returns the
+// list of user-facing warning messages (empty when everything was clean).
+async function deleteWorkspaceWithSideEffects(
+  workspace: WorkspaceRow,
+  opts: { deleteLocalBranch?: boolean; deleteRemoteBranch?: boolean; removeWorktree?: boolean },
+): Promise<string[]> {
+  return withWorkspaceLifecycleGuard(workspace.id, async () => {
+    const current = workspaceService.getWorkspace(workspace.id)
+    if (!current) throw new Error(`Workspace '${workspace.id}' not found`)
+    // A bulk deletion may have captured the list before restoration completed.
+    if (workspace.archivedAt && !current.archivedAt) {
+      throw new Error('Workspace was unarchived while deletion was pending. Retry from its current state.')
+    }
+    return deleteWorkspaceWithSideEffectsUnlocked(current, opts)
+  })
+}
+
+async function deleteWorkspaceWithSideEffectsUnlocked(
+  workspace: WorkspaceRow,
+  opts: { deleteLocalBranch?: boolean; deleteRemoteBranch?: boolean; removeWorktree?: boolean },
+): Promise<string[]> {
+  // Stop the agent and WAIT for it to die. `git worktree remove --force` runs
+  // a few lines below: firing and forgetting here pulled the directory from
+  // under an agent still writing to it, destroying uncommitted work.
+  try {
+    assertAgentStopped(await agentManager.stopAgentAndWait(workspace.id, undefined, 'delete'))
+  } catch (err) {
+    console.error(`[workspaces] stopAgentAndWait during delete failed for '${workspace.name}':`, err)
+    throw err
+  }
+
+  // Stop dev server if it was running. The processSpawn would otherwise
+  // outlive the workspace (and keep its port + docker containers alive).
+  try {
+    await devServerService.stopDevServer(workspace.id)
+  } catch (err) {
+    console.error(`[workspaces] stopDevServer during delete failed for '${workspace.name}':`, err)
+    throw err
+  }
+
+  try {
+    terminalService.destroyTerminal(workspace.id)
+  } catch {
+    // Terminal may not exist — ignore
+  }
+
+  // Collected best-effort warnings: the DB deletion always proceeds, but
+  // side-effects (worktree, local/remote branches) can fail independently.
+  // We surface a user-friendly message per failure so the UI can show a
+  // sticky toast with a copy-pasteable recovery command — common case:
+  // Docker leaves root-owned files inside the worktree, git worktree
+  // remove fails with EACCES.
+  const warnings: string[] = []
+
+  // Owned worktrees only — attached external worktrees aren't ours to remove.
+  const worktreePath = workspace.worktreePath
+  if (workspace.worktreePurgedAt) {
+    console.log(`[workspaces] skipping worktree removal on delete (already purged): ${worktreePath}`)
+  } else if (workspace.worktreeOwned && opts.removeWorktree !== false) {
+    try {
+      await worktreeService.removeWorktree(workspace.projectPath, worktreePath)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      console.error(`[workspaces] Failed to remove worktree: ${message}`)
+      warnings.push(
+        `Failed to remove worktree directory '${worktreePath}'. The git entry may still reference it. ` +
+          `Fix manually:\n` +
+          `  sudo rm -rf '${worktreePath}'\n` +
+          `  cd '${workspace.projectPath}' && git worktree prune\n` +
+          `Reason: ${message}`,
+      )
+    }
+  } else {
+    console.log(`[workspaces] keeping reused worktree on delete: ${worktreePath}`)
+  }
+
+  // Delete local branch if requested
+  if (opts.deleteLocalBranch) {
+    try {
+      gitOps.deleteLocalBranch(workspace.projectPath, workspace.workingBranch)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      console.error(`[workspaces] Failed to delete local branch: ${message}`)
+      warnings.push(
+        `Failed to delete local branch '${workspace.workingBranch}'. Fix manually:\n` +
+          `  cd '${workspace.projectPath}' && git branch -D '${workspace.workingBranch}'\n` +
+          `Reason: ${message}`,
+      )
+    }
+  }
+
+  // Delete remote branch if requested
+  if (opts.deleteRemoteBranch) {
+    try {
+      gitOps.deleteRemoteBranch(workspace.projectPath, workspace.workingBranch)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      console.error(`[workspaces] Failed to delete remote branch: ${message}`)
+      warnings.push(
+        `Failed to delete remote branch '${workspace.workingBranch}'. Fix manually:\n` +
+          `  cd '${workspace.projectPath}' && git push origin --delete '${workspace.workingBranch}'\n` +
+          `Reason: ${message}`,
+      )
+    }
+  }
+
+  // Delete workspace from DB (cascades to tasks, sessions, events)
+  workspaceService.deleteWorkspace(workspace.id)
+
+  // Announce the deletion so any other tab with this workspace open (or a
+  // live terminal attached to it) can react — mirrors workspace:archived's
+  // cross-tab-sync purpose. Ephemeral: a deleted workspace has no future
+  // ws_events history to replay, so persisting this would be pointless.
+  wsService.emitEphemeral(workspace.id, 'workspace:deleted', { workspaceId: workspace.id })
+
+  return warnings
+}
+
+// DELETE /api/workspaces/archived — bulk-delete every archived workspace.
+// Must be declared BEFORE `DELETE /:id` or the dynamic segment captures it.
+// Each workspace teardown is isolated: an error on one is swallowed into the
+// warnings list and never aborts the batch.
+app.delete('/archived', migrationGuard, async (c) => {
+  try {
+    const body = await c.req
+      .json<{
+        deleteLocalBranch?: boolean
+        deleteRemoteBranch?: boolean
+      }>()
+      .catch(() => ({}) as { deleteLocalBranch?: boolean; deleteRemoteBranch?: boolean })
+
+    const archived = workspaceService.listArchivedWorkspaces()
+    const warnings: string[] = []
+    let deleted = 0
+
+    for (const workspace of archived) {
+      try {
+        warnings.push(...(await deleteWorkspaceWithSideEffects(workspace, body)))
+        deleted++
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        console.error(`[workspaces] Failed to delete archived workspace '${workspace.id}': ${message}`)
+        warnings.push(`Failed to delete workspace '${workspace.name}': ${message}`)
+      }
+    }
+
+    return c.json({ ok: true, deleted, warnings }, 200)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// DELETE /api/workspaces/:id — delete workspace
+app.delete('/:id', migrationGuard, async (c) => {
+  try {
+    const id = c.req.param('id')
+
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+
+    // Parse optional body for branch deletion options
+    const body = await c.req
+      .json<{
+        deleteLocalBranch?: boolean
+        deleteRemoteBranch?: boolean
+      }>()
+      .catch(() => ({}) as { deleteLocalBranch?: boolean; deleteRemoteBranch?: boolean })
+
+    const warnings = await deleteWorkspaceWithSideEffects(workspace, body)
+
+    // When everything worked cleanly we keep the legacy 204 response so
+    // existing clients aren't surprised by a JSON body. Warnings promote the
+    // response to 200 so the body is readable.
+    if (warnings.length === 0) {
+      return new Response(null, { status: 204 })
+    }
+    return c.json({ ok: true, warnings }, 200)
+  } catch (err) {
+    if (err instanceof WorkspaceLifecycleBusyError) return c.json({ code: err.code, error: err.message }, 409)
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// POST /api/workspaces/:id/start — start/restart agent
+app.post('/:id/start', migrationGuard, async (c) => {
+  try {
+    const id = c.req.param('id')
+
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+
+    if (workspace.archivedAt) return c.json({ error: `Workspace '${id}' is archived` }, 409)
+    if (workspace.worktreePurgedAt) return c.json({ error: `Workspace '${id}' worktree is purged` }, 409)
+
+    // If the workspace declares an engine, ensure it is still registered.
+    // Otherwise startAgent() would throw from deep inside resolveEngine and
+    // surface as an opaque 500 — better to fail fast with a clear 400.
+    const workspaceEngine = (workspace as { engine?: string }).engine
+    if (workspaceEngine) {
+      const validEngineIds = listEngines().map((e) => e.id as string)
+      if (!validEngineIds.includes(workspaceEngine)) {
+        return c.json(
+          {
+            error: `Workspace uses engine '${workspaceEngine}' which is no longer available. Recreate or reconfigure the workspace.`,
+          },
+          400,
+        )
+      }
+    }
+
+    const body = await c.req
+      .json<{ prompt?: string; agentSessionId?: string; resume?: boolean }>()
+      .catch(() => ({ prompt: undefined, agentSessionId: undefined, resume: undefined }))
+    // Prompt resolution order:
+    //  1. Explicit body.prompt (user-typed in the chat input)
+    //  2. Pending workspace.initial_prompt — set by workspace creation when
+    //     a setup-script crash prevented the original agent launch
+    //  3. Generic resume fallback
+    const pendingInitialPrompt =
+      workspace.initialPrompt && workspace.initialPrompt.length > 0 ? workspace.initialPrompt : null
+    const prompt = body.prompt ?? pendingInitialPrompt ?? 'Continue the previous task where you left off.'
+    const agentSessionId = body.agentSessionId
+    const resume = body.resume === true
+
+    if (workspaceService.getWorkspace(id)?.status === 'compacting') {
+      return c.json(
+        {
+          code: 'compacting',
+          error: 'Workspace is compacting its context; wait until compaction finishes before sending a message',
+        },
+        409,
+      )
+    }
+
+    // A manual start supersedes any scheduled retry (quota or transient
+    // watchdog recovery). Leaving its timer armed could spawn a second agent
+    // after the user has already resumed the workspace.
+    quotaBackoffService.cancel(id, 'user')
+
+    // Stop the existing agent and wait: a fresh one starts right below.
+    try {
+      assertAgentStopped(await agentManager.stopAgentAndWait(id, undefined, 'replacement'))
+    } catch (err) {
+      console.error(`[workspaces] stopAgentAndWait before start failed for '${id}':`, err)
+      throw err
+    }
+
+    const worktreePath = workspace.worktreePath
+
+    const agent = agentManager.startAgent(
+      id,
+      worktreePath,
+      prompt,
+      workspace.model,
+      resume,
+      workspace.agentPermissionMode,
+      agentSessionId,
+      workspace.reasoningEffort,
+    )
+    workspaceService.updateWorkspaceStatus(id, 'executing')
+
+    // Persist the user prompt so it survives page refresh.
+    // When agentSessionId is provided (idle-session flow), the prompt was typed
+    // by the user in the chat input; otherwise it's the workspace start prompt.
+    if (body.prompt) {
+      wsService.emit(id, 'user:message', { content: body.prompt, sender: 'user' }, agent.agentSessionId)
+    } else if (pendingInitialPrompt) {
+      // Pending brainstorm prompt — surface it in the feed so the user sees
+      // what the agent just received, mirroring the workspace-creation flow.
+      wsService.emit(
+        id,
+        'user:message',
+        { content: pendingInitialPrompt, sender: 'system-prompt' },
+        agent.agentSessionId,
+      )
+    }
+
+    // Clear the pending prompt once the agent has been handed it — subsequent
+    // /:id/start calls fall back to the generic "Continue…" string.
+    if (pendingInitialPrompt) {
+      try {
+        workspaceService.clearInitialPrompt(id)
+      } catch (err) {
+        console.error('[workspaces] clearInitialPrompt after start failed:', err)
+      }
+    }
+
+    return c.json({ status: 'started' })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// GET /api/workspaces/:id/git-stats — commit count and diff stats for the branch
+app.get('/:id/git-stats', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+
+    const freshFetch = c.req.query('freshFetch') === '1'
+    if (freshFetch) {
+      await gitOps.fetchSourceBranchAsync(workspace.worktreePath, workspace.sourceBranch)
+    } else {
+      // Fire-and-forget: explicitly catch to avoid unhandled rejection.
+      void gitOps.fetchSourceBranchAsync(workspace.worktreePath, workspace.sourceBranch).catch(() => {})
+    }
+
+    const forgeProvider = getForgeProvider(resolveForge(workspace.projectPath))
+    const pr = await forgeProvider.getPrStatus(workspace.worktreePath, workspace.workingBranch)
+    const stats = await computeGitStats(workspace, pr)
+    return c.json(stats)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// GET /api/workspaces/:id/diff?mode=branch|unpushed — list changed files
+// - `branch` (default): committed + working tree changes vs
+//   `origin/<sourceBranch>` (which can be ahead of the local ref when
+//   upstream landed merges Kōbō hasn't pulled). The handler refreshes
+//   `origin/<sourceBranch>` synchronously so the diff is never stale.
+// - `unpushed`: committed-only changes vs `origin/<workingBranch>`,
+//   i.e. what the next `git push` will send.
+app.get('/:id/diff', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const rawMode = c.req.query('mode')
+    const mode = rawMode === 'unpushed' ? 'unpushed' : rawMode === 'commits' ? 'commits' : 'branch'
+    // Opt-in flag from the diff viewer toggle. Only meaningful in `branch`
+    // mode — `unpushed` is committed-only by definition.
+    const includeUntracked = c.req.query('includeUntracked') === '1'
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+
+    const worktreePath = workspace.worktreePath
+
+    if (mode === 'commits') {
+      const from = c.req.query('from')
+      const to = c.req.query('to')
+      if (!from || !to) {
+        return c.json({ error: 'mode=commits requires from and to query params' }, 400)
+      }
+      if (!gitOps.commitExists(worktreePath, to)) {
+        return c.json({ error: `Invalid commit ref '${to}'` }, 400)
+      }
+      // `to` is strict (400 above). `from` is intentionally lenient: any ref it
+      // can't resolve falls back to the empty tree (renders as all-added). The
+      // only unresolved `from` the UI ever sends is a root commit's `<sha>^`
+      // (single-commit diff of the first commit); the compare dialog otherwise
+      // only offers refs that resolve.
+      const fromRef = gitOps.commitExists(worktreePath, from) ? from : gitOps.EMPTY_TREE_SHA
+      const files = gitOps.getChangedFilesBetween(worktreePath, fromRef, to)
+      c.header('Cache-Control', 'no-store')
+      return c.json({ files, mode: 'commits', from: fromRef, to })
+    }
+
+    // Sync fetch in `branch` mode so the diff reflects upstream's HEAD, not a
+    // stale local copy of the source branch. Best-effort: a failed fetch
+    // (offline, no remote configured) still returns the diff against whatever
+    // `origin/<source>` we have in cache.
+    if (mode === 'branch') {
+      await gitOps.fetchSourceBranchAsync(worktreePath, workspace.sourceBranch)
+    }
+    const files =
+      mode === 'unpushed'
+        ? gitOps.getUnpushedChangedFiles(worktreePath, workspace.workingBranch)
+        : gitOps.getChangedFiles(worktreePath, workspace.sourceBranch, includeUntracked)
+
+    c.header('Cache-Control', 'no-store')
+    return c.json({
+      files,
+      mode,
+      sourceBranch: workspace.sourceBranch,
+      workingBranch: workspace.workingBranch,
+    })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// GET /api/workspaces/:id/diff-file?path=...&mode=branch|unpushed
+// Resolves `original` at the appropriate base ref:
+//  - `branch`   → sourceBranch
+//  - `unpushed` → origin/<workingBranch>
+// `modified` is always the current worktree content.
+app.get('/:id/diff-file', (c) => {
+  try {
+    const id = c.req.param('id')
+    const filePath = c.req.query('path')
+    const mode = c.req.query('mode') === 'unpushed' ? 'unpushed' : 'branch'
+    if (!filePath) {
+      return c.json({ error: 'Missing path query parameter' }, 400)
+    }
+
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+
+    const worktreePath = workspace.worktreePath
+    try {
+      safePath.assertPathInside(worktreePath, filePath)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      return c.json({ error: message }, 400)
+    }
+
+    if (c.req.query('mode') === 'commits') {
+      const from = c.req.query('from')
+      const to = c.req.query('to')
+      if (!from || !to) {
+        return c.json({ error: 'mode=commits requires from and to query params' }, 400)
+      }
+      if (!gitOps.commitExists(worktreePath, to)) {
+        return c.json({ error: `Invalid commit ref '${to}'` }, 400)
+      }
+      // `from` is lenient (empty-tree fallback) for a root commit's `<sha>^` —
+      // see the matching note in the `/diff` commits branch above.
+      const fromRef = gitOps.commitExists(worktreePath, from) ? from : gitOps.EMPTY_TREE_SHA
+      const original = gitOps.getFileAtRef(worktreePath, fromRef, filePath)
+      const modified = gitOps.getFileAtRef(worktreePath, to, filePath)
+      c.header('Cache-Control', 'no-store')
+      return c.json({
+        original: original ?? '',
+        modified: modified ?? '',
+        filePath,
+        mode: 'commits',
+        from: fromRef,
+        to,
+      })
+    }
+
+    const baseRef = mode === 'unpushed' ? `origin/${workspace.workingBranch}` : workspace.sourceBranch
+    const original = gitOps.getFileAtRef(worktreePath, baseRef, filePath)
+    const modified = gitOps.getFileContent(worktreePath, filePath)
+
+    c.header('Cache-Control', 'no-store')
+    return c.json({
+      original: original ?? '',
+      modified: modified ?? '',
+      filePath,
+      mode,
+      modifiedSha: shaOf(modified ?? ''),
+    })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// POST /api/workspaces/:id/rollback-file { path }
+// Reset a single file to its `origin/<workingBranch>` version (overwrites
+// working tree + index). Used by the right-click menu in the diff viewer.
+// Returns 422 when the branch has never been pushed (no remote ref to
+// rollback to) so the UI can disable the action gracefully.
+app.post('/:id/rollback-file', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+
+    const body = await c.req.json<{ path?: unknown }>().catch(() => ({}) as { path?: unknown })
+    const filePath = typeof body?.path === 'string' ? body.path : ''
+    if (!filePath) {
+      return c.json({ error: 'Missing or invalid `path` field' }, 400)
+    }
+
+    try {
+      safePath.assertPathInside(workspace.worktreePath, filePath)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      return c.json({ error: message }, 400)
+    }
+
+    let target: gitOps.RollbackTarget
+    try {
+      target = await withGitRepoLock(workspace.worktreePath, async () => {
+        if (agentManager.getAgentStatus(id) !== null) throw new Error('Stop the agent before rolling back a file')
+        gitOps.assertCurrentBranch(workspace.worktreePath, workspace.workingBranch)
+        gitOps.assertNoIndexLock(workspace.worktreePath)
+        return gitOps.rollbackFile(workspace.worktreePath, workspace.workingBranch, filePath)
+      })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      return c.json({ error: message }, 422)
+    }
+
+    return c.json({ ok: true, path: filePath, target })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// GET /api/workspaces/:id/branch-divergence?limit=50
+// Returns commits on the working branch ahead of `origin/<sourceBranch>`
+// (`ahead`) and commits on `origin/<sourceBranch>` not yet on the working
+// branch (`behind`). Refreshes `origin/<sourceBranch>` synchronously so the
+// counts and lists are never computed against a stale local source ref.
+app.get('/:id/branch-divergence', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+    const limitRaw = c.req.query('limit')
+    const parsed = parseInt(limitRaw ?? '50', 10)
+    const limit = Math.min(Math.max(1, Number.isNaN(parsed) ? 50 : parsed), 200)
+    const worktreePath = workspace.worktreePath
+
+    await gitOps.fetchSourceBranchAsync(worktreePath, workspace.sourceBranch)
+    const ahead = gitOps.listBranchCommits(worktreePath, workspace.sourceBranch, workspace.workingBranch, limit)
+    const behind = gitOps.listCommitsBehind(worktreePath, workspace.sourceBranch, workspace.workingBranch, limit)
+
+    c.header('Cache-Control', 'no-store')
+    return c.json({
+      ahead,
+      behind,
+      sourceBranch: workspace.sourceBranch,
+      workingBranch: workspace.workingBranch,
+    })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// GET /api/workspaces/:id/commits?limit=50 — list commits between
+// `origin/<sourceBranch>` and HEAD, each tagged with whether it's already
+// pushed to origin/<branch>. Refreshes `origin/<sourceBranch>` synchronously
+// so the list is not computed against a stale local source ref.
+app.get('/:id/commits', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+    const limitRaw = c.req.query('limit')
+    const limit = Math.min(Math.max(1, parseInt(limitRaw ?? '50', 10) || 50), 200)
+    const worktreePath = workspace.worktreePath
+    await gitOps.fetchSourceBranchAsync(worktreePath, workspace.sourceBranch)
+    const commits = gitOps.listBranchCommits(worktreePath, workspace.sourceBranch, workspace.workingBranch, limit)
+    c.header('Cache-Control', 'no-store')
+    return c.json({ commits, sourceBranch: workspace.sourceBranch, workingBranch: workspace.workingBranch })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// GET /:id/working-tree-files — list uncommitted working-tree files (read-only)
+app.get('/:id/working-tree-files', (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    const files = gitOps.getWorkingTreeFiles(workspace.worktreePath)
+    return c.json({ files })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// POST /api/workspaces/:id/rename-branch { newName }
+// Rename the working branch in git, move the worktree dir to match, and
+// update the DB. Run as one atomic operation from the UI "Rename branch"
+// action. If the worktree move fails (dirty tree, etc.) the branch rename
+// is kept — the DB is still updated so Kōbō tracks the current name.
+app.post('/:id/rename-branch', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const body = (await c.req.json().catch(() => ({}))) as { newName?: unknown }
+    const newName = typeof body.newName === 'string' ? body.newName.trim() : ''
+    if (!newName) {
+      return c.json({ error: 'newName is required' }, 400)
+    }
+    if (!gitOps.isValidBranchName(newName)) {
+      return c.json(
+        {
+          error:
+            'Invalid branch name. It must start with a letter or a digit and may then contain letters, digits, /, _, - and . — no leading dash, no "..", no trailing "/", "." or ".lock".',
+        },
+        400,
+      )
+    }
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+    if (!workspace.worktreeOwned) {
+      return c.json(
+        {
+          error: 'Rename is not available for attached external worktrees. Manage the branch name with git directly.',
+        },
+        400,
+      )
+    }
+    if (newName === workspace.workingBranch) {
+      return c.json(workspace) // no-op
+    }
+
+    const oldWorktreePath = workspace.worktreePath
+    // Sibling rename: keep the same worktrees-root, swap the branch leaf.
+    // Cannot use `path.dirname` directly because branches with slashes
+    // (e.g. `feature/x`) make the dirname end one level too deep.
+    // Note: we don't pass a `projectSlug` argument here on purpose — the
+    // sibling resolver auto-detects whether the existing path was prefixed
+    // by inspecting its suffix, so prefixed and legacy worktrees both keep
+    // their layout across rename without us having to know the slug here.
+    const newWorktreePath = resolveSiblingWorkspaceWorktreePath(
+      workspace.projectPath,
+      oldWorktreePath,
+      workspace.workingBranch,
+      newName,
+    )
+
+    // Reject early if the target name is already in use — either as a local
+    // branch or on origin. Avoids git's generic "already exists" error and
+    // protects against the same silent-fallback trap the create flow has.
+    if (gitOps.branchExists(oldWorktreePath, newName)) {
+      return c.json({ error: `Branch '${newName}' already exists (locally or on origin)`, code: 'branch_exists' }, 409)
+    }
+
+    try {
+      gitOps.renameBranch(oldWorktreePath, workspace.workingBranch, newName)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      return c.json({ error: `Failed to rename git branch: ${message}` }, 500)
+    }
+
+    // Best-effort: align the worktree dir with the new branch name. If the
+    // tree is dirty or another process holds a lock, skip silently — the
+    // worktree keeps working under its old path, and Kōbō uses the ref name,
+    // not the dir, for git operations.
+    try {
+      gitOps.moveWorktree(workspace.projectPath, oldWorktreePath, newWorktreePath)
+      workspaceService.updateWorktreePath(id, newWorktreePath)
+    } catch (err) {
+      console.error('[workspaces] Failed to move worktree dir (branch renamed anyway):', err)
+      // worktree_path stays at oldWorktreePath, which still exists on disk
+    }
+
+    const updated = workspaceService.updateWorkingBranch(id, newName)
+    return c.json(updated)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// POST /api/workspaces/:id/resync-branch
+// Read the real current branch name inside the worktree (via
+// `git rev-parse --abbrev-ref HEAD`) and update the DB if it drifted. Used
+// after the agent renames the branch from the chat (`git branch -m …`).
+app.post('/:id/resync-branch', (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+    if (!workspace.worktreeOwned) {
+      return c.json(
+        {
+          error: 'Resync-branch is not available for attached external worktrees.',
+        },
+        400,
+      )
+    }
+    const worktreePath = workspace.worktreePath
+    let actual: string
+    try {
+      actual = gitOps.getCurrentBranch(worktreePath).trim()
+    } catch (err) {
+      // Could mean the dir was moved too — try scanning worktrees.
+      const message = err instanceof Error ? err.message : String(err)
+      return c.json({ error: `Could not read HEAD: ${message}` }, 500)
+    }
+    if (!actual || actual === workspace.workingBranch) {
+      return c.json({ ok: true, changed: false, workingBranch: workspace.workingBranch })
+    }
+
+    // Branch was renamed in-place by the agent (`git branch -m ...`). The
+    // worktree directory is still at <worktrees-root>/<old-name>; move it so it
+    // matches the new ref, otherwise Kōbō's path resolver breaks and
+    // subsequent session spawns fail with ENOENT on .mcp.json. Best-effort:
+    // if the move fails (dir already moved, lockfile, dirty tree), we still
+    // update the DB so git ops stay aligned with the current ref name — the
+    // user can repair the dir manually.
+    // Same auto-detection rationale as the rename path above: the resolver
+    // recovers the (possibly slug-prefixed) root from the existing path, so
+    // we don't pass `projectSlug` here either.
+    const newWorktreePath = resolveSiblingWorkspaceWorktreePath(
+      workspace.projectPath,
+      worktreePath,
+      workspace.workingBranch,
+      actual,
+    )
+    try {
+      gitOps.moveWorktree(workspace.projectPath, worktreePath, newWorktreePath)
+      workspaceService.updateWorktreePath(id, newWorktreePath)
+    } catch (err) {
+      console.error('[workspaces] resync-branch: moveWorktree failed (DB update proceeds):', err)
+      // worktree_path stays at the old path; DB update for working branch still proceeds
+    }
+
+    const updated = workspaceService.updateWorkingBranch(id, actual)
+    return c.json({ ok: true, changed: true, workingBranch: updated.workingBranch })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// POST /api/workspaces/:id/push — push working branch to origin
+app.post('/:id/push', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+
+    const body = await c.req.json<{ force?: boolean }>().catch(() => ({}) as { force?: boolean })
+    const force = body?.force === true
+
+    const worktreePath = workspace.worktreePath
+
+    // While a rebase / merge / cherry-pick is in flight the local branch ref
+    // has not moved yet, so `git push` would exit 0 with "Everything
+    // up-to-date" and the user would see nothing happen. Refuse instead.
+    const ongoing = gitOps.getOngoingGitOperation(worktreePath)
+    if (ongoing) {
+      return c.json(
+        {
+          error: `Cannot push while a ${ongoing} is in progress on branch '${workspace.workingBranch}'. Finish or abort it first.`,
+          code: 'operation_in_progress',
+          operation: ongoing,
+        },
+        409,
+      )
+    }
+
+    let upToDate: boolean
+    try {
+      // Only pass an options arg when force is requested — keeps the
+      // no-options call shape identical to before for callers/tests that
+      // assert on argument count.
+      const result = force
+        ? await gitOps.pushBranchAsync(worktreePath, workspace.workingBranch, { force: true })
+        : await gitOps.pushBranchAsync(worktreePath, workspace.workingBranch)
+      upToDate = result.upToDate
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      return c.json({ error: message }, workspaceErrorStatus(err))
+    }
+
+    // Emit a trace into the chat feed so the user sees the action
+    const session = workspaceService.getActiveSession(id)
+    wsService.emit(
+      id,
+      'user:message',
+      {
+        content: upToDate
+          ? `Nothing to push: branch ${workspace.workingBranch} is already up to date on origin`
+          : `Pushed branch ${workspace.workingBranch} to origin`,
+        sender: 'system-prompt',
+      },
+      session?.id ?? undefined,
+    )
+
+    return c.json({ ok: true, branch: workspace.workingBranch, upToDate })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// POST /api/workspaces/:id/fetch — git fetch the workspace repo (all branches of origin).
+// Read-only: updates remote-tracking refs, never touches the working tree.
+app.post('/:id/fetch', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+    await gitOps.fetchAllBranchesAsync(workspace.worktreePath)
+    return c.json({ ok: true })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// POST /api/workspaces/:id/pull — pull working branch from origin (fast-forward only)
+app.post('/:id/pull', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+
+    const worktreePath = workspace.worktreePath
+    const autostash = c.req.query('autostash') === '1'
+
+    try {
+      await gitOps.pullBranchAsync(worktreePath, workspace.workingBranch, 'origin', { autostash })
+    } catch (err) {
+      if (err instanceof gitOps.DirtyWorktreeError) {
+        return c.json({ error: err.message, code: 'dirty_worktree', operation: err.operation, status: err.status }, 409)
+      }
+      const message = err instanceof Error ? err.message : String(err)
+      return c.json({ error: message }, workspaceErrorStatus(err))
+    }
+
+    // Emit a trace into the chat feed so the user sees the action
+    const session = workspaceService.getActiveSession(id)
+    wsService.emit(
+      id,
+      'user:message',
+      { content: `Pulled branch ${workspace.workingBranch} from origin`, sender: 'system-prompt' },
+      session?.id ?? undefined,
+    )
+
+    return c.json({ ok: true, branch: workspace.workingBranch })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+/** Rebase the workspace branch onto its source branch. */
+app.post('/:id/rebase', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+
+    const autostash = c.req.query('autostash') === '1'
+    const worktreePath = workspace.worktreePath
+    await gitOps.rebaseBranchAsync(worktreePath, workspace.sourceBranch, { autostash })
+
+    return c.json({ success: true })
+  } catch (err) {
+    if (err instanceof gitOps.GitConflictError) {
+      return c.json({ error: err.message, conflict: true, operation: err.operation, files: err.files }, 409)
+    }
+    if (err instanceof gitOps.DirtyWorktreeError) {
+      return c.json({ error: err.message, code: 'dirty_worktree', operation: err.operation, status: err.status }, 409)
+    }
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+/** Merge the source branch into the workspace branch (non-fast-forward). */
+app.post('/:id/merge', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+
+    const autostash = c.req.query('autostash') === '1'
+    const worktreePath = workspace.worktreePath
+    await gitOps.mergeBranchAsync(worktreePath, workspace.sourceBranch, { autostash })
+
+    return c.json({ success: true })
+  } catch (err) {
+    if (err instanceof gitOps.GitConflictError) {
+      return c.json({ error: err.message, conflict: true, operation: err.operation, files: err.files }, 409)
+    }
+    if (err instanceof gitOps.DirtyWorktreeError) {
+      return c.json({ error: err.message, code: 'dirty_worktree', operation: err.operation, status: err.status }, 409)
+    }
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+/** Abort any in-progress merge or rebase in the worktree. */
+app.post('/:id/git/abort', (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+
+    const worktreePath = workspace.worktreePath
+    const aborted = gitOps.abortOngoingGitOperation(worktreePath)
+    return c.json({ success: true, aborted })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+/** Continue an in-progress merge, rebase or cherry-pick after resolution. */
+app.post('/:id/git/continue', (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+
+    const continued = gitOps.continueOngoingGitOperation(workspace.worktreePath)
+    if (!continued) return c.json({ error: 'No Git operation is in progress' }, 409)
+    return c.json({ success: true, continued })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+/** Stage + commit all working-tree changes (recovery action for a dirty rebase/merge). */
+app.post('/:id/git/commit-all', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+
+    const body = (await c.req.json().catch(() => ({}))) as { message?: unknown }
+    const message = typeof body.message === 'string' ? body.message.trim() : ''
+    if (!message) return c.json({ error: 'Commit message is required' }, 400)
+
+    gitOps.commitAllChanges(workspace.worktreePath, message)
+    return c.json({ success: true })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+/** Ask the workspace agent to inspect and commit the current working tree. */
+app.post('/:id/git/commit-with-agent', migrationGuard, async (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+
+    const workingTree = gitOps.getWorkingTreeStatus(workspace.worktreePath)
+    if (workingTree.staged + workingTree.modified + workingTree.untracked === 0) {
+      return c.json({ error: 'No uncommitted changes to commit' }, 400)
+    }
+
+    const prompt = `Please prepare a clean commit for the uncommitted changes in this workspace.
+
+1. Read .ai/.git-conventions.md if it exists and follow it exactly.
+2. Inspect git status and the staged and unstaged diffs. Do not include unrelated files.
+3. Run the relevant focused checks when practical.
+4. Stage the intended changes and create one conventional, descriptive commit.
+5. Do NOT push the branch.
+
+When finished, report the commit SHA, its message, the files included, and the checks you ran.`
+
+    let messageSent = false
+    try {
+      const { agentSessionId } = await deliverAgentPrompt(workspace, workspace.worktreePath, prompt)
+      messageSent = true
+      wsService.emit(workspace.id, 'user:message', { content: prompt, sender: 'user' }, agentSessionId)
+    } catch (deliveryErr) {
+      const message = deliveryErr instanceof Error ? deliveryErr.message : String(deliveryErr)
+      return c.json({ error: `Unable to ask the agent to commit: ${message}` }, 409)
+    }
+
+    return c.json({ ok: true, messageSent })
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+  }
+})
+
+/** Discard working-tree changes (destructive recovery action for a dirty rebase/merge). */
+app.post('/:id/git/discard', (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+
+    gitOps.discardWorkingTreeChanges(workspace.worktreePath)
+    return c.json({ success: true })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+/** Hand off merge/rebase conflicts to the workspace agent with an intelligent-resolution prompt. */
+app.post('/:id/git/resolve-with-agent', migrationGuard, async (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+
+    const body = (await c.req
+      .json<{ operation?: 'merge' | 'rebase' | 'cherry-pick'; files?: string[] }>()
+      .catch(() => ({}))) as {
+      operation?: 'merge' | 'rebase' | 'cherry-pick'
+      files?: string[]
+    }
+    const worktreePath = workspace.worktreePath
+    const operation = body.operation ?? gitOps.getOngoingGitOperation(worktreePath) ?? 'merge'
+    const files = body.files && body.files.length > 0 ? body.files : gitOps.getConflictedFiles(worktreePath)
+
+    if (files.length === 0) {
+      return c.json({ error: 'No conflicted files detected — nothing for the agent to resolve' }, 400)
+    }
+
+    const fileList = files.map((f) => `- ${f}`).join('\n')
+    const continueCmd =
+      operation === 'merge'
+        ? 'git merge --continue'
+        : operation === 'cherry-pick'
+          ? 'git cherry-pick --continue'
+          : 'git rebase --continue'
+    // During a cherry-pick the conflict sides are inverted vs a rebase:
+    // `ours` = the new base, `theirs` = the feature commit being applied.
+    const cherryPickNote =
+      operation === 'cherry-pick'
+        ? '\n\n**Cherry-pick note:** during a cherry-pick, `ours` is the new base branch and `theirs` is our feature commit being replayed — the inverse of a rebase. `git checkout --theirs <file>` takes OUR feature version.'
+        : ''
+    const prompt = `I started a \`git ${operation}\` of \`origin/${workspace.sourceBranch}\` into our working branch \`${workspace.workingBranch}\` and it produced conflicts that I need your help to resolve INTELLIGENTLY.
+
+Conflicted files (${files.length}):
+${fileList}
+
+## Resolution rules — read carefully
+
+1. **Our branch is the source of truth for the feature we are building.** Its behavior must be preserved.
+2. **The source branch (\`${workspace.sourceBranch}\`) carries legitimate upstream changes** (bug fixes, refactors, dependency bumps). Integrate these where they don't conflict with our intent.
+3. **Do NOT blindly pick a side.** Neither \`--ours\` nor \`--theirs\` wholesale. Read each conflict hunk and reason about what the correct merged state is.
+4. **Think semantically, not syntactically.** If our branch renamed \`foo\` to \`bar\` and the source branch added a new call to \`foo\`, the correct resolution is a new call to \`bar\`, not "keep ours and drop the new call".
+5. **Preserve tests and contracts.** If both sides touched the same test, keep coverage from both.
+6. **Imports, versions, lock files:** prefer the superset (union) unless they genuinely conflict — in which case use the more recent / more restrictive.
+
+## Steps
+
+1. For each conflicted file, open it and read both conflict markers.
+2. Decide the merge intent. If unsure, investigate both sides' commit history (\`git log --oneline ours..HEAD <file>\` vs \`git log --oneline origin/${workspace.sourceBranch} <file>\`).
+3. Edit the file to the correct merged state and remove the conflict markers.
+4. Run the test suite to verify no regression (\`npm test\` or the project's equivalent).
+5. \`git add <resolved-files>\` then \`${continueCmd}\`.
+6. Report the summary: which files you touched, the key decisions you made, and the final test result.${cherryPickNote}
+
+Start now.`
+
+    let messageSent = false
+    try {
+      const { agentSessionId } = await deliverAgentPrompt(workspace, worktreePath, prompt)
+      messageSent = true
+      wsService.emit(workspace.id, 'user:message', { content: prompt, sender: 'user' }, agentSessionId)
+    } catch (deliveryErr) {
+      const deliveryMessage = deliveryErr instanceof Error ? deliveryErr.message : String(deliveryErr)
+      console.warn(`[workspaces] resolve-with-agent: agent resume failed: ${deliveryMessage}`)
+    }
+
+    return c.json({ ok: true, operation, files, messageSent })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+/** Change the base branch of an existing PR via the resolved forge provider. */
+app.post('/:id/change-pr-base', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const body = await c.req.json<{ base: string }>().catch(() => ({}) as { base: string })
+    if (!body.base) return c.json({ error: 'Missing base parameter' }, 400)
+    // Forwarded to `gh pr edit --base <base>` / the GitLab equivalent, so a
+    // name starting with `-` would read as a CLI option rather than a branch.
+    if (!gitOps.isValidBranchName(body.base)) {
+      return c.json({ error: `Invalid base branch name: ${body.base}` }, 400)
+    }
+
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+
+    const provider = getForgeProvider(resolveForge(workspace.projectPath))
+    if (!provider.capabilities.canChangePrBase) {
+      return c.json(
+        { error: 'This project has no forge that supports changing the PR base', code: 'forge_unsupported' },
+        409,
+      )
+    }
+    const availability = await provider.isAvailable(workspace.worktreePath)
+    if (!availability.available) {
+      return c.json(
+        {
+          error: `Forge CLI unavailable (${availability.reason ?? 'unknown'})`,
+          code: `forge_${availability.reason ?? 'unavailable'}`,
+        },
+        409,
+      )
+    }
+
+    await provider.changePrBase(workspace.worktreePath, body.base)
+    return c.json({ success: true })
+  } catch (err) {
+    if (err instanceof ForgeUnavailableError) {
+      return c.json({ error: err.message, code: 'forge_unavailable' }, 409)
+    }
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+/** Merge a ready, open PR/MR through its resolved forge provider. */
+app.post('/:id/merge-pr', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+
+    const provider = getForgeProvider(resolveForge(workspace.projectPath))
+    if (!provider.capabilities.canMergeRequest) {
+      return c.json({ error: 'This project has no forge that can merge the PR', code: 'forge_unsupported' }, 409)
+    }
+    const availability = await provider.isAvailable(workspace.worktreePath)
+    if (!availability.available) {
+      return c.json(
+        {
+          error: `Forge CLI unavailable (${availability.reason ?? 'unknown'})`,
+          code: `forge_${availability.reason ?? 'unavailable'}`,
+        },
+        409,
+      )
+    }
+
+    const snapshot = await provider.getPrStatus(workspace.worktreePath, workspace.workingBranch)
+    if (snapshot?.state !== 'OPEN') {
+      return c.json({ error: 'No open PR found for this workspace', code: 'pr_not_open' }, 409)
+    }
+    if (!snapshot.readyToMerge) {
+      return c.json({ error: 'This PR is not ready to merge', code: 'pr_not_ready' }, 409)
+    }
+
+    await provider.mergeRequest(workspace.worktreePath, snapshot.number)
+    const merged = await provider.getPrStatus(workspace.worktreePath, workspace.workingBranch)
+    return c.json({ success: true, merged: merged?.state === 'MERGED', branch: workspace.workingBranch })
+  } catch (err) {
+    if (err instanceof ForgeUnavailableError) {
+      return c.json({ error: err.message, code: 'forge_unavailable' }, 409)
+    }
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+/** Delete the workspace branch from the remote after its PR/MR was merged. */
+app.post('/:id/delete-remote-branch', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    const provider = getForgeProvider(resolveForge(workspace.projectPath))
+    if (!provider.capabilities.canDeleteRemoteBranch) {
+      return c.json({ error: 'This project cannot delete remote branches', code: 'forge_unsupported' }, 409)
+    }
+    const availability = await provider.isAvailable(workspace.worktreePath)
+    if (!availability.available) return c.json({ error: 'Forge CLI unavailable', code: 'forge_unavailable' }, 409)
+    const snapshot = await provider.getPrStatus(workspace.worktreePath, workspace.workingBranch)
+    if (snapshot?.state !== 'MERGED') return c.json({ error: 'The PR is not merged yet', code: 'pr_not_merged' }, 409)
+    await provider.deleteRemoteBranch(workspace.worktreePath, workspace.workingBranch)
+    return c.json({ success: true })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+/** Re-target a workspace onto a new source branch (metadata + worktree + PR base). */
+app.post('/:id/change-source-branch', async (c) => {
+  const id = c.req.param('id')
+  const workspace = workspaceService.getWorkspace(id)
+  try {
+    const body = await c.req.json<{ newBase: string }>().catch(() => ({}) as { newBase: string })
+    if (!body.newBase) return c.json({ error: 'Missing newBase parameter' }, 400)
+    // Reaches git (fetch/reset/cherry-pick) and the forge CLI as a bare
+    // argument, and is exported to the custom script as KOBO_NEW_BASE.
+    if (!gitOps.isValidBranchName(body.newBase)) {
+      return c.json({ error: `Invalid source branch name: ${body.newBase}` }, 400)
+    }
+
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+
+    const result = await changeSourceBranch(id, body.newBase)
+    if (result.status === 'too-many') {
+      return c.json(
+        { error: 'The branch has too many own commits — rebase it manually', code: 'too_many_commits', ...result },
+        409,
+      )
+    }
+    if (result.status === 'dirty') {
+      return c.json(
+        { error: 'Commit or stash your changes before changing the source branch', code: 'dirty_worktree', ...result },
+        409,
+      )
+    }
+    return c.json(result)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (/agent is running/i.test(message)) {
+      return c.json({ error: message, code: 'agent_running' }, 409)
+    }
+    if (/does not exist|already '|is required/i.test(message)) {
+      return c.json({ error: message }, 400)
+    }
+    // A custom script (or the built-in reconstruct) may have left a partial
+    // git operation behind — surface it so the UI can offer a one-click abort.
+    const ongoingOperation = workspace ? gitOps.getOngoingGitOperation(workspace.worktreePath) : null
+    return c.json({ error: message, ongoingOperation }, 500)
+  }
+})
+
+/** Cancel an in-flight source-branch change: abort the cherry-pick, restore the
+ *  working branch from its latest backup branch, revert the source metadata. */
+app.post('/:id/cancel-source-change', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const body = await c.req.json<{ previousBase: string }>().catch(() => ({}) as { previousBase: string })
+    if (!body.previousBase) return c.json({ error: 'Missing previousBase parameter' }, 400)
+    // Persisted as the workspace source branch, and from there it reaches
+    // `git fetch origin <sourceBranch>` as a bare argument — including from a
+    // plain visit to the Diff tab, with no further user action.
+    if (!gitOps.isValidBranchName(body.previousBase)) {
+      return c.json({ error: `Invalid source branch name: ${body.previousBase}` }, 400)
+    }
+
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+
+    // "No backup exists" and "I could not find out" are different answers.
+    // Conflating them told the user restoration was impossible while the
+    // backup branch was on disk, closing the only rollback path there is.
+    let backups: string[]
+    try {
+      backups = gitOps.listBackupBranches(workspace.worktreePath, workspace.workingBranch)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      return c.json({ error: `Cannot list backup branches: ${message}`, code: 'backup_list_failed' }, 500)
+    }
+    if (backups.length === 0) {
+      return c.json({ error: 'No backup branch found — cannot auto-restore', code: 'no_backup' }, 409)
+    }
+    if (agentManager.hasController(id)) return c.json({ error: 'Stop the agent before restoring the branch' }, 409)
+    await withGitRepoLock(workspace.worktreePath, async () => {
+      gitOps.restoreBranchFromBackup(workspace.worktreePath, workspace.workingBranch, backups[0])
+    })
+    workspaceService.updateWorkspaceSourceBranch(id, body.previousBase)
+    return c.json({ success: true, restoredFrom: backups[0] })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+/** Force-push the working branch with --force-with-lease (after a history rewrite). */
+app.post('/:id/force-push', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    // Same guard as /push: mid-rebase the branch ref has not moved, so the
+    // force push would be a silent "Everything up-to-date" no-op.
+    const ongoing = gitOps.getOngoingGitOperation(workspace.worktreePath)
+    if (ongoing) {
+      return c.json(
+        {
+          error: `Cannot force push while a ${ongoing} is in progress on branch '${workspace.workingBranch}'. Finish or abort it first.`,
+          code: 'operation_in_progress',
+          operation: ongoing,
+        },
+        409,
+      )
+    }
+    const { upToDate } = await gitOps.pushBranchAsync(workspace.worktreePath, workspace.workingBranch, {
+      force: true,
+    })
+    if (upToDate) {
+      // This route never traced its pushes; only the surprising no-op case is
+      // worth a line in the chat, so the user knows why nothing changed.
+      const session = workspaceService.getActiveSession(id)
+      wsService.emit(
+        id,
+        'user:message',
+        {
+          content: `Nothing to push: branch ${workspace.workingBranch} is already up to date on origin`,
+          sender: 'system-prompt',
+        },
+        session?.id ?? undefined,
+      )
+    }
+    return c.json({ success: true, upToDate })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// POST /api/workspaces/:id/open-pr — create a GitHub PR and send a templated prompt to the agent
+app.post('/:id/open-pr', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+
+    const worktreePath = workspace.worktreePath
+
+    // Verify branch exists on remote
+    let lsRemoteOut = ''
+    try {
+      const { stdout } = await execFileAsync('git', ['ls-remote', '--heads', 'origin', workspace.workingBranch], {
+        cwd: worktreePath,
+      })
+      lsRemoteOut = stdout
+    } catch {
+      lsRemoteOut = ''
+    }
+    if (!lsRemoteOut.trim()) {
+      return c.json({ error: 'Branch is not on remote', code: 'branch_not_pushed' }, 409)
+    }
+
+    // Ensure all local commits are pushed. Compare against origin/<workingBranch>
+    // explicitly — NOT `@{u}`: the worktree is created from origin/<sourceBranch>
+    // (worktree-service.createWorktree), so the branch's upstream tracks the BASE.
+    // `@{u}..HEAD` would then count the branch's own commits and falsely report
+    // "unpushed" for any branch pushed without -u (e.g. by the agent). This mirrors
+    // getUnpushedCountAsync, the ref the GitPanel's "pushed" label already uses.
+    try {
+      const remoteRef = `origin/${workspace.workingBranch}`
+      const { stdout } = await execFileAsync('git', ['rev-list', `${remoteRef}..HEAD`, '--count'], {
+        cwd: worktreePath,
+      })
+      const countStr = stdout.trim()
+      const count = parseInt(countStr, 10) || 0
+      if (count > 0) {
+        return c.json({ error: 'Local commits not pushed', code: 'unpushed_commits' }, 409)
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      const stderr = (err as { stderr?: string | Buffer }).stderr?.toString() ?? ''
+      const combined = `${message} ${stderr}`.toLowerCase()
+      if (combined.includes('no upstream') || combined.includes('aucun amont') || combined.includes('no such ref')) {
+        return c.json({ error: 'Branch has no upstream', code: 'branch_not_pushed' }, 409)
+      }
+      return c.json({ error: `Failed to check branch state: ${message}` }, 500)
+    }
+
+    // Create the PR/MR via the resolved forge provider.
+    const provider = getForgeProvider(resolveForge(workspace.projectPath))
+    if (!provider.capabilities.canCreatePr) {
+      return c.json({ error: 'This project has no forge that can open a PR', code: 'forge_unsupported' }, 409)
+    }
+    const availability = await provider.isAvailable(worktreePath)
+    if (!availability.available) {
+      return c.json(
+        {
+          error: `Forge CLI unavailable (${availability.reason ?? 'unknown'})`,
+          code: `forge_${availability.reason ?? 'unavailable'}`,
+        },
+        409,
+      )
+    }
+
+    let prUrl: string
+    let prNumber: number
+    try {
+      const placeholderBody = 'Automated PR — description will be updated by the agent.'
+      const created = await provider.createPr(worktreePath, {
+        base: workspace.sourceBranch,
+        head: workspace.workingBranch,
+        title: workspace.name,
+        body: placeholderBody,
+      })
+      prUrl = created.url
+      prNumber = created.number
+    } catch (err) {
+      if (err instanceof ForgeUnavailableError) {
+        return c.json({ error: err.message, code: 'forge_unavailable' }, 409)
+      }
+      const message = err instanceof Error ? err.message : String(err)
+      const stderr = (err as { stderr?: string | Buffer }).stderr?.toString() ?? ''
+      return c.json({ error: `Failed to open PR: ${message} ${stderr}`.trim() }, 500)
+    }
+
+    // ── From here on, PR exists. No more 5xx responses. ──
+
+    // Resolve the PR prompt template; skip message steps if empty
+    const effective = settingsService.getEffectiveSettings(workspace.projectPath)
+    if (!effective.prPromptTemplate) {
+      return c.json({ ok: true, prNumber, prUrl, messageSent: false })
+    }
+
+    // Build context and render the PR prompt template
+    const commits = gitOps.getCommitsBetween(worktreePath, workspace.sourceBranch, workspace.workingBranch)
+    const diffStats = gitOps.getDiffStatsBetween(worktreePath, workspace.sourceBranch, workspace.workingBranch)
+    const tasks = workspaceService.listTasks(workspace.id)
+
+    const rendered = renderPrTemplate(effective.prPromptTemplate, {
+      workspace,
+      prNumber,
+      prUrl,
+      commits,
+      diffStats,
+      tasks,
+    })
+
+    // Send to the running agent, or resume the agent with the PR prompt
+    let messageSent = false
+    try {
+      const { agentSessionId } = await deliverAgentPrompt(workspace, workspace.worktreePath, rendered)
+      messageSent = true
+      wsService.emit(workspace.id, 'user:message', { content: rendered, sender: 'user' }, agentSessionId)
+    } catch (deliveryErr) {
+      const deliveryMessage = deliveryErr instanceof Error ? deliveryErr.message : String(deliveryErr)
+      console.warn(`[workspaces] open-pr: PR created but agent resume failed: ${deliveryMessage}`)
+    }
+
+    return c.json({ ok: true, prNumber, prUrl, messageSent })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// POST /api/workspaces/:id/start-review — ask the agent to review committed + uncommitted changes
+app.post('/:id/start-review', migrationGuard, async (c) => {
+  try {
+    return c.json(await startWorkspaceReview(c.req.param('id'), await c.req.json().catch(() => ({}))))
+  } catch (err) {
+    return c.json(
+      { error: err instanceof Error ? err.message : String(err) },
+      err instanceof ReviewRequestError ? err.status : workspaceErrorStatus(err),
+    )
+  }
+})
+
+// POST /api/workspaces/:id/start-ci-fix — dispatch the configured CI-fix
+// prompt to the agent when the workspace's PR has failing CI.
+// Resumes the current session (or starts a fresh one if none is alive).
+app.post('/:id/start-ci-fix', migrationGuard, async (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+    if (workspace.archivedAt) {
+      return c.json({ error: `Workspace '${id}' is archived` }, 400)
+    }
+
+    // Refresh the PR snapshot best-effort so the action operates on the
+    // freshest CI rollup; fall back to the cache if the refresh fails.
+    let snapshot = await refreshPrSnapshot(id).catch(() => null)
+    if (!snapshot) {
+      snapshot = getAllPrSnapshots()[id] ?? null
+    }
+    if (snapshot?.state !== 'OPEN' || snapshot.ci.rollup !== 'FAILURE') {
+      return c.json({ error: 'No failing CI detected on this workspace' }, 400)
+    }
+
+    const effective = settingsService.getEffectiveSettings(workspace.projectPath)
+    const template = effective.ciFixPromptTemplate
+    if (!template || template.trim().length === 0) {
+      return c.json({ error: 'No CI-fix prompt template configured. Set one in Settings → Prompts.' }, 400)
+    }
+
+    const failedChecks: CiFixCheck[] = snapshot.ci.checks
+      .filter((check) => check.conclusion === 'FAILURE')
+      .map((check) => ({ name: check.name, detailsUrl: check.detailsUrl }))
+
+    // Best-effort first details URL as a stand-in for `ci_run_url` — the
+    // forge providers don't expose a top-level run URL, but the first failed
+    // check's `detailsUrl` reliably points back at the failing run.
+    const ciRunUrl = failedChecks.find((c) => c.detailsUrl)?.detailsUrl ?? null
+
+    const rendered = renderCiFixTemplate(template, {
+      workspace,
+      prNumber: snapshot.number,
+      prUrl: snapshot.url,
+      prTitle: snapshot.title,
+      failedChecks,
+      ciRunUrl,
+    })
+
+    const session = workspaceService.getActiveSession(workspace.id)
+    let emitSessionId: string | undefined = session?.id
+    try {
+      const delivery = await deliverAgentPrompt(workspace, workspace.worktreePath, rendered)
+      emitSessionId = delivery.agentSessionId
+    } catch (deliveryErr) {
+      const message = deliveryErr instanceof Error ? deliveryErr.message : String(deliveryErr)
+      return c.json({ error: `Failed to dispatch CI-fix prompt: ${message}` }, 500)
+    }
+
+    wsService.emit(workspace.id, 'user:message', { content: rendered, sender: 'user' }, emitSessionId)
+
+    return c.json({ ok: true, failedChecksCount: failedChecks.length })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+/**
+ * POST /api/workspaces/:id/dismiss-pr-attention — record the user's
+ * "I've seen this" on the changes-requested or CI-failure badge. The
+ * badge stays hidden until the pr-watcher observes a fresher pr.updatedAt.
+ */
+app.post('/:id/dismiss-pr-attention', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+    const body = await c.req.json<{ kind?: string; prUpdatedAt?: string }>().catch(() => ({}) as Record<string, never>)
+    const kind = body.kind === 'changes-requested' || body.kind === 'ci-failed' ? body.kind : null
+    if (!kind) {
+      return c.json({ error: "Field 'kind' must be 'changes-requested' or 'ci-failed'" }, 400)
+    }
+    const prUpdatedAt = typeof body.prUpdatedAt === 'string' ? body.prUpdatedAt : null
+    if (!prUpdatedAt) {
+      return c.json({ error: "Field 'prUpdatedAt' (ISO timestamp) is required" }, 400)
+    }
+    workspaceService.dismissPrAttention(id, kind, prUpdatedAt)
+    wsService.emitEphemeral(id, 'workspace:pr-attention-dismissed', { kind, prUpdatedAt })
+    return c.json({ success: true })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+/**
+ * POST /api/workspaces/:id/restore-pr-attention — undo a dismiss; clears the
+ * dismissed-at column so the changes-requested / CI-failure badge surfaces
+ * again. The inverse of dismiss-pr-attention.
+ */
+app.post('/:id/restore-pr-attention', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+    const body = await c.req.json<{ kind?: string }>().catch(() => ({}) as Record<string, never>)
+    const kind = body.kind === 'changes-requested' || body.kind === 'ci-failed' ? body.kind : null
+    if (!kind) {
+      return c.json({ error: "Field 'kind' must be 'changes-requested' or 'ci-failed'" }, 400)
+    }
+    workspaceService.restorePrAttention(id, kind)
+    wsService.emitEphemeral(id, 'workspace:pr-attention-restored', { kind })
+    return c.json({ success: true })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+/** POST /api/workspaces/:id/mark-read — mark workspace as read (clear unread indicator). */
+app.post('/:id/mark-read', (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+
+    workspaceService.markWorkspaceRead(id)
+    wsService.emitEphemeral(id, 'workspace:unread', { hasUnread: false })
+
+    return c.json({ success: true })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// POST /api/workspaces/:id/stop — stop agent
+app.post('/:id/stop', migrationGuard, async (c) => {
+  try {
+    const id = c.req.param('id')
+
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+
+    try {
+      // The response says "stopped": make that true before returning.
+      assertAgentStopped(await agentManager.stopAgentAndWait(id))
+    } catch (err) {
+      // Agent may not be tracked (e.g. server restarted) — just update status
+      console.error(`[workspaces] stopAgentAndWait on manual stop failed for '${id}':`, err)
+      throw err
+    }
+
+    // Always transition to idle so the UI reflects the stopped state
+    try {
+      workspaceService.updateWorkspaceStatus(id, 'idle')
+    } catch {
+      // Status transition may not be valid
+    }
+
+    return c.json({ status: 'stopped' })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+// POST /api/workspaces/:id/interrupt — soft-interrupt agent (SIGINT, like Escape in Claude Code)
+app.post('/:id/interrupt', migrationGuard, async (c) => {
+  try {
+    const id = c.req.param('id')
+
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+
+    const rawBody = await c.req.text()
+    let body: Record<string, unknown> = {}
+    if (rawBody.trim().length > 0) {
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(rawBody)
+      } catch {
+        return c.json({ error: 'Request body must be valid JSON' }, 400)
+      }
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return c.json({ error: 'Request body must be a JSON object' }, 400)
+      }
+      body = parsed as Record<string, unknown>
+    }
+    if (
+      body.expectedSessionId !== undefined &&
+      (typeof body.expectedSessionId !== 'string' || body.expectedSessionId.trim().length === 0)
+    ) {
+      return c.json({ error: 'expectedSessionId must be a non-empty string when provided' }, 400)
+    }
+    if (body.disableAutoLoop !== undefined && typeof body.disableAutoLoop !== 'boolean') {
+      return c.json({ error: 'disableAutoLoop must be a boolean when provided' }, 400)
+    }
+
+    const options: agentManager.InterruptAgentOptions = {}
+    if (body.expectedSessionId !== undefined) options.expectedSessionId = body.expectedSessionId as string
+    if (body.disableAutoLoop !== undefined) options.disableAutoLoop = body.disableAutoLoop as boolean
+
+    agentManager.interruptAgent(id, options)
+    return c.json({ status: 'interrupted' })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (err instanceof agentManager.InterruptAgentError) {
+      const status = err.code === 'interrupt_failed' ? 500 : 409
+      return c.json({ error: message, code: err.code }, status)
+    }
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
+export default app

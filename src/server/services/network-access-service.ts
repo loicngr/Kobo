@@ -1,0 +1,313 @@
+import crypto from 'node:crypto'
+import os from 'node:os'
+
+const LOOPBACK_ADDRESSES = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1'])
+
+/** True for loopback remote addresses. Undefined → false (deny-safe). */
+export function isLoopbackAddress(address: string | undefined): boolean {
+  if (!address) return false
+  return LOOPBACK_ADDRESSES.has(address)
+}
+
+/** Bind host for `serve()`: localhost-only when disabled, all interfaces when enabled. */
+export function resolveBindHost(enabled: boolean): string | undefined {
+  return enabled ? undefined : '127.0.0.1'
+}
+
+/**
+ * Non-internal addresses of the running server, one per LAN interface. Both
+ * families: with network access on, the server binds every interface, so an
+ * IPv6 address is as legitimate a way to reach it as an IPv4 one. A scoped
+ * link-local address (`fe80::1%eth0`) loses its zone, which is the form a URL
+ * carries.
+ */
+export function getLanHostnames(): string[] {
+  return collectLanAddresses(null)
+}
+
+/**
+ * Non-internal IPv4 URLs for the running server, for display + QR. IPv4 only:
+ * these are meant to be read off a screen or scanned from a phone, and an IPv6
+ * literal is neither.
+ */
+export function getLanUrls(port: number): string[] {
+  return collectLanAddresses('IPv4').map((address) => `http://${address}:${port}`)
+}
+
+function collectLanAddresses(family: 'IPv4' | null): string[] {
+  const addresses: string[] = []
+  for (const infos of Object.values(os.networkInterfaces())) {
+    if (!infos) continue
+    for (const info of infos) {
+      if (info.internal) continue
+      if (family !== null && info.family !== family) continue
+      // A scoped link-local address (`fe80::1%eth0`) loses its zone, which is
+      // the form a URL carries.
+      addresses.push(info.address.split('%')[0])
+    }
+  }
+  return addresses
+}
+
+/**
+ * Hostnames that always designate the host machine itself. A request or a page
+ * carrying one of these is, by construction, already running on the user's own
+ * machine, whatever port it came from — which is what keeps the Quasar dev
+ * server (localhost:8080 proxying to localhost:3000) working.
+ */
+// `::ffff:7f00:1` is what the URL parser normalises `::ffff:127.0.0.1` into,
+// so both spellings of the IPv4-mapped loopback land here. `0.0.0.0` and `::`
+// name the wildcard bind rather than a host, but Linux routes them to loopback
+// and `http://0.0.0.0:3000` is a common bookmark; a rebinding page can never
+// produce them, since the browser puts its own domain in the Host.
+const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1', '::ffff:127.0.0.1', '::ffff:7f00:1', '0.0.0.0', '::'])
+
+/**
+ * Hostname carried by a raw `Host` or `Origin` header, or null when the value
+ * cannot be parsed. `Host` arrives bare (`127.0.0.1:3000`), `Origin` with a
+ * scheme (`http://127.0.0.1:3000`); adding a scheme when none is present runs
+ * both through the same URL rules, including the bracketed IPv6 form.
+ */
+function headerHostname(value: string): string | null {
+  try {
+    const hostname = new URL(value.includes('://') ? value : `http://${value}`).hostname
+    if (!hostname) return null
+    // The URL parser keeps IPv6 hostnames bracketed; compare on the bare address.
+    return hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname
+  } catch {
+    return null
+  }
+}
+
+/**
+ * True when a raw `Host`/`Origin` value names the machine itself. Always
+ * allowed, whatever the settings say, which lets a caller settle the common
+ * case without reading the settings file or listing the network interfaces —
+ * both synchronous, and this runs on every request.
+ */
+export function isLocalRequestHost(value: string | undefined): boolean {
+  if (!value) return false
+  const hostname = headerHostname(value)
+  return hostname !== null && LOCAL_HOSTNAMES.has(hostname)
+}
+
+function isAllowedHostname(hostname: string | null, enabled: boolean, lanHostnames: string[]): boolean {
+  if (!hostname) return false
+  if (LOCAL_HOSTNAMES.has(hostname)) return true
+  return enabled && lanHostnames.includes(hostname)
+}
+
+/**
+ * Guards against DNS rebinding: a page on `evil.com` whose domain re-resolves
+ * to 127.0.0.1 reaches this server with `Host: evil.com`, and the browser then
+ * treats every response as same-origin. Only the names by which the machine is
+ * legitimately reachable are accepted — its own loopback names, plus its LAN
+ * addresses once network access is enabled.
+ *
+ * Behind a reverse proxy the Host is whatever domain the operator chose. When
+ * they declare it via `KOBO_NETWORK_ACCESS_PROXY_HOST` it is enforced like any
+ * other name; without it we cannot tell their domain from an attacker's, so
+ * anything is accepted. That mode also turns off the loopback exemption, so
+ * every `/api/*` request has to carry the token.
+ *
+ * Residual risk when the hostname is left undeclared: the SPA shell is served
+ * outside `/api/*` and therefore behind no token, so a rebinding page can be
+ * handed the real interface and ask the user to paste their token into it.
+ * Declaring the hostname closes that; otherwise, authenticate at the proxy.
+ */
+export function isAllowedRequestHost(params: {
+  host: string | undefined
+  enabled: boolean
+  lanHostnames: string[]
+  behindProxy?: boolean
+  /** Hostname the operator's proxy serves Kōbō under, when declared. */
+  proxyHostname?: string | null
+}): boolean {
+  if (!params.host) return false
+  const hostname = headerHostname(params.host)
+  if (params.behindProxy) {
+    // No declared hostname means we cannot tell the operator's domain from an
+    // attacker's, so anything goes — the historical behaviour.
+    if (!params.proxyHostname) return true
+    return hostname === params.proxyHostname || (hostname !== null && LOCAL_HOSTNAMES.has(hostname))
+  }
+  return isAllowedHostname(hostname, params.enabled, params.lanHostnames)
+}
+
+/**
+ * Hostname declared via `KOBO_NETWORK_ACCESS_PROXY_HOST`, or null when unset.
+ *
+ * Behind a reverse proxy we otherwise have to accept any Host, which leaves the
+ * door open to a rebinding page being served the real interface and asking the
+ * user to paste their token into it. Declaring the domain the proxy serves
+ * closes that, and costs one environment variable in the compose file where
+ * the other network-access settings already live.
+ */
+export function resolveProxyHostname(env: NodeJS.ProcessEnv = process.env): string | null {
+  const raw = env.KOBO_NETWORK_ACCESS_PROXY_HOST?.trim()
+  if (!raw) return null
+  return headerHostname(raw)
+}
+
+/**
+ * Names the site a request was driven from. Guards two things.
+ *
+ * The WebSocket upgrade: WebSockets are exempt from the same-origin policy and
+ * send no preflight, so without this any page the user visits could open
+ * `/ws/terminal/<id>` and drive a real shell on the host.
+ *
+ * And cross-site writes: a page on another site reaching `http://localhost:3000`
+ * sends a perfectly legitimate `Host: localhost:3000` — the browser puts it
+ * there — so the Host check cannot see it. Reading the reply is already blocked
+ * (we send no CORS headers), but the write would still land, because Hono parses
+ * a JSON body whatever the Content-Type: a `text/plain` POST is a CORS simple
+ * request and needs no preflight.
+ *
+ * A missing Origin is allowed. Browsers attach one to every WebSocket handshake
+ * and every state-changing request, so its absence means a non-browser caller —
+ * curl, or Kōbō's own MCP server calling back into the API. Such a caller on
+ * loopback already has the machine, and over the LAN still needs the token.
+ *
+ * The rule is that the page must have been served by us: its authority has to
+ * match the Host this very request carries. That survives a port remap
+ * (`docker -p 3001:3000`, `ssh -L`) which a fixed port list would break, while
+ * still rejecting a page on another loopback port — including the per-workspace
+ * dev servers Kōbō itself spawns, serving whatever code an agent just wrote.
+ *
+ * Matching the Host is not a defense on its own, since a rebinding page matches
+ * it too. The Host check above is what rejects that one; this must simply not
+ * undo it.
+ */
+export function isAllowedOrigin(params: {
+  origin: string | undefined
+  /** Raw `Host` header of the same request — what the page was served from. */
+  requestHost: string | undefined
+  behindProxy?: boolean
+  proxyHostname?: string | null
+  /** Origin the dev client is served from, when `npm run dev` declares one. */
+  devOrigin?: string | null
+}): boolean {
+  if (params.origin === undefined) return true
+
+  const origin = authority(params.origin)
+  if (origin === null) return false
+
+  if (params.behindProxy) {
+    if (!params.proxyHostname) return true
+    return headerHostname(params.origin) === params.proxyHostname
+  }
+
+  // `quasar dev` proxies to the backend with changeOrigin, so it rewrites the
+  // Host to ours while the browser stays on the Quasar port. The two cannot
+  // match there, hence the explicit declaration.
+  if (params.devOrigin && origin === authority(params.devOrigin)) return true
+
+  return params.requestHost !== undefined && origin === authority(params.requestHost)
+}
+
+/** Host and port of a raw `Host`/`Origin` value, or null when unparseable. */
+function authority(value: string): string | null {
+  try {
+    return new URL(value.includes('://') ? value : `http://${value}`).host || null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Origin the development client is served from, declared by the `dev` script
+ * via `KOBO_DEV_CLIENT_ORIGIN`. Never set in a published build, so it cannot
+ * widen anything in production.
+ */
+export function resolveDevClientOrigin(env: NodeJS.ProcessEnv = process.env): string | null {
+  const raw = env.KOBO_DEV_CLIENT_ORIGIN?.trim()
+  return raw ? raw : null
+}
+
+/** ~32-char url-safe random token. */
+export function generateToken(): string {
+  return crypto.randomBytes(24).toString('base64url')
+}
+
+/** Constant-time token comparison; false on empty/length mismatch (never throws). */
+export function tokenMatches(provided: string | undefined, expected: string): boolean {
+  if (!provided || !expected) return false
+  const a = Buffer.from(provided)
+  const b = Buffer.from(expected)
+  if (a.length !== b.length) return false
+  return crypto.timingSafeEqual(a, b)
+}
+
+export interface NetworkAccessDecision {
+  allow: boolean
+  status: 200 | 401 | 403
+}
+
+/** Core gate decision shared by the HTTP middleware and the WS upgrade guard. */
+export function evaluateNetworkAccess(params: {
+  address: string | undefined
+  enabled: boolean
+  expectedToken: string
+  providedToken: string | undefined
+  /**
+   * When false, loopback addresses are NOT automatically trusted — they fall
+   * through to the normal enabled/token checks like any other address.
+   * Defaults to true (today's behavior) so every caller that omits it is
+   * unaffected. Set to false when Kōbō runs behind a reverse proxy, where a
+   * proxied request can appear to originate from loopback.
+   */
+  trustLoopback?: boolean
+}): NetworkAccessDecision {
+  const trustLoopback = params.trustLoopback ?? true
+  if (trustLoopback && isLoopbackAddress(params.address)) return { allow: true, status: 200 }
+  if (!params.enabled) return { allow: false, status: 403 }
+  if (tokenMatches(params.providedToken, params.expectedToken)) return { allow: true, status: 200 }
+  return { allow: false, status: 401 }
+}
+
+/** WS upgrade authorization: parses `?token=` from the raw URL. */
+export function authorizeWsUpgrade(params: {
+  address: string | undefined
+  rawUrl: string | undefined
+  enabled: boolean
+  expectedToken: string
+  trustLoopback?: boolean
+}): boolean {
+  let providedToken: string | undefined
+  try {
+    providedToken = new URL(params.rawUrl ?? '/', 'http://localhost').searchParams.get('token') ?? undefined
+  } catch {
+    providedToken = undefined
+  }
+  return evaluateNetworkAccess({
+    address: params.address,
+    enabled: params.enabled,
+    expectedToken: params.expectedToken,
+    providedToken,
+    trustLoopback: params.trustLoopback,
+  }).allow
+}
+
+/**
+ * Reads KOBO_NETWORK_ACCESS_ENABLED / KOBO_NETWORK_ACCESS_BEHIND_PROXY and
+ * returns only the fields an env var actually specifies — an unset env var
+ * means "leave current settings alone" (key omitted from the result); a SET
+ * env var always produces a decisive true/false, even for a value that isn't
+ * literally "true"/"1" (an explicit non-true value is a deliberate "off",
+ * not "don't touch"). Re-applied on every server boot — see index.ts.
+ */
+export function resolveNetworkAccessEnvOverrides(env: NodeJS.ProcessEnv): {
+  networkAccessEnabled?: boolean
+  networkAccessBehindProxy?: boolean
+} {
+  const overrides: { networkAccessEnabled?: boolean; networkAccessBehindProxy?: boolean } = {}
+  if (env.KOBO_NETWORK_ACCESS_ENABLED !== undefined) {
+    overrides.networkAccessEnabled =
+      env.KOBO_NETWORK_ACCESS_ENABLED === 'true' || env.KOBO_NETWORK_ACCESS_ENABLED === '1'
+  }
+  if (env.KOBO_NETWORK_ACCESS_BEHIND_PROXY !== undefined) {
+    overrides.networkAccessBehindProxy =
+      env.KOBO_NETWORK_ACCESS_BEHIND_PROXY === 'true' || env.KOBO_NETWORK_ACCESS_BEHIND_PROXY === '1'
+  }
+  return overrides
+}

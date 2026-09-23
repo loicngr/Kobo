@@ -1,0 +1,2 @@
+{"type":"system","subtype":"compact","session_id":"abc-123-def"}
+{"type":"system","subtype":"compact_boundary","session_id":"abc-123-def","compact_metadata":{"trigger":"auto","pre_tokens":190000}}

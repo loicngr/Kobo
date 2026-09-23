@@ -1,0 +1,5064 @@
+<template>
+  <q-page class="settings-page" :style-fn="workspacePageStyle">
+    <div v-if="store.loadError" class="settings-load-error">
+      <q-icon name="error" size="18px" />
+      <div class="column">
+        <span class="settings-load-error__title">{{ $t('settings.loadFailed') }}</span>
+        <span class="settings-load-error__detail">{{ store.loadError }}</span>
+        <span class="settings-load-error__hint">{{ $t('settings.loadFailedHint') }}</span>
+      </div>
+      <q-space />
+      <q-btn dense flat no-caps icon="refresh" :label="$t('common.retry')" @click="reloadSettings" />
+    </div>
+    <div class="settings-layout">
+      <!-- Sidebar nav (desktop: fixed aside) -->
+      <aside v-if="!isMobile" class="settings-nav">
+        <div class="settings-nav__title">{{ $t('settings.title') }}</div>
+        <SettingsNavList :nav-items="navItems" :active-tab="activeTab" @select="selectTab" />
+      </aside>
+
+      <!-- Sidebar nav (mobile: overlay drawer) -->
+      <q-drawer
+        v-else
+        v-model="navDrawerOpen"
+        side="left"
+        overlay
+        behavior="mobile"
+        :width="240"
+      >
+        <q-list>
+          <q-item clickable @click="openWorkspacesDrawer">
+            <q-item-section avatar>
+              <q-icon name="arrow_back" />
+            </q-item-section>
+            <q-item-section>{{ $t('workspaceList.title') }}</q-item-section>
+          </q-item>
+          <q-separator />
+        </q-list>
+        <div class="settings-nav">
+          <div class="settings-nav__title">{{ $t('settings.title') }}</div>
+          <SettingsNavList :nav-items="navItems" :active-tab="activeTab" @select="selectTab" />
+        </div>
+      </q-drawer>
+
+      <!-- Content panel -->
+      <main class="settings-content">
+        <header class="settings-content__header">
+          <DrawerToggleButton exclude-mobile class="q-mr-sm" />
+          <q-btn
+            v-if="isMobile"
+            flat
+            dense
+            round
+            icon="menu"
+            :aria-label="$t('settings.openNav')"
+            class="settings-content__nav-toggle"
+            @click="navDrawerOpen = true"
+          >
+            <q-tooltip>{{ $t('settings.openNav') }}</q-tooltip>
+          </q-btn>
+          <h2 class="settings-content__title">{{ activeNavLabel }}</h2>
+          <TourReplayButton tour-id="settings" class="q-ml-sm" />
+        </header>
+
+        <div class="text-caption text-kobo-3 q-mb-md">{{ $t(`settings.help.${activeTab}`) }}</div>
+
+        <div class="settings-panels">
+        <div v-show="isGlobalSection" class="settings-global-wrap">
+
+            <!-- Localization -->
+            <div
+              v-if="activeTab === 'general'"
+              data-tour="settings-card-general"
+              class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
+            >
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.language') }}</div>
+              <q-select
+                :model-value="locale"
+                :options="languageOptions"
+                emit-value
+                map-options
+                option-value="value"
+                option-label="label"
+                dense
+                dark
+                outlined
+                class="settings-input"
+                @update:model-value="onLanguageChange"
+              />
+            </div>
+
+            <!-- Workspace list display -->
+            <div v-if="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.workspaceListSection') }}</div>
+              <q-toggle
+                v-model="globalFlattenWorkspaceList"
+                :label="$t('settings.flattenWorkspaceList')"
+                dark
+                dense
+                color="primary"
+                class="text-kobo-2 text-caption"
+              />
+              <div class="text-caption text-kobo-3 q-mt-xs">{{ $t('settings.flattenWorkspaceListHint') }}</div>
+            </div>
+
+            <!-- Skill suite -->
+            <div
+              v-if="activeTab === 'skills'"
+              data-tour="settings-card-skills"
+              class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
+            >
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.skillSuite.section') }}</div>
+
+              <q-option-group
+                v-model="globalSkillSuite"
+                :options="[
+                  { label: $t('settings.skillSuite.standard'), value: 'standard' },
+                  { label: $t('settings.skillSuite.superpowers'),         value: 'superpowers' },
+                  { label: $t('settings.skillSuite.gstack'),              value: 'gstack' },
+                  { label: $t('settings.skillSuite.ecc'),                 value: 'ecc' },
+                  { label: $t('settings.skillSuite.superpowersGstack'),   value: 'superpowers+gstack' },
+                  { label: $t('settings.skillSuite.allThree'),            value: 'superpowers+gstack+ecc' },
+                  { label: $t('settings.skillSuite.custom'),              value: 'custom' },
+                ]"
+                type="radio"
+                color="primary"
+                dense
+                dark
+                inline
+              />
+              <div class="text-caption text-kobo-3 q-mt-xs">
+                {{ $t(skillSuiteHintKey) }}
+              </div>
+
+              <q-btn
+                flat dense no-caps size="sm"
+                color="kobo-2"
+                icon="restart_alt"
+                :label="$t('settings.skillSuite.reloadDefaults')"
+                :disable="globalSkillSuite !== 'custom'"
+                class="q-mt-sm"
+                @click="confirmReloadCustomPrompts"
+              />
+            </div>
+
+            <div v-if="activeTab === 'skills' && globalSkillSuite === 'custom'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.skillSuite.customPrompts') }}</div>
+
+              <div class="text-caption text-kobo-3 q-mb-xs q-mt-sm">{{ $t('settings.skillSuite.reviewTemplate') }}</div>
+              <q-btn-dropdown
+                flat dense no-caps size="sm" color="kobo-2" icon="download"
+                :label="$t('settings.skillSuite.importPrompt')"
+                :loading="importingCustomPrompt === 'reviewTemplate'"
+                class="q-mb-sm"
+              >
+                <q-list dense>
+                  <q-item v-for="suite in importableSkillSuites" :key="suite.value" v-close-popup clickable @click="importCustomPrompt('reviewTemplate', suite.value)"><q-item-section>{{ suite.label }}</q-item-section></q-item>
+                </q-list>
+              </q-btn-dropdown>
+              <q-input
+                v-model="globalCustomReviewTemplate"
+                type="textarea"
+                outlined
+                autogrow
+                class="settings-input mono-textarea"
+              />
+
+              <div class="text-caption text-kobo-3 q-mt-md q-mb-xs">{{ $t('settings.skillSuite.autoLoopReviewGate') }}</div>
+              <q-btn-dropdown
+                flat dense no-caps size="sm" color="kobo-2" icon="download"
+                :label="$t('settings.skillSuite.importPrompt')"
+                :loading="importingCustomPrompt === 'autoLoopReviewGate'"
+                class="q-mb-sm"
+              >
+                <q-list dense>
+                  <q-item v-for="suite in importableSkillSuites" :key="suite.value" v-close-popup clickable @click="importCustomPrompt('autoLoopReviewGate', suite.value)"><q-item-section>{{ suite.label }}</q-item-section></q-item>
+                </q-list>
+              </q-btn-dropdown>
+              <q-input
+                v-model="globalCustomAutoLoopReviewGate"
+                type="textarea"
+                outlined
+                autogrow
+                class="settings-input mono-textarea"
+              />
+
+              <div class="text-caption text-kobo-3 q-mt-md q-mb-xs">{{ $t('settings.skillSuite.autoLoopGroomingIntro') }}</div>
+              <q-btn-dropdown
+                flat dense no-caps size="sm" color="kobo-2" icon="download"
+                :label="$t('settings.skillSuite.importPrompt')"
+                :loading="importingCustomPrompt === 'autoLoopGroomingIntro'"
+                class="q-mb-sm"
+              >
+                <q-list dense>
+                  <q-item v-for="suite in importableSkillSuites" :key="suite.value" v-close-popup clickable @click="importCustomPrompt('autoLoopGroomingIntro', suite.value)"><q-item-section>{{ suite.label }}</q-item-section></q-item>
+                </q-list>
+              </q-btn-dropdown>
+              <q-input
+                v-model="globalCustomAutoLoopGroomingIntro"
+                type="textarea"
+                outlined
+                autogrow
+                class="settings-input mono-textarea"
+              />
+
+              <div class="text-caption text-kobo-3 q-mt-md q-mb-xs">{{ $t('settings.skillSuite.qaTemplate') }}</div>
+              <q-btn-dropdown
+                flat dense no-caps size="sm" color="kobo-2" icon="download"
+                :label="$t('settings.skillSuite.importPrompt')"
+                :loading="importingCustomPrompt === 'qaPromptTemplate'"
+                class="q-mb-sm"
+              >
+                <q-list dense>
+                  <q-item v-for="suite in importableSkillSuites" :key="suite.value" v-close-popup clickable @click="importCustomPrompt('qaPromptTemplate', suite.value)"><q-item-section>{{ suite.label }}</q-item-section></q-item>
+                </q-list>
+              </q-btn-dropdown>
+              <q-input
+                v-model="globalCustomQaPromptTemplate"
+                type="textarea"
+                outlined
+                autogrow
+                class="settings-input mono-textarea"
+              />
+
+              <div class="text-caption text-kobo-3 q-mt-md q-mb-xs">{{ $t('settings.skillSuite.brainstormingInstruction') }}</div>
+              <q-btn-dropdown
+                flat dense no-caps size="sm" color="kobo-2" icon="download"
+                :label="$t('settings.skillSuite.importPrompt')"
+                :loading="importingCustomPrompt === 'brainstormingInstruction'"
+                class="q-mb-sm"
+              >
+                <q-list dense>
+                  <q-item v-for="suite in importableSkillSuites" :key="suite.value" v-close-popup clickable @click="importCustomPrompt('brainstormingInstruction', suite.value)"><q-item-section>{{ suite.label }}</q-item-section></q-item>
+                </q-list>
+              </q-btn-dropdown>
+              <q-input
+                v-model="globalCustomBrainstormingInstruction"
+                type="textarea"
+                outlined
+                autogrow
+                class="settings-input mono-textarea"
+              />
+            </div>
+
+            <!-- Default agent configuration -->
+            <div
+              v-if="activeTab === 'agents'"
+              data-tour="settings-card-agents"
+              class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
+            >
+
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.defaultModelClaude') }}</div>
+              <q-select
+                v-model="globalClaudeModel"
+                :options="modelOptions"
+                emit-value
+                map-options
+                option-value="value"
+                option-label="label"
+                dense
+                dark
+                outlined
+                class="settings-input q-mb-md"
+              />
+
+              <div class="text-subtitle2 q-mb-sm q-mt-md">{{ $t('settings.defaultModelCodex') }}</div>
+              <q-select
+                v-model="globalCodexModel"
+                :options="codexModelOptions"
+                emit-value
+                map-options
+                option-value="value"
+                option-label="label"
+                dense
+                dark
+                outlined
+                class="settings-input q-mb-md"
+              />
+
+              <div class="text-subtitle2 q-mb-sm q-mt-md">{{ $t('settings.defaultPermissionModeClaude') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.defaultPermissionModeHint') }}</div>
+              <q-select
+                v-model="globalClaudePermissionMode"
+                :options="claudePermissionModeOptions"
+                emit-value
+                map-options
+                dense
+                dark
+                outlined
+                class="settings-input q-mb-md"
+              />
+
+              <div class="text-subtitle2 q-mb-sm q-mt-md">{{ $t('settings.defaultPermissionModeCodex') }}</div>
+              <q-select
+                v-model="globalCodexPermissionMode"
+                :options="codexPermissionModeOptions"
+                emit-value
+                map-options
+                dense
+                dark
+                outlined
+                class="settings-input"
+              />
+              <q-input
+                v-model.number="globalAutoLoopMaxRetries"
+                :label="$t('settings.autoLoopMaxRetries')"
+                :hint="$t('settings.autoLoopMaxRetriesHint')"
+                type="number"
+                min="1"
+                max="20"
+                dense
+                dark
+                outlined
+                class="settings-input q-mt-md"
+              />
+
+            </div>
+
+            <!-- Activity feed display -->
+            <div v-if="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.activityFeed') }}</div>
+              <div class="row items-center q-gutter-lg">
+                <q-toggle
+                  v-model="globalShowVerboseSystemMessages"
+                  :label="$t('settings.verboseMessages')"
+                  dark
+                  dense
+                  color="primary"
+                  class="text-kobo-2 text-caption"
+                />
+                <q-toggle
+                  v-model="globalShowThinkingBlocks"
+                  :label="$t('settings.showThinkingBlocks')"
+                  dark
+                  dense
+                  color="primary"
+                  class="text-kobo-2 text-caption"
+                />
+              </div>
+            </div>
+
+            <!-- Whip settings -->
+            <div v-if="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+              <div class="text-subtitle2 q-mb-xs">{{ $t('settings.whipSettings') }}</div>
+              <div class="text-kobo-3 text-caption q-mb-md">{{ $t('settings.whipSettingsHint') }}</div>
+              <q-toggle
+                v-model="globalWhipEnabled"
+                :label="$t('settings.whipEnabled')"
+                dark
+                dense
+                color="primary"
+                class="text-kobo-2 text-caption"
+              >
+                <q-tooltip>{{ $t('settings.whipEnabledHint') }}</q-tooltip>
+              </q-toggle>
+              <div v-if="globalWhipEnabled" class="column q-gutter-sm q-mt-md">
+                <WhipShortcutRecorder v-model="globalWhipShortcut" />
+                <div class="row items-center q-gutter-sm">
+                  <div class="text-kobo-2 text-caption" style="min-width: 58px;">
+                    {{ $t('settings.whipVolume') }}
+                  </div>
+                  <q-slider
+                    v-model="globalWhipVolume"
+                    :min="0"
+                    :max="1"
+                    :step="0.05"
+                    :disable="whipVolumeAvailability.disabled"
+                    :aria-label="$t('settings.whipVolume')"
+                    dark
+                    dense
+                    color="primary"
+                    class="col"
+                  />
+                  <div class="text-kobo-2 text-caption" style="min-width: 40px; text-align: right;">
+                    {{ Math.round(globalWhipVolume * 100) }}%
+                  </div>
+                </div>
+                <div v-if="whipVolumeAvailability.hintKey" class="text-kobo-3 text-caption">
+                  {{ $t(whipVolumeAvailability.hintKey) }}
+                </div>
+              </div>
+            </div>
+
+            <!-- Notifications -->
+            <div
+              v-if="activeTab === 'notifications'"
+              data-tour="settings-card-notifications"
+              class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
+            >
+
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.notifications') }}</div>
+              <q-toggle
+                v-model="globalActivityDigestEnabled"
+                :label="$t('absence.title')"
+                color="primary"
+              />
+              <div class="text-kobo-3 text-caption q-mb-md">{{ $t('settings.activityDigestHint') }}</div>
+              <q-input
+                v-model.number="globalAwaitingUserReminderMinutes"
+                :label="$t('settings.awaitingUserReminder')"
+                :hint="$t('settings.awaitingUserReminderHint')"
+                type="number"
+                min="0"
+                max="1440"
+                dense
+                dark
+                outlined
+                class="settings-input q-mt-md"
+              />
+
+              <q-separator dark class="q-my-md" />
+              <CustomSoundManager />
+
+              <div class="notification-sounds-grid q-mt-md">
+                <div class="notification-sound-card q-pa-md rounded-borders">
+                  <div class="text-subtitle2">{{ $t('settings.notificationSound') }}</div>
+                  <div class="text-kobo-3 text-caption q-mb-sm">{{ $t('settings.notificationSoundHint') }}</div>
+                  <div class="column q-gutter-xs q-mb-sm">
+                    <q-toggle
+                      v-model="globalBrowserNotifications"
+                      :label="$t('settings.enableBrowserNotifications')"
+                      dark
+                      dense
+                      color="primary"
+                      class="text-kobo-2 text-caption"
+                    />
+                    <q-toggle
+                      v-model="globalAudioNotifications"
+                      :label="$t('settings.enableAudio')"
+                      dark
+                      dense
+                      color="primary"
+                      class="text-kobo-2 text-caption"
+                    />
+                  </div>
+                  <div class="row items-center q-gutter-sm q-mb-sm">
+                    <q-chip dense square :color="browserNotificationStatus.color" text-color="white" icon="notifications">
+                      {{ browserNotificationStatus.label }}
+                    </q-chip>
+                    <q-btn
+                      flat
+                      dense
+                      no-caps
+                      color="primary"
+                      icon="notifications_active"
+                      :label="$t('settings.testBrowserNotification')"
+                      @click="testBrowserNotification"
+                    />
+                  </div>
+                  <div class="row items-center q-gutter-sm">
+                    <q-select
+                      v-model="globalAudioNotificationSound"
+                      :options="soundSelectOptions"
+                      :label="$t('settings.notificationSound')"
+                      :disable="!globalAudioNotifications"
+                      dark
+                      dense
+                      outlined
+                      emit-value
+                      map-options
+                      color="primary"
+                      class="col"
+                    />
+                    <q-btn
+                      flat
+                      dense
+                      color="primary"
+                      icon="play_arrow"
+                      :label="$t('settings.notificationSoundPreview')"
+                      :disable="!globalAudioNotifications"
+                      @click="previewNotificationSound"
+                    />
+                  </div>
+                  <div class="row items-center q-gutter-sm q-mt-sm">
+                    <div class="text-kobo-2 text-caption" style="min-width: 58px;">{{ $t('settings.notificationVolume') }}</div>
+                    <q-slider
+                      v-model="globalAudioNotificationVolume"
+                      :min="0"
+                      :max="1"
+                      :step="0.05"
+                      :disable="!globalAudioNotifications"
+                      :aria-label="$t('settings.notificationVolume')"
+                      dark
+                      dense
+                      color="primary"
+                      class="col"
+                    />
+                    <div class="text-kobo-2 text-caption" style="min-width: 40px; text-align: right;">
+                      {{ Math.round(globalAudioNotificationVolume * 100) }}%
+                    </div>
+                  </div>
+                </div>
+                <div class="notification-sound-card q-pa-md rounded-borders">
+                  <div class="text-subtitle2">{{ $t('settings.questionSound') }}</div>
+                  <div class="text-kobo-3 text-caption q-mb-sm">{{ $t('settings.questionSoundHint') }}</div>
+                  <q-toggle
+                    v-model="globalAudioQuestionNotifications"
+                    :label="$t('settings.enableAudio')"
+                    dark
+                    dense
+                    color="primary"
+                    class="text-kobo-2 text-caption q-mb-sm"
+                  />
+                  <div class="row items-center q-gutter-sm">
+                    <q-select
+                      v-model="globalAudioQuestionSound"
+                      :options="eventSoundSelectOptions"
+                      :label="$t('settings.questionSound')"
+                      :disable="!globalAudioQuestionNotifications"
+                      dark
+                      dense
+                      outlined
+                      emit-value
+                      map-options
+                      color="primary"
+                      class="col"
+                    />
+                    <q-btn
+                      flat
+                      dense
+                      color="primary"
+                      icon="play_arrow"
+                      :label="$t('settings.notificationSoundPreview')"
+                      :disable="!globalAudioQuestionNotifications"
+                      @click="previewQuestionSound"
+                    />
+                  </div>
+                  <div class="row items-center q-gutter-sm q-mt-sm">
+                    <div class="text-kobo-2 text-caption" style="min-width: 58px;">{{ $t('settings.notificationVolume') }}</div>
+                    <q-slider
+                      v-model="globalAudioQuestionVolume"
+                      :min="0"
+                      :max="1"
+                      :step="0.05"
+                      :disable="!globalAudioQuestionNotifications"
+                      :aria-label="$t('settings.notificationVolume')"
+                      dark
+                      dense
+                      color="primary"
+                      class="col"
+                    />
+                    <div class="text-kobo-2 text-caption" style="min-width: 40px; text-align: right;">
+                      {{ Math.round(globalAudioQuestionVolume * 100) }}%
+                    </div>
+                  </div>
+                </div>
+                <div class="notification-sound-card q-pa-md rounded-borders">
+                  <div class="text-subtitle2">{{ $t('settings.workspaceCreatedSound') }}</div>
+                  <div class="text-kobo-3 text-caption q-mb-sm">{{ $t('settings.workspaceCreatedSoundHint') }}</div>
+                  <q-toggle
+                    v-model="globalAudioWorkspaceCreatedNotifications"
+                    :label="$t('settings.enableAudio')"
+                    dark
+                    dense
+                    color="primary"
+                    class="text-kobo-2 text-caption q-mb-sm"
+                  />
+                  <div class="row items-center q-gutter-sm">
+                    <q-select
+                      v-model="globalAudioWorkspaceCreatedSound"
+                      :options="eventSoundSelectOptions"
+                      :label="$t('settings.workspaceCreatedSound')"
+                      :disable="!globalAudioWorkspaceCreatedNotifications"
+                      dark
+                      dense
+                      outlined
+                      emit-value
+                      map-options
+                      color="primary"
+                      class="col"
+                    />
+                    <q-btn
+                      flat
+                      dense
+                      color="primary"
+                      icon="play_arrow"
+                      :label="$t('settings.notificationSoundPreview')"
+                      :disable="!globalAudioWorkspaceCreatedNotifications"
+                      @click="previewWorkspaceCreatedSound"
+                    />
+                  </div>
+                  <div class="row items-center q-gutter-sm q-mt-sm">
+                    <div class="text-kobo-2 text-caption" style="min-width: 58px;">{{ $t('settings.notificationVolume') }}</div>
+                    <q-slider
+                      v-model="globalAudioWorkspaceCreatedVolume"
+                      :min="0"
+                      :max="1"
+                      :step="0.05"
+                      :disable="!globalAudioWorkspaceCreatedNotifications"
+                      :aria-label="$t('settings.notificationVolume')"
+                      dark
+                      dense
+                      color="primary"
+                      class="col"
+                    />
+                    <div class="text-kobo-2 text-caption" style="min-width: 40px; text-align: right;">
+                      {{ Math.round(globalAudioWorkspaceCreatedVolume * 100) }}%
+                    </div>
+                  </div>
+                </div>
+                <div class="notification-sound-card q-pa-md rounded-borders">
+                  <div class="text-subtitle2">{{ $t('settings.agentErrorSound') }}</div>
+                  <div class="text-kobo-3 text-caption q-mb-sm">{{ $t('settings.agentErrorSoundHint') }}</div>
+                  <q-toggle v-model="globalAudioAgentErrorNotifications" :label="$t('settings.enableAudio')" dark dense color="primary" class="text-kobo-2 text-caption q-mb-sm" />
+                  <div class="row items-center q-gutter-sm">
+                    <q-select v-model="globalAudioAgentErrorSound" :options="eventSoundSelectOptions" :label="$t('settings.agentErrorSound')" :disable="!globalAudioAgentErrorNotifications" dark dense outlined emit-value map-options color="primary" class="col" />
+                    <q-btn flat dense color="primary" icon="play_arrow" :label="$t('settings.notificationSoundPreview')" :disable="!globalAudioAgentErrorNotifications" @click="previewAgentErrorSound" />
+                  </div>
+                  <div class="row items-center q-gutter-sm q-mt-sm">
+                    <div class="text-kobo-2 text-caption" style="min-width: 58px;">{{ $t('settings.notificationVolume') }}</div>
+                    <q-slider v-model="globalAudioAgentErrorVolume" :min="0" :max="1" :step="0.05" :disable="!globalAudioAgentErrorNotifications" :aria-label="$t('settings.notificationVolume')" dark dense color="primary" class="col" />
+                    <div class="text-kobo-2 text-caption" style="min-width: 40px; text-align: right;">{{ Math.round(globalAudioAgentErrorVolume * 100) }}%</div>
+                  </div>
+                </div>
+              </div>
+              <PrNotificationSoundSettings
+                v-model="globalPrNotificationSounds"
+                :general-sound="globalAudioNotificationSound"
+              />
+            </div>
+
+            <!-- Voice transcription — Runtime status -->
+            <div
+              v-if="activeTab === 'voice'"
+              data-tour="settings-card-voice"
+              class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
+            >
+              <div class="row items-center q-mb-sm">
+                <div class="text-subtitle2">{{ $t('voice.sectionRuntime') }}</div>
+                <q-space />
+                <q-btn
+                  flat
+                  dense
+                  no-caps
+                  size="sm"
+                  icon="refresh"
+                  color="kobo-2"
+                  :label="t('common.refresh')"
+                  @click="store.fetchVoiceRuntime()"
+                />
+              </div>
+              <div class="column q-gutter-xs">
+                <div class="row items-center q-gutter-sm">
+                  <q-icon
+                    :name="store.voiceRuntime?.available ? 'check_circle' : 'cancel'"
+                    :color="store.voiceRuntime?.available ? 'green-5' : 'red-5'"
+                    size="xs"
+                  />
+                  <span
+                    class="text-caption"
+                    :class="store.voiceRuntime?.available ? 'text-green-5' : 'text-red-5'"
+                  >
+                    {{
+                      store.voiceRuntime?.available
+                        ? t('voice.runtimeReady', { command: store.voiceRuntime?.command ?? 'whisper-cli' })
+                        : t('voice.runtimeMissing', { command: store.voiceRuntime?.command ?? 'whisper-cli' })
+                    }}
+                  </span>
+                </div>
+                <div class="row items-center q-gutter-sm">
+                  <q-icon
+                    :name="store.voiceRuntime?.ffmpegAvailable ? 'check_circle' : 'cancel'"
+                    :color="store.voiceRuntime?.ffmpegAvailable ? 'green-5' : 'red-5'"
+                    size="xs"
+                  />
+                  <span
+                    class="text-caption"
+                    :class="store.voiceRuntime?.ffmpegAvailable ? 'text-green-5' : 'text-red-5'"
+                  >
+                    {{
+                      store.voiceRuntime?.ffmpegAvailable
+                        ? t('voice.ffmpegReady')
+                        : t('voice.ffmpegMissing')
+                    }}
+                  </span>
+                </div>
+              </div>
+              <q-expansion-item
+                dense
+                dark
+                icon="help_outline"
+                :label="$t('voice.installGuideTitle')"
+                class="variables-panel rounded-borders q-mt-sm"
+              >
+                <div class="q-pa-sm text-caption text-kobo-2">
+                  <div class="q-mb-sm">{{ $t('voice.installGuideIntro') }}</div>
+                  <div class="q-mb-sm">
+                    <a
+                      href="https://github.com/ggml-org/whisper.cpp"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="text-kobo-2"
+                    >
+                      {{ $t('voice.installLink') }}
+                    </a>
+                  </div>
+                  <div class="q-mb-xs text-kobo-2">{{ $t('voice.installGuideUbuntuTitle') }}</div>
+                  <pre class="mono-guide q-mb-sm">sudo apt update
+sudo apt install -y cmake build-essential ffmpeg
+git clone https://github.com/ggml-org/whisper.cpp.git
+cd whisper.cpp
+cmake -B build
+cmake --build build -j</pre>
+                  <div class="q-mb-sm">{{ $t('voice.installGuideBinaryPathHint') }}</div>
+                  <div class="q-mb-xs text-kobo-2">{{ $t('voice.installGuideWindowsTitle') }}</div>
+                  <pre class="mono-guide q-mb-sm"># Install CMake + Visual Studio Build Tools (C/C++)
+# Install ffmpeg (choco/scoop)
+where whisper-cli
+where ffmpeg</pre>
+                  <div>{{ $t('voice.installGuideSettingsHint') }}</div>
+                </div>
+              </q-expansion-item>
+            </div>
+
+            <!-- Voice transcription — Activation -->
+            <div v-if="activeTab === 'voice'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('voice.sectionActivation') }}</div>
+              <q-toggle
+                v-model="globalVoiceEnabled"
+                :label="$t('voice.enabled')"
+                dark
+                dense
+                color="primary"
+                class="text-kobo-2 text-caption q-mb-sm"
+              />
+              <div class="row q-col-gutter-sm">
+                <div class="col-12 col-sm-6">
+                  <q-select
+                    v-model="globalVoicePttKey"
+                    :label="$t('voice.pttKey')"
+                    :options="[
+                      { label: $t('voice.pttAlt'), value: 'alt' },
+                      { label: $t('voice.pttCtrlSpace'), value: 'ctrl+space' },
+                    ]"
+                    emit-value
+                    map-options
+                    dense
+                    dark
+                    outlined
+                    class="settings-input"
+                  />
+                </div>
+                <div class="col-12 col-sm-6">
+                  <q-select
+                    v-model="globalVoiceLanguage"
+                    :label="$t('voice.language')"
+                    :options="voiceLanguageOptions"
+                    emit-value
+                    map-options
+                    dense
+                    dark
+                    outlined
+                    class="settings-input"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <!-- Voice transcription — Models -->
+            <div v-if="activeTab === 'voice'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('voice.sectionModels') }}</div>
+              <q-select
+                v-model="globalVoiceModel"
+                :label="$t('voice.model')"
+                :options="voiceModelOptions"
+                emit-value
+                map-options
+                dense
+                dark
+                outlined
+                class="settings-input q-mb-md"
+              />
+              <div v-if="store.voiceModelsDir" class="voice-models-dir row items-center q-gutter-sm q-mb-md">
+                <q-icon name="folder" color="kobo-2" size="xs" />
+                <span class="text-caption text-kobo-2 ellipsis-2-lines" style="flex: 1; min-width: 0; word-break: break-all;">
+                  {{ store.voiceModelsDir }}
+                </span>
+                <q-btn
+                  flat
+                  dense
+                  round
+                  size="xs"
+                  icon="content_copy"
+                  color="kobo-2"
+                  :title="t('common.copy')"
+                  @click="copyToClipboard(store.voiceModelsDir)"
+                />
+              </div>
+              <div class="column q-gutter-sm">
+                <div
+                  v-for="m in store.voiceModels"
+                  :key="m.name"
+                  class="voice-model-row q-pa-sm rounded-borders"
+                  :class="{ 'voice-model-row--active': m.download }"
+                >
+                  <div class="row items-center q-gutter-sm">
+                    <q-icon
+                      :name="m.download ? 'downloading' : m.installed ? 'check_circle' : 'circle'"
+                      :color="m.download ? 'primary' : m.installed ? 'green-5' : 'kobo-3'"
+                      size="xs"
+                    />
+                    <span class="text-body2 text-kobo-1" style="font-family: var(--kobo-font-mono, monospace);">
+                      {{ m.name }}
+                    </span>
+                    <span class="text-caption text-kobo-3">
+                      {{ formatBytes(m.installedSizeBytes ?? m.sizeBytes) }}
+                    </span>
+                    <q-space />
+                    <q-btn
+                      v-if="m.download"
+                      flat
+                      dense
+                      no-caps
+                      size="sm"
+                      color="kobo-2"
+                      icon="close"
+                      :label="$t('common.cancel')"
+                      @click="cancelVoiceDownload(m.name)"
+                    />
+                    <q-btn
+                      v-else
+                      flat
+                      dense
+                      no-caps
+                      size="sm"
+                      :color="m.installed ? 'red-5' : 'primary'"
+                      :icon="m.installed ? 'delete_outline' : 'download'"
+                      :label="m.installed ? $t('voice.delete') : $t('voice.download')"
+                      :loading="voiceActionModel === m.name"
+                      @click="m.installed ? removeVoiceModel(m.name) : installVoiceModel(m.name)"
+                    />
+                  </div>
+                  <div v-if="m.download" class="q-mt-sm">
+                    <q-linear-progress
+                      :value="m.download.total > 0 ? Math.min(1, m.download.downloaded / m.download.total) : 0"
+                      :indeterminate="!m.download.total"
+                      color="primary"
+                      track-color="kobo-surface-2"
+                      size="6px"
+                      rounded
+                    />
+                    <div class="row items-center q-mt-xs">
+                      <span class="text-caption text-kobo-3">
+                        {{ formatBytes(m.download.downloaded) }} / {{ formatBytes(m.download.total) }}
+                      </span>
+                      <q-space />
+                      <span class="text-caption text-kobo-2">
+                        {{
+                          m.download.total > 0
+                            ? `${Math.floor((m.download.downloaded / m.download.total) * 100)}%`
+                            : '—'
+                        }}
+                      </span>
+                    </div>
+                  </div>
+                  <div
+                    v-else-if="m.installed"
+                    class="text-caption text-kobo-3 q-mt-xs ellipsis"
+                    style="font-family: var(--kobo-font-mono, monospace); word-break: break-all;"
+                  >
+                    {{ m.fileName }}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Voice transcription — Advanced options -->
+            <div v-if="activeTab === 'voice'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('voice.sectionAdvanced') }}</div>
+              <q-expansion-item
+                dense
+                dark
+                icon="tune"
+                :label="$t('voice.sectionBehavior')"
+                class="variables-panel rounded-borders q-mb-sm"
+              >
+                <div class="q-pa-sm column q-gutter-sm">
+                  <div class="row items-center q-gutter-sm">
+                    <div class="text-caption text-kobo-2">{{ $t('voice.temperature') }}</div>
+                    <q-slider
+                      v-model="globalVoiceTemperature"
+                      :min="0"
+                      :max="1"
+                      :step="0.05"
+                      dark
+                      dense
+                      color="primary"
+                      class="col"
+                    />
+                    <div class="text-caption text-kobo-2" style="min-width: 40px; text-align: right;">
+                      {{ globalVoiceTemperature.toFixed(2) }}
+                    </div>
+                  </div>
+                  <div class="text-caption text-kobo-3">{{ $t('voice.temperatureHint') }}</div>
+                  <q-input
+                    v-model="globalVoicePrompt"
+                    :label="$t('voice.initialPrompt')"
+                    type="textarea"
+                    dense
+                    dark
+                    outlined
+                    :rows="2"
+                    class="settings-input"
+                  />
+                  <div class="text-caption text-kobo-3">{{ $t('voice.initialPromptHint') }}</div>
+                  <q-toggle
+                    v-model="globalVoiceTranslateToEnglish"
+                    :label="$t('voice.translateToEnglish')"
+                    dark
+                    dense
+                    color="primary"
+                    class="text-kobo-2 text-caption"
+                  />
+                  <div class="text-caption text-kobo-3">{{ $t('voice.translateToEnglishHint') }}</div>
+                  <q-toggle
+                    v-model="globalVoiceSuppressNst"
+                    :label="$t('voice.suppressNst')"
+                    dark
+                    dense
+                    color="primary"
+                    class="text-kobo-2 text-caption"
+                  />
+                  <div class="text-caption text-kobo-3">{{ $t('voice.suppressNstHint') }}</div>
+                </div>
+              </q-expansion-item>
+              <q-expansion-item
+                dense
+                dark
+                icon="terminal"
+                :label="$t('voice.sectionBinaries')"
+                class="variables-panel rounded-borders"
+              >
+                <div class="q-pa-sm column q-gutter-sm">
+                  <q-input
+                    v-model="globalVoiceCommandPath"
+                    :label="$t('voice.commandPath')"
+                    dense
+                    dark
+                    outlined
+                    class="settings-input"
+                  />
+                  <q-input
+                    v-model="globalVoiceFfmpegPath"
+                    :label="$t('voice.ffmpegPath')"
+                    dense
+                    dark
+                    outlined
+                    class="settings-input"
+                  />
+                </div>
+              </q-expansion-item>
+            </div>
+
+            <div v-if="activeTab === 'git'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md" data-tour="settings-card-git">
+              <WorkflowPolicyEditor v-model="globalWorkflowPolicy" class="q-my-md" />
+              <div class="row items-center q-mb-sm q-mt-md">
+                <div class="text-subtitle2">{{ $t('settings.gitConventions') }}</div>
+                <q-space />
+                <q-btn
+                  flat
+                  dense
+                  no-caps
+                  size="sm"
+                  color="kobo-2"
+                  icon="restart_alt"
+                  :label="t('settings.resetToDefault')"
+                  :loading="resettingField === 'gitConventions'"
+                  :disable="resettingField !== null && resettingField !== 'gitConventions'"
+                  @click="resetFieldToDefault('gitConventions')"
+                />
+              </div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.gitConventionsHint') }}</div>
+              <q-input
+                v-model="globalGitConventions"
+                type="textarea"
+                dense
+                dark
+                outlined
+                :rows="8"
+                :placeholder="$t('settings.gitConventionsPlaceholder')"
+                class="settings-input mono-textarea"
+              />
+            </div>
+
+            <!-- Branch prefixes -->
+            <div v-if="activeTab === 'git'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.branchPrefixesTitle') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.branchPrefixesHint') }}</div>
+
+              <q-list
+                v-if="globalBranchPrefixes.length > 0"
+                bordered
+                separator
+                class="rounded-borders q-mb-sm"
+              >
+                <q-item v-for="(prefix, index) in globalBranchPrefixes" :key="prefix">
+                  <q-item-section>
+                    <q-item-label class="cursor-pointer">
+                      {{ prefix }}/
+                      <q-popup-edit
+                        :model-value="prefix"
+                        auto-save
+                        @save="(val: string) => updateBranchPrefix(index, val)"
+                      >
+                        <template #default="scope">
+                          <q-input
+                            v-model="scope.value"
+                            dense
+                            dark
+                            autofocus
+                            @keyup.enter="scope.set"
+                          />
+                        </template>
+                      </q-popup-edit>
+                      <q-tooltip>{{ $t('settings.branchPrefixesEditHint') }}</q-tooltip>
+                    </q-item-label>
+                  </q-item-section>
+                  <q-item-section side>
+                    <div class="row items-center no-wrap">
+                      <q-btn
+                        flat
+                        dense
+                        round
+                        size="sm"
+                        icon="keyboard_arrow_up"
+                        color="kobo-3"
+                        :disable="index === 0"
+                        :title="$t('settings.branchPrefixesMoveUp')"
+                        @click="moveBranchPrefix(index, -1)"
+                      />
+                      <q-btn
+                        flat
+                        dense
+                        round
+                        size="sm"
+                        icon="keyboard_arrow_down"
+                        color="kobo-3"
+                        :disable="index === globalBranchPrefixes.length - 1"
+                        :title="$t('settings.branchPrefixesMoveDown')"
+                        @click="moveBranchPrefix(index, 1)"
+                      />
+                      <q-btn
+                        flat
+                        dense
+                        round
+                        size="sm"
+                        icon="delete"
+                        color="kobo-3"
+                        :title="$t('common.delete')"
+                        @click="removeBranchPrefix(index)"
+                      />
+                    </div>
+                  </q-item-section>
+                </q-item>
+              </q-list>
+              <div v-else class="text-caption text-kobo-3 q-mb-sm">
+                {{ $t('settings.branchPrefixesEmpty') }}
+              </div>
+
+              <div class="row items-center q-gutter-sm">
+                <q-input
+                  v-model="newBranchPrefix"
+                  :label="$t('settings.branchPrefixesAddLabel')"
+                  dense
+                  dark
+                  outlined
+                  class="col"
+                  @keyup.enter="addBranchPrefix"
+                />
+                <q-btn
+                  flat
+                  :label="$t('common.add')"
+                  icon="add"
+                  color="primary"
+                  :disable="normalizeBranchPrefix(newBranchPrefix).length === 0"
+                  @click="addBranchPrefix"
+                />
+              </div>
+            </div>
+
+            <div
+              v-if="activeTab === 'prompts'"
+              data-tour="settings-card-prompts"
+              class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
+            >
+              <div class="row items-center q-mb-sm">
+                <div class="text-subtitle2">{{ $t('settings.prPromptTemplate') }}</div>
+                <q-space />
+                <q-btn
+                  flat
+                  dense
+                  no-caps
+                  size="sm"
+                  color="kobo-2"
+                  icon="restart_alt"
+                  :label="t('settings.resetToDefault')"
+                  :loading="resettingField === 'prPromptTemplate'"
+                  :disable="resettingField !== null && resettingField !== 'prPromptTemplate'"
+                  @click="resetFieldToDefault('prPromptTemplate')"
+                />
+              </div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.prPromptHint') }}</div>
+              <q-input
+                v-model="globalPrPrompt"
+                type="textarea"
+                dense
+                dark
+                outlined
+                :rows="8"
+                :placeholder="$t('settings.prPromptPlaceholder')"
+                class="settings-input mono-textarea q-mb-md"
+              />
+
+              <div class="q-mb-sm">
+                <q-expansion-item
+                  dense
+                  dark
+                  icon="code"
+                  :label="$t('settings.availableVariables')"
+                  class="variables-panel rounded-borders"
+                >
+                  <q-list dense dark class="q-pa-sm">
+                    <q-item v-for="v in availableVariables" :key="v.name" dense>
+                      <q-item-section>
+                        <q-item-label class="text-caption" style="font-family: monospace;">{{ v.name }}</q-item-label>
+                        <q-item-label caption class="text-kobo-3">{{ v.description }}</q-item-label>
+                      </q-item-section>
+                    </q-item>
+                  </q-list>
+                </q-expansion-item>
+              </div>
+
+              <div class="row items-center q-mb-sm q-mt-md">
+                <div class="text-subtitle2">{{ $t('settings.reviewPromptTemplate') }}</div>
+                <q-space />
+                <q-btn
+                  flat
+                  dense
+                  no-caps
+                  size="sm"
+                  color="kobo-2"
+                  icon="restart_alt"
+                  :label="t('settings.resetToDefault')"
+                  :loading="resettingField === 'reviewPromptTemplate'"
+                  :disable="resettingField !== null && resettingField !== 'reviewPromptTemplate'"
+                  @click="resetFieldToDefault('reviewPromptTemplate')"
+                />
+              </div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.reviewPromptHint') }}</div>
+              <q-input
+                v-model="globalReviewPrompt"
+                type="textarea"
+                dense
+                dark
+                outlined
+                :rows="8"
+                :placeholder="$t('settings.reviewPromptPlaceholder')"
+                class="settings-input mono-textarea q-mb-md"
+              />
+
+              <div class="row items-center q-mb-sm q-mt-md">
+                <div class="text-subtitle2">{{ $t('settings.ciFixPromptTemplate') }}</div>
+                <q-space />
+                <q-btn
+                  flat
+                  dense
+                  no-caps
+                  size="sm"
+                  color="kobo-2"
+                  icon="restart_alt"
+                  :label="t('settings.resetToDefault')"
+                  :loading="resettingField === 'ciFixPromptTemplate'"
+                  :disable="resettingField !== null && resettingField !== 'ciFixPromptTemplate'"
+                  @click="resetFieldToDefault('ciFixPromptTemplate')"
+                />
+              </div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.ciFixPromptHint') }}</div>
+              <q-input
+                v-model="globalCiFixPrompt"
+                type="textarea"
+                dense
+                dark
+                outlined
+                :rows="8"
+                :placeholder="$t('settings.ciFixPromptPlaceholder')"
+                class="settings-input mono-textarea q-mb-md"
+              />
+
+              <div class="row items-center q-mb-sm q-mt-md">
+                <div class="text-subtitle2">{{ $t('settings.finalizationPromptTemplate') }}</div>
+                <q-space />
+                <q-btn
+                  flat
+                  dense
+                  no-caps
+                  size="sm"
+                  color="kobo-2"
+                  icon="restart_alt"
+                  :label="t('settings.resetToDefault')"
+                  :loading="resettingField === 'finalizationPrompt'"
+                  :disable="resettingField !== null && resettingField !== 'finalizationPrompt'"
+                  @click="resetFieldToDefault('finalizationPrompt')"
+                />
+              </div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.finalizationPromptHint') }}</div>
+              <q-input
+                v-model="globalFinalizationPrompt"
+                type="textarea"
+                dense
+                dark
+                outlined
+                :rows="8"
+                :placeholder="$t('settings.finalizationPromptPlaceholder')"
+                class="settings-input mono-textarea q-mb-md"
+              />
+
+            </div>
+
+            <!-- Editor -->
+            <div v-if="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.editorCommand') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.editorCommandHint') }}</div>
+              <q-input
+                v-model="globalEditorCommand"
+                dense
+                dark
+                outlined
+                :placeholder="$t('settings.editorCommandPlaceholder')"
+                class="settings-input"
+              />
+            </div>
+
+            <!-- File manager -->
+            <div v-if="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.fileManagerCommand') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.fileManagerCommandHint') }}</div>
+              <q-input
+                v-model="globalFileManagerCommand"
+                dense
+                dark
+                outlined
+                :placeholder="$t('settings.fileManagerCommandPlaceholder')"
+                class="settings-input"
+              />
+            </div>
+
+            <!-- Terminal -->
+            <div v-if="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.terminalCommand') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.terminalCommandHint') }}</div>
+              <q-input
+                v-model="globalTerminalCommand"
+                dense
+                dark
+                outlined
+                :placeholder="$t('settings.terminalCommandPlaceholder')"
+                class="settings-input"
+              />
+            </div>
+
+            <div v-if="activeTab === 'notion'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+              <q-toggle v-model="globalNotionEnabled" :label="$t('settings.integrationEnabled')" dark dense color="primary" />
+            </div>
+            <div
+              v-if="activeTab === 'notion'"
+              data-tour="settings-card-notion"
+              :class="['settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md', { 'opacity-50': !globalNotionEnabled }]"
+            >
+              <IntegrationConnectionSettings v-model="integrationDrafts.notion" v-model:connection-status="integrationStatus.notion" integration="notion" />
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.mcpSelection') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t(integrationStatus.notion.configured ? 'integration.directOverrides' : 'settings.mcpSelectionHint') }}</div>
+              <div class="q-mb-sm">
+                <div class="field-label-sub text-caption q-mb-xs text-kobo-3">{{ $t('settings.notionMcp') }}</div>
+                <q-select
+                  v-model="globalNotionMcpKey"
+                  data-test="notion-mcp-key"
+                  :disable="integrationStatus.notion.configured"
+                  :options="mcpServerOptions"
+                  emit-value
+                  map-options
+                  dense
+                  dark
+                  outlined
+                  class="settings-input"
+                />
+              </div>
+              <!-- Le test de l'intégration Notion appartient à l'onglet Notion.
+                   Il vivait au milieu de l'onglet « prompts », où personne ne
+                   pouvait le trouver, pendant que cet onglet-ci hébergeait le
+                   test SENTRY — grisé en permanence pour qui n'utilise pas
+                   Sentry. Les deux boutons sont maintenant chez eux. -->
+              <q-btn
+                flat
+                dense
+                no-caps
+                color="primary"
+                icon="health_and_safety"
+                :label="$t('settings.testIntegration')"
+                :loading="integrationTestLoading === 'notion'"
+                :disable="!globalNotionEnabled || integrationTestLoading !== null"
+                @click="testIntegration('notion')"
+              />
+              <div v-if="integrationTestResult.notion" :class="['text-caption q-mt-sm', integrationTestResult.notion.ok ? 'text-positive' : 'text-negative']">
+                {{ integrationTestResult.notion.detail }} ({{ integrationTestResult.notion.durationMs }} ms)
+              </div>
+            </div>
+
+            <div
+              v-if="activeTab === 'sentry'"
+              data-tour="settings-card-sentry"
+              class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
+            >
+              <q-toggle v-model="globalSentryEnabled" :label="$t('settings.integrationEnabled')" dark dense color="primary" />
+            </div>
+
+            <div v-if="activeTab === 'sentry'" :class="['settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md', { 'opacity-50': !globalSentryEnabled }]">
+              <IntegrationConnectionSettings v-model="integrationDrafts.sentry" v-model:connection-status="integrationStatus.sentry" integration="sentry" />
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.mcpSelection') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t(integrationStatus.sentry.configured ? 'integration.directOverrides' : 'settings.mcpSelectionHint') }}</div>
+              <div class="q-mb-sm">
+                <div class="field-label-sub text-caption q-mb-xs text-kobo-3">{{ $t('settings.sentryMcp') }}</div>
+                <q-select
+                  v-model="globalSentryMcpKey"
+                  data-test="sentry-mcp-key"
+                  :disable="integrationStatus.sentry.configured"
+                  :options="mcpServerOptions"
+                  emit-value
+                  map-options
+                  dense
+                  dark
+                  outlined
+                  class="settings-input"
+                />
+              </div>
+              <q-btn
+                flat
+                dense
+                no-caps
+                color="primary"
+                icon="health_and_safety"
+                :label="$t('settings.testIntegration')"
+                :loading="integrationTestLoading === 'sentry'"
+                :disable="!globalSentryEnabled || integrationTestLoading !== null"
+                class="q-mt-sm"
+                @click="testIntegration('sentry')"
+              />
+              <div v-if="integrationTestResult.sentry" :class="['text-caption q-mt-sm', integrationTestResult.sentry.ok ? 'text-positive' : 'text-negative']">
+                {{ integrationTestResult.sentry.detail }} ({{ integrationTestResult.sentry.durationMs }} ms)
+              </div>
+            </div>
+
+            <div
+              v-if="activeTab === 'forge'"
+              data-tour="settings-card-forge"
+              class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
+            >
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.bitbucketCommunity') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-md">{{ $t('settings.bitbucketCommunityHint') }}</div>
+              <q-input v-model="globalBitbucketUsername" :label="$t('settings.bitbucketUsername')" autocomplete="username" dark dense outlined class="q-mb-sm" />
+              <q-input v-model="globalBitbucketToken" :label="$t('settings.bitbucketToken')" type="password" autocomplete="off" dark dense outlined />
+            </div>
+
+            <div v-if="activeTab === 'notion'" :class="['settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md', { 'opacity-50': !globalNotionEnabled }]">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.notionStatus') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.notionStatusHint') }}</div>
+              <div class="q-mb-sm">
+                <div class="field-label-sub text-caption q-mb-xs text-kobo-3">{{ $t('settings.notionStatusProperty') }}</div>
+                <q-input
+                  v-model="globalNotionStatusProperty"
+                  dense
+                  dark
+                  outlined
+                  :placeholder="$t('settings.notionStatusPropertyPlaceholder')"
+                  class="settings-input"
+                />
+              </div>
+              <div class="q-mb-sm">
+                <div class="field-label-sub text-caption q-mb-xs text-kobo-3">{{ $t('settings.notionInProgressStatus') }}</div>
+                <q-input
+                  v-model="globalNotionStatus"
+                  dense
+                  dark
+                  outlined
+                  :placeholder="$t('settings.notionInProgressStatusPlaceholder')"
+                  class="settings-input"
+                />
+              </div>
+              <div class="row items-center q-mb-sm">
+                <div class="text-subtitle2">{{ t('settings.notionInitialPrompt') }}</div>
+                <q-space />
+                <q-btn
+                  flat
+                  dense
+                  no-caps
+                  size="sm"
+                  color="kobo-2"
+                  icon="restart_alt"
+                  :label="t('settings.resetToDefault')"
+                  :loading="resettingField === 'notionInitialPromptTemplate'"
+                  :disable="resettingField !== null && resettingField !== 'notionInitialPromptTemplate'"
+                  @click="resetFieldToDefault('notionInitialPromptTemplate')"
+                />
+              </div>
+              <div class="text-caption text-kobo-3 q-mb-xs">{{ t('settings.notionInitialPrompt.help', { variables: '{ticket_id}, {notion_url}, {notion_file_path}' }) }}</div>
+              <q-input
+                v-model="globalNotionInitialPrompt"
+                type="textarea"
+                outlined
+                autogrow
+                class="settings-input mono-textarea"
+              />
+            </div>
+
+            <!-- Notion assignment -->
+            <div v-if="activeTab === 'notion'" :class="['settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md', { 'opacity-50': !globalNotionEnabled }]">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.notionAssignee') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.notionAssigneeHint') }}</div>
+              <div class="q-mb-sm">
+                <div class="field-label-sub text-caption q-mb-xs text-kobo-3">{{ $t('settings.notionAssigneeProperty') }}</div>
+                <q-input
+                  v-model="globalNotionAssigneeProperty"
+                  dense
+                  dark
+                  outlined
+                  :placeholder="$t('settings.notionAssigneePropertyPlaceholder')"
+                  class="settings-input"
+                />
+              </div>
+              <div class="q-mb-sm">
+                <div class="row items-center q-mb-xs">
+                  <div class="field-label-sub text-caption text-kobo-3 col">{{ $t('settings.notionUserId') }}</div>
+                  <q-btn
+                    flat
+                    dense
+                    no-caps
+                    size="sm"
+                    icon="refresh"
+                    color="kobo-2"
+                    :loading="loadingNotionUsers"
+                    :label="$t('settings.notionUsersRefresh')"
+                    @click="loadNotionUsers(true)"
+                  />
+                </div>
+                <q-select
+                  v-if="notionUsers.length > 0"
+                  v-model="globalNotionUserId"
+                  :options="notionUserOptions"
+                  emit-value
+                  map-options
+                  clearable
+                  dense
+                  dark
+                  outlined
+                  :hint="$t('settings.notionUserIdHint')"
+                  class="settings-input"
+                >
+                  <template #option="scope">
+                    <q-item v-bind="scope.itemProps">
+                      <q-item-section avatar>
+                        <q-avatar size="24px">
+                          <img v-if="scope.opt.avatarUrl" :src="scope.opt.avatarUrl" :alt="scope.opt.label">
+                          <q-icon v-else name="person" size="20px" />
+                        </q-avatar>
+                      </q-item-section>
+                      <q-item-section>
+                        <q-item-label>{{ scope.opt.name }}</q-item-label>
+                        <q-item-label caption>{{ scope.opt.email }}</q-item-label>
+                      </q-item-section>
+                    </q-item>
+                  </template>
+                </q-select>
+                <div v-else-if="loadingNotionUsers" class="text-caption text-kobo-3 q-py-sm">
+                  {{ $t('settings.notionUsersLoading') }}
+                </div>
+                <template v-else>
+                  <div v-if="notionUsersError" class="text-caption text-orange-5 q-mb-xs">
+                    {{ $t('settings.notionUsersLoadFailed', { error: notionUsersError }) }}
+                  </div>
+                  <q-input
+                    v-model="globalNotionUserId"
+                    dense
+                    dark
+                    outlined
+                    :placeholder="$t('settings.notionUserIdPlaceholder')"
+                    :hint="notionUsersError ? $t('settings.notionUsersManualFallback') : $t('settings.notionUserIdHint')"
+                    class="settings-input"
+                  />
+                </template>
+              </div>
+            </div>
+
+            <div v-if="activeTab === 'sentry'" :class="['settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md', { 'opacity-50': !globalSentryEnabled }]">
+              <div class="text-subtitle2 q-mb-sm">{{ t('settings.sentryIntegration') }}</div>
+              <div class="row items-center q-mb-sm">
+                <div class="text-subtitle2">{{ t('settings.sentryInitialPrompt') }}</div>
+                <q-space />
+                <q-btn
+                  flat
+                  dense
+                  no-caps
+                  size="sm"
+                  color="kobo-2"
+                  icon="restart_alt"
+                  :label="t('settings.resetToDefault')"
+                  :loading="resettingField === 'sentryInitialPromptTemplate'"
+                  :disable="resettingField !== null && resettingField !== 'sentryInitialPromptTemplate'"
+                  @click="resetFieldToDefault('sentryInitialPromptTemplate')"
+                />
+              </div>
+              <div class="text-caption text-kobo-3 q-mb-xs">{{ t('settings.sentryInitialPrompt.help', { variables: '{issue_id}, {sentry_url}, {sentry_file_path}' }) }}</div>
+              <q-input
+                v-model="globalSentryInitialPrompt"
+                type="textarea"
+                outlined
+                autogrow
+                class="settings-input mono-textarea"
+              />
+            </div>
+
+            <!-- Workspace tags -->
+            <div v-if="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.tagsTitle') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.tagsHint') }}</div>
+              <q-select
+                v-model="globalTags"
+                :label="$t('settings.tagsLabel')"
+                dark
+                outlined
+                multiple
+                use-input
+                use-chips
+                new-value-mode="add-unique"
+                hide-dropdown-icon
+                input-debounce="0"
+                class="settings-input"
+              />
+            </div>
+
+            <!-- Setup script -->
+            <div
+              v-if="activeTab === 'scripts'"
+              data-tour="settings-card-scripts"
+              class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
+            >
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.setupScript') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.setupScriptHint') }}</div>
+              <q-input
+                v-model="globalSetupScript"
+                type="textarea"
+                dark
+                outlined
+                autogrow
+                :input-style="{ minHeight: '100px' }"
+                :placeholder="$t('settings.setupScriptPlaceholder')"
+                class="settings-input mono-textarea"
+              />
+            </div>
+
+            <!-- Cleanup script -->
+            <div v-if="activeTab === 'scripts'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.cleanupScript') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.cleanupScriptHint') }}</div>
+              <q-input
+                v-model="globalCleanupScript"
+                type="textarea"
+                dark
+                outlined
+                autogrow
+                :input-style="{ minHeight: '100px' }"
+                :placeholder="$t('settings.cleanupScriptPlaceholder')"
+                class="settings-input mono-textarea"
+              />
+              <div class="text-caption text-kobo-3 q-mt-md q-mb-xs">{{ $t('settings.cleanupScriptMode') }}</div>
+              <q-option-group
+                v-model="globalCleanupScriptMode"
+                :options="[
+                  { label: $t('settings.cleanupScriptMode.idle'), value: 'idle' },
+                  { label: $t('settings.cleanupScriptMode.noTasks'), value: 'no-tasks' },
+                ]"
+                type="radio"
+                color="primary"
+                dense
+              />
+              <q-checkbox
+                v-model="globalCleanupScriptOnlyOnChanges"
+                :label="$t('settings.cleanupScriptOnlyOnChanges')"
+                dark
+                dense
+                color="primary"
+                class="q-mt-sm"
+              />
+            </div>
+
+            <!-- Archive script -->
+            <div v-if="activeTab === 'scripts'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.archiveScript') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.archiveScriptHint') }}</div>
+              <q-input
+                v-model="globalArchiveScript"
+                type="textarea"
+                dark
+                outlined
+                autogrow
+                :input-style="{ minHeight: '100px' }"
+                :placeholder="$t('settings.archiveScriptPlaceholder')"
+                class="settings-input mono-textarea"
+              />
+            </div>
+
+            <!-- Lifecycle hook: sessionEnded -->
+            <div v-if="activeTab === 'scripts'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.hook.sessionEndedTitle') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.hook.sessionEndedHint') }}</div>
+              <q-input
+                v-model="globalSessionEndedScript"
+                type="textarea"
+                dark
+                outlined
+                autogrow
+                :input-style="{ minHeight: '100px' }"
+                :placeholder="$t('settings.hook.sessionEndedPlaceholder')"
+                class="settings-input mono-textarea"
+              />
+            </div>
+
+            <!-- Lifecycle hook: prMerged -->
+            <div v-if="activeTab === 'scripts'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.hook.prMergedTitle') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.hook.prMergedHint') }}</div>
+              <q-input
+                v-model="globalPrMergedScript"
+                type="textarea"
+                dark
+                outlined
+                autogrow
+                :input-style="{ minHeight: '100px' }"
+                :placeholder="$t('settings.hook.prMergedPlaceholder')"
+                class="settings-input mono-textarea"
+              />
+            </div>
+
+            <!-- Lifecycle hook: autoLoopDisabled -->
+            <div v-if="activeTab === 'scripts'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.hook.autoLoopDisabledTitle') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.hook.autoLoopDisabledHint') }}</div>
+              <q-input
+                v-model="globalAutoLoopDisabledScript"
+                type="textarea"
+                dark
+                outlined
+                autogrow
+                :input-style="{ minHeight: '100px' }"
+                :placeholder="$t('settings.hook.autoLoopDisabledPlaceholder')"
+                class="settings-input mono-textarea"
+              />
+            </div>
+
+            <!-- Change-source-branch script -->
+            <div v-if="activeTab === 'scripts'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+              <div class="row items-center justify-between q-mb-sm">
+                <div class="text-subtitle2">{{ $t('settings.changeSourceBranchScript') }}</div>
+                <q-btn
+                  flat
+                  dense
+                  no-caps
+                  size="sm"
+                  color="primary"
+                  icon="restart_alt"
+                  :label="$t('settings.changeSourceBranchScript.resetDefault')"
+                  @click="insertDefaultChangeSourceBranchScript('global')"
+                />
+              </div>
+              <div class="text-caption text-kobo-3 q-mb-xs">{{ $t('settings.changeSourceBranchScript.help') }}</div>
+              <pre class="text-caption text-kobo-3 mono-guide q-mb-sm">{{ $t('settings.changeSourceBranchScript.envHelp') }}</pre>
+              <q-input
+                v-model="globalChangeSourceBranchScript"
+                type="textarea"
+                dark
+                outlined
+                :input-style="{ minHeight: '400px', maxHeight: '600px' }"
+                :placeholder="$t('settings.changeSourceBranchScript.placeholder')"
+                class="settings-input mono-textarea"
+              />
+            </div>
+
+            <div
+              v-if="activeTab === 'worktrees'"
+              data-tour="settings-card-worktrees"
+              class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
+            >
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.worktreesTitle') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.worktreesHint') }}</div>
+              <q-input
+                ref="globalWorktreesPathInput"
+                v-model="globalWorktreesPath"
+                :label="$t('settings.worktreesPathLabel')"
+                dense
+                dark
+                outlined
+                :placeholder="WORKTREES_PATH"
+                :rules="worktreesPathRules"
+                lazy-rules
+                class="settings-input"
+              />
+              <q-toggle
+                v-model="globalWorktreesPrefixByProject"
+                :label="$t('settings.worktreesPrefixByProject')"
+                dark
+                dense
+                color="primary"
+                class="text-kobo-2 text-caption q-mt-sm"
+              />
+              <div class="text-caption text-kobo-3 q-mt-xs">{{ $t('settings.worktreesPrefixByProjectHint') }}</div>
+
+              <q-separator dark class="q-my-md" />
+
+              <div data-tour="settings-card-worktrees-purge">
+                <q-toggle
+                  v-model="globalAutoPurgeOnPrMerged"
+                  :label="$t('settings.autoPurgeOnPrMerged')"
+                  dark
+                  dense
+                  color="primary"
+                  class="text-kobo-2 text-caption"
+                />
+                <div class="text-caption text-kobo-3 q-mt-xs">{{ $t('settings.autoPurgeOnPrMergedHint') }}</div>
+              </div>
+
+
+
+              <q-separator dark class="q-my-md" />
+
+              <div data-tour="settings-card-worktrees-retention">
+                <div class="text-subtitle2 q-mb-sm">{{ $t('settings.retentionTitle') }}</div>
+                <div class="text-caption text-negative q-mb-sm">{{ $t('settings.retentionWarning') }}</div>
+                <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.retentionHint') }}</div>
+                <q-input
+                  v-model.number="globalWsEventsRetentionDays"
+                  :label="$t('settings.retentionDaysLabel')"
+                  :hint="$t('settings.retentionDaysHint')"
+                  type="number"
+                  min="0"
+                  max="3650"
+                  dense
+                  dark
+                  outlined
+                  class="settings-input"
+                />
+                <q-input
+                  v-model.number="globalWsEventsKeepPerWorkspace"
+                  :label="$t('settings.retentionKeepLabel')"
+                  :hint="$t('settings.retentionKeepHint')"
+                  type="number"
+                  min="0"
+                  max="1000000"
+                  dense
+                  dark
+                  outlined
+                  class="settings-input q-mt-md"
+                />
+                <div v-if="globalWsEventsRetentionDays === 0" class="text-caption text-kobo-3 q-mt-sm">
+                  {{ $t('settings.retentionDisabledHint') }}
+                </div>
+              </div>
+
+              <q-expansion-item
+                dense
+                dark
+                icon="help_outline"
+                :label="$t('settings.purgeDocsTitle')"
+                class="purge-docs q-mt-md rounded-borders"
+              >
+                <div class="q-pa-sm text-caption text-kobo-2" style="line-height: 1.55;">
+                  <div class="text-weight-medium text-kobo-1 q-mb-xs">
+                    {{ $t('settings.purgeDocsRestoreTitle') }}
+                  </div>
+                  <div class="q-mb-xs">{{ $t('settings.purgeDocsRestoreIntro') }}</div>
+                  <pre class="purge-docs-code">{{ $t('settings.purgeDocsRestoreCommands') }}</pre>
+                  <div class="text-kobo-3 q-mb-md">{{ $t('settings.purgeDocsRestoreFootnote') }}</div>
+
+                  <div class="text-weight-medium text-kobo-1 q-mb-xs">
+                    {{ $t('settings.purgeDocsPermissionsTitle') }}
+                  </div>
+                  <div class="q-mb-xs">{{ $t('settings.purgeDocsPermissionsIntro') }}</div>
+                  <ul class="q-pl-md q-my-xs">
+                    <li>{{ $t('settings.purgeDocsPermissionsDocker') }}</li>
+                    <li>{{ $t('settings.purgeDocsPermissionsAcl') }}</li>
+                  </ul>
+                  <pre class="purge-docs-code">{{ $t('settings.purgeDocsPermissionsAclCommand') }}</pre>
+                  <div class="text-kobo-3 q-mb-md">{{ $t('settings.purgeDocsPermissionsFootnote') }}</div>
+
+                  <div class="text-weight-medium text-kobo-1 q-mb-xs">
+                    {{ $t('settings.purgeDocsPermissionsRecoverTitle') }}
+                  </div>
+                  <div class="q-mb-xs">{{ $t('settings.purgeDocsPermissionsRecoverIntro') }}</div>
+                  <div class="q-mb-xs text-kobo-3">{{ $t('settings.purgeDocsPermissionsRecoverAclIntro') }}</div>
+                  <pre class="purge-docs-code">{{ $t('settings.purgeDocsPermissionsRecoverAclCommand') }}</pre>
+                  <div class="q-mb-xs text-kobo-3">{{ $t('settings.purgeDocsPermissionsRecoverChownIntro') }}</div>
+                  <pre class="purge-docs-code">{{ $t('settings.purgeDocsPermissionsRecoverChownCommand') }}</pre>
+                  <div class="text-kobo-3">{{ $t('settings.purgeDocsPermissionsRecoverFootnote') }}</div>
+                </div>
+              </q-expansion-item>
+            </div>
+
+            <!-- Network access -->
+            <div
+              v-if="activeTab === 'general'"
+              class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
+            >
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.network.title') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.network.hint') }}</div>
+
+              <q-toggle
+                :model-value="network.enabled"
+                :label="$t('settings.network.enable')"
+                dark
+                color="primary"
+                @update:model-value="onToggleNetwork"
+              />
+
+              <q-banner v-if="networkRestartRequired" class="bg-amber-1 text-amber-9 q-mt-sm" dense rounded>
+                {{ $t('settings.network.restartRequired') }}
+              </q-banner>
+
+              <div v-if="network.enabled" class="q-mt-md">
+                <q-toggle
+                  :model-value="network.behindProxy"
+                  :label="$t('settings.network.behindProxy')"
+                  dark
+                  color="primary"
+                  @update:model-value="onToggleBehindProxy"
+                />
+                <div class="text-caption text-kobo-3 q-mt-xs">{{ $t('settings.network.behindProxyHint') }}</div>
+              </div>
+
+              <template v-if="network.enabled && network.token">
+                <div class="q-mt-md">
+                  <div class="text-caption text-kobo-3 q-mb-xs">{{ $t('settings.network.token') }}</div>
+                  <q-input :model-value="network.token" readonly dense dark outlined>
+                    <template #append>
+                      <q-btn flat dense icon="content_copy" :title="$t('settings.network.copy')" @click="copyToken" />
+                    </template>
+                  </q-input>
+                  <q-btn
+                    class="q-mt-sm"
+                    :label="$t('settings.network.regenerate')"
+                    color="primary"
+                    outline
+                    dense
+                    @click="onRegenerateToken"
+                  />
+                </div>
+
+                <div class="q-mt-md">
+                  <div class="text-caption text-kobo-3 q-mb-xs">{{ $t('settings.network.urls') }}</div>
+                  <div v-if="networkDisplayUrls.length === 0" class="text-caption text-kobo-3">
+                    {{ $t('settings.network.noUrls') }}
+                  </div>
+                  <div v-for="u in networkDisplayUrls" :key="u" class="text-body2">{{ u }}</div>
+                </div>
+
+                <div v-if="networkQrDataUrl" class="q-mt-md">
+                  <div class="text-caption text-kobo-3 q-mb-xs">{{ $t('settings.network.scan') }}</div>
+                  <img :src="networkQrDataUrl" :alt="$t('settings.network.scan')" width="200" height="200" />
+                </div>
+              </template>
+              <McpConnectionSettings :token="network.token" :network-enabled="network.enabled" :behind-proxy="network.behindProxy" />
+            </div>
+
+            <!-- Import / Export config -->
+            <div
+              v-if="activeTab === 'export'"
+              data-tour="settings-card-export"
+              class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
+            >
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.shareTitle') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.shareHint') }}</div>
+              <div class="row q-gutter-sm">
+                <q-btn
+                  :label="$t('settings.exportConfig')"
+                  icon="download"
+                  no-caps
+                  outline
+                  color="kobo-2"
+                  @click="exportConfig"
+                />
+                <q-btn
+                  :label="$t('settings.importConfig')"
+                  icon="upload"
+                  no-caps
+                  outline
+                  color="kobo-2"
+                  @click="triggerImport"
+                />
+                <input
+                  ref="importFileInput"
+                  type="file"
+                  accept="application/json,.json"
+                  style="display: none;"
+                  @change="onImportFile"
+                />
+              </div>
+            </div>
+
+          </div>
+
+        <!-- Projects panel -->
+        <div v-if="activeTab === 'projects'" class="q-pa-none">
+          <div class="row q-gutter-md" style="min-height: 500px;">
+            <!-- Left column: project list (30%) -->
+            <div class="project-list-col">
+              <div class="settings-card rounded-borders" style="height: 100%;">
+                <div class="q-pa-sm">
+                  <div class="text-caption text-uppercase text-weight-bold q-px-sm q-py-xs text-kobo-3" style="letter-spacing: 0.05em;">
+                    {{ $t('settings.configuredProjects') }}
+                  </div>
+                </div>
+
+                <q-separator dark />
+
+                <q-list dark dense class="q-py-xs">
+                  <q-item
+                    v-for="(project, index) in store.projects"
+                    :key="project.path"
+                    clickable
+                    :active="selectedProjectIndex === index && !isNewProject"
+                    active-class="project-item--active"
+                    class="project-item q-mx-xs rounded-borders"
+                    style="min-height: 40px;"
+                    @click="selectProject(index)"
+                  >
+                    <q-item-section>
+                      <q-item-label class="text-body2 text-kobo-1">
+                        {{ projectDisplayName(project) }}
+                      </q-item-label>
+                      <q-item-label caption class="text-kobo-3 ellipsis" style="font-size: 11px; font-family: monospace;">
+                        {{ project.path }}
+                      </q-item-label>
+                    </q-item-section>
+                  </q-item>
+                </q-list>
+
+                <!-- Empty state -->
+                <div
+                  v-if="store.projects.length === 0 && !store.loading"
+                  class="q-pa-md text-center text-caption text-kobo-3"
+                >
+                  {{ $t('settings.noProjects') }}
+                </div>
+
+                <q-separator dark />
+
+                <div class="q-pa-sm">
+                  <q-btn
+                    data-tour="settings-card-projects"
+                    :label="$t('settings.addProject')"
+                    icon="add"
+                    no-caps
+                    flat
+                    dense
+                    class="full-width"
+                    color="primary"
+                    @click="addNewProject"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <!-- Right column: edit form (70%) -->
+            <div class="project-form-col">
+              <div class="settings-card rounded-borders q-pa-lg" style="height: 100%;">
+                <template v-if="selectedProject || isNewProject">
+                  <div class="row items-center q-mb-md">
+                    <div class="text-subtitle1 text-weight-medium text-kobo-1">
+                      {{ isNewProject ? $t('settings.newProject') : $t('settings.editProject') }}
+                    </div>
+                    <q-space />
+                    <q-btn
+                      v-if="!isNewProject"
+                      :label="$t('common.delete')"
+                      icon="delete_outline"
+                      no-caps
+                      flat
+                      dense
+                      size="sm"
+                      color="red-5"
+                      :loading="deletingProject"
+                      @click="deleteProject"
+                    />
+                  </div>
+
+                  <q-separator dark class="q-mb-md" />
+
+                  <!-- Copy settings from existing project (new-project mode only) -->
+                  <div v-if="isNewProject && store.projects.length > 0" class="q-mb-md">
+                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-kobo-3">
+                      {{ $t('settings.copyFrom') }}
+                    </div>
+                    <q-select
+                      :model-value="copyFromPath"
+                      :options="copyFromOptions"
+                      option-value="value"
+                      option-label="label"
+                      emit-value
+                      map-options
+                      clearable
+                      dense
+                      dark
+                      outlined
+                      :placeholder="$t('settings.copyFromPlaceholder')"
+                      class="settings-input"
+                      @update:model-value="onCopyFromChange"
+                    />
+                    <div class="text-caption text-kobo-3 q-mt-xs">
+                      {{ $t('settings.copyFromHint') }}
+                    </div>
+                  </div>
+
+                  <!-- Identity -->
+                  <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+                    <div class="text-subtitle2 q-mb-md">{{ $t('settings.projectGroup.identity') }}</div>
+
+                    <div class="q-mb-md">
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-kobo-3">{{ $t('settings.projectPath') }}</div>
+                      <q-input
+                        v-model="projectForm.path"
+                        dense
+                        dark
+                        outlined
+                        :readonly="!isNewProject"
+                        :placeholder="$t('settings.projectPathPlaceholder')"
+                        class="settings-input"
+                        :class="{ 'readonly-input': !isNewProject }"
+                      >
+                        <template v-if="isNewProject" #append>
+                          <q-btn
+                            flat
+                            dense
+                            round
+                            size="sm"
+                            icon="folder_open"
+                            color="kobo-2"
+                            @click="folderPickerOpen = true"
+                          >
+                            <q-tooltip>{{ $t('folderPicker.title') }}</q-tooltip>
+                          </q-btn>
+                        </template>
+                      </q-input>
+                    </div>
+
+                    <div class="q-mb-md">
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-kobo-3">{{ $t('settings.displayName') }}</div>
+                      <q-input
+                        v-model="projectForm.displayName"
+                        dense
+                        dark
+                        outlined
+                        :placeholder="$t('settings.displayNamePlaceholder')"
+                        class="settings-input"
+                      />
+                    </div>
+
+                    <div>
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-kobo-3">
+                        {{ $t('settings.projectColor') }}
+                      </div>
+                      <div class="row items-center q-gutter-xs">
+                        <q-chip
+                          v-for="c in PROJECT_COLOR_PALETTE"
+                          :key="c"
+                          dense
+                          clickable
+                          :color="c"
+                          :icon="projectForm.color === c ? 'check' : undefined"
+                          text-color="white"
+                          @click="projectForm.color = c"
+                        />
+                        <q-btn
+                          flat
+                          dense
+                          no-caps
+                          size="xs"
+                          :label="$t('settings.projectColorClear')"
+                          color="kobo-2"
+                          :disable="!projectForm.color"
+                          @click="projectForm.color = null"
+                        />
+                      </div>
+                      <div class="text-caption text-kobo-3 q-mt-xs">
+                        {{ projectForm.color ?? $t('settings.projectColorDefault') }}
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Defaults -->
+                  <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+                    <div class="text-subtitle2 q-mb-md">{{ $t('settings.projectGroup.defaults') }}</div>
+
+                    <div class="q-mb-md">
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-kobo-3">{{ $t('settings.defaultSourceBranch') }}</div>
+                      <q-select
+                        v-model="projectForm.defaultSourceBranch"
+                        :options="branchFilterOptions"
+                        dense
+                        dark
+                        outlined
+                        use-input
+                        emit-value
+                        :loading="loadingBranches"
+                        class="settings-input"
+                        placeholder="main"
+                        @filter="filterBranches"
+                      >
+                        <template #no-option>
+                          <q-item>
+                            <q-item-section class="text-kobo-3 text-caption">
+                              {{ projectForm.path.trim() ? $t('createPage.noBranches') : $t('createPage.enterPath') }}
+                            </q-item-section>
+                          </q-item>
+                        </template>
+                      </q-select>
+                    </div>
+
+                    <div class="q-mb-md">
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-kobo-3">{{ $t('settings.defaultModel.project') }}</div>
+                      <q-select
+                        v-model="projectForm.defaultModel"
+                        :options="projectModelOptions"
+                        emit-value
+                        map-options
+                        option-value="value"
+                        option-label="label"
+                        dense
+                        dark
+                        outlined
+                        class="settings-input"
+                      />
+                    </div>
+
+                    <div>
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-kobo-3">{{ $t('settings.forge') }}</div>
+                      <q-select
+                        v-model="projectForm.forge"
+                        :options="forgeOptions"
+                        emit-value
+                        map-options
+                        option-value="value"
+                        option-label="label"
+                        dense
+                        dark
+                        outlined
+                        class="settings-input"
+                      />
+                    </div>
+                  </div>
+
+                  <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md" data-test="project-git-settings">
+                    <div class="text-subtitle2 q-mb-md">{{ $t('settings.nav.git') }}</div>
+                    <WorkflowPolicyEditor v-model="projectForm.workflowPolicy" inherit class="q-my-md" />
+                    <div class="q-mb-md">
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-kobo-3">{{ $t('settings.gitConventions.project') }}</div>
+                      <div class="text-caption text-kobo-3 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
+                      <q-input
+                        v-model="projectForm.gitConventions"
+                        type="textarea"
+                        outlined
+                        autogrow
+                        :input-style="{ minHeight: '140px' }"
+                        :placeholder="$t('settings.gitConventionsEmpty')"
+                        class="settings-input mono-textarea"
+                      />
+                    </div>
+
+
+                  </div>
+
+                  <!-- Prompts -->
+                  <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+                    <div class="text-subtitle2 q-mb-md">{{ $t('settings.projectGroup.prompts') }}</div>
+
+                    <div class="q-mb-md">
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-kobo-3">{{ $t('settings.prPromptTemplate.project') }}</div>
+                      <div class="text-caption text-kobo-3 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
+                      <q-input
+                        v-model="projectForm.prPromptTemplate"
+                        type="textarea"
+                        outlined
+                        autogrow
+                        :input-style="{ minHeight: '100px' }"
+                        :placeholder="$t('settings.prPromptPlaceholder.project')"
+                        class="settings-input mono-textarea"
+                      />
+                    </div>
+
+                    <div class="q-mb-md">
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-kobo-3">{{ $t('settings.reviewPromptTemplate.project') }}</div>
+                      <div class="text-caption text-kobo-3 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
+                      <q-input
+                        v-model="projectForm.reviewPromptTemplate"
+                        type="textarea"
+                        outlined
+                        autogrow
+                        :input-style="{ minHeight: '100px' }"
+                        :placeholder="$t('settings.reviewPromptPlaceholder')"
+                        class="settings-input mono-textarea"
+                      />
+                    </div>
+
+                    <div class="q-mb-md">
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-kobo-3">{{ $t('settings.ciFixPromptTemplate.project') }}</div>
+                      <div class="text-caption text-kobo-3 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
+                      <q-input
+                        v-model="projectForm.ciFixPromptTemplate"
+                        type="textarea"
+                        outlined
+                        autogrow
+                        :input-style="{ minHeight: '100px' }"
+                        :placeholder="$t('settings.ciFixPromptPlaceholder')"
+                        class="settings-input mono-textarea"
+                      />
+                    </div>
+
+                    <div v-if="globalNotionEnabled" class="q-mb-md">
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-kobo-3">{{ t('settings.notionInitialPrompt.project') }}</div>
+                      <div class="text-caption text-kobo-3 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
+                      <q-input
+                        v-model="projectForm.notionInitialPromptTemplate"
+                        type="textarea"
+                        outlined
+                        autogrow
+                        class="settings-input mono-textarea"
+                      />
+                    </div>
+
+                    <div v-if="globalSentryEnabled" class="q-mb-md">
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-kobo-3">{{ t('settings.sentryInitialPrompt.project') }}</div>
+                      <div class="text-caption text-kobo-3 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
+                      <q-input
+                        v-model="projectForm.sentryInitialPromptTemplate"
+                        type="textarea"
+                        outlined
+                        autogrow
+                        class="settings-input mono-textarea"
+                      />
+                    </div>
+
+                    <div>
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-kobo-3">{{ $t('settings.taskPromptTemplate') }}</div>
+                      <q-input
+                        v-model="projectForm.taskPromptTemplate"
+                        type="textarea"
+                        outlined
+                        autogrow
+                        :input-style="{ minHeight: '100px' }"
+                        :placeholder="$t('settings.taskPromptTemplatePlaceholder')"
+                        class="settings-input"
+                      />
+                      <div class="text-caption text-kobo-3 q-mt-xs">{{ $t('settings.taskPromptTemplateHint') }}</div>
+                    </div>
+                  </div>
+
+                  <!-- Scripts -->
+                  <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+                    <div class="text-subtitle2 q-mb-md">{{ $t('settings.projectGroup.scripts') }}</div>
+
+                    <div class="q-mb-md">
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-kobo-3">{{ $t('settings.setupScript') }}</div>
+                      <div class="text-caption text-kobo-3 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
+                      <q-input
+                        v-model="projectForm.setupScript"
+                        type="textarea"
+                        outlined
+                        autogrow
+                        :input-style="{ minHeight: '100px' }"
+                        :placeholder="$t('settings.setupScriptPlaceholder')"
+                        class="settings-input mono-textarea"
+                      />
+                      <div class="text-caption text-kobo-3 q-mt-xs">{{ $t('settings.setupScriptHint') }}</div>
+                    </div>
+
+                    <div class="q-mb-md">
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-kobo-3">{{ $t('settings.cleanupScript') }}</div>
+                      <div class="text-caption text-kobo-3 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
+                      <q-input
+                        v-model="projectForm.cleanupScript"
+                        type="textarea"
+                        outlined
+                        autogrow
+                        :input-style="{ minHeight: '100px' }"
+                        :placeholder="$t('settings.cleanupScriptPlaceholder')"
+                        class="settings-input mono-textarea"
+                      />
+                      <div class="field-label-sub text-caption q-mt-sm q-mb-xs text-kobo-3">{{ $t('settings.cleanupScriptMode') }}</div>
+                      <q-select
+                        v-model="projectForm.cleanupScriptMode"
+                        :options="cleanupModeProjectOptions"
+                        emit-value
+                        map-options
+                        dense
+                        outlined
+                        class="settings-input"
+                      />
+                    </div>
+
+                    <div>
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-kobo-3">{{ $t('settings.archiveScript') }}</div>
+                      <div class="text-caption text-kobo-3 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
+                      <q-input
+                        v-model="projectForm.archiveScript"
+                        type="textarea"
+                        outlined
+                        autogrow
+                        :input-style="{ minHeight: '100px' }"
+                        :placeholder="$t('settings.archiveScriptPlaceholder')"
+                        class="settings-input mono-textarea"
+                      />
+                    </div>
+
+                    <div>
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-kobo-3">{{ $t('settings.hook.sessionEndedTitle') }}</div>
+                      <div class="text-caption text-kobo-3 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
+                      <q-input
+                        v-model="projectForm.sessionEndedScript"
+                        type="textarea"
+                        outlined
+                        autogrow
+                        :input-style="{ minHeight: '100px' }"
+                        :placeholder="$t('settings.hook.sessionEndedPlaceholder')"
+                        class="settings-input mono-textarea"
+                      />
+                    </div>
+
+                    <div>
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-kobo-3">{{ $t('settings.hook.prMergedTitle') }}</div>
+                      <div class="text-caption text-kobo-3 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
+                      <q-input
+                        v-model="projectForm.prMergedScript"
+                        type="textarea"
+                        outlined
+                        autogrow
+                        :input-style="{ minHeight: '100px' }"
+                        :placeholder="$t('settings.hook.prMergedPlaceholder')"
+                        class="settings-input mono-textarea"
+                      />
+                    </div>
+
+                    <div>
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-kobo-3">{{ $t('settings.hook.autoLoopDisabledTitle') }}</div>
+                      <div class="text-caption text-kobo-3 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
+                      <q-input
+                        v-model="projectForm.autoLoopDisabledScript"
+                        type="textarea"
+                        outlined
+                        autogrow
+                        :input-style="{ minHeight: '100px' }"
+                        :placeholder="$t('settings.hook.autoLoopDisabledPlaceholder')"
+                        class="settings-input mono-textarea"
+                      />
+                    </div>
+
+                    <div>
+                      <div class="row items-center justify-between q-mb-xs">
+                        <div class="field-label text-body2 text-weight-medium text-kobo-3">{{ $t('settings.changeSourceBranchScript') }}</div>
+                        <q-btn
+                          flat
+                          dense
+                          no-caps
+                          size="sm"
+                          color="primary"
+                          icon="restart_alt"
+                          :label="$t('settings.changeSourceBranchScript.resetDefault')"
+                          @click="insertDefaultChangeSourceBranchScript('project')"
+                        />
+                      </div>
+                      <div class="text-caption text-kobo-3 q-mb-xs">{{ $t('settings.changeSourceBranchScript.help') }}</div>
+                      <pre class="text-caption text-kobo-3 mono-guide q-mb-sm">{{ $t('settings.changeSourceBranchScript.envHelp') }}</pre>
+                      <q-input
+                        v-model="projectForm.changeSourceBranchScript"
+                        type="textarea"
+                        outlined
+                        :input-style="{ minHeight: '400px', maxHeight: '600px' }"
+                        :placeholder="$t('settings.changeSourceBranchScript.placeholder')"
+                        class="settings-input mono-textarea"
+                      />
+                    </div>
+                  </div>
+
+                  <!-- Dev Server -->
+                  <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+                    <div class="text-subtitle2 q-mb-md">{{ $t('settings.devServer') }}</div>
+                    <div class="q-mb-md">
+                      <div class="field-label-sub text-caption q-mb-xs text-kobo-3">{{ $t('settings.devServerStart') }}</div>
+                      <q-input
+                        v-model="projectForm.devServer.startCommand"
+                        type="textarea"
+                        outlined
+                        autogrow
+                        :input-style="{ minHeight: '60px' }"
+                        :placeholder="$t('settings.devServerStartPlaceholder')"
+                        class="settings-input mono-textarea"
+                      />
+                    </div>
+                    <div>
+                      <div class="field-label-sub text-caption q-mb-xs text-kobo-3">{{ $t('settings.devServerStop') }}</div>
+                      <q-input
+                        v-model="projectForm.devServer.stopCommand"
+                        type="textarea"
+                        outlined
+                        autogrow
+                        :input-style="{ minHeight: '60px' }"
+                        :placeholder="$t('settings.devServerStopPlaceholder')"
+                        class="settings-input mono-textarea"
+                      />
+                    </div>
+                  </div>
+
+                  <!-- E2E tests -->
+                  <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+                    <div class="text-subtitle2 q-mb-xs">{{ $t('settings.e2e.title') }}</div>
+                    <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.e2e.helpText') }}</div>
+
+                    <q-select
+                      v-model="projectForm.e2e.framework"
+                      :options="[
+                        { label: $t('settings.e2e.frameworkNone'), value: '' },
+                        { label: 'Cypress', value: 'cypress' },
+                        { label: 'Playwright', value: 'playwright' },
+                        { label: 'Jest', value: 'jest' },
+                        { label: 'Vitest', value: 'vitest' },
+                        { label: $t('settings.e2e.frameworkOther'), value: 'other' },
+                      ]"
+                      emit-value
+                      map-options
+                      dense
+                      dark
+                      outlined
+                      class="settings-input q-mb-sm"
+                      :label="$t('settings.e2e.framework')"
+                    />
+
+                    <template v-if="projectForm.e2e.framework">
+                      <q-select
+                        v-model="projectForm.e2e.skill"
+                        :options="filteredSkills"
+                        use-input
+                        fill-input
+                        hide-selected
+                        hide-dropdown-icon
+                        input-debounce="200"
+                        new-value-mode="add-unique"
+                        dense
+                        dark
+                        outlined
+                        class="settings-input q-mb-sm"
+                        :label="$t('settings.e2e.skill')"
+                        :placeholder="$t('settings.e2e.skillPlaceholder')"
+                        @filter="filterSkills"
+                      />
+                      <q-input
+                        v-model="projectForm.e2e.prompt"
+                        type="textarea"
+                        autogrow
+                        dense
+                        dark
+                        outlined
+                        class="settings-input mono-textarea"
+                        :label="$t('settings.e2e.prompt')"
+                        :placeholder="$t('settings.e2e.promptPlaceholder')"
+                      />
+                    </template>
+                  </div>
+
+                  <!-- Auto-loop finalization -->
+                  <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+                    <div class="text-subtitle2 q-mb-xs">{{ $t('settings.finalization.title') }}</div>
+                    <div class="text-caption text-kobo-3 q-mb-sm">
+                      {{ $t('settings.finalization.helpText') }}
+                    </div>
+                    <q-input
+                      v-model="projectForm.finalization.prompt"
+                      type="textarea"
+                      autogrow
+                      rows="4"
+                      dense
+                      dark
+                      outlined
+                      class="settings-input mono-textarea q-mb-sm"
+                      :label="$t('settings.finalization.prompt')"
+                      :placeholder="$t('settings.finalization.promptPlaceholder')"
+                    />
+                  </div>
+
+                </template>
+
+                <!-- No selection state -->
+                <template v-else>
+                  <div class="column items-center justify-center" style="height: 100%; min-height: 300px;">
+                    <q-icon name="folder_open" size="48px" color="kobo-3" class="q-mb-md" />
+                    <div class="text-body2 text-kobo-3">
+                      {{ $t('settings.selectProject') }}
+                    </div>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </div>
+        </div>
+        <!-- Templates panel -->
+        <div v-if="activeTab === 'templates'" class="q-pa-none">
+          <div data-tour="settings-card-templates" class="settings-card rounded-borders q-pa-lg">
+            <div class="row items-center justify-between q-mb-md">
+              <div class="text-subtitle1 text-weight-medium text-kobo-1">
+                {{ $t('templates.title') }}
+              </div>
+              <div class="row q-gutter-sm items-center">
+                <q-btn
+                  flat
+                  color="kobo-2"
+                  icon="restart_alt"
+                  :label="$t('templates.reloadDefaults')"
+                  dense
+                  no-caps
+                  :loading="reloadingDefaults"
+                  @click="confirmReloadDefaults"
+                >
+                  <q-tooltip>{{ $t('templates.reloadDefaultsHint') }}</q-tooltip>
+                </q-btn>
+                <q-btn
+                  color="primary"
+                  icon="add"
+                  :label="$t('templates.newTemplate')"
+                  dense
+                  no-caps
+                  @click="openCreateDialog"
+                />
+              </div>
+            </div>
+
+            <q-separator dark class="q-mb-md" />
+
+            <div v-if="sortedTemplates.length === 0" class="text-kobo-3 q-py-lg text-center">
+              {{ $t('templates.empty') }}
+            </div>
+
+            <div v-else class="column q-gutter-sm">
+              <q-card
+                v-for="template in sortedTemplates"
+                :key="template.slug"
+                dark
+                flat
+                bordered
+                class="q-pa-md template-card"
+              >
+                <div class="row items-start justify-between no-wrap">
+                  <div class="col">
+                    <div class="text-body1 text-weight-medium" style="font-family: var(--kobo-font-mono);">
+                      /{{ template.slug }}
+                    </div>
+                    <div class="text-caption text-kobo-2 q-mt-xs">{{ template.description }}</div>
+                  </div>
+                  <div class="row no-wrap q-gutter-xs">
+                    <q-btn
+                      v-if="templatesStore.isDefault(template.slug)"
+                      flat
+                      dense
+                      round
+                      size="sm"
+                      icon="settings_backup_restore"
+                      color="kobo-2"
+                      @click="confirmResetTemplate(template)"
+                    >
+                      <q-tooltip>{{ $t('templates.resetToDefault') }}</q-tooltip>
+                    </q-btn>
+                    <q-btn flat dense round size="sm" icon="edit" color="kobo-2" @click="openEditDialog(template)">
+                      <q-tooltip>{{ $t('templates.editTemplate') }}</q-tooltip>
+                    </q-btn>
+                    <q-btn flat dense round size="sm" icon="delete" color="red-4" @click="confirmDeleteTemplate(template)">
+                      <q-tooltip>{{ $t('templates.deleteTemplate') }}</q-tooltip>
+                    </q-btn>
+                  </div>
+                </div>
+              </q-card>
+            </div>
+
+            <div class="text-caption text-kobo-3 q-mt-lg" style="font-family: var(--kobo-font-mono);">
+              {{ $t('templates.filePath', { path: '~/.config/kobo/templates.json' }) }}
+            </div>
+          </div>
+        </div>
+        <!-- Workspace templates panel -->
+        <div v-if="activeTab === 'workspaceTemplates'" class="q-pa-none">
+          <div data-tour="settings-card-workspaceTemplates" class="settings-card rounded-borders q-pa-lg">
+            <div class="text-subtitle1 text-weight-medium text-kobo-1 q-mb-xs">
+              {{ $t('workspaceTemplates.title') }}
+            </div>
+            <div class="text-caption text-kobo-3 q-mb-md">{{ $t('workspaceTemplates.hint') }}</div>
+
+            <div v-if="workspaceTemplatesStore.templates.length === 0" class="text-caption text-kobo-3">
+              {{ $t('workspaceTemplates.empty') }}
+            </div>
+
+            <q-list v-else dark separator>
+              <q-expansion-item
+                v-for="tpl in workspaceTemplatesStore.templates"
+                :key="tpl.id"
+                dense
+                header-class="text-kobo-1"
+              >
+                <template #header>
+                  <q-item-section>
+                    <q-item-label>{{ tpl.name }}</q-item-label>
+                    <q-item-label caption class="text-kobo-3">
+                      {{ tpl.preset.projectPath || $t('workspaceTemplates.anyProject') }}
+                      · {{ tpl.preset.engine ?? '-' }} · {{ tpl.preset.model ?? '-' }}
+                      · {{ formatTemplateDate(tpl.updatedAt) }}
+                    </q-item-label>
+                  </q-item-section>
+                  <q-item-section side>
+                    <div class="row no-wrap q-gutter-xs">
+                      <q-btn flat dense round size="sm" icon="edit" :title="$t('workspaceTemplates.rename')" @click.stop="renameWorkspaceTemplate(tpl.id, tpl.name)" />
+                      <q-btn flat dense round size="sm" icon="delete" color="kobo-danger" :title="$t('common.delete')" @click.stop="deleteWorkspaceTemplate(tpl.id, tpl.name)" />
+                    </div>
+                  </q-item-section>
+                </template>
+                <q-card dark flat class="settings-subcard q-pa-md">
+                  <pre class="mono-guide q-ma-none">{{ JSON.stringify(tpl.preset, null, 2) }}</pre>
+                </q-card>
+              </q-expansion-item>
+            </q-list>
+          </div>
+        </div>
+        </div>
+      </main>
+
+      <transition name="save-bar">
+        <div v-if="savebarVisible" class="settings-savebar" :class="{ 'settings-savebar--full': isMobile }">
+          <span class="settings-savebar__label">{{ $t('settings.unsavedChanges') }}</span>
+          <q-btn
+            dense
+            no-caps
+            unelevated
+            class="settings-savebar__action"
+            :loading="savebarLoading"
+            :label="$t('common.save')"
+            @click="savebarSave"
+          />
+        </div>
+      </transition>
+    </div>
+
+
+    <!-- Templates create/edit dialog -->
+    <q-dialog v-model="showTemplateDialog" persistent>
+      <q-card dark style="min-width: 560px; max-width: 800px; width: 80vw;">
+        <q-card-section>
+          <div class="text-subtitle1">
+            {{ editingSlug === null ? $t('templates.newTemplate') : $t('templates.editTemplate') }}
+          </div>
+        </q-card-section>
+
+        <q-card-section class="q-gutter-md">
+          <q-input
+            v-model="formSlug"
+            :label="$t('templates.slug')"
+            :hint="$t('templates.slugHint')"
+            dark
+            dense
+            prefix="/"
+            :disable="editingSlug !== null"
+            :rules="[(v) => /^[a-z0-9][a-z0-9-]{0,63}$/.test(v) || $t('templates.slugInvalid')]"
+            lazy-rules
+          />
+          <q-input
+            v-model="formDescription"
+            :label="$t('templates.description')"
+            :hint="$t('templates.descriptionHint')"
+            dark
+            dense
+            counter
+            maxlength="120"
+            :rules="[(v) => (v && v.trim().length > 0) || '']"
+          />
+          <q-input
+            v-model="formContent"
+            :label="$t('templates.content')"
+            :hint="$t('templates.contentHint')"
+            dark
+            dense
+            type="textarea"
+            autogrow
+            counter
+            maxlength="4096"
+            :rules="[(v) => (v && v.trim().length > 0) || '']"
+          />
+          <q-expansion-item
+            dense
+            dense-toggle
+            :label="$t('templates.availableVars')"
+            header-class="text-kobo-3 text-caption q-pa-none"
+            style="font-size: 11px;"
+          >
+            <div class="q-pl-md q-pt-xs" style="font-size: 11px; font-family: var(--kobo-font-mono); columns: 2; column-gap: 24px;">
+              <div v-for="v in availableVarsDisplay" :key="v" class="text-kobo-2 q-mb-xs">
+                {{ v }}
+              </div>
+            </div>
+          </q-expansion-item>
+          <div v-if="formError" class="text-negative text-caption">{{ formError }}</div>
+        </q-card-section>
+
+        <q-card-actions align="right">
+          <q-btn flat :label="$t('common.cancel')" v-close-popup />
+          <q-btn
+            flat
+            color="primary"
+            :label="editingSlug === null ? $t('templates.create') : $t('templates.save')"
+            :loading="saving"
+            @click="saveTemplate"
+          />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
+
+    <FolderPickerDialog
+      v-model="folderPickerOpen"
+      :initial-path="projectForm.path"
+      @select="onFolderPicked"
+    />
+  </q-page>
+</template>
+
+<script setup lang="ts">
+import { type QInput, useQuasar } from 'quasar'
+import CustomSoundManager from 'src/components/CustomSoundManager.vue'
+import DrawerToggleButton from 'src/components/DrawerToggleButton.vue'
+import FolderPickerDialog from 'src/components/FolderPickerDialog.vue'
+import IntegrationConnectionSettings from 'src/components/IntegrationConnectionSettings.vue'
+import McpConnectionSettings from 'src/components/McpConnectionSettings.vue'
+import PrNotificationSoundSettings from 'src/components/PrNotificationSoundSettings.vue'
+import SettingsNavList from 'src/components/SettingsNavList.vue'
+import TourReplayButton from 'src/components/TourReplayButton.vue'
+import WhipShortcutRecorder from 'src/components/WhipShortcutRecorder.vue'
+import WorkflowPolicyEditor from 'src/components/WorkflowPolicyEditor.vue'
+import { useIsMobile } from 'src/composables/use-is-mobile'
+import { useTours } from 'src/composables/use-tours'
+import { CODEX_MODEL_OPTION_DEFS, MODEL_OPTION_DEFS } from 'src/constants/models'
+import { type AgentPermissionMode, PERMISSION_MODES_BY_ENGINE } from 'src/constants/permissionModes'
+import { type SupportedLocale, setLocale } from 'src/i18n'
+import { useCustomSoundsStore } from 'src/stores/custom-sounds'
+import { useLayoutStore } from 'src/stores/layout'
+import type { ProjectSettings } from 'src/stores/settings'
+import { useSettingsStore } from 'src/stores/settings'
+import { type Template, useTemplatesStore } from 'src/stores/templates'
+import { useWorkspaceTemplatesStore } from 'src/stores/workspace-templates'
+import { formFieldsEqual } from 'src/utils/form-fields-equal'
+import { captureFormSnapshot } from 'src/utils/form-snapshot'
+import {
+  DEFAULT_NOTIFICATION_SOUND,
+  DEFAULT_PR_NOTIFICATION_AUDIO_SETTINGS,
+  INHERIT_NOTIFICATION_SOUND,
+  NOTIFICATION_SOUNDS,
+  normalizeSoundSelectionForForm,
+  PR_NOTIFICATION_AUDIO_CONTROL_SETTING_KEYS,
+  PR_NOTIFICATION_SOUND_SETTING_KEYS,
+  type PrNotificationAudioSettings as PrNotificationSoundSettingsModel,
+  resolveSoundIdForForm,
+} from 'src/utils/notification-sounds'
+import { playNotificationSound } from 'src/utils/notifications'
+import { PROJECT_COLOR_PALETTE, type ProjectColor } from 'src/utils/project-color'
+import { registerUnsavedScope, unregisterUnsavedScope } from 'src/utils/unsaved-guard'
+import { getWhipVolumeAvailability } from 'src/utils/whip-settings'
+import { DEFAULT_WHIP_SHORTCUT } from 'src/utils/whip-shortcut'
+import { workspacePageStyle } from 'src/utils/workspace-page-layout'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { useRoute } from 'vue-router'
+import { WORKTREES_PATH } from '../../../shared/consts'
+import {
+  AGNOSTIC_AUTO_LOOP_GROOMING_INTRO,
+  AGNOSTIC_AUTO_LOOP_REVIEW_GATE,
+  AGNOSTIC_BRAINSTORMING_INSTRUCTION,
+  AGNOSTIC_QA_PROMPT_TEMPLATE,
+  AGNOSTIC_REVIEW_TEMPLATE,
+  type SkillSuite,
+} from '../../../shared/skill-suite-prompts'
+import { resolveWorkflowPolicy, type WorkflowPolicy } from '../../../shared/workflow-policy'
+
+const $q = useQuasar()
+const store = useSettingsStore()
+const templatesStore = useTemplatesStore()
+const workspaceTemplatesStore = useWorkspaceTemplatesStore()
+const { t, locale } = useI18n()
+const { scheduleAutoRun } = useTours()
+const { isMobile } = useIsMobile()
+const layout = useLayoutStore()
+
+// Tab state
+const activeTab = ref('general')
+const navDrawerOpen = ref(false)
+
+function selectTab(tab: string) {
+  activeTab.value = tab
+  if (isMobile.value) navDrawerOpen.value = false
+}
+
+function openWorkspacesDrawer() {
+  navDrawerOpen.value = false
+  layout.toggleLeft()
+}
+
+const navItems = computed(() => [
+  { value: 'general', icon: 'tune', label: t('settings.nav.general') },
+  { value: 'agents', icon: 'smart_toy', label: t('settings.nav.agents') },
+  { value: 'skills', icon: 'extension', label: t('settings.nav.skills') },
+  { value: 'git', icon: 'source', label: t('settings.nav.git') },
+  { value: 'prompts', icon: 'text_snippet', label: t('settings.nav.prompts') },
+  { value: 'scripts', icon: 'terminal', label: t('settings.nav.scripts') },
+  { value: 'notion', icon: 'integration_instructions', label: t('settings.nav.notion') },
+  { value: 'sentry', icon: 'bug_report', label: t('settings.nav.sentry') },
+  { value: 'forge', icon: 'account_tree', label: t('settings.nav.forge') },
+  { value: 'voice', icon: 'mic', label: t('settings.nav.voice') },
+  { value: 'notifications', icon: 'notifications', label: t('settings.nav.notifications') },
+  { value: 'worktrees', icon: 'account_tree', label: t('settings.nav.worktrees') },
+  { value: 'projects', icon: 'folder', label: t('settings.projects') },
+  { value: 'templates', icon: 'description', label: t('settings.nav.promptTemplates') },
+  { value: 'workspaceTemplates', icon: 'bookmarks', label: t('settings.nav.workspaceTemplates') },
+  { value: 'export', icon: 'import_export', label: t('settings.nav.export') },
+])
+const settingsRoute = useRoute()
+watch(
+  () => settingsRoute.query.tab,
+  (tab) => {
+    if (typeof tab === 'string' && navItems.value.some((item) => item.value === tab)) selectTab(tab)
+  },
+  { immediate: true },
+)
+
+const activeNavLabel = computed(() => navItems.value.find((i) => i.value === activeTab.value)?.label ?? '')
+
+const isGlobalSection = computed(() =>
+  [
+    'general',
+    'agents',
+    'skills',
+    'prompts',
+    'git',
+    'scripts',
+    'notion',
+    'sentry',
+    'forge',
+    'voice',
+    'notifications',
+    'worktrees',
+    'export',
+  ].includes(activeTab.value),
+)
+
+// Global form
+const globalClaudeModel = ref('auto')
+const globalCodexModel = ref('auto')
+const globalPrPrompt = ref('')
+const globalReviewPrompt = ref('')
+const globalCiFixPrompt = ref('')
+const globalFinalizationPrompt = ref('')
+const globalGitConventions = ref('')
+const globalEditorCommand = ref('')
+const globalFileManagerCommand = ref('')
+const globalTerminalCommand = ref('')
+const globalAutoPurgeOnPrMerged = ref(false)
+const globalAutoLoopMaxRetries = ref(5)
+const globalAwaitingUserReminderMinutes = ref(0)
+const globalActivityDigestEnabled = ref(true)
+const globalWsEventsRetentionDays = ref(0)
+const globalWsEventsKeepPerWorkspace = ref(0)
+
+// Network access
+interface NetworkState {
+  enabled: boolean
+  token: string
+  behindProxy: boolean
+  urls: string[]
+}
+const network = ref<NetworkState>({ enabled: false, token: '', behindProxy: false, urls: [] })
+const networkRestartRequired = ref(false)
+const networkQrDataUrl = ref('')
+
+// The server reports LAN URLs on the BACKEND port. In dev the UI is served by the
+// Quasar dev server on a different port (the backend only exposes the API), so a
+// raw backend URL 404s on a remote device. Rebuild each URL on the port/protocol
+// the UI is actually served from (window.location) — keeping only the LAN host —
+// so the links/QR point at a reachable UI in both dev and production.
+function toClientLanUrl(serverUrl: string): string {
+  try {
+    const u = new URL(serverUrl)
+    const port = window.location.port ? `:${window.location.port}` : ''
+    return `${window.location.protocol}//${u.hostname}${port}`
+  } catch {
+    return serverUrl
+  }
+}
+const networkDisplayUrls = computed(() => network.value.urls.map(toClientLanUrl))
+
+async function fetchNetwork() {
+  try {
+    const res = await fetch('/api/settings/network')
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    network.value = (await res.json()) as NetworkState
+    await refreshQr()
+  } catch {
+    $q.notify({ type: 'negative', message: t('settings.network.loadFailed'), position: 'top' })
+  }
+}
+
+async function refreshQr() {
+  const base = networkDisplayUrls.value[0]
+  if (!base || !network.value.token) {
+    networkQrDataUrl.value = ''
+    return
+  }
+  const url = `${base}/?token=${encodeURIComponent(network.value.token)}`
+  try {
+    // Loaded on demand: it is only needed by the LAN pairing QR, and a static
+    // import puts the whole encoder in the settings chunk for everyone else.
+    const { default: QRCode } = await import('qrcode')
+    networkQrDataUrl.value = await QRCode.toDataURL(url, { margin: 1, width: 200 })
+  } catch {
+    networkQrDataUrl.value = ''
+  }
+}
+
+async function postNetwork(body: { enabled?: boolean; regenerate?: boolean; behindProxy?: boolean }) {
+  try {
+    const res = await fetch('/api/settings/network', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const data = (await res.json()) as NetworkState & { restartRequired?: boolean }
+    network.value = { enabled: data.enabled, token: data.token, behindProxy: data.behindProxy, urls: data.urls }
+    if (data.restartRequired) networkRestartRequired.value = true
+    await refreshQr()
+  } catch {
+    $q.notify({ type: 'negative', message: t('settings.network.updateFailed'), position: 'top' })
+    // Resync the toggle to the real server state (it optimistically followed the click).
+    await fetchNetwork()
+  }
+}
+
+function onToggleNetwork(value: boolean) {
+  void postNetwork({ enabled: value })
+}
+
+function onToggleBehindProxy(value: boolean) {
+  void postNetwork({ behindProxy: value })
+}
+
+function onRegenerateToken() {
+  $q.dialog({
+    title: t('settings.network.title'),
+    message: t('settings.network.regenerateConfirm'),
+    cancel: true,
+    persistent: true,
+  }).onOk(() => {
+    void postNetwork({ regenerate: true })
+  })
+}
+
+function copyToken() {
+  // Reuse the shared helper: it catches the non-secure-context case (plain HTTP on
+  // a remote LAN device, where navigator.clipboard is undefined) and shows a real
+  // failure toast instead of a false "Copied" — the token field stays selectable.
+  void copyToClipboard(network.value.token)
+}
+
+const globalBrowserNotifications = ref(true)
+const browserNotificationPermission = ref<NotificationPermission | 'unsupported'>(
+  typeof Notification === 'undefined' ? 'unsupported' : Notification.permission,
+)
+const globalAudioNotifications = ref(true)
+const globalAudioQuestionNotifications = ref(false)
+const globalAudioWorkspaceCreatedNotifications = ref(false)
+const globalAudioAgentErrorNotifications = ref(false)
+const globalAudioNotificationSound = ref(DEFAULT_NOTIFICATION_SOUND)
+const globalAudioQuestionSound = ref(INHERIT_NOTIFICATION_SOUND)
+const globalAudioWorkspaceCreatedSound = ref(INHERIT_NOTIFICATION_SOUND)
+const globalAudioAgentErrorSound = ref(INHERIT_NOTIFICATION_SOUND)
+const globalAudioNotificationVolume = ref(1)
+const globalAudioQuestionVolume = ref(1)
+const globalAudioWorkspaceCreatedVolume = ref(1)
+const globalAudioAgentErrorVolume = ref(1)
+const globalPrNotificationSounds = ref<PrNotificationSoundSettingsModel>({
+  ...DEFAULT_PR_NOTIFICATION_AUDIO_SETTINGS,
+})
+const globalNotionStatusProperty = ref('')
+const globalNotionStatus = ref('')
+const globalNotionAssigneeProperty = ref('')
+const globalNotionUserId = ref('')
+const globalShowVerboseSystemMessages = ref(false)
+const globalShowThinkingBlocks = ref(true)
+const globalWhipEnabled = ref(false)
+const globalWhipShortcut = ref(DEFAULT_WHIP_SHORTCUT)
+const globalWhipVolume = ref(1)
+const whipVolumeAvailability = computed(() => getWhipVolumeAvailability(globalAudioNotifications.value))
+
+const browserNotificationStatus = computed(() => {
+  switch (browserNotificationPermission.value) {
+    case 'granted':
+      return { color: 'positive', label: t('settings.browserNotificationGranted') }
+    case 'denied':
+      return { color: 'negative', label: t('settings.browserNotificationDenied') }
+    case 'default':
+      return { color: 'warning', label: t('settings.browserNotificationAsk') }
+    default:
+      return { color: 'kobo-3', label: t('settings.browserNotificationUnsupported') }
+  }
+})
+
+async function testBrowserNotification() {
+  if (typeof Notification === 'undefined') {
+    $q.notify({ type: 'negative', message: t('settings.browserNotificationUnsupported'), position: 'top' })
+    return
+  }
+  if (Notification.permission === 'default') {
+    browserNotificationPermission.value = await Notification.requestPermission()
+  } else {
+    browserNotificationPermission.value = Notification.permission
+  }
+  if (browserNotificationPermission.value !== 'granted') {
+    $q.notify({ type: 'warning', message: t('settings.browserNotificationPermissionNeeded'), position: 'top' })
+    return
+  }
+  new Notification(t('settings.browserNotificationTestTitle'), {
+    body: t('settings.browserNotificationTestBody'),
+    icon: '/favicon.ico',
+  })
+}
+type IntegrationKey = 'notion' | 'sentry'
+interface IntegrationTestResult {
+  ok: boolean
+  durationMs: number
+  detail: string
+}
+const integrationTestLoading = ref<IntegrationKey | null>(null)
+const integrationTestResult = ref<Partial<Record<IntegrationKey, IntegrationTestResult>>>({})
+
+async function testIntegration(integration: IntegrationKey) {
+  integrationTestLoading.value = integration
+  try {
+    const response = await fetch(`/api/${integration}/test`, { method: 'POST' })
+    const body = (await response.json()) as IntegrationTestResult & { error?: string }
+    integrationTestResult.value[integration] = response.ok
+      ? body
+      : { ok: false, durationMs: 0, detail: body.error ?? `HTTP ${response.status}` }
+  } catch (error) {
+    integrationTestResult.value[integration] = {
+      ok: false,
+      durationMs: 0,
+      detail: error instanceof Error ? error.message : String(error),
+    }
+  } finally {
+    integrationTestLoading.value = null
+  }
+}
+
+interface NotionUserOption {
+  id: string
+  name: string
+  email: string
+  avatarUrl: string | null
+}
+const notionUsers = ref<NotionUserOption[]>([])
+const loadingNotionUsers = ref(false)
+const notionUsersError = ref('')
+const notionUserOptions = computed(() =>
+  notionUsers.value.map((u) => ({
+    label: `${u.name} — ${u.email}`,
+    value: u.id,
+    name: u.name,
+    email: u.email,
+    avatarUrl: u.avatarUrl,
+  })),
+)
+
+async function loadNotionUsers(force = false) {
+  if (loadingNotionUsers.value) return
+  if (!force && notionUsers.value.length > 0) return
+  loadingNotionUsers.value = true
+  notionUsersError.value = ''
+  try {
+    const res = await fetch('/api/notion/users')
+    const body = (await res.json().catch(() => ({}))) as { users?: NotionUserOption[]; error?: string }
+    if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`)
+    notionUsers.value = Array.isArray(body.users) ? body.users : []
+  } catch (err) {
+    notionUsersError.value = err instanceof Error ? err.message : String(err)
+    notionUsers.value = []
+  } finally {
+    loadingNotionUsers.value = false
+  }
+}
+const globalNotionInitialPrompt = ref('')
+const globalSentryInitialPrompt = ref('')
+type ResettableField =
+  | 'prPromptTemplate'
+  | 'reviewPromptTemplate'
+  | 'ciFixPromptTemplate'
+  | 'finalizationPrompt'
+  | 'gitConventions'
+  | 'notionInitialPromptTemplate'
+  | 'sentryInitialPromptTemplate'
+const resettingField = ref<ResettableField | null>(null)
+const globalClaudePermissionMode = ref<AgentPermissionMode>('bypass')
+const globalCodexPermissionMode = ref<AgentPermissionMode>('bypass')
+const globalNotionMcpKey = ref('')
+const globalSentryMcpKey = ref('')
+const globalBitbucketToken = ref('')
+const globalBitbucketUsername = ref('')
+const globalNotionEnabled = ref(true)
+const globalSentryEnabled = ref(true)
+const globalTags = ref<string[]>([])
+const globalBranchPrefixes = ref<string[]>([])
+const newBranchPrefix = ref('')
+const globalSetupScript = ref('')
+const globalCleanupScript = ref('')
+const globalCleanupScriptMode = ref<'idle' | 'no-tasks'>('no-tasks')
+const globalCleanupScriptOnlyOnChanges = ref(false)
+const globalArchiveScript = ref('')
+const globalSessionEndedScript = ref('')
+const globalPrMergedScript = ref('')
+const globalAutoLoopDisabledScript = ref('')
+const globalChangeSourceBranchScript = ref('')
+// Hydrated at mount from GET /api/settings/defaults.
+const defaultChangeSourceBranchScript = ref('')
+
+// Folder picker dialog for the new-project path field.
+const folderPickerOpen = ref(false)
+function onFolderPicked(picked: string) {
+  projectForm.value.path = picked
+}
+
+// Project-level cleanup mode select — includes an 'inherit global' entry.
+const cleanupModeProjectOptions = computed(() => [
+  { label: t('settings.cleanupScriptMode.inherit'), value: '' },
+  { label: t('settings.cleanupScriptMode.idle'), value: 'idle' },
+  { label: t('settings.cleanupScriptMode.noTasks'), value: 'no-tasks' },
+])
+const globalWorktreesPath = ref<string>(WORKTREES_PATH)
+const globalWorktreesPathInput = ref<QInput | null>(null)
+const globalWorktreesPrefixByProject = ref(true)
+
+// ── Branch prefix CRUD ──────────────────────────────────────────────────────
+// Mirror of the server-side `sanitizeBranchPrefixes` rules so invalid input is
+// rejected before it reaches the API. Returns '' when the value is unusable.
+function normalizeBranchPrefix(raw: string): string {
+  const value = raw.trim().replace(/^\/+|\/+$/g, '')
+  if (value.length === 0 || value.length > 50) return ''
+  if (!/^[A-Za-z0-9._/-]+$/.test(value) || value.includes('..')) return ''
+  return value
+}
+
+function addBranchPrefix() {
+  const value = normalizeBranchPrefix(newBranchPrefix.value)
+  if (!value || globalBranchPrefixes.value.includes(value)) return
+  globalBranchPrefixes.value.push(value)
+  newBranchPrefix.value = ''
+}
+
+function removeBranchPrefix(index: number) {
+  globalBranchPrefixes.value.splice(index, 1)
+}
+
+function updateBranchPrefix(index: number, raw: string) {
+  const value = normalizeBranchPrefix(raw)
+  if (!value) return
+  // Reject a rename that would collide with another existing prefix.
+  const existing = globalBranchPrefixes.value.indexOf(value)
+  if (existing !== -1 && existing !== index) return
+  globalBranchPrefixes.value[index] = value
+}
+
+function moveBranchPrefix(index: number, direction: -1 | 1) {
+  const target = index + direction
+  if (target < 0 || target >= globalBranchPrefixes.value.length) return
+  const list = globalBranchPrefixes.value
+  ;[list[index], list[target]] = [list[target], list[index]]
+}
+const globalFlattenWorkspaceList = ref(false)
+const globalSkillSuite = ref<SkillSuite>('standard')
+const skillSuiteHintKey = computed(() => {
+  switch (globalSkillSuite.value) {
+    case 'standard':
+      return 'settings.skillSuite.standardHint'
+    case 'gstack':
+      return 'settings.skillSuite.gstackHint'
+    case 'ecc':
+      return 'settings.skillSuite.eccHint'
+    case 'superpowers+gstack':
+      return 'settings.skillSuite.superpowersGstackHint'
+    case 'superpowers+gstack+ecc':
+      return 'settings.skillSuite.allThreeHint'
+    case 'custom':
+      return 'settings.skillSuite.customHint'
+    default:
+      return 'settings.skillSuite.superpowersHint'
+  }
+})
+const globalCustomReviewTemplate = ref('')
+const globalCustomAutoLoopReviewGate = ref('')
+const globalCustomAutoLoopGroomingIntro = ref('')
+const globalCustomQaPromptTemplate = ref('')
+const globalCustomBrainstormingInstruction = ref('')
+type CustomPromptField =
+  | 'reviewTemplate'
+  | 'autoLoopReviewGate'
+  | 'autoLoopGroomingIntro'
+  | 'qaPromptTemplate'
+  | 'brainstormingInstruction'
+
+interface ImportedSuitePrompts {
+  reviewTemplate: string
+  autoLoopReviewGate: string
+  autoLoopGroomingIntro: string
+  qaPromptTemplate: string
+  brainstormingInstruction: string
+}
+
+const importingCustomPrompt = ref<CustomPromptField | null>(null)
+const importableSkillSuites = computed(() => [
+  { value: 'custom' as SkillSuite, label: t('settings.skillSuite.agnostic') },
+  { value: 'superpowers' as SkillSuite, label: t('settings.skillSuite.superpowers') },
+  { value: 'gstack' as SkillSuite, label: t('settings.skillSuite.gstack') },
+  { value: 'ecc' as SkillSuite, label: t('settings.skillSuite.ecc') },
+  { value: 'superpowers+gstack' as SkillSuite, label: t('settings.skillSuite.superpowersGstack') },
+  { value: 'superpowers+gstack+ecc' as SkillSuite, label: t('settings.skillSuite.allThree') },
+])
+
+async function importCustomPrompt(field: CustomPromptField, suite: SkillSuite): Promise<void> {
+  importingCustomPrompt.value = field
+  try {
+    const res = await fetch(`/api/settings/skill-suite-prompts/${suite}`)
+    if (!res.ok) throw new Error(await res.text())
+    const prompts = (await res.json()) as ImportedSuitePrompts
+    const targets: Record<CustomPromptField, { value: string }> = {
+      reviewTemplate: globalCustomReviewTemplate,
+      autoLoopReviewGate: globalCustomAutoLoopReviewGate,
+      autoLoopGroomingIntro: globalCustomAutoLoopGroomingIntro,
+      qaPromptTemplate: globalCustomQaPromptTemplate,
+      brainstormingInstruction: globalCustomBrainstormingInstruction,
+    }
+    targets[field].value = prompts[field]
+    $q.notify({ type: 'positive', message: t('settings.skillSuite.imported'), position: 'top' })
+  } catch (err) {
+    $q.notify({
+      type: 'negative',
+      message: `${t('settings.skillSuite.importFailed')}: ${String(err)}`,
+      position: 'top',
+    })
+  } finally {
+    importingCustomPrompt.value = null
+  }
+}
+const globalVoiceEnabled = ref(false)
+const globalVoicePttKey = ref<'alt' | 'ctrl+space'>('alt')
+const globalVoiceLanguage = ref('auto')
+const globalVoiceModel = ref<string | null>(null)
+const globalVoiceCommandPath = ref('')
+const globalVoiceFfmpegPath = ref('')
+const globalVoiceTemperature = ref(0)
+const globalVoicePrompt = ref('')
+const globalVoiceTranslateToEnglish = ref(false)
+const globalVoiceSuppressNst = ref(true)
+const voiceActionModel = ref<string | null>(null)
+const hydratingVoiceForm = ref(false)
+
+function confirmReloadCustomPrompts(): void {
+  $q.dialog({
+    title: t('settings.skillSuite.reloadDefaults'),
+    message: t('settings.skillSuite.reloadDefaultsConfirm'),
+    cancel: true,
+    persistent: true,
+    dark: true,
+  }).onOk(() => {
+    globalCustomReviewTemplate.value = AGNOSTIC_REVIEW_TEMPLATE
+    globalCustomAutoLoopReviewGate.value = AGNOSTIC_AUTO_LOOP_REVIEW_GATE
+    globalCustomAutoLoopGroomingIntro.value = AGNOSTIC_AUTO_LOOP_GROOMING_INTRO
+    globalCustomQaPromptTemplate.value = AGNOSTIC_QA_PROMPT_TEMPLATE
+    globalCustomBrainstormingInstruction.value = AGNOSTIC_BRAINSTORMING_INSTRUCTION
+  })
+}
+
+/**
+ * Reset a change-source-branch-script textarea to Kōbō's default. Used when
+ * the user has edited the pre-filled default and wants to start over.
+ * Confirms before overwriting a customised script; no-ops silently when the
+ * field is already at the default (or empty).
+ */
+function insertDefaultChangeSourceBranchScript(target: 'global' | 'project'): void {
+  const current =
+    target === 'global' ? globalChangeSourceBranchScript.value : projectForm.value.changeSourceBranchScript
+  const apply = (): void => {
+    if (target === 'global') {
+      globalChangeSourceBranchScript.value = defaultChangeSourceBranchScript.value
+    } else {
+      projectForm.value.changeSourceBranchScript = defaultChangeSourceBranchScript.value
+    }
+  }
+  if (!current.trim() || current === defaultChangeSourceBranchScript.value) {
+    apply()
+    return
+  }
+  $q.dialog({
+    title: t('settings.changeSourceBranchScript.replaceConfirmTitle'),
+    message: t('settings.changeSourceBranchScript.replaceConfirm'),
+    cancel: true,
+    persistent: true,
+    dark: true,
+  }).onOk(apply)
+}
+
+function recommendedTemperatureForModel(modelName: string | null): number {
+  if (!modelName) return 0.1
+  if (modelName === 'tiny' || modelName === 'base') return 0.1
+  if (modelName === 'small' || modelName === 'medium' || modelName === 'large-v3') return 0.2
+  return 0.2
+}
+const worktreesPathRules = [(value: string) => value.trim().length > 0 || t('settings.worktreesPathRequired')]
+const savingGlobal = ref(false)
+const globalWorkflowPolicy = ref<Partial<WorkflowPolicy>>(resolveWorkflowPolicy())
+
+// Credentials remain only in this page's memory, outside settings and exports.
+const integrationStatus = ref({ notion: { configured: false }, sentry: { configured: false } })
+const integrationDrafts = ref({
+  notion: { command: '', args: '', environment: '' },
+  sentry: { command: '', args: '', environment: '' },
+})
+const hasIntegrationDrafts = computed(() =>
+  Object.values(integrationDrafts.value).some(
+    (draft) => draft.command !== '' || draft.args !== '' || draft.environment !== '',
+  ),
+)
+
+// Project form
+const selectedProjectIndex = ref(-1)
+const isNewProject = ref(false)
+const projectForm = ref({
+  workflowPolicy: {} as Partial<WorkflowPolicy>,
+  path: '',
+  displayName: '',
+  color: null as ProjectColor | null,
+  defaultSourceBranch: '',
+  defaultModel: '',
+  forge: 'auto' as 'auto' | 'github' | 'gitlab' | 'bitbucket-community' | 'none',
+  prPromptTemplate: '',
+  reviewPromptTemplate: '',
+  ciFixPromptTemplate: '',
+  notionInitialPromptTemplate: '',
+  sentryInitialPromptTemplate: '',
+  gitConventions: '',
+  setupScript: '',
+  taskPromptTemplate: '',
+  cleanupScript: '',
+  cleanupScriptMode: '' as '' | 'idle' | 'no-tasks',
+  archiveScript: '',
+  // Empty = inherit `global.changeSourceBranchScript`.
+  changeSourceBranchScript: '',
+  // Empty = inherit the matching global lifecycle hook.
+  sessionEndedScript: '',
+  prMergedScript: '',
+  autoLoopDisabledScript: '',
+  devServer: { startCommand: '', stopCommand: '' },
+  e2e: { framework: '' as 'cypress' | 'playwright' | 'jest' | 'vitest' | 'other' | '', skill: '', prompt: '' },
+  finalization: { prompt: '' },
+})
+
+// ── Copy-from-existing-project (clone) ─────────────────────────────────────
+// Fields copied verbatim from the source project when "Copy from" is set.
+// Excludes path/displayName/defaultSourceBranch — those stay user-filled.
+const COPYABLE_FIELDS = [
+  'workflowPolicy',
+  'defaultModel',
+  'forge',
+  'prPromptTemplate',
+  'reviewPromptTemplate',
+  'ciFixPromptTemplate',
+  'notionInitialPromptTemplate',
+  'sentryInitialPromptTemplate',
+  'gitConventions',
+  'setupScript',
+  'taskPromptTemplate',
+  'cleanupScript',
+  'cleanupScriptMode',
+  'archiveScript',
+  'changeSourceBranchScript',
+  'sessionEndedScript',
+  'prMergedScript',
+  'autoLoopDisabledScript',
+  'devServer',
+  'e2e',
+  'finalization',
+] as const
+
+const copyFromPath = ref<string | null>(null)
+const previousCopyFromPath = ref<string | null>(null)
+
+const copyFromOptions = computed(() =>
+  store.projects.map((p) => ({
+    value: p.path,
+    label: projectDisplayName(p) || p.path,
+  })),
+)
+
+function applyCopyFrom(sourcePath: string) {
+  const source = store.projects.find((p) => p.path === sourcePath)
+  if (!source) return
+  // Mirror the defensive pattern of `syncProjectForm`: legacy projects in
+  // settings.json may be missing nested objects (e.g. older e2e/finalization
+  // schema), so always coalesce to a defined default. New nested objects also
+  // ensure no reference is shared with the source project.
+  projectForm.value.workflowPolicy = { ...source.workflowPolicy }
+  projectForm.value.defaultModel = source.defaultModel ?? ''
+  projectForm.value.forge = source.forge ?? 'auto'
+  projectForm.value.prPromptTemplate = source.prPromptTemplate ?? ''
+  projectForm.value.reviewPromptTemplate = source.reviewPromptTemplate ?? ''
+  projectForm.value.ciFixPromptTemplate = source.ciFixPromptTemplate ?? ''
+  projectForm.value.notionInitialPromptTemplate = source.notionInitialPromptTemplate ?? ''
+  projectForm.value.sentryInitialPromptTemplate = source.sentryInitialPromptTemplate ?? ''
+  projectForm.value.gitConventions = source.gitConventions ?? ''
+  projectForm.value.setupScript = source.setupScript ?? ''
+  projectForm.value.devServer = {
+    startCommand: source.devServer?.startCommand ?? '',
+    stopCommand: source.devServer?.stopCommand ?? '',
+  }
+  projectForm.value.e2e = {
+    framework: source.e2e?.framework ?? '',
+    skill: source.e2e?.skill ?? '',
+    prompt: source.e2e?.prompt ?? '',
+  }
+  projectForm.value.finalization = {
+    prompt: source.finalization?.prompt ?? '',
+  }
+}
+
+function isFormPristine(): boolean {
+  // Pristine when every COPYABLE_FIELDS value matches the empty-form default.
+  // Defaults are inlined to match exactly what `syncProjectForm(null)` produces.
+  const defaults: Record<string, unknown> = {
+    workflowPolicy: {},
+    defaultModel: '',
+    forge: 'auto',
+    prPromptTemplate: '',
+    reviewPromptTemplate: '',
+    notionInitialPromptTemplate: '',
+    sentryInitialPromptTemplate: '',
+    gitConventions: '',
+    setupScript: '',
+    taskPromptTemplate: '',
+    cleanupScript: '',
+    cleanupScriptMode: '',
+    archiveScript: '',
+    changeSourceBranchScript: '',
+    sessionEndedScript: '',
+    prMergedScript: '',
+    autoLoopDisabledScript: '',
+    devServer: { startCommand: '', stopCommand: '' },
+    e2e: { framework: '', skill: '', prompt: '' },
+    finalization: { prompt: '' },
+  }
+  return COPYABLE_FIELDS.every((key) => JSON.stringify(projectForm.value[key]) === JSON.stringify(defaults[key]))
+}
+
+function onCopyFromChange(newPath: string | null) {
+  // Cas 1: clear → non-destructive, just remove the label
+  if (newPath === null) {
+    copyFromPath.value = null
+    previousCopyFromPath.value = null
+    return
+  }
+
+  // Cas 2: first selection on a pristine form → populate silently
+  if (previousCopyFromPath.value === null && isFormPristine()) {
+    applyCopyFrom(newPath)
+    copyFromPath.value = newPath
+    previousCopyFromPath.value = newPath
+    return
+  }
+
+  // Cas 3: change or re-select → confirm before overwrite
+  const target = store.projects.find((p) => p.path === newPath)
+  const targetLabel = target ? projectDisplayName(target) || newPath : newPath
+  $q.dialog({
+    title: t('settings.copyFromConfirmTitle'),
+    message: t('settings.copyFromConfirm', { project: targetLabel }),
+    cancel: true,
+    persistent: true,
+    dark: true,
+  })
+    .onOk(() => {
+      applyCopyFrom(newPath)
+      copyFromPath.value = newPath
+      previousCopyFromPath.value = newPath
+    })
+    .onCancel(() => {
+      // Revert: q-select v-model already moved, force it back to the previous value.
+      copyFromPath.value = previousCopyFromPath.value
+    })
+}
+
+// Skills catalogue (fetched once, used for E2E skill autocomplete)
+const availableSkills = ref<string[]>([])
+const filteredSkills = ref<string[]>([])
+async function fetchAvailableSkills() {
+  try {
+    const res = await fetch('/api/skills')
+    if (res.ok) availableSkills.value = await res.json()
+  } catch {
+    /* non-fatal — autocomplete just stays empty */
+  }
+}
+function filterSkills(input: string, update: (cb: () => void) => void) {
+  update(() => {
+    const needle = input.trim().toLowerCase()
+    filteredSkills.value = needle
+      ? availableSkills.value.filter((s) => s.toLowerCase().includes(needle))
+      : availableSkills.value.slice()
+  })
+}
+
+// Branch fetching for project form
+const projectBranches = ref<string[]>([])
+const loadingBranches = ref(false)
+const savingProject = ref(false)
+const deletingProject = ref(false)
+
+// Templates dialog state
+const showTemplateDialog = ref(false)
+const editingSlug = ref<string | null>(null) // null = create mode
+const formSlug = ref('')
+const formDescription = ref('')
+const formContent = ref('')
+const formError = ref('')
+const saving = ref(false)
+const reloadingDefaults = ref(false)
+
+const sortedTemplates = computed(() => [...templatesStore.templates].sort((a, b) => a.slug.localeCompare(b.slug)))
+
+const availableVarsDisplay = [
+  '{workspace_name}',
+  '{working_branch}',
+  '{source_branch}',
+  '{project_path}',
+  '{worktree_path}',
+  '{commit_count}',
+  '{unpushed_count}',
+  '{files_changed}',
+  '{insertions}',
+  '{deletions}',
+  '{pr_number}',
+  '{pr_url}',
+  '{pr_state}',
+  '{session_name}',
+]
+
+function openCreateDialog() {
+  editingSlug.value = null
+  formSlug.value = ''
+  formDescription.value = ''
+  formContent.value = ''
+  formError.value = ''
+  showTemplateDialog.value = true
+}
+
+function openEditDialog(template: Template) {
+  editingSlug.value = template.slug
+  formSlug.value = template.slug
+  formDescription.value = template.description
+  formContent.value = template.content
+  formError.value = ''
+  showTemplateDialog.value = true
+}
+
+async function saveTemplate() {
+  formError.value = ''
+  const trimmedSlug = formSlug.value.trim()
+  const trimmedDesc = formDescription.value.trim()
+  // Explicit guard for create mode: slug field is free-form and q-input `:rules`
+  // run on blur not on the save button, so an empty slug would sneak through.
+  if (editingSlug.value === null && !/^[a-z0-9][a-z0-9-]{0,63}$/.test(trimmedSlug)) {
+    formError.value = t('templates.slugInvalid')
+    return
+  }
+  if (!trimmedDesc) {
+    formError.value = t('templates.descriptionRequired')
+    return
+  }
+  if (!formContent.value.trim()) {
+    formError.value = t('templates.contentRequired')
+    return
+  }
+  saving.value = true
+  try {
+    if (editingSlug.value === null) {
+      await templatesStore.createTemplate({
+        slug: trimmedSlug,
+        description: trimmedDesc,
+        content: formContent.value, // keep user's whitespace for multiline prompts
+      })
+    } else {
+      await templatesStore.updateTemplate(editingSlug.value, {
+        description: trimmedDesc,
+        content: formContent.value,
+      })
+    }
+    showTemplateDialog.value = false
+  } catch (err) {
+    formError.value = err instanceof Error ? err.message : t('templates.createFailed')
+  } finally {
+    saving.value = false
+  }
+}
+
+function confirmReloadDefaults() {
+  $q.dialog({
+    title: t('templates.reloadDefaults'),
+    message: t('templates.reloadDefaultsConfirmMessage'),
+    dark: true,
+    cancel: { flat: true, label: t('common.cancel'), color: 'kobo-2' },
+    ok: { flat: true, label: t('templates.reloadDefaults'), color: 'primary' },
+  }).onOk(async () => {
+    reloadingDefaults.value = true
+    try {
+      const result = await templatesStore.reloadDefaults()
+      $q.notify({
+        type: 'positive',
+        message: t('templates.reloadDefaultsSuccess', { added: result.added.length, kept: result.kept.length }),
+        position: 'top',
+        timeout: 4000,
+      })
+    } catch (err) {
+      $q.notify({
+        type: 'negative',
+        message: err instanceof Error ? err.message : t('templates.reloadDefaultsFailed'),
+        position: 'top',
+      })
+    } finally {
+      reloadingDefaults.value = false
+    }
+  })
+}
+
+async function confirmDeleteTemplate(template: Template) {
+  $q.dialog({
+    title: t('templates.deleteTemplate'),
+    message: `${t('templates.deleteConfirm', { slug: template.slug })}\n\n${t('templates.deleteConfirmMessage')}`,
+    dark: true,
+    cancel: { flat: true, label: t('common.cancel'), color: 'kobo-2' },
+    ok: { flat: true, label: t('templates.deleteTemplate'), color: 'red-5' },
+  }).onOk(async () => {
+    try {
+      await templatesStore.deleteTemplate(template.slug)
+    } catch (err) {
+      $q.notify({
+        type: 'negative',
+        message: err instanceof Error ? err.message : t('templates.deleteFailed'),
+        position: 'top',
+      })
+    }
+  })
+}
+
+function formatTemplateDate(iso: string): string {
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? '-' : d.toLocaleDateString()
+}
+
+function renameWorkspaceTemplate(id: string, currentName: string): void {
+  $q.dialog({
+    title: t('workspaceTemplates.renameTitle'),
+    dark: true,
+    prompt: {
+      model: currentName,
+      type: 'text',
+      outlined: true,
+      dense: true,
+      isValid: (v: string) => v.trim().length > 0,
+    },
+    cancel: true,
+    persistent: true,
+  }).onOk(async (name: string) => {
+    try {
+      await workspaceTemplatesStore.updateTemplate(id, { name })
+    } catch (err) {
+      $q.notify({
+        type: 'negative',
+        message: err instanceof Error ? err.message : t('settings.saveError'),
+        position: 'top',
+      })
+    }
+  })
+}
+
+function deleteWorkspaceTemplate(id: string, name: string): void {
+  // A plain confirm, no typed name: a template is cheap to recreate.
+  $q.dialog({
+    title: t('workspaceTemplates.title'),
+    message: t('workspaceTemplates.deleteConfirm', { name }),
+    dark: true,
+    cancel: true,
+    persistent: true,
+  }).onOk(async () => {
+    try {
+      await workspaceTemplatesStore.deleteTemplate(id)
+      $q.notify({ type: 'positive', message: t('workspaceTemplates.deleted', { name }), position: 'top' })
+    } catch (err) {
+      $q.notify({
+        type: 'negative',
+        message: err instanceof Error ? err.message : t('settings.saveError'),
+        position: 'top',
+      })
+    }
+  })
+}
+
+function confirmResetTemplate(template: Template) {
+  $q.dialog({
+    title: t('templates.resetConfirmTitle'),
+    message: t('templates.resetConfirmMessage', { slug: template.slug }),
+    dark: true,
+    cancel: { flat: true, label: t('common.cancel'), color: 'kobo-2' },
+    ok: { flat: true, label: t('templates.resetToDefault'), color: 'primary' },
+  }).onOk(async () => {
+    try {
+      await templatesStore.resetToDefault(template.slug)
+      $q.notify({ type: 'positive', message: t('templates.resetSuccess', { slug: template.slug }), position: 'top' })
+    } catch (err) {
+      $q.notify({
+        type: 'negative',
+        message: err instanceof Error ? err.message : t('templates.resetFailed'),
+        position: 'top',
+      })
+    }
+  })
+}
+
+// Language options
+const languageOptions = [
+  { label: 'English', value: 'en' },
+  { label: 'Français', value: 'fr' },
+  { label: 'Deutsch', value: 'de' },
+  { label: 'Español', value: 'es' },
+  { label: 'Italiano', value: 'it' },
+]
+
+function onLanguageChange(val: string) {
+  // setLocale fetches the messages first: assigning the locale before they are
+  // registered would flash every key as its own name.
+  setLocale(val as SupportedLocale).catch((err: unknown) => {
+    console.error('[i18n] locale load failed:', err)
+    $q.notify({ type: 'negative', message: t('settings.localeLoadFailed'), position: 'top' })
+  })
+  localStorage.setItem('kobo:locale', val)
+}
+
+// Model options — split per engine. The Settings page exposes one selector
+// per engine (each engine has its own catalogue), and the project-level
+// selector keeps using the Claude catalogue (project default model is a
+// single string applied only when it matches the chosen engine; see
+// CreatePage's engine watcher for the runtime fallback).
+const modelOptions = computed(() => [
+  ...MODEL_OPTION_DEFS.map((option) => ({ label: t(option.i18nLabelKey), value: option.value })),
+])
+
+const codexModelOptions = computed(() => [
+  ...CODEX_MODEL_OPTION_DEFS.map((option) => ({ label: t(option.i18nLabelKey), value: option.value })),
+])
+
+const projectModelOptions = computed(() => [{ label: t('settings.useGlobal'), value: '' }, ...modelOptions.value])
+
+const forgeOptions = computed(() => [
+  { label: t('settings.forge.auto'), value: 'auto' },
+  { label: t('settings.forge.github'), value: 'github' },
+  { label: t('settings.forge.gitlab'), value: 'gitlab' },
+  { label: t('settings.forge.bitbucketCommunity'), value: 'bitbucket-community' },
+  { label: t('settings.forge.none'), value: 'none' },
+])
+
+// Permission-mode lists per engine — single source of truth in
+// `constants/permissionModes.ts`, mirrored in backend capabilities. Codex
+// supports `interactive` since the app-server migration (item/tool/requestUserInput
+// gives real user-input round-trips); pulling from the constant ensures the
+// Settings dropdowns stay in sync with CreatePage/WorkspacePage automatically.
+const claudePermissionModeOptions = computed(() =>
+  PERMISSION_MODES_BY_ENGINE['claude-code'].map((value) => ({
+    label: t(`agentPermissionMode.${value}`),
+    value,
+  })),
+)
+const codexPermissionModeOptions = computed(() =>
+  PERMISSION_MODES_BY_ENGINE.codex.map((value) => ({
+    label: t(`agentPermissionMode.${value}`),
+    value,
+  })),
+)
+
+// Available template variables reference (displayed in the Global tab)
+const availableVariables = computed(() => [
+  { name: '{{pr_number}}', description: t('settings.var.prNumber') },
+  { name: '{{pr_url}}', description: t('settings.var.prUrl') },
+  { name: '{{branch_name}}', description: t('settings.var.branchName') },
+  { name: '{{source_branch}}', description: t('settings.var.sourceBranch') },
+  { name: '{{workspace_name}}', description: t('settings.var.workspaceName') },
+  { name: '{{project_name}}', description: t('settings.var.projectName') },
+  { name: '{{notion_url}}', description: t('settings.var.notionUrl') },
+  { name: '{{commits}}', description: t('settings.var.commits') },
+  { name: '{{diff_stats}}', description: t('settings.var.diffStats') },
+  { name: '{{tasks}}', description: t('settings.var.tasks') },
+  { name: '{{acceptance_criteria}}', description: t('settings.var.acceptanceCriteria') },
+])
+
+const mcpServerOptions = computed(() => [
+  { label: t('settings.mcpAutoSelect'), value: '' },
+  ...store.activeMcpServers.map((server) => ({
+    label: server.key,
+    value: server.key,
+  })),
+])
+
+const customSoundsStore = useCustomSoundsStore()
+const soundSelectOptions = computed(() => [
+  ...NOTIFICATION_SOUNDS.map((s) => ({ label: t(s.labelKey), value: s.id })),
+  ...customSoundsStore.options,
+])
+const eventSoundSelectOptions = computed(() => [
+  { label: t('settings.soundGeneral'), value: INHERIT_NOTIFICATION_SOUND },
+  ...soundSelectOptions.value,
+])
+const voiceModelOptions = computed<Array<{ label: string; value: string | null }>>(() =>
+  [{ label: t('voice.noneModel'), value: null as string | null }].concat(
+    store.voiceModels.map((m) => ({
+      label: m.installed ? `${m.name}` : `${m.name} (${t('voice.notInstalled')})`,
+      value: m.name,
+    })),
+  ),
+)
+const voiceLanguageOptions = [
+  { label: 'auto', value: 'auto' },
+  { label: 'ar', value: 'ar' },
+  { label: 'de', value: 'de' },
+  { label: 'en', value: 'en' },
+  { label: 'es', value: 'es' },
+  { label: 'fr', value: 'fr' },
+  { label: 'hi', value: 'hi' },
+  { label: 'it', value: 'it' },
+  { label: 'ja', value: 'ja' },
+  { label: 'ko', value: 'ko' },
+  { label: 'nl', value: 'nl' },
+  { label: 'pl', value: 'pl' },
+  { label: 'pt', value: 'pt' },
+  { label: 'ru', value: 'ru' },
+  { label: 'tr', value: 'tr' },
+  { label: 'uk', value: 'uk' },
+  { label: 'vi', value: 'vi' },
+  { label: 'zh', value: 'zh' },
+]
+
+function previewNotificationSound(): void {
+  playNotificationSound(globalAudioNotificationSound.value, globalAudioNotificationVolume.value)
+}
+
+function previewQuestionSound(): void {
+  playNotificationSound(globalAudioQuestionSound.value, globalAudioQuestionVolume.value)
+}
+
+function previewWorkspaceCreatedSound(): void {
+  playNotificationSound(globalAudioWorkspaceCreatedSound.value, globalAudioWorkspaceCreatedVolume.value)
+}
+
+function previewAgentErrorSound(): void {
+  playNotificationSound(globalAudioAgentErrorSound.value, globalAudioAgentErrorVolume.value)
+}
+
+// Selected project
+const selectedProject = computed<ProjectSettings | null>(() => {
+  if (selectedProjectIndex.value < 0 || selectedProjectIndex.value >= store.projects.length) {
+    return null
+  }
+  return store.projects[selectedProjectIndex.value] ?? null
+})
+
+// Dirty-state tracking — snapshots of the saved form state captured at
+// hydration and after each successful save. The Save buttons compare the
+// current ref values against these snapshots to surface unsaved changes
+// with an orange outline.
+// Initialisé à la valeur RÉELLE du formulaire, pas à la chaîne vide.
+// `captureGlobalSnapshot` est une déclaration de fonction, donc hissée, et
+// toutes les refs qu'elle lit sont déclarées plus haut dans ce fichier :
+// l'appel est sûr ici. Avec `''`, `isGlobalDirty` était vrai dès le premier
+// rendu et la barre « modifications non enregistrées » clignotait à chaque
+// ouverture, le temps que `onMounted` finisse ses `await` et appelle
+// `syncGlobalForm()`.
+// Snapshots are OBJECTS, not JSON strings: serialising 76 fields — five of them
+// multi-kilobyte scripts — on every keystroke was what made typing stutter.
+const globalSavedSnapshot = ref<Record<string, unknown>>(captureGlobalSnapshot())
+const projectSavedSnapshot = ref<Record<string, unknown>>({})
+
+/**
+ * Live view of the global form. Shares references with the refs it reads, so
+ * it is cheap enough to recompute on every keystroke — but it must NEVER be
+ * stored as a saved-state snapshot: use `captureGlobalSnapshot()` for that.
+ */
+function readGlobalForm(): Record<string, unknown> {
+  return {
+    workflowPolicy: globalWorkflowPolicy.value,
+    claudeModel: globalClaudeModel.value,
+    codexModel: globalCodexModel.value,
+    prPrompt: globalPrPrompt.value,
+    reviewPrompt: globalReviewPrompt.value,
+    ciFixPrompt: globalCiFixPrompt.value,
+    finalizationPrompt: globalFinalizationPrompt.value,
+    gitConventions: globalGitConventions.value,
+    editorCommand: globalEditorCommand.value,
+    fileManagerCommand: globalFileManagerCommand.value,
+    terminalCommand: globalTerminalCommand.value,
+    autoPurgeOnPrMerged: globalAutoPurgeOnPrMerged.value,
+    autoLoopMaxRetries: globalAutoLoopMaxRetries.value,
+    awaitingUserReminderMinutes: globalAwaitingUserReminderMinutes.value,
+    activityDigestEnabled: globalActivityDigestEnabled.value,
+    wsEventsRetentionDays: globalWsEventsRetentionDays.value,
+    wsEventsKeepPerWorkspace: globalWsEventsKeepPerWorkspace.value,
+    browserNotifications: globalBrowserNotifications.value,
+    audioNotifications: globalAudioNotifications.value,
+    audioQuestionNotifications: globalAudioQuestionNotifications.value,
+    audioWorkspaceCreatedNotifications: globalAudioWorkspaceCreatedNotifications.value,
+    audioAgentErrorNotifications: globalAudioAgentErrorNotifications.value,
+    audioNotificationSound: globalAudioNotificationSound.value,
+    audioQuestionSound: globalAudioQuestionSound.value,
+    audioWorkspaceCreatedSound: globalAudioWorkspaceCreatedSound.value,
+    audioAgentErrorSound: globalAudioAgentErrorSound.value,
+    audioNotificationVolume: globalAudioNotificationVolume.value,
+    audioQuestionVolume: globalAudioQuestionVolume.value,
+    audioWorkspaceCreatedVolume: globalAudioWorkspaceCreatedVolume.value,
+    audioAgentErrorVolume: globalAudioAgentErrorVolume.value,
+    prNotificationSounds: globalPrNotificationSounds.value,
+    notionStatusProperty: globalNotionStatusProperty.value,
+    notionStatus: globalNotionStatus.value,
+    notionAssigneeProperty: globalNotionAssigneeProperty.value,
+    notionUserId: globalNotionUserId.value,
+    notionInitialPrompt: globalNotionInitialPrompt.value,
+    sentryInitialPrompt: globalSentryInitialPrompt.value,
+    claudePermissionMode: globalClaudePermissionMode.value,
+    codexPermissionMode: globalCodexPermissionMode.value,
+    notionMcpKey: globalNotionMcpKey.value,
+    sentryMcpKey: globalSentryMcpKey.value,
+    bitbucketToken: globalBitbucketToken.value,
+    bitbucketUsername: globalBitbucketUsername.value,
+    notionEnabled: globalNotionEnabled.value,
+    sentryEnabled: globalSentryEnabled.value,
+    showVerboseSystemMessages: globalShowVerboseSystemMessages.value,
+    showThinkingBlocks: globalShowThinkingBlocks.value,
+    whipEnabled: globalWhipEnabled.value,
+    whipShortcut: globalWhipShortcut.value,
+    whipVolume: globalWhipVolume.value,
+    tags: globalTags.value,
+    branchPrefixes: globalBranchPrefixes.value,
+    setupScript: globalSetupScript.value,
+    cleanupScript: globalCleanupScript.value,
+    cleanupScriptMode: globalCleanupScriptMode.value,
+    cleanupScriptOnlyOnChanges: globalCleanupScriptOnlyOnChanges.value,
+    archiveScript: globalArchiveScript.value,
+    changeSourceBranchScript: globalChangeSourceBranchScript.value,
+    sessionEndedScript: globalSessionEndedScript.value,
+    prMergedScript: globalPrMergedScript.value,
+    autoLoopDisabledScript: globalAutoLoopDisabledScript.value,
+    worktreesPath: globalWorktreesPath.value,
+    worktreesPrefixByProject: globalWorktreesPrefixByProject.value,
+    flattenWorkspaceList: globalFlattenWorkspaceList.value,
+    skillSuite: globalSkillSuite.value,
+    customReviewTemplate: globalCustomReviewTemplate.value,
+    customAutoLoopReviewGate: globalCustomAutoLoopReviewGate.value,
+    customAutoLoopGroomingIntro: globalCustomAutoLoopGroomingIntro.value,
+    customQaPromptTemplate: globalCustomQaPromptTemplate.value,
+    customBrainstormingInstruction: globalCustomBrainstormingInstruction.value,
+    voiceEnabled: globalVoiceEnabled.value,
+    voicePttKey: globalVoicePttKey.value,
+    voiceLanguage: globalVoiceLanguage.value,
+    voiceModel: globalVoiceModel.value,
+    voiceCommandPath: globalVoiceCommandPath.value,
+    voiceFfmpegPath: globalVoiceFfmpegPath.value,
+    voiceTemperature: globalVoiceTemperature.value,
+    voicePrompt: globalVoicePrompt.value,
+    voiceTranslateToEnglish: globalVoiceTranslateToEnglish.value,
+    voiceSuppressNst: globalVoiceSuppressNst.value,
+  }
+}
+
+/** Live view of the project form — same caveat as `readGlobalForm`. */
+function readProjectForm(): Record<string, unknown> {
+  return { ...projectForm.value }
+}
+
+// Saved-state snapshots must be DETACHED from the live form: arrays (tags,
+// branch prefixes) and nested objects (devServer, e2e, finalization) are edited
+// in place, and a snapshot sharing those references would mutate along with the
+// value it is compared against — the savebar would never appear and the edit
+// would be lost silently.
+function captureGlobalSnapshot(): Record<string, unknown> {
+  return captureFormSnapshot(readGlobalForm())
+}
+
+function captureProjectSnapshot(): Record<string, unknown> {
+  return captureFormSnapshot(readProjectForm())
+}
+
+// The dirty checks compare the LIVE form against the detached snapshot: no
+// deep clone on every keystroke, and any in-place mutation still shows up.
+const isGlobalDirty = computed(() => !formFieldsEqual(readGlobalForm(), globalSavedSnapshot.value))
+const isProjectDirty = computed(() => !formFieldsEqual(readProjectForm(), projectSavedSnapshot.value))
+
+const savebarVisible = computed(() => {
+  // A failed load must never offer a Save: the form is on defaults.
+  if (store.loadError) return false
+  // Any dirty scope keeps the bar up, whichever tab is showing. Computing it
+  // per tab made the warning vanish on tab switch, and the user believed they
+  // had saved (see unsaved-guard.ts).
+  if (isGlobalDirty.value) return true
+  return isProjectDirty.value && (selectedProject.value !== null || isNewProject.value)
+})
+const savebarLoading = computed(() => {
+  // Mirrors savebarSave's own condition rather than the active tab, for the
+  // same reason: the dirty scope, not the visible tab, decides what happens.
+  // `saving` is the prompt-template DIALOG's own loading flag — unrelated to
+  // the global save. The savebar button never showed a spinner because of it,
+  // which made a double-click on a slow save possible.
+  if (isProjectDirty.value && (selectedProject.value !== null || isNewProject.value)) return savingProject.value
+  return savingGlobal.value
+})
+function savebarSave() {
+  if (isProjectDirty.value && (selectedProject.value !== null || isNewProject.value)) saveProject()
+  else saveGlobal()
+}
+
+// Init global form from store
+function syncGlobalForm() {
+  globalWorkflowPolicy.value = resolveWorkflowPolicy(store.global.workflowPolicy)
+  hydratingVoiceForm.value = true
+  const modelMap = store.global.defaultModelByEngine ?? {}
+  globalClaudeModel.value = modelMap['claude-code'] ?? 'auto'
+  globalCodexModel.value = modelMap.codex ?? 'auto'
+  globalPrPrompt.value = store.global.prPromptTemplate
+  globalReviewPrompt.value = store.global.reviewPromptTemplate ?? ''
+  globalCiFixPrompt.value = store.global.ciFixPromptTemplate ?? ''
+  globalFinalizationPrompt.value = store.global.finalizationPrompt ?? ''
+  globalGitConventions.value = store.global.gitConventions
+  globalEditorCommand.value = store.global.editorCommand ?? ''
+  globalFileManagerCommand.value = store.global.fileManagerCommand ?? ''
+  globalTerminalCommand.value = store.global.terminalCommand ?? ''
+  globalAutoPurgeOnPrMerged.value = store.global.autoPurgeOnPrMerged ?? false
+  globalAutoLoopMaxRetries.value = store.global.autoLoopMaxRetries ?? 5
+  globalAwaitingUserReminderMinutes.value = store.global.awaitingUserReminderMinutes ?? 0
+  globalActivityDigestEnabled.value = store.global.activityDigestEnabled ?? true
+  globalWsEventsRetentionDays.value = store.global.wsEventsRetentionDays ?? 0
+  globalWsEventsKeepPerWorkspace.value = store.global.wsEventsKeepPerWorkspace ?? 0
+  globalBrowserNotifications.value = store.global.browserNotifications ?? true
+  globalAudioNotifications.value = store.global.audioNotifications ?? true
+  globalAudioQuestionNotifications.value = store.global.audioQuestionNotifications ?? false
+  globalAudioWorkspaceCreatedNotifications.value = store.global.audioWorkspaceCreatedNotifications ?? false
+  globalAudioAgentErrorNotifications.value = store.global.audioAgentErrorNotifications ?? false
+  // Shape-level normalisation only. `resolveSoundId` would answer "not playable"
+  // for an imported sound while its catalogue is still loading, and this form
+  // value is written straight back on save — which would erase the selection.
+  globalAudioNotificationSound.value = resolveSoundIdForForm(store.global.audioNotificationSound)
+  globalAudioQuestionSound.value = normalizeSoundSelectionForForm(store.global.audioQuestionSound)
+  globalAudioWorkspaceCreatedSound.value = normalizeSoundSelectionForForm(store.global.audioWorkspaceCreatedSound)
+  globalAudioAgentErrorSound.value = normalizeSoundSelectionForForm(store.global.audioAgentErrorSound)
+  const prSounds = Object.fromEntries(
+    PR_NOTIFICATION_SOUND_SETTING_KEYS.map((key) => [key, normalizeSoundSelectionForForm(store.global[key])]),
+  )
+  const prAudioControls = Object.fromEntries(
+    PR_NOTIFICATION_AUDIO_CONTROL_SETTING_KEYS.map((key) => {
+      const value = store.global[key]
+      if (key.endsWith('Enabled')) return [key, typeof value === 'boolean' ? value : false]
+      const volume = Number(value)
+      return [key, Number.isFinite(volume) ? Math.max(0, Math.min(1, volume)) : 1]
+    }),
+  )
+  globalPrNotificationSounds.value = { ...prSounds, ...prAudioControls } as PrNotificationSoundSettingsModel
+  const v = store.global.audioNotificationVolume
+  globalAudioNotificationVolume.value = typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 1
+  const questionVolume = store.global.audioQuestionVolume
+  globalAudioQuestionVolume.value =
+    typeof questionVolume === 'number' && Number.isFinite(questionVolume) ? Math.max(0, Math.min(1, questionVolume)) : 1
+  const workspaceCreatedVolume = store.global.audioWorkspaceCreatedVolume
+  globalAudioWorkspaceCreatedVolume.value =
+    typeof workspaceCreatedVolume === 'number' && Number.isFinite(workspaceCreatedVolume)
+      ? Math.max(0, Math.min(1, workspaceCreatedVolume))
+      : 1
+  const agentErrorVolume = store.global.audioAgentErrorVolume
+  globalAudioAgentErrorVolume.value =
+    typeof agentErrorVolume === 'number' && Number.isFinite(agentErrorVolume)
+      ? Math.max(0, Math.min(1, agentErrorVolume))
+      : 1
+  globalNotionStatusProperty.value = store.global.notionStatusProperty ?? ''
+  globalNotionStatus.value = store.global.notionInProgressStatus ?? ''
+  globalNotionAssigneeProperty.value = store.global.notionAssigneeProperty ?? ''
+  globalNotionUserId.value = store.global.notionUserId ?? ''
+  globalNotionInitialPrompt.value = store.global.notionInitialPromptTemplate ?? ''
+  globalSentryInitialPrompt.value = store.global.sentryInitialPromptTemplate ?? ''
+  // Legacy/unknown values fall back to 'bypass' — safest non-plan default.
+  {
+    const modeMap = store.global.defaultPermissionModeByEngine ?? {}
+    const isValidMode = (v: unknown): v is 'plan' | 'bypass' | 'strict' | 'interactive' =>
+      v === 'plan' || v === 'bypass' || v === 'strict' || v === 'interactive'
+    const claudeStored = modeMap['claude-code']
+    globalClaudePermissionMode.value = isValidMode(claudeStored) ? claudeStored : 'bypass'
+    const codexStored = modeMap.codex
+    globalCodexPermissionMode.value = isValidMode(codexStored) ? codexStored : 'bypass'
+  }
+  globalNotionMcpKey.value = store.global.notionMcpKey ?? ''
+  globalSentryMcpKey.value = store.global.sentryMcpKey ?? ''
+  globalBitbucketToken.value = store.global.bitbucketToken ?? ''
+  globalBitbucketUsername.value = store.global.bitbucketUsername ?? ''
+  globalNotionEnabled.value = store.global.notionEnabled ?? true
+  globalSentryEnabled.value = store.global.sentryEnabled ?? true
+  globalShowVerboseSystemMessages.value = store.showVerboseSystemMessages
+  globalShowThinkingBlocks.value = store.global.showThinkingBlocks ?? true
+  globalWhipEnabled.value = store.global.whipEnabled ?? false
+  globalWhipShortcut.value = store.global.whipShortcut ?? DEFAULT_WHIP_SHORTCUT
+  globalWhipVolume.value = store.global.whipVolume ?? 1
+  globalTags.value = Array.isArray(store.global.tags) ? [...store.global.tags] : []
+  globalBranchPrefixes.value = Array.isArray(store.global.branchPrefixes) ? [...store.global.branchPrefixes] : []
+  globalSetupScript.value = store.global.setupScript ?? ''
+  globalCleanupScript.value = store.global.cleanupScript ?? ''
+  globalCleanupScriptMode.value = store.global.cleanupScriptMode === 'idle' ? 'idle' : 'no-tasks'
+  globalCleanupScriptOnlyOnChanges.value = store.global.cleanupScriptOnlyOnChanges ?? false
+  globalArchiveScript.value = store.global.archiveScript ?? ''
+  globalSessionEndedScript.value = store.global.sessionEndedScript ?? ''
+  globalPrMergedScript.value = store.global.prMergedScript ?? ''
+  globalAutoLoopDisabledScript.value = store.global.autoLoopDisabledScript ?? ''
+  globalChangeSourceBranchScript.value = store.global.changeSourceBranchScript ?? ''
+  globalWorktreesPath.value = store.global.worktreesPath ?? WORKTREES_PATH
+  globalWorktreesPrefixByProject.value = store.global.worktreesPrefixByProject ?? false
+  globalFlattenWorkspaceList.value = store.global.flattenWorkspaceList ?? false
+  globalSkillSuite.value = store.global.skillSuite ?? 'standard'
+  globalCustomReviewTemplate.value = store.global.customReviewTemplate ?? ''
+  globalCustomAutoLoopReviewGate.value = store.global.customAutoLoopReviewGate ?? ''
+  globalCustomAutoLoopGroomingIntro.value = store.global.customAutoLoopGroomingIntro ?? ''
+  globalCustomQaPromptTemplate.value = store.global.customQaPromptTemplate ?? ''
+  globalCustomBrainstormingInstruction.value = store.global.customBrainstormingInstruction ?? ''
+  globalVoiceEnabled.value = store.global.voiceEnabled ?? false
+  globalVoicePttKey.value = store.global.voicePttKey === 'ctrl+space' ? 'ctrl+space' : 'alt'
+  globalVoiceLanguage.value = store.global.voiceLanguage ?? 'auto'
+  globalVoiceModel.value = store.global.voiceModel ?? null
+  globalVoiceCommandPath.value = store.global.voiceCommandPath ?? ''
+  globalVoiceFfmpegPath.value = store.global.voiceFfmpegPath ?? ''
+  globalVoiceTemperature.value = typeof store.global.voiceTemperature === 'number' ? store.global.voiceTemperature : 0
+  globalVoicePrompt.value = store.global.voicePrompt ?? ''
+  globalVoiceTranslateToEnglish.value = store.global.voiceTranslateToEnglish ?? false
+  globalVoiceSuppressNst.value = store.global.voiceSuppressNonSpeechTokens ?? true
+  hydratingVoiceForm.value = false
+  globalSavedSnapshot.value = captureGlobalSnapshot()
+}
+
+watch(
+  () => globalVoiceModel.value,
+  (next, prev) => {
+    if (hydratingVoiceForm.value) return
+    if (next === prev) return
+    globalVoiceTemperature.value = recommendedTemperatureForModel(next)
+  },
+)
+
+// Init project form from selected project
+function syncProjectForm(project: ProjectSettings | null) {
+  if (!project) {
+    projectForm.value = {
+      workflowPolicy: {},
+      path: '',
+      displayName: '',
+      color: null,
+      defaultSourceBranch: '',
+      defaultModel: '',
+      forge: 'auto',
+      prPromptTemplate: '',
+      reviewPromptTemplate: '',
+      ciFixPromptTemplate: '',
+      notionInitialPromptTemplate: '',
+      sentryInitialPromptTemplate: '',
+      gitConventions: '',
+      setupScript: '',
+      taskPromptTemplate: '',
+      cleanupScript: '',
+      cleanupScriptMode: '',
+      archiveScript: '',
+      changeSourceBranchScript: '',
+      sessionEndedScript: '',
+      prMergedScript: '',
+      autoLoopDisabledScript: '',
+      devServer: { startCommand: '', stopCommand: '' },
+      e2e: { framework: '', skill: '', prompt: '' },
+      finalization: { prompt: '' },
+    }
+    projectBranches.value = []
+    projectSavedSnapshot.value = captureProjectSnapshot()
+    return
+  }
+  projectForm.value = {
+    workflowPolicy: { ...project.workflowPolicy },
+    path: project.path,
+    displayName: project.displayName,
+    color: project.color ?? null,
+    defaultSourceBranch: project.defaultSourceBranch,
+    defaultModel: project.defaultModel,
+    forge: project.forge ?? 'auto',
+    prPromptTemplate: project.prPromptTemplate,
+    reviewPromptTemplate: project.reviewPromptTemplate ?? '',
+    ciFixPromptTemplate: project.ciFixPromptTemplate ?? '',
+    notionInitialPromptTemplate: project.notionInitialPromptTemplate ?? '',
+    sentryInitialPromptTemplate: project.sentryInitialPromptTemplate ?? '',
+    gitConventions: project.gitConventions ?? '',
+    setupScript: project.setupScript ?? '',
+    taskPromptTemplate: project.taskPromptTemplate ?? '',
+    cleanupScript: project.cleanupScript ?? '',
+    cleanupScriptMode: project.cleanupScriptMode ?? '',
+    archiveScript: project.archiveScript ?? '',
+    changeSourceBranchScript: project.changeSourceBranchScript ?? '',
+    sessionEndedScript: project.sessionEndedScript ?? '',
+    prMergedScript: project.prMergedScript ?? '',
+    autoLoopDisabledScript: project.autoLoopDisabledScript ?? '',
+    devServer: {
+      startCommand: project.devServer?.startCommand ?? '',
+      stopCommand: project.devServer?.stopCommand ?? '',
+    },
+    e2e: {
+      framework: project.e2e?.framework ?? '',
+      skill: project.e2e?.skill ?? '',
+      prompt: project.e2e?.prompt ?? '',
+    },
+    finalization: {
+      prompt: project.finalization?.prompt ?? '',
+    },
+  }
+  projectSavedSnapshot.value = captureProjectSnapshot()
+  if (project.path) {
+    void fetchProjectBranches(project.path)
+  }
+}
+
+// Fetch branches for project path
+async function fetchProjectBranches(path: string) {
+  if (!path.trim()) {
+    projectBranches.value = []
+    return
+  }
+  loadingBranches.value = true
+  try {
+    const res = await fetch(`/api/git/branches?path=${encodeURIComponent(path.trim())}`)
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const data = await res.json()
+    projectBranches.value = data.local ?? data.branches ?? []
+  } catch {
+    projectBranches.value = []
+  } finally {
+    loadingBranches.value = false
+  }
+}
+
+// Debounce path changes for branch fetching
+let pathDebounce: ReturnType<typeof setTimeout> | null = null
+watch(
+  () => projectForm.value.path,
+  (val) => {
+    if (pathDebounce) clearTimeout(pathDebounce)
+    pathDebounce = setTimeout(() => {
+      void fetchProjectBranches(val)
+    }, 500)
+  },
+)
+
+// Watch selected project changes
+watch(selectedProjectIndex, () => {
+  isNewProject.value = false
+  syncProjectForm(selectedProject.value)
+})
+
+// Save global settings
+const importFileInput = ref<HTMLInputElement | null>(null)
+
+async function exportConfig() {
+  try {
+    const res = await fetch('/api/settings/export')
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const data = await res.json()
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `kobo-config-${new Date().toISOString().replace(/[:.]/g, '-')}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+    $q.notify({ type: 'positive', message: t('settings.exportSuccess'), position: 'top', timeout: 3000 })
+  } catch (err) {
+    $q.notify({ type: 'negative', message: String(err), position: 'top', timeout: 4000 })
+  }
+}
+
+function triggerImport() {
+  importFileInput.value?.click()
+}
+
+async function onImportFile(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  try {
+    $q.dialog({
+      title: t('settings.importConfirmTitle'),
+      message: t('settings.importConfirmMessage'),
+      cancel: true,
+      persistent: true,
+      dark: true,
+    }).onOk(async () => {
+      try {
+        const text = await file.text()
+        const bundle = JSON.parse(text)
+        const res = await fetch('/api/settings/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(bundle),
+        })
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}))
+          throw new Error(body.error ?? `HTTP ${res.status}`)
+        }
+        await store.fetchSettings()
+        syncGlobalForm()
+        $q.notify({ type: 'positive', message: t('settings.importSuccess'), position: 'top', timeout: 3000 })
+      } catch (err) {
+        $q.notify({ type: 'negative', message: String(err), position: 'top', timeout: 5000 })
+      }
+    })
+  } finally {
+    input.value = ''
+  }
+}
+
+async function resetFieldToDefault(field: ResettableField) {
+  if (resettingField.value !== null) return
+  resettingField.value = field
+  try {
+    const defaults = await store.fetchGlobalDefaults()
+    const target: Record<ResettableField, typeof globalPrPrompt> = {
+      prPromptTemplate: globalPrPrompt,
+      reviewPromptTemplate: globalReviewPrompt,
+      ciFixPromptTemplate: globalCiFixPrompt,
+      finalizationPrompt: globalFinalizationPrompt,
+      gitConventions: globalGitConventions,
+      notionInitialPromptTemplate: globalNotionInitialPrompt,
+      sentryInitialPromptTemplate: globalSentryInitialPrompt,
+    }
+    target[field].value = defaults[field]
+  } catch (err) {
+    console.error('[SettingsPage] resetFieldToDefault failed:', err)
+    $q.notify({ type: 'negative', message: t('settings.resetFailed'), position: 'top' })
+  } finally {
+    resettingField.value = null
+  }
+}
+
+/**
+ * Ask before NARROWING the retention window — which includes enabling it.
+ *
+ * `0` means "keep everything", so in this comparison it is +∞: going from 0 to
+ * 30 shrinks the window from infinity to a month and is the single most
+ * destructive move of the feature (a year-old database loses eleven months at
+ * the next start-up). Going the other way — 30 → 0, or 7 → 30 — destroys
+ * nothing and needs no confirmation.
+ *
+ * The dialog states the real volume, from a preview that counts without
+ * deleting. If that count fails we still ask, with a wording that carries no
+ * number: a failed preview must never remove the safeguard.
+ */
+async function confirmRetentionReduction(): Promise<boolean> {
+  const asWindow = (days: number): number => (days === 0 ? Number.POSITIVE_INFINITY : days)
+  const previous = store.global.wsEventsRetentionDays ?? 0
+  const next = globalWsEventsRetentionDays.value
+  if (asWindow(next) >= asWindow(previous)) return true
+
+  let message = t('settings.retentionConfirmMessageUnknown', { days: next })
+  try {
+    const preview = await store.previewRetention(next, globalWsEventsKeepPerWorkspace.value)
+    message = t('settings.retentionConfirmMessage', {
+      days: next,
+      count: preview.deletable,
+      total: preview.total,
+    })
+  } catch (err) {
+    console.error('[SettingsPage] retention preview failed:', err)
+  }
+
+  return await new Promise<boolean>((resolve) => {
+    $q.dialog({
+      title: t('settings.retentionConfirmTitle'),
+      message,
+      cancel: true,
+      persistent: true,
+      dark: true,
+    })
+      .onOk(() => resolve(true))
+      .onCancel(() => resolve(false))
+      .onDismiss(() => resolve(false))
+  })
+}
+
+async function saveGlobal() {
+  const worktreesPathValid = await globalWorktreesPathInput.value?.validate()
+  if (worktreesPathValid === false) return
+  if (!(await confirmRetentionReduction())) return
+
+  savingGlobal.value = true
+  try {
+    await store.updateGlobal({
+      workflowPolicy: resolveWorkflowPolicy(globalWorkflowPolicy.value),
+      defaultModelByEngine: {
+        'claude-code': globalClaudeModel.value,
+        codex: globalCodexModel.value,
+      },
+      prPromptTemplate: globalPrPrompt.value,
+      reviewPromptTemplate: globalReviewPrompt.value,
+      ciFixPromptTemplate: globalCiFixPrompt.value,
+      finalizationPrompt: globalFinalizationPrompt.value,
+      gitConventions: globalGitConventions.value,
+      editorCommand: globalEditorCommand.value,
+      fileManagerCommand: globalFileManagerCommand.value,
+      terminalCommand: globalTerminalCommand.value,
+      autoPurgeOnPrMerged: globalAutoPurgeOnPrMerged.value,
+      autoLoopMaxRetries: globalAutoLoopMaxRetries.value,
+      awaitingUserReminderMinutes: globalAwaitingUserReminderMinutes.value,
+      activityDigestEnabled: globalActivityDigestEnabled.value,
+      wsEventsRetentionDays: globalWsEventsRetentionDays.value,
+      wsEventsKeepPerWorkspace: globalWsEventsKeepPerWorkspace.value,
+      browserNotifications: globalBrowserNotifications.value,
+      audioNotifications: globalAudioNotifications.value,
+      audioQuestionNotifications: globalAudioQuestionNotifications.value,
+      audioWorkspaceCreatedNotifications: globalAudioWorkspaceCreatedNotifications.value,
+      audioAgentErrorNotifications: globalAudioAgentErrorNotifications.value,
+      audioNotificationSound: globalAudioNotificationSound.value,
+      audioQuestionSound: globalAudioQuestionSound.value,
+      audioWorkspaceCreatedSound: globalAudioWorkspaceCreatedSound.value,
+      audioAgentErrorSound: globalAudioAgentErrorSound.value,
+      audioNotificationVolume: globalAudioNotificationVolume.value,
+      audioQuestionVolume: globalAudioQuestionVolume.value,
+      audioWorkspaceCreatedVolume: globalAudioWorkspaceCreatedVolume.value,
+      audioAgentErrorVolume: globalAudioAgentErrorVolume.value,
+      ...globalPrNotificationSounds.value,
+      notionStatusProperty: globalNotionStatusProperty.value,
+      notionInProgressStatus: globalNotionStatus.value,
+      notionAssigneeProperty: globalNotionAssigneeProperty.value,
+      notionUserId: globalNotionUserId.value,
+      notionInitialPromptTemplate: globalNotionInitialPrompt.value,
+      sentryInitialPromptTemplate: globalSentryInitialPrompt.value,
+      defaultPermissionModeByEngine: {
+        'claude-code': globalClaudePermissionMode.value,
+        codex: globalCodexPermissionMode.value,
+      },
+      notionMcpKey: globalNotionMcpKey.value,
+      sentryMcpKey: globalSentryMcpKey.value,
+      bitbucketToken: globalBitbucketToken.value,
+      bitbucketUsername: globalBitbucketUsername.value,
+      notionEnabled: globalNotionEnabled.value,
+      sentryEnabled: globalSentryEnabled.value,
+      showThinkingBlocks: globalShowThinkingBlocks.value,
+      whipEnabled: globalWhipEnabled.value,
+      whipShortcut: globalWhipShortcut.value,
+      whipVolume: globalWhipVolume.value,
+      tags: globalTags.value,
+      branchPrefixes: globalBranchPrefixes.value,
+      setupScript: globalSetupScript.value,
+      cleanupScript: globalCleanupScript.value,
+      cleanupScriptMode: globalCleanupScriptMode.value,
+      cleanupScriptOnlyOnChanges: globalCleanupScriptOnlyOnChanges.value,
+      archiveScript: globalArchiveScript.value,
+      changeSourceBranchScript: globalChangeSourceBranchScript.value,
+      sessionEndedScript: globalSessionEndedScript.value,
+      prMergedScript: globalPrMergedScript.value,
+      autoLoopDisabledScript: globalAutoLoopDisabledScript.value,
+      worktreesPath: globalWorktreesPath.value,
+      worktreesPrefixByProject: globalWorktreesPrefixByProject.value,
+      flattenWorkspaceList: globalFlattenWorkspaceList.value,
+      skillSuite: globalSkillSuite.value,
+      customReviewTemplate: globalCustomReviewTemplate.value,
+      customAutoLoopReviewGate: globalCustomAutoLoopReviewGate.value,
+      customAutoLoopGroomingIntro: globalCustomAutoLoopGroomingIntro.value,
+      customQaPromptTemplate: globalCustomQaPromptTemplate.value,
+      customBrainstormingInstruction: globalCustomBrainstormingInstruction.value,
+      voiceEnabled: globalVoiceEnabled.value,
+      voicePttKey: globalVoicePttKey.value,
+      voiceLanguage: globalVoiceLanguage.value,
+      voiceModel: globalVoiceModel.value,
+      voiceCommandPath: globalVoiceCommandPath.value.trim(),
+      voiceFfmpegPath: globalVoiceFfmpegPath.value.trim(),
+      voiceTemperature: globalVoiceTemperature.value,
+      voicePrompt: globalVoicePrompt.value,
+      voiceTranslateToEnglish: globalVoiceTranslateToEnglish.value,
+      voiceSuppressNonSpeechTokens: globalVoiceSuppressNst.value,
+    })
+    store.setVerboseSystemMessages(globalShowVerboseSystemMessages.value)
+    globalSavedSnapshot.value = captureGlobalSnapshot()
+    $q.notify({ type: 'positive', message: t('settings.saved'), position: 'top' })
+  } catch {
+    $q.notify({ type: 'negative', message: t('settings.saveError'), position: 'top' })
+  } finally {
+    savingGlobal.value = false
+  }
+}
+
+async function installVoiceModel(name: string) {
+  voiceActionModel.value = name
+  startVoiceModelsPolling()
+  try {
+    await store.downloadVoiceModel(name)
+  } catch {
+    $q.notify({ type: 'negative', message: t('voice.downloadFailed'), position: 'top' })
+  } finally {
+    voiceActionModel.value = null
+    stopVoiceModelsPolling()
+  }
+}
+
+async function removeVoiceModel(name: string) {
+  voiceActionModel.value = name
+  try {
+    await store.deleteVoiceModel(name)
+    if (globalVoiceModel.value === name) globalVoiceModel.value = null
+  } catch {
+    $q.notify({ type: 'negative', message: t('voice.deleteFailed'), position: 'top' })
+  } finally {
+    voiceActionModel.value = null
+  }
+}
+
+async function cancelVoiceDownload(name: string) {
+  try {
+    await store.cancelVoiceModelDownload(name)
+  } catch {
+    $q.notify({ type: 'negative', message: t('voice.cancelFailed'), position: 'top' })
+  }
+}
+
+function formatBytes(bytes: number | undefined | null): string {
+  if (bytes === undefined || bytes === null || !Number.isFinite(bytes) || bytes < 0) return '—'
+  if (bytes < 1024) return `${bytes} B`
+  const units = ['KB', 'MB', 'GB', 'TB']
+  let value = bytes / 1024
+  let i = 0
+  while (value >= 1024 && i < units.length - 1) {
+    value /= 1024
+    i++
+  }
+  return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[i]}`
+}
+
+// 800 ms was ~75 requests per minute for the whole duration of a model
+// download — minutes, not seconds — with every failure silently discarded.
+const VOICE_MODELS_POLL_MS = 2500
+
+let voiceModelsPollTimer: ReturnType<typeof setInterval> | null = null
+function startVoiceModelsPolling() {
+  if (voiceModelsPollTimer) return
+  voiceModelsPollTimer = setInterval(() => {
+    if (document.visibilityState === 'hidden') return
+    store.fetchVoiceModels().catch((err) => {
+      console.error('[settings] voice model polling failed:', err)
+    })
+  }, VOICE_MODELS_POLL_MS)
+}
+function stopVoiceModelsPolling() {
+  if (voiceModelsPollTimer) {
+    clearInterval(voiceModelsPollTimer)
+    voiceModelsPollTimer = null
+  }
+}
+
+async function copyToClipboard(text: string) {
+  try {
+    await navigator.clipboard.writeText(text)
+    $q.notify({ type: 'positive', message: t('common.copied'), position: 'top', timeout: 1200 })
+  } catch {
+    $q.notify({ type: 'negative', message: t('common.copyFailed'), position: 'top' })
+  }
+}
+
+// Save project
+async function saveProject() {
+  if (!projectForm.value.path.trim()) {
+    $q.notify({ type: 'negative', message: t('settings.projectPathRequired'), position: 'top' })
+    return
+  }
+  savingProject.value = true
+  try {
+    await store.upsertProject(projectForm.value.path.trim(), {
+      workflowPolicy: { ...projectForm.value.workflowPolicy },
+      displayName: projectForm.value.displayName,
+      color: projectForm.value.color,
+      defaultSourceBranch: projectForm.value.defaultSourceBranch,
+      defaultModel: projectForm.value.defaultModel,
+      forge: projectForm.value.forge,
+      prPromptTemplate: projectForm.value.prPromptTemplate,
+      reviewPromptTemplate: projectForm.value.reviewPromptTemplate,
+      ciFixPromptTemplate: projectForm.value.ciFixPromptTemplate,
+      notionInitialPromptTemplate: projectForm.value.notionInitialPromptTemplate,
+      sentryInitialPromptTemplate: projectForm.value.sentryInitialPromptTemplate,
+      gitConventions: projectForm.value.gitConventions,
+      setupScript: projectForm.value.setupScript,
+      taskPromptTemplate: projectForm.value.taskPromptTemplate,
+      cleanupScript: projectForm.value.cleanupScript,
+      cleanupScriptMode: projectForm.value.cleanupScriptMode,
+      archiveScript: projectForm.value.archiveScript,
+      changeSourceBranchScript: projectForm.value.changeSourceBranchScript,
+      sessionEndedScript: projectForm.value.sessionEndedScript,
+      prMergedScript: projectForm.value.prMergedScript,
+      autoLoopDisabledScript: projectForm.value.autoLoopDisabledScript,
+      devServer: projectForm.value.devServer,
+      e2e: projectForm.value.e2e,
+      finalization: projectForm.value.finalization,
+    })
+    isNewProject.value = false
+    // Select the project we just saved
+    const idx = store.projects.findIndex((p) => p.path === projectForm.value.path.trim())
+    if (idx >= 0) selectedProjectIndex.value = idx
+    projectSavedSnapshot.value = captureProjectSnapshot()
+    $q.notify({ type: 'positive', message: t('settings.projectSaved'), position: 'top' })
+  } catch {
+    $q.notify({ type: 'negative', message: t('settings.projectSaveError'), position: 'top' })
+  } finally {
+    savingProject.value = false
+  }
+}
+
+// Delete project
+function deleteProject() {
+  if (!selectedProject.value) return
+  const projectName = selectedProject.value.displayName || selectedProject.value.path
+  $q.dialog({
+    title: t('settings.deleteProjectConfirmTitle'),
+    message: t('settings.deleteProjectConfirmMessage', { name: projectName }),
+    dark: true,
+    cancel: { flat: true, label: t('common.cancel'), color: 'kobo-2' },
+    ok: { flat: true, label: t('common.delete'), color: 'red-5' },
+  }).onOk(async () => {
+    if (!selectedProject.value) return
+    deletingProject.value = true
+    try {
+      await store.deleteProject(selectedProject.value.path)
+      selectedProjectIndex.value = -1
+      isNewProject.value = false
+      syncProjectForm(null)
+      $q.notify({ type: 'positive', message: t('settings.projectDeleted'), position: 'top' })
+    } catch {
+      $q.notify({ type: 'negative', message: t('settings.projectDeleteError'), position: 'top' })
+    } finally {
+      deletingProject.value = false
+    }
+  })
+}
+
+// Add new project
+function addNewProject() {
+  selectedProjectIndex.value = -1
+  isNewProject.value = true
+  syncProjectForm(null)
+  copyFromPath.value = null
+  previousCopyFromPath.value = null
+}
+
+// Select a project from the list
+function selectProject(index: number) {
+  // Same gate as savebarVisible / the settings:project unsaved-scope: dirty
+  // alone is trivially true before any project was ever selected, since
+  // projectSavedSnapshot starts at {} while captureProjectSnapshot() never is.
+  if (isProjectDirty.value && (selectedProject.value !== null || isNewProject.value)) {
+    $q.dialog({
+      title: t('settings.unsavedChanges.title'),
+      message: t('settings.unsavedChanges.message'),
+      dark: true,
+      persistent: true,
+      ok: { flat: true, label: t('settings.unsavedChanges.discard'), color: 'negative' },
+      cancel: { flat: true, label: t('settings.unsavedChanges.cancel'), color: 'kobo-2' },
+    }).onOk(() => {
+      isNewProject.value = false
+      selectedProjectIndex.value = index
+      copyFromPath.value = null
+      previousCopyFromPath.value = null
+    })
+    return
+  }
+  isNewProject.value = false
+  selectedProjectIndex.value = index
+  copyFromPath.value = null
+  previousCopyFromPath.value = null
+}
+
+// Display name for project list
+function projectDisplayName(project: ProjectSettings): string {
+  if (project.displayName) return project.displayName
+  const parts = project.path.split('/')
+  return parts[parts.length - 1] ?? project.path
+}
+
+// Branch filter options for q-select
+const branchFilterOptions = ref<string[]>([])
+
+function filterBranches(val: string, update: (fn: () => void) => void) {
+  update(() => {
+    branchFilterOptions.value = val
+      ? projectBranches.value.filter((b) => b.toLowerCase().includes(val.toLowerCase()))
+      : projectBranches.value
+  })
+}
+
+async function reloadSettings() {
+  await store.fetchSettings()
+  if (!store.loadError) syncGlobalForm()
+}
+
+// Init
+onMounted(async () => {
+  await Promise.all([store.fetchSettings(), store.fetchActiveMcpServers(), fetchAvailableSkills()])
+  try {
+    const defaults = await store.fetchGlobalDefaults()
+    defaultChangeSourceBranchScript.value = defaults.changeSourceBranchScript ?? ''
+  } catch (err) {
+    console.error('[SettingsPage] fetchGlobalDefaults failed:', err)
+  }
+  await store.fetchVoiceModels()
+  await store.fetchVoiceRuntime()
+  syncGlobalForm()
+  // Armed once the settings are loaded so the `settings-card-*` anchors exist.
+  scheduleAutoRun('settings')
+  void fetchNetwork()
+  void workspaceTemplatesStore.fetchTemplates()
+  registerUnsavedScope('settings:global', () => isGlobalDirty.value)
+  registerUnsavedScope('settings:integrations', () => hasIntegrationDrafts.value)
+  // Mirrors savebarVisible's own gate: `isProjectDirty` alone is trivially true
+  // from mount (captureProjectSnapshot() on the default form is never the
+  // initial empty-string snapshot), so without this gate the guard fired on
+  // every exit from Settings, project selected or not. See savebarVisible.
+  registerUnsavedScope(
+    'settings:project',
+    () => isProjectDirty.value && (selectedProject.value !== null || isNewProject.value),
+  )
+})
+
+// Cleanup debounce timer on unmount
+onUnmounted(() => {
+  if (pathDebounce) clearTimeout(pathDebounce)
+  stopVoiceModelsPolling()
+  unregisterUnsavedScope('settings:global')
+  unregisterUnsavedScope('settings:integrations')
+  unregisterUnsavedScope('settings:project')
+})
+</script>
+
+<style lang="scss" scoped>
+.settings-page.q-page {
+  background-color: var(--kobo-bg);
+  position: relative;
+  padding: 0;
+  // QPage sets the available viewport height; only the content panel scrolls.
+  display: flex;
+  flex-direction: column;
+}
+
+.purge-docs {
+  background-color: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+.purge-docs-code {
+  background-color: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 4px;
+  padding: 8px 10px;
+  margin: 6px 0;
+  font-family: var(--kobo-font-mono, monospace);
+  font-size: 11px;
+  color: var(--kobo-text-2);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.settings-load-error {
+  display: flex;
+  align-items: flex-start;
+  flex-shrink: 0;
+  gap: var(--kobo-space-sm);
+  padding: var(--kobo-space-md);
+  border: 1px solid var(--kobo-danger);
+  border-radius: var(--kobo-radius-sm);
+  background: var(--kobo-surface);
+  color: var(--kobo-text);
+}
+
+.settings-load-error__detail,
+.settings-load-error__hint {
+  font-size: 12px;
+  color: var(--kobo-text-3);
+}
+
+.settings-layout {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+  overflow: hidden;
+}
+
+.settings-nav {
+  width: 240px;
+  flex-shrink: 0;
+  background-color: var(--kobo-surface);
+  border-right: 1px solid var(--kobo-border-subtle);
+  padding: 24px 12px;
+  overflow-y: auto;
+}
+
+.settings-nav__title {
+  font-family: var(--kobo-font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--kobo-text-3);
+  padding: 0 12px;
+  margin-bottom: 16px;
+}
+
+.settings-content {
+  flex: 1;
+  min-width: 0;
+  padding: 24px 32px 80px;
+  overflow-y: auto;
+}
+
+.settings-content__header {
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--kobo-border-subtle);
+  position: sticky;
+  top: -24px;
+  background-color: var(--kobo-bg);
+  margin-top: -24px;
+  padding-top: 24px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: var(--kobo-space-sm);
+}
+
+.settings-content__nav-toggle {
+  color: var(--kobo-text-2);
+}
+
+.settings-content__title {
+  font-family: var(--kobo-font-sans);
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--kobo-text);
+  margin: 0;
+  line-height: 1.2;
+}
+
+.settings-panels {
+  background: transparent;
+}
+
+.settings-global-wrap {
+  display: block;
+}
+
+.settings-card {
+  background: var(--kobo-surface);
+  border: 1px solid var(--kobo-border-subtle);
+  border-radius: var(--kobo-radius-md);
+}
+
+.settings-subcard {
+  background: var(--kobo-surface);
+  border: 1px solid var(--kobo-border-subtle);
+  border-radius: var(--kobo-radius-md);
+  margin-bottom: 16px;
+}
+
+.notification-sounds-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 1fr;
+}
+
+.notification-sound-card {
+  background: var(--kobo-surface-2);
+  border: 1px solid var(--kobo-border-subtle);
+}
+
+.voice-model-row {
+  background: var(--kobo-surface-2);
+  border: 1px solid var(--kobo-border-subtle);
+  transition: border-color var(--kobo-duration-short) var(--kobo-ease-out);
+}
+
+.voice-model-row--active {
+  border-color: var(--kobo-accent);
+}
+
+.voice-models-dir {
+  background: var(--kobo-surface-2);
+  border: 1px solid var(--kobo-border-subtle);
+  border-radius: var(--kobo-radius-sm);
+  padding: 6px 10px;
+}
+
+.template-card {
+  background: var(--kobo-surface);
+  border: 1px solid var(--kobo-border-subtle);
+}
+
+// field-label: font-size and font-weight moved to template (text-body2 text-weight-medium)
+
+// field-label-sub: font-size moved to template (text-caption)
+
+.settings-input {
+  :deep(.q-field__control) {
+    background: var(--kobo-surface-2);
+    border-color: var(--kobo-border-subtle);
+  }
+
+  :deep(.q-field__native),
+  :deep(input),
+  :deep(textarea) {
+    color: var(--kobo-text);
+  }
+
+  :deep(.q-field__label) {
+    color: var(--kobo-text-3);
+  }
+}
+
+.mono-textarea {
+  :deep(textarea) {
+    font-family: var(--kobo-font-mono);
+    font-size: 13px;
+  }
+}
+
+.mono-guide {
+  margin: 0;
+  white-space: pre-wrap;
+  background: var(--kobo-surface-2);
+  border: 1px solid var(--kobo-border-subtle);
+  border-radius: var(--kobo-radius-sm);
+  padding: 8px 10px;
+  font-family: var(--kobo-font-mono);
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--kobo-text-2);
+}
+
+.readonly-input {
+  :deep(.q-field__control) {
+    background: var(--kobo-bg);
+  }
+
+  :deep(input) {
+    color: var(--kobo-text-3);
+  }
+}
+
+.project-list-col {
+  width: 30%;
+  min-width: 200px;
+  max-width: 280px;
+  flex-shrink: 0;
+  overflow: hidden;
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
+  max-height: calc(100vh - 140px);
+}
+
+.project-form-col {
+  flex: 1;
+  min-width: 0;
+}
+
+.project-item {
+  &:hover {
+    background-color: rgba(255, 255, 255, 0.03);
+  }
+}
+
+.project-item--active {
+  background-color: var(--kobo-hover) !important;
+  border-left: 2px solid var(--kobo-accent);
+}
+
+.save-btn--dirty {
+  box-shadow: 0 0 0 2px var(--kobo-accent) !important;
+  border-radius: var(--kobo-radius-sm);
+  transition: box-shadow var(--kobo-duration-short) var(--kobo-ease-out);
+}
+
+.settings-savebar {
+  position: absolute;
+  bottom: 0;
+  left: 240px;
+  right: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 32px;
+  background-color: var(--kobo-surface);
+  border-top: 1px solid var(--kobo-border-subtle);
+}
+
+/* Sous 600 px l'aside de navigation n'est pas rendu (`v-if="!isMobile"`), donc
+   le décalage de 240 px laissait la barre collée à droite : 135 px utiles sur
+   un écran de 375. Pleine largeur en mobile. */
+.settings-savebar--full {
+  left: 0;
+  padding: var(--kobo-space-md) var(--kobo-space-lg);
+}
+
+.settings-savebar__label {
+  font-family: var(--kobo-font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--kobo-text-2);
+}
+
+.settings-savebar__action {
+  background-color: var(--kobo-accent) !important;
+  color: var(--kobo-accent-fg) !important;
+  font-weight: 500;
+  font-size: 13px;
+  padding: 6px 16px;
+  border-radius: var(--kobo-radius-sm);
+
+  &:hover {
+    background-color: var(--kobo-accent-hover) !important;
+  }
+}
+
+.save-bar-enter-active,
+.save-bar-leave-active {
+  transition: transform var(--kobo-duration-medium) var(--kobo-ease-out),
+              opacity var(--kobo-duration-medium) var(--kobo-ease-out);
+}
+
+.save-bar-enter-from,
+.save-bar-leave-to {
+  transform: translateY(100%);
+  opacity: 0;
+}
+</style>

@@ -1,0 +1,2528 @@
+import Database from 'better-sqlite3'
+import { describe, expect, it, vi } from 'vitest'
+import {
+  getMigrationHistory,
+  getPendingMigrations,
+  migrations,
+  runMigrations,
+  SCHEMA_VERSION,
+} from '../server/db/migrations.js'
+import { initSchema } from '../server/db/schema.js'
+
+// Historical unit fixtures intentionally omit unrelated tables. Supply the event-log
+// table that has existed since v1 before exercising all later migrations.
+function migrateFixture(db: Database.Database): void {
+  if (
+    db
+      .prepare("SELECT 1 FROM sqlite_master WHERE name IN ('workspaces', 'schema_migrations', 'schema_version')")
+      .get() &&
+    !db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'ws_events'").get()
+  ) {
+    db.exec(`CREATE TABLE ws_events (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      type TEXT NOT NULL, payload TEXT NOT NULL, session_id TEXT, created_at TEXT NOT NULL)`)
+  }
+  runMigrations(db)
+}
+
+describe('runMigrations(db)', () => {
+  it('crée toutes les tables requises (fresh install)', () => {
+    const db = new Database(':memory:')
+    migrateFixture(db)
+
+    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all() as {
+      name: string
+    }[]
+
+    const tableNames = tables.map((t) => t.name)
+    expect(tableNames).toContain('workspaces')
+    expect(tableNames).toContain('tasks')
+    expect(tableNames).toContain('agent_sessions')
+    expect(tableNames).toContain('ws_events')
+    expect(tableNames).toContain('workspace_permission_rules')
+    expect(tableNames).toContain('schema_migrations')
+    expect(tableNames).not.toContain('schema_version')
+    db.close()
+  })
+
+  it('enregistre toutes les migrations dans schema_migrations (fresh install)', () => {
+    const db = new Database(':memory:')
+    migrateFixture(db)
+
+    const history = getMigrationHistory(db)
+    // init-schema (v1) + all incremental migrations
+    expect(history.length).toBe(1 + migrations.length)
+    expect(history[0].version).toBe(1)
+    expect(history[0].name).toBe('init-schema')
+    expect(history[history.length - 1].version).toBe(SCHEMA_VERSION)
+    db.close()
+  })
+
+  it('exporte SCHEMA_VERSION = 49', () => {
+    expect(SCHEMA_VERSION).toBe(49)
+  })
+
+  it('migration v33 records and backfills the engine on agent sessions', () => {
+    const db = new Database(':memory:')
+    db.exec(`
+      CREATE TABLE workspaces (id TEXT PRIMARY KEY, engine TEXT NOT NULL);
+      CREATE TABLE agent_sessions (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        engine_session_id TEXT
+      );
+      INSERT INTO workspaces VALUES ('ws-1', 'codex');
+      INSERT INTO agent_sessions VALUES ('session-1', 'ws-1', 'thread-1');
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+    `)
+    for (let version = 1; version <= 32; version++) {
+      db.prepare('INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)').run(
+        version,
+        `v${version}`,
+        'now',
+      )
+    }
+
+    migrateFixture(db)
+
+    const columns = (db.prepare('PRAGMA table_info(agent_sessions)').all() as Array<{ name: string }>).map(
+      (column) => column.name,
+    )
+    expect(columns).toContain('engine')
+    expect(db.prepare("SELECT engine FROM agent_sessions WHERE id = 'session-1'").get()).toEqual({ engine: 'codex' })
+    db.close()
+  })
+
+  it('migration v34 backfills and maintains per-session event metrics', () => {
+    const db = new Database(':memory:')
+    db.pragma('foreign_keys = ON')
+    db.exec(`
+      CREATE TABLE workspaces (id TEXT PRIMARY KEY);
+      CREATE TABLE agent_sessions (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id));
+      CREATE TABLE ws_events (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        type TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        session_id TEXT,
+        created_at TEXT NOT NULL
+      );
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+      INSERT INTO workspaces VALUES ('ws-1');
+      INSERT INTO agent_sessions VALUES ('session-1', 'ws-1');
+      INSERT INTO ws_events VALUES
+        ('e1', 'ws-1', 'agent:event', '{"kind":"tool:call"}', 'session-1', 'now'),
+        ('e2', 'ws-1', 'agent:event', '{"kind":"usage","inputTokens":120,"outputTokens":30}', 'session-1', 'now');
+    `)
+    for (let version = 1; version <= 33; version++) {
+      db.prepare('INSERT INTO schema_migrations VALUES (?, ?, ?)').run(version, `v${version}`, 'now')
+    }
+
+    migrateFixture(db)
+    expect(db.prepare('SELECT * FROM session_event_metrics').get()).toMatchObject({
+      workspace_id: 'ws-1',
+      session_id: 'session-1',
+      tool_calls: 1,
+      errors: 0,
+      input_tokens: 120,
+      output_tokens: 30,
+    })
+
+    db.prepare('INSERT INTO ws_events VALUES (?, ?, ?, ?, ?, ?)').run(
+      'e3',
+      'ws-1',
+      'agent:event',
+      JSON.stringify({ kind: 'tool:result', isError: true }),
+      'session-1',
+      'now',
+    )
+    expect((db.prepare('SELECT errors FROM session_event_metrics').get() as { errors: number }).errors).toBe(1)
+
+    // v36 drops the AFTER DELETE trigger: metrics are recomputed once,
+    // application-side, at the end of the deleting transaction (see
+    // recomputeSessionMetrics in workspace-service.ts). The stored value is
+    // therefore intentionally stale until that call runs.
+    db.prepare("DELETE FROM ws_events WHERE id = 'e3'").run()
+    expect((db.prepare('SELECT errors FROM session_event_metrics').get() as { errors: number }).errors).toBe(1)
+    expect(
+      (db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND name = ?")
+        .get('trg_ws_events_metrics_delete') as { name: string } | undefined) ?? null,
+    ).toBeNull()
+    db.close()
+  })
+
+  it('migration v35 adds a nullable task progress baseline without losing sessions', () => {
+    const upgraded = new Database(':memory:')
+    upgraded.exec(`
+      CREATE TABLE agent_sessions (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'running'
+      );
+      INSERT INTO agent_sessions (id, workspace_id, status) VALUES ('session-1', 'ws-1', 'completed');
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+    `)
+    for (let version = 1; version <= 34; version++) {
+      upgraded.prepare('INSERT INTO schema_migrations VALUES (?, ?, ?)').run(version, `v${version}`, 'now')
+    }
+
+    migrateFixture(upgraded)
+
+    expect(
+      (upgraded.prepare('PRAGMA table_info(agent_sessions)').all() as Array<{ name: string }>).map(
+        (column) => column.name,
+      ),
+    ).toContain('task_progress_baseline')
+    expect(
+      upgraded.prepare("SELECT id, status, task_progress_baseline FROM agent_sessions WHERE id = 'session-1'").get(),
+    ).toEqual({
+      id: 'session-1',
+      status: 'completed',
+      task_progress_baseline: null,
+    })
+    expect(getMigrationHistory(upgraded).find((record) => record.version === 35)).toMatchObject({
+      version: 35,
+      name: 'add-agent-session-task-progress-baseline',
+    })
+    upgraded.close()
+
+    const fresh = new Database(':memory:')
+    initSchema(fresh)
+    expect(
+      (fresh.prepare('PRAGMA table_info(agent_sessions)').all() as Array<{ name: string }>).map(
+        (column) => column.name,
+      ),
+    ).toContain('task_progress_baseline')
+    fresh.close()
+  })
+
+  it('migration v36 drops the delete trigger and adds the hot indexes, converging with a fresh install', () => {
+    const upgraded = new Database(':memory:')
+    initSchema(upgraded)
+    // Re-create the v34 shape on purpose: an installation migrated through v34
+    // carries the trigger, a fresh install created after v36 never does.
+    upgraded.exec(`
+      CREATE TRIGGER IF NOT EXISTS trg_ws_events_metrics_delete
+      AFTER DELETE ON ws_events
+      WHEN OLD.type = 'agent:event' AND OLD.session_id IS NOT NULL
+      BEGIN
+        DELETE FROM session_event_metrics
+        WHERE workspace_id = OLD.workspace_id AND session_id = OLD.session_id;
+      END;
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+    `)
+    for (let version = 1; version <= 35; version++) {
+      upgraded.prepare('INSERT INTO schema_migrations VALUES (?, ?, ?)').run(version, `v${version}`, 'now')
+    }
+
+    migrateFixture(upgraded)
+
+    const upgradedObjects = (
+      upgraded
+        .prepare("SELECT name FROM sqlite_master WHERE type IN ('trigger', 'index') AND name NOT LIKE 'sqlite_%'")
+        .all() as Array<{ name: string }>
+    )
+      .map((row) => row.name)
+      .sort()
+    expect(upgradedObjects).not.toContain('trg_ws_events_metrics_delete')
+    expect(upgradedObjects).toContain('trg_ws_events_metrics_insert')
+    for (const name of [
+      'idx_tasks_workspace_sort',
+      'idx_agent_sessions_workspace_started',
+      'idx_agent_sessions_engine_session',
+      'idx_workspaces_archived_updated',
+      'idx_session_event_metrics_session',
+    ]) {
+      expect(upgradedObjects).toContain(name)
+    }
+    expect(getMigrationHistory(upgraded).find((record) => record.version === 36)).toMatchObject({
+      version: 36,
+      name: 'drop-metrics-delete-trigger-add-hot-indexes',
+    })
+
+    const fresh = new Database(':memory:')
+    runMigrations(fresh)
+    const freshObjects = (
+      fresh
+        .prepare("SELECT name FROM sqlite_master WHERE type IN ('trigger', 'index') AND name NOT LIKE 'sqlite_%'")
+        .all() as Array<{ name: string }>
+    )
+      .map((row) => row.name)
+      .sort()
+    expect(freshObjects).toEqual(upgradedObjects)
+
+    upgraded.close()
+    fresh.close()
+  })
+
+  it('migration v37 adds a nullable pr_url column to workspaces without losing data', () => {
+    const upgraded = new Database(':memory:')
+    upgraded.exec(`
+      CREATE TABLE workspaces (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        project_path TEXT NOT NULL,
+        source_branch TEXT NOT NULL,
+        working_branch TEXT NOT NULL,
+        status TEXT NOT NULL
+      );
+      INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, status)
+        VALUES ('w1', 'Keep me', '/repo', 'main', 'feat/x', 'idle');
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+    `)
+    for (let version = 1; version <= 36; version++) {
+      upgraded.prepare('INSERT INTO schema_migrations VALUES (?, ?, ?)').run(version, `v${version}`, 'now')
+    }
+
+    migrateFixture(upgraded)
+
+    expect(
+      (upgraded.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>).map((column) => column.name),
+    ).toContain('pr_url')
+    expect(upgraded.prepare("SELECT name, pr_url FROM workspaces WHERE id = 'w1'").get()).toEqual({
+      name: 'Keep me',
+      pr_url: null,
+    })
+    expect(getMigrationHistory(upgraded).find((record) => record.version === 37)).toMatchObject({
+      version: 37,
+      name: 'add-workspace-pr-url',
+    })
+    upgraded.close()
+
+    const fresh = new Database(':memory:')
+    initSchema(fresh)
+    expect(
+      (fresh.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>).map((column) => column.name),
+    ).toContain('pr_url')
+    fresh.close()
+  })
+
+  it('migration v38 adds a reason column to pending_quota_backoffs, backfilled to quota', () => {
+    const upgraded = new Database(':memory:')
+    upgraded.exec(`
+      CREATE TABLE workspaces (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        project_path TEXT NOT NULL,
+        source_branch TEXT NOT NULL,
+        working_branch TEXT NOT NULL,
+        status TEXT NOT NULL
+      );
+      INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, status)
+        VALUES ('w1', 'Keep me', '/repo', 'main', 'feat/x', 'quota');
+      CREATE TABLE pending_quota_backoffs (
+        workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+        target_at    TEXT NOT NULL,
+        resets_at    TEXT,
+        source       TEXT NOT NULL CHECK (source IN ('rate_limit_info', 'usage_api', 'fallback_ladder')),
+        retry_count  INTEGER NOT NULL DEFAULT 0,
+        created_at   TEXT NOT NULL
+      );
+      INSERT INTO pending_quota_backoffs (workspace_id, target_at, resets_at, source, retry_count, created_at)
+        VALUES ('w1', '2026-05-06T13:30:00Z', NULL, 'fallback_ladder', 2, '2026-05-06T13:00:00Z');
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+    `)
+    for (let version = 1; version <= 37; version++) {
+      upgraded.prepare('INSERT INTO schema_migrations VALUES (?, ?, ?)').run(version, `v${version}`, 'now')
+    }
+
+    migrateFixture(upgraded)
+
+    expect(
+      (upgraded.prepare('PRAGMA table_info(pending_quota_backoffs)').all() as Array<{ name: string }>).map(
+        (column) => column.name,
+      ),
+    ).toContain('reason')
+    expect(
+      upgraded
+        .prepare("SELECT workspace_id, retry_count, reason FROM pending_quota_backoffs WHERE workspace_id = 'w1'")
+        .get(),
+    ).toEqual({
+      workspace_id: 'w1',
+      retry_count: 2,
+      reason: 'quota',
+    })
+    expect(getMigrationHistory(upgraded).find((record) => record.version === 38)).toMatchObject({
+      version: 38,
+      name: 'add-quota-backoff-reason',
+    })
+    upgraded.close()
+
+    const fresh = new Database(':memory:')
+    initSchema(fresh)
+    expect(
+      (fresh.prepare('PRAGMA table_info(pending_quota_backoffs)').all() as Array<{ name: string }>).map(
+        (column) => column.name,
+      ),
+    ).toContain('reason')
+    fresh.close()
+  })
+
+  it('migration v17 unifies legacy permission_mode + permission_profile into agent_permission_mode', () => {
+    // Build a v16 database with the old schema and seed rows covering each
+    // legacy combination so we can assert the unified column comes out right.
+    const db = new Database(':memory:')
+    db.exec(`
+      CREATE TABLE workspaces (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        project_path TEXT NOT NULL,
+        source_branch TEXT NOT NULL,
+        working_branch TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'created',
+        notion_url TEXT,
+        notion_page_id TEXT,
+        sentry_url TEXT,
+        worktree_path TEXT,
+        worktree_owned INTEGER NOT NULL DEFAULT 1,
+        model TEXT NOT NULL,
+        reasoning_effort TEXT NOT NULL DEFAULT 'auto',
+        permission_mode TEXT NOT NULL DEFAULT 'auto-accept',
+        dev_server_status TEXT NOT NULL DEFAULT 'stopped',
+        has_unread INTEGER NOT NULL DEFAULT 0,
+        archived_at TEXT,
+        favorited_at TEXT,
+        tags TEXT NOT NULL DEFAULT '[]',
+        engine TEXT NOT NULL DEFAULT 'claude-code',
+        auto_loop INTEGER NOT NULL DEFAULT 0,
+        auto_loop_ready INTEGER NOT NULL DEFAULT 0,
+        no_progress_streak INTEGER NOT NULL DEFAULT 0,
+        permission_profile TEXT NOT NULL DEFAULT 'bypass',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+      CREATE TABLE pending_wakeups (
+        workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+        target_at    TEXT NOT NULL,
+        prompt       TEXT NOT NULL,
+        reason       TEXT,
+        created_at   TEXT NOT NULL
+      );
+    `)
+    // Mark all migrations up to v16 as already applied.
+    const now = '2025-01-01'
+    db.prepare('INSERT INTO schema_migrations VALUES (?, ?, ?)').run(1, 'init-schema', now)
+    for (const m of migrations) {
+      if (m.version <= 16) {
+        db.prepare('INSERT INTO schema_migrations VALUES (?, ?, ?)').run(m.version, m.name, now)
+      }
+    }
+    // Seed rows covering every (permission_mode, permission_profile) combination.
+    const insert = db.prepare(
+      `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, model, permission_mode, permission_profile, created_at, updated_at)
+       VALUES (?, 'w', '/p', 'main', 'feat', 'claude-opus-4-7', ?, ?, ?, ?)`,
+    )
+    insert.run('plan-bypass', 'plan', 'bypass', now, now)
+    insert.run('plan-strict', 'plan', 'strict', now, now)
+    insert.run('auto-bypass', 'auto-accept', 'bypass', now, now)
+    insert.run('auto-strict', 'auto-accept', 'strict', now, now)
+    insert.run('auto-interactive', 'auto-accept', 'interactive', now, now)
+
+    migrateFixture(db)
+
+    const rows = db.prepare('SELECT id, agent_permission_mode FROM workspaces ORDER BY id').all() as Array<{
+      id: string
+      agent_permission_mode: string
+    }>
+    const map = Object.fromEntries(rows.map((r) => [r.id, r.agent_permission_mode]))
+    // 'plan' wins regardless of the profile.
+    expect(map['plan-bypass']).toBe('plan')
+    expect(map['plan-strict']).toBe('plan')
+    // 'auto-accept' rows promote the profile.
+    expect(map['auto-bypass']).toBe('bypass')
+    expect(map['auto-strict']).toBe('strict')
+    expect(map['auto-interactive']).toBe('interactive')
+
+    // Idempotent: a second run preserves the data and stays at the latest version.
+    migrateFixture(db)
+    const second = db.prepare('SELECT agent_permission_mode FROM workspaces WHERE id = ?').get('plan-bypass') as {
+      agent_permission_mode: string
+    }
+    expect(second.agent_permission_mode).toBe('plan')
+    db.close()
+  })
+
+  it('migre depuis la legacy schema_version table', () => {
+    const db = new Database(':memory:')
+    // Simulate a v1 database with old schema_version table
+    db.exec(
+      [
+        'CREATE TABLE schema_version (version INTEGER NOT NULL)',
+        'INSERT INTO schema_version (version) VALUES (1)',
+        "CREATE TABLE workspaces (id TEXT PRIMARY KEY, name TEXT NOT NULL, project_path TEXT NOT NULL, source_branch TEXT NOT NULL, working_branch TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'created', notion_url TEXT, notion_page_id TEXT, model TEXT NOT NULL DEFAULT 'claude-opus-4-6', dev_server_status TEXT NOT NULL DEFAULT 'stopped', archived_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
+        "CREATE TABLE tasks (id TEXT PRIMARY KEY, workspace_id TEXT, title TEXT, status TEXT DEFAULT 'pending', is_acceptance_criterion INTEGER DEFAULT 0, sort_order INTEGER DEFAULT 0, created_at TEXT, updated_at TEXT)",
+        "CREATE TABLE agent_sessions (id TEXT PRIMARY KEY, workspace_id TEXT, pid INTEGER, claude_session_id TEXT, status TEXT DEFAULT 'running', started_at TEXT, ended_at TEXT)",
+        'CREATE TABLE ws_events (id TEXT PRIMARY KEY, workspace_id TEXT, type TEXT, payload TEXT, session_id TEXT, created_at TEXT)',
+        "INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at) VALUES ('w1', 'test', '/tmp', 'main', 'feat', '2025-01-01', '2025-01-01')",
+      ].join('; '),
+    )
+
+    migrateFixture(db)
+
+    // Legacy table should be dropped
+    const hasLegacy = (
+      db.prepare("SELECT count(*) as c FROM sqlite_master WHERE type='table' AND name='schema_version'").get() as {
+        c: number
+      }
+    ).c
+    expect(hasLegacy).toBe(0)
+
+    // History should show init + applied migration
+    const history = getMigrationHistory(db)
+    expect(history.some((h) => h.version === 1 && h.name === 'init-schema')).toBe(true)
+    expect(history.some((h) => h.version === 2 && h.name === 'add-permission-mode')).toBe(true)
+
+    // Migration should have been applied
+    const row = db.prepare('SELECT permission_mode FROM workspaces WHERE id = ?').get('w1') as {
+      permission_mode: string
+    }
+    expect(row.permission_mode).toBe('auto-accept')
+    db.close()
+  })
+
+  it('est idempotent (peut être appelé plusieurs fois)', () => {
+    const db = new Database(':memory:')
+    expect(() => {
+      migrateFixture(db)
+      migrateFixture(db)
+      migrateFixture(db)
+    }).not.toThrow()
+
+    // Should still have exactly the same number of records
+    const history = getMigrationHistory(db)
+    expect(history.length).toBe(1 + migrations.length)
+    db.close()
+  })
+
+  it('rolls back both schema changes and history when a migration fails', () => {
+    const db = new Database(':memory:')
+    migrateFixture(db)
+    const failingVersion = SCHEMA_VERSION + 1
+    migrations.push({
+      version: failingVersion,
+      name: 'test-failing-migration',
+      migrate(database) {
+        database.exec('CREATE TABLE should_be_rolled_back (id TEXT)')
+        throw new Error('injected migration failure')
+      },
+    })
+    try {
+      expect(() => runMigrations(db)).toThrow('injected migration failure')
+      const table = db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'should_be_rolled_back'")
+        .get()
+      expect(table).toBeUndefined()
+      expect(db.prepare('SELECT version FROM schema_migrations WHERE version = ?').get(failingVersion)).toBeUndefined()
+    } finally {
+      migrations.pop()
+      db.close()
+    }
+  })
+
+  it("n'applique pas une migration déjà présente", () => {
+    const db = new Database(':memory:')
+    migrateFixture(db)
+
+    const beforeCount = (
+      db.prepare("SELECT count(*) as c FROM sqlite_master WHERE type='table'").get() as { c: number }
+    ).c
+
+    migrateFixture(db)
+
+    const afterCount = (db.prepare("SELECT count(*) as c FROM sqlite_master WHERE type='table'").get() as { c: number })
+      .c
+
+    expect(afterCount).toBe(beforeCount)
+    db.close()
+  })
+
+  it('crée les index workspace_id après migration (fresh install)', () => {
+    const db = new Database(':memory:')
+    migrateFixture(db)
+
+    const indexes = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%_workspace_id'")
+      .all() as { name: string }[]
+    const indexNames = indexes.map((i) => i.name)
+
+    expect(indexNames).toContain('idx_tasks_workspace_id')
+    expect(indexNames).toContain('idx_agent_sessions_workspace_id')
+    expect(indexNames).toContain('idx_ws_events_workspace_id')
+    db.close()
+  })
+
+  it("crée les index workspace_id lors d'un upgrade v2 → v3", () => {
+    const db = new Database(':memory:')
+    // Simulate a v2 database (init + permission_mode migration already applied)
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        version  INTEGER PRIMARY KEY,
+        name     TEXT NOT NULL,
+        applied_at TEXT NOT NULL
+      )
+    `)
+    db.exec(`
+      CREATE TABLE workspaces (id TEXT PRIMARY KEY, name TEXT NOT NULL, project_path TEXT NOT NULL, source_branch TEXT NOT NULL, working_branch TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'created', notion_url TEXT, notion_page_id TEXT, model TEXT NOT NULL DEFAULT 'claude-opus-4-6', permission_mode TEXT NOT NULL DEFAULT 'auto-accept', dev_server_status TEXT NOT NULL DEFAULT 'stopped', archived_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE tasks (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, title TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', is_acceptance_criterion INTEGER DEFAULT 0, sort_order INTEGER DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE agent_sessions (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, pid INTEGER, claude_session_id TEXT, status TEXT NOT NULL DEFAULT 'running', started_at TEXT NOT NULL, ended_at TEXT);
+      CREATE TABLE ws_events (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, type TEXT NOT NULL, payload TEXT NOT NULL, session_id TEXT, created_at TEXT NOT NULL);
+    `)
+    const now = new Date().toISOString()
+    db.prepare('INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)').run(1, 'init-schema', now)
+    db.prepare('INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)').run(
+      2,
+      'add-permission-mode',
+      now,
+    )
+
+    // No indexes should exist yet
+    const beforeIndexes = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%_workspace_id'")
+      .all() as { name: string }[]
+    expect(beforeIndexes.length).toBe(0)
+
+    migrateFixture(db)
+
+    // Indexes should now exist
+    const afterIndexes = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%_workspace_id'")
+      .all() as { name: string }[]
+    const indexNames = afterIndexes.map((i) => i.name)
+
+    expect(indexNames).toContain('idx_tasks_workspace_id')
+    expect(indexNames).toContain('idx_agent_sessions_workspace_id')
+    expect(indexNames).toContain('idx_ws_events_workspace_id')
+
+    // Migration should be recorded
+    const history = getMigrationHistory(db)
+    expect(history.some((h) => h.version === 3 && h.name === 'add-workspace-id-indexes')).toBe(true)
+    db.close()
+  })
+
+  it("ajoute la colonne has_unread lors d'un upgrade v3 -> v4", () => {
+    const db = new Database(':memory:')
+    // Simulate a v3 database
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        version  INTEGER PRIMARY KEY,
+        name     TEXT NOT NULL,
+        applied_at TEXT NOT NULL
+      )
+    `)
+    db.exec(`
+      CREATE TABLE workspaces (id TEXT PRIMARY KEY, name TEXT NOT NULL, project_path TEXT NOT NULL, source_branch TEXT NOT NULL, working_branch TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'created', notion_url TEXT, notion_page_id TEXT, model TEXT NOT NULL DEFAULT 'claude-opus-4-6', permission_mode TEXT NOT NULL DEFAULT 'auto-accept', dev_server_status TEXT NOT NULL DEFAULT 'stopped', archived_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE tasks (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, title TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', is_acceptance_criterion INTEGER DEFAULT 0, sort_order INTEGER DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE agent_sessions (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, pid INTEGER, claude_session_id TEXT, status TEXT NOT NULL DEFAULT 'running', started_at TEXT NOT NULL, ended_at TEXT);
+      CREATE TABLE ws_events (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, type TEXT NOT NULL, payload TEXT NOT NULL, session_id TEXT, created_at TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS idx_tasks_workspace_id ON tasks(workspace_id);
+      CREATE INDEX IF NOT EXISTS idx_agent_sessions_workspace_id ON agent_sessions(workspace_id);
+      CREATE INDEX IF NOT EXISTS idx_ws_events_workspace_id ON ws_events(workspace_id);
+    `)
+    const now = new Date().toISOString()
+    db.prepare('INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)').run(1, 'init-schema', now)
+    db.prepare('INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)').run(
+      2,
+      'add-permission-mode',
+      now,
+    )
+    db.prepare('INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)').run(
+      3,
+      'add-workspace-id-indexes',
+      now,
+    )
+
+    // Insert a workspace before migration
+    db.prepare(
+      "INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at) VALUES ('w1', 'test', '/tmp', 'main', 'feat', ?, ?)",
+    ).run(now, now)
+
+    migrateFixture(db)
+
+    // has_unread column should exist with default value 0
+    const row = db.prepare('SELECT has_unread FROM workspaces WHERE id = ?').get('w1') as { has_unread: number }
+    expect(row.has_unread).toBe(0)
+
+    // Migration should be recorded
+    const history = getMigrationHistory(db)
+    expect(history.some((h) => h.version === 4 && h.name === 'add-has-unread')).toBe(true)
+    db.close()
+  })
+
+  it('getMigrationHistory retourne un tableau vide sur une DB sans la table', () => {
+    const db = new Database(':memory:')
+    const history = getMigrationHistory(db)
+    expect(history).toEqual([])
+    db.close()
+  })
+
+  it('migration v5: ajoute la colonne name à agent_sessions', () => {
+    const db = new Database(':memory:')
+    // Simulate a v4 database (all migrations up to v4 applied manually)
+    db.exec(`
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+      CREATE TABLE workspaces (id TEXT PRIMARY KEY, name TEXT NOT NULL, project_path TEXT NOT NULL,
+        source_branch TEXT NOT NULL, working_branch TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'created',
+        notion_url TEXT, notion_page_id TEXT, model TEXT NOT NULL DEFAULT 'claude-opus-4-6',
+        permission_mode TEXT NOT NULL DEFAULT 'auto-accept',
+        dev_server_status TEXT NOT NULL DEFAULT 'stopped', archived_at TEXT, has_unread INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE agent_sessions (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL
+        REFERENCES workspaces(id) ON DELETE CASCADE, pid INTEGER, claude_session_id TEXT,
+        status TEXT NOT NULL DEFAULT 'running', started_at TEXT NOT NULL, ended_at TEXT);
+      CREATE TABLE tasks (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, title TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending', is_acceptance_criterion INTEGER NOT NULL DEFAULT 0,
+        sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE ws_events (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, type TEXT NOT NULL,
+        payload TEXT NOT NULL, session_id TEXT, created_at TEXT NOT NULL);
+      INSERT INTO schema_migrations (version, name, applied_at) VALUES
+        (1, 'init-schema', '2025-01-01'),
+        (2, 'add-permission-mode', '2025-01-01'),
+        (3, 'add-workspace-id-indexes', '2025-01-01'),
+        (4, 'add-has-unread', '2025-01-01');
+    `)
+
+    migrateFixture(db)
+
+    const cols = db.prepare('PRAGMA table_info(agent_sessions)').all() as { name: string }[]
+    expect(cols.map((c) => c.name)).toContain('name')
+
+    const history = getMigrationHistory(db)
+    expect(history.find((h) => h.version === 5)).toBeTruthy()
+    db.close()
+  })
+
+  it('fresh install v5: agent_sessions a la colonne name', () => {
+    const db = new Database(':memory:')
+    migrateFixture(db)
+    const cols = db.prepare('PRAGMA table_info(agent_sessions)').all() as { name: string }[]
+    expect(cols.map((c) => c.name)).toContain('name')
+    db.close()
+  })
+
+  it('migration v6: backfille ws_events.session_id depuis claude_session_id vers agent_sessions.id', () => {
+    const db = new Database(':memory:')
+    // Simulate a v5 database with existing ws_events rows tagged by claude_session_id
+    db.exec(`
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+      CREATE TABLE workspaces (id TEXT PRIMARY KEY, name TEXT NOT NULL, project_path TEXT NOT NULL,
+        source_branch TEXT NOT NULL, working_branch TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'created',
+        notion_url TEXT, notion_page_id TEXT, model TEXT NOT NULL DEFAULT 'claude-opus-4-6',
+        permission_mode TEXT NOT NULL DEFAULT 'auto-accept',
+        dev_server_status TEXT NOT NULL DEFAULT 'stopped', archived_at TEXT, has_unread INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE agent_sessions (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL
+        REFERENCES workspaces(id) ON DELETE CASCADE, pid INTEGER, claude_session_id TEXT,
+        status TEXT NOT NULL DEFAULT 'running', started_at TEXT NOT NULL, ended_at TEXT, name TEXT);
+      CREATE TABLE tasks (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, title TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending', is_acceptance_criterion INTEGER NOT NULL DEFAULT 0,
+        sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE ws_events (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, type TEXT NOT NULL,
+        payload TEXT NOT NULL, session_id TEXT, created_at TEXT NOT NULL);
+      INSERT INTO schema_migrations (version, name, applied_at) VALUES
+        (1, 'init-schema', '2025-01-01'),
+        (2, 'add-permission-mode', '2025-01-01'),
+        (3, 'add-workspace-id-indexes', '2025-01-01'),
+        (4, 'add-has-unread', '2025-01-01'),
+        (5, 'add-agent-session-name', '2025-01-01');
+      INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
+        VALUES ('w1', 'test', '/tmp', 'main', 'feat', '2025-01-01', '2025-01-01');
+      INSERT INTO agent_sessions (id, workspace_id, pid, claude_session_id, status, started_at)
+        VALUES ('sess-internal-1', 'w1', 100, 'claude-uuid-1', 'completed', '2025-01-01'),
+               ('sess-internal-2', 'w1', 101, 'claude-uuid-2', 'completed', '2025-01-02');
+      INSERT INTO ws_events (id, workspace_id, type, payload, session_id, created_at) VALUES
+        ('e1', 'w1', 'agent:output', '{}', 'claude-uuid-1', '2025-01-01'),
+        ('e2', 'w1', 'agent:output', '{}', 'claude-uuid-1', '2025-01-01'),
+        ('e3', 'w1', 'agent:output', '{}', 'claude-uuid-2', '2025-01-02'),
+        ('e4', 'w1', 'agent:output', '{}', NULL, '2025-01-02'),
+        ('e5', 'w1', 'agent:output', '{}', 'unknown-uuid', '2025-01-02');
+    `)
+
+    migrateFixture(db)
+
+    // Events tagged with known claude_session_id should be rewritten to agent_sessions.id
+    const events = db.prepare('SELECT id, session_id FROM ws_events ORDER BY id').all() as {
+      id: string
+      session_id: string | null
+    }[]
+    expect(events.find((e) => e.id === 'e1')?.session_id).toBe('sess-internal-1')
+    expect(events.find((e) => e.id === 'e2')?.session_id).toBe('sess-internal-1')
+    expect(events.find((e) => e.id === 'e3')?.session_id).toBe('sess-internal-2')
+    // NULL stays NULL
+    expect(events.find((e) => e.id === 'e4')?.session_id).toBe(null)
+    // Unknown claude_session_id stays untouched (no matching agent_sessions row)
+    expect(events.find((e) => e.id === 'e5')?.session_id).toBe('unknown-uuid')
+
+    const history = getMigrationHistory(db)
+    expect(history.find((h) => h.version === 6)).toBeTruthy()
+    db.close()
+  })
+
+  it('migration v6 est idempotente (un second runMigrations ne re-modifie rien)', () => {
+    const db = new Database(':memory:')
+    migrateFixture(db)
+
+    // Insert legacy data AFTER the initial migration — this mimics events
+    // that could have been written by an older backend still running
+    // against the upgraded schema.
+    db.exec(`
+      INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
+        VALUES ('w1', 'test', '/tmp', 'main', 'feat', '2025-01-01', '2025-01-01');
+      INSERT INTO agent_sessions (id, workspace_id, pid, engine_session_id, status, started_at)
+        VALUES ('sess-1', 'w1', 100, 'claude-legacy', 'completed', '2025-01-01');
+      INSERT INTO ws_events (id, workspace_id, type, payload, session_id, created_at)
+        VALUES ('e1', 'w1', 'agent:output', '{}', 'claude-legacy', '2025-01-01');
+    `)
+
+    // Run migrations a second time — schema_migrations already has v6, so the
+    // backfill should NOT run again. The legacy row must remain unchanged.
+    migrateFixture(db)
+
+    const row = db.prepare('SELECT session_id FROM ws_events WHERE id = ?').get('e1') as {
+      session_id: string | null
+    }
+    // v6 was already marked as applied, so the second run is a no-op: the legacy
+    // tag is still present. This protects against accidental double-execution.
+    expect(row.session_id).toBe('claude-legacy')
+
+    // And the history should still contain v6 exactly once.
+    const history = getMigrationHistory(db)
+    const v6Entries = history.filter((h) => h.version === 6)
+    expect(v6Entries.length).toBe(1)
+
+    db.close()
+  })
+
+  it('v8: adds favorited_at column to workspaces (nullable, defaults to NULL)', () => {
+    const db = new Database(':memory:')
+    // Simulate a v7 database
+    db.exec(`
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+      CREATE TABLE workspaces (id TEXT PRIMARY KEY, name TEXT NOT NULL, project_path TEXT NOT NULL,
+        source_branch TEXT NOT NULL, working_branch TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'created',
+        notion_url TEXT, notion_page_id TEXT, model TEXT NOT NULL DEFAULT 'claude-opus-4-7',
+        reasoning_effort TEXT NOT NULL DEFAULT 'auto',
+        permission_mode TEXT NOT NULL DEFAULT 'auto-accept',
+        dev_server_status TEXT NOT NULL DEFAULT 'stopped', has_unread INTEGER NOT NULL DEFAULT 0,
+        archived_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE tasks (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, title TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending', is_acceptance_criterion INTEGER NOT NULL DEFAULT 0,
+        sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE agent_sessions (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL
+        REFERENCES workspaces(id) ON DELETE CASCADE, pid INTEGER, claude_session_id TEXT,
+        status TEXT NOT NULL DEFAULT 'running', started_at TEXT NOT NULL, ended_at TEXT, name TEXT);
+      CREATE TABLE ws_events (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, type TEXT NOT NULL,
+        payload TEXT NOT NULL, session_id TEXT, created_at TEXT NOT NULL);
+      INSERT INTO schema_migrations (version, name, applied_at) VALUES
+        (1, 'init-schema', '2025-01-01'),
+        (2, 'add-permission-mode', '2025-01-01'),
+        (3, 'add-workspace-id-indexes', '2025-01-01'),
+        (4, 'add-has-unread', '2025-01-01'),
+        (5, 'add-agent-session-name', '2025-01-01'),
+        (6, 'backfill-ws-events-session-id', '2025-01-01'),
+        (7, 'add-reasoning-effort', '2025-01-01');
+    `)
+
+    // Insert a workspace before migration
+    const now = new Date().toISOString()
+    db.prepare(
+      "INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at) VALUES ('w1', 'test', '/tmp', 'main', 'feat', ?, ?)",
+    ).run(now, now)
+
+    migrateFixture(db)
+
+    // favorited_at column should exist and be nullable
+    const cols = db.prepare('PRAGMA table_info(workspaces)').all() as {
+      name: string
+      notnull: number
+    }[]
+    const favoritedAtCol = cols.find((c) => c.name === 'favorited_at')
+    expect(favoritedAtCol).toBeDefined()
+    expect(favoritedAtCol?.notnull).toBe(0)
+
+    // Existing row should have favorited_at = NULL
+    const row = db.prepare('SELECT favorited_at FROM workspaces WHERE id = ?').get('w1') as {
+      favorited_at: string | null
+    }
+    expect(row.favorited_at).toBeNull()
+
+    // Migration should be recorded
+    const history = getMigrationHistory(db)
+    expect(history.find((h) => h.version === 8 && h.name === 'add-workspace-favorited-at')).toBeTruthy()
+
+    db.close()
+  })
+
+  it('v8: fresh install matches upgraded install (identical table_info)', () => {
+    // Fresh install DB
+    const freshDb = new Database(':memory:')
+    runMigrations(freshDb)
+
+    // Upgraded from v7 DB
+    const upgradedDb = new Database(':memory:')
+    upgradedDb.exec(`
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+      CREATE TABLE workspaces (id TEXT PRIMARY KEY, name TEXT NOT NULL, project_path TEXT NOT NULL,
+        source_branch TEXT NOT NULL, working_branch TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'created',
+        notion_url TEXT, notion_page_id TEXT, model TEXT NOT NULL DEFAULT 'claude-opus-4-7',
+        reasoning_effort TEXT NOT NULL DEFAULT 'auto',
+        permission_mode TEXT NOT NULL DEFAULT 'auto-accept',
+        dev_server_status TEXT NOT NULL DEFAULT 'stopped', has_unread INTEGER NOT NULL DEFAULT 0,
+        archived_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE tasks (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, title TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending', is_acceptance_criterion INTEGER NOT NULL DEFAULT 0,
+        sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE agent_sessions (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL
+        REFERENCES workspaces(id) ON DELETE CASCADE, pid INTEGER, claude_session_id TEXT,
+        status TEXT NOT NULL DEFAULT 'running', started_at TEXT NOT NULL, ended_at TEXT, name TEXT);
+      CREATE TABLE ws_events (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, type TEXT NOT NULL,
+        payload TEXT NOT NULL, session_id TEXT, created_at TEXT NOT NULL);
+      INSERT INTO schema_migrations (version, name, applied_at) VALUES
+        (1, 'init-schema', '2025-01-01'),
+        (2, 'add-permission-mode', '2025-01-01'),
+        (3, 'add-workspace-id-indexes', '2025-01-01'),
+        (4, 'add-has-unread', '2025-01-01'),
+        (5, 'add-agent-session-name', '2025-01-01'),
+        (6, 'backfill-ws-events-session-id', '2025-01-01'),
+        (7, 'add-reasoning-effort', '2025-01-01');
+    `)
+    runMigrations(upgradedDb)
+
+    const freshCols = (freshDb.prepare('PRAGMA table_info(workspaces)').all() as { name: string }[])
+      .map((c) => c.name)
+      .sort()
+    const upgradedCols = (upgradedDb.prepare('PRAGMA table_info(workspaces)').all() as { name: string }[])
+      .map((c) => c.name)
+      .sort()
+
+    expect(freshCols).toEqual(upgradedCols)
+    expect(freshCols).toContain('favorited_at')
+
+    freshDb.close()
+    upgradedDb.close()
+  })
+
+  it('v10: adds engine column to workspaces and renames claude_session_id → engine_session_id without data loss', () => {
+    const db = new Database(':memory:')
+    // Simulate a v9 database (all migrations up to v9 applied manually)
+    db.exec(`
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+      CREATE TABLE workspaces (id TEXT PRIMARY KEY, name TEXT NOT NULL, project_path TEXT NOT NULL,
+        source_branch TEXT NOT NULL, working_branch TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'created',
+        notion_url TEXT, notion_page_id TEXT, model TEXT NOT NULL DEFAULT 'claude-opus-4-7',
+        reasoning_effort TEXT NOT NULL DEFAULT 'auto',
+        permission_mode TEXT NOT NULL DEFAULT 'auto-accept',
+        dev_server_status TEXT NOT NULL DEFAULT 'stopped', has_unread INTEGER NOT NULL DEFAULT 0,
+        archived_at TEXT, favorited_at TEXT, tags TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE tasks (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, title TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending', is_acceptance_criterion INTEGER NOT NULL DEFAULT 0,
+        sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE agent_sessions (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL
+        REFERENCES workspaces(id) ON DELETE CASCADE, pid INTEGER, claude_session_id TEXT,
+        status TEXT NOT NULL DEFAULT 'running', started_at TEXT NOT NULL, ended_at TEXT, name TEXT);
+      CREATE TABLE ws_events (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, type TEXT NOT NULL,
+        payload TEXT NOT NULL, session_id TEXT, created_at TEXT NOT NULL);
+      INSERT INTO schema_migrations (version, name, applied_at) VALUES
+        (1, 'init-schema', '2025-01-01'),
+        (2, 'add-permission-mode', '2025-01-01'),
+        (3, 'add-workspace-id-indexes', '2025-01-01'),
+        (4, 'add-has-unread', '2025-01-01'),
+        (5, 'add-agent-session-name', '2025-01-01'),
+        (6, 'backfill-ws-events-session-id', '2025-01-01'),
+        (7, 'add-reasoning-effort', '2025-01-01'),
+        (8, 'add-workspace-favorited-at', '2025-01-01'),
+        (9, 'add-workspace-tags', '2025-01-01');
+      INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
+        VALUES ('w1', 'existing', '/tmp', 'main', 'feat', '2025-01-01', '2025-01-01');
+      INSERT INTO agent_sessions (id, workspace_id, pid, claude_session_id, status, started_at)
+        VALUES ('s1', 'w1', 123, 'claude-uuid-preserved', 'completed', '2025-01-01');
+    `)
+
+    migrateFixture(db)
+
+    // Migration should be recorded
+    const history = getMigrationHistory(db)
+    expect(history.find((h) => h.version === 10 && h.name === 'agent-engine-abstraction')).toBeTruthy()
+
+    // workspaces.engine column should exist with default 'claude-code'
+    const wsCols = db.prepare('PRAGMA table_info(workspaces)').all() as { name: string; dflt_value: string | null }[]
+    const engineCol = wsCols.find((c) => c.name === 'engine')
+    expect(engineCol).toBeDefined()
+
+    // Existing workspace row should have engine = 'claude-code'
+    const wsRow = db.prepare('SELECT engine FROM workspaces WHERE id = ?').get('w1') as { engine: string }
+    expect(wsRow.engine).toBe('claude-code')
+
+    // agent_sessions column should be renamed
+    const sessCols = (db.prepare('PRAGMA table_info(agent_sessions)').all() as { name: string }[]).map((c) => c.name)
+    expect(sessCols).toContain('engine_session_id')
+    expect(sessCols).not.toContain('claude_session_id')
+
+    // Existing session data should be preserved under the new column name
+    const sessRow = db.prepare('SELECT engine_session_id FROM agent_sessions WHERE id = ?').get('s1') as {
+      engine_session_id: string
+    }
+    expect(sessRow.engine_session_id).toBe('claude-uuid-preserved')
+
+    db.close()
+  })
+
+  it('v10: fresh install matches upgraded install (identical table_info)', () => {
+    // Fresh install DB
+    const freshDb = new Database(':memory:')
+    runMigrations(freshDb)
+
+    // Upgraded from v9 DB
+    const upgradedDb = new Database(':memory:')
+    upgradedDb.exec(`
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+      CREATE TABLE workspaces (id TEXT PRIMARY KEY, name TEXT NOT NULL, project_path TEXT NOT NULL,
+        source_branch TEXT NOT NULL, working_branch TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'created',
+        notion_url TEXT, notion_page_id TEXT, model TEXT NOT NULL DEFAULT 'claude-opus-4-7',
+        reasoning_effort TEXT NOT NULL DEFAULT 'auto',
+        permission_mode TEXT NOT NULL DEFAULT 'auto-accept',
+        dev_server_status TEXT NOT NULL DEFAULT 'stopped', has_unread INTEGER NOT NULL DEFAULT 0,
+        archived_at TEXT, favorited_at TEXT, tags TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE tasks (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, title TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending', is_acceptance_criterion INTEGER NOT NULL DEFAULT 0,
+        sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE agent_sessions (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL
+        REFERENCES workspaces(id) ON DELETE CASCADE, pid INTEGER, claude_session_id TEXT,
+        status TEXT NOT NULL DEFAULT 'running', started_at TEXT NOT NULL, ended_at TEXT, name TEXT);
+      CREATE TABLE ws_events (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, type TEXT NOT NULL,
+        payload TEXT NOT NULL, session_id TEXT, created_at TEXT NOT NULL);
+      INSERT INTO schema_migrations (version, name, applied_at) VALUES
+        (1, 'init-schema', '2025-01-01'),
+        (2, 'add-permission-mode', '2025-01-01'),
+        (3, 'add-workspace-id-indexes', '2025-01-01'),
+        (4, 'add-has-unread', '2025-01-01'),
+        (5, 'add-agent-session-name', '2025-01-01'),
+        (6, 'backfill-ws-events-session-id', '2025-01-01'),
+        (7, 'add-reasoning-effort', '2025-01-01'),
+        (8, 'add-workspace-favorited-at', '2025-01-01'),
+        (9, 'add-workspace-tags', '2025-01-01');
+    `)
+    runMigrations(upgradedDb)
+
+    const freshWsCols = (freshDb.prepare('PRAGMA table_info(workspaces)').all() as { name: string }[])
+      .map((c) => c.name)
+      .sort()
+    const upgradedWsCols = (upgradedDb.prepare('PRAGMA table_info(workspaces)').all() as { name: string }[])
+      .map((c) => c.name)
+      .sort()
+    expect(freshWsCols).toEqual(upgradedWsCols)
+    expect(freshWsCols).toContain('engine')
+
+    const freshSessCols = (freshDb.prepare('PRAGMA table_info(agent_sessions)').all() as { name: string }[])
+      .map((c) => c.name)
+      .sort()
+    const upgradedSessCols = (upgradedDb.prepare('PRAGMA table_info(agent_sessions)').all() as { name: string }[])
+      .map((c) => c.name)
+      .sort()
+    expect(freshSessCols).toEqual(upgradedSessCols)
+    expect(freshSessCols).toContain('engine_session_id')
+    expect(freshSessCols).not.toContain('claude_session_id')
+
+    freshDb.close()
+    upgradedDb.close()
+  })
+
+  it("ajoute la colonne sentry_url lors d'un upgrade v13 -> v14", () => {
+    const db = new Database(':memory:')
+    // Simulate a real v13 schema: run all migrations, then unwind the v14
+    // history row + drop the column. SQLite's DROP COLUMN (3.35+) lets us
+    // do this without rebuilding the table by hand.
+    migrateFixture(db)
+    db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(14)
+    db.prepare('ALTER TABLE workspaces DROP COLUMN sentry_url').run()
+
+    const now = new Date().toISOString()
+    db.prepare(
+      "INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, notion_url, created_at, updated_at) VALUES ('w1', 'preexisting', '/tmp', 'main', 'feat', 'https://www.notion.so/abc-1234567890abcdef1234567890abcd', ?, ?)",
+    ).run(now, now)
+
+    migrateFixture(db)
+
+    const row = db.prepare('SELECT sentry_url, notion_url FROM workspaces WHERE id = ?').get('w1') as {
+      sentry_url: string | null
+      notion_url: string | null
+    }
+    expect(row.sentry_url).toBeNull()
+    expect(row.notion_url).toBe('https://www.notion.so/abc-1234567890abcdef1234567890abcd')
+
+    const history = getMigrationHistory(db)
+    expect(history.some((h) => h.version === 14 && h.name === 'add-workspace-sentry-url')).toBe(true)
+    db.close()
+  })
+
+  it('expose la colonne sentry_url sur un fresh install', () => {
+    const db = new Database(':memory:')
+    migrateFixture(db)
+    const cols = db.prepare("PRAGMA table_info('workspaces')").all() as Array<{
+      name: string
+      type: string
+      notnull: number
+      dflt_value: string | null
+    }>
+    const sentryCol = cols.find((c) => c.name === 'sentry_url')
+    expect(sentryCol).toBeDefined()
+    expect(sentryCol?.type).toBe('TEXT')
+    expect(sentryCol?.notnull).toBe(0)
+    db.close()
+  })
+
+  it("ajoute les colonnes worktree_path et worktree_owned lors d'un upgrade v14 -> v15", () => {
+    const db = new Database(':memory:')
+    // Simulate a v14 schema by running all migrations then unwinding v15.
+    migrateFixture(db)
+    db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(15)
+    db.prepare('ALTER TABLE workspaces DROP COLUMN worktree_path').run()
+    db.prepare('ALTER TABLE workspaces DROP COLUMN worktree_owned').run()
+
+    const now = new Date().toISOString()
+    db.prepare(
+      "INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at) VALUES ('w1', 'pre', '/tmp/proj', 'main', 'feature/foo', ?, ?)",
+    ).run(now, now)
+
+    migrateFixture(db)
+
+    const row = db.prepare('SELECT worktree_path, worktree_owned FROM workspaces WHERE id = ?').get('w1') as {
+      worktree_path: string
+      worktree_owned: number
+    }
+    expect(row.worktree_path).toBe('/tmp/proj/.worktrees/feature/foo')
+    expect(row.worktree_owned).toBe(1)
+
+    const history = getMigrationHistory(db)
+    expect(history.some((h) => h.version === 15 && h.name === 'add-workspace-worktree-path')).toBe(true)
+    db.close()
+  })
+
+  it('expose les colonnes worktree_path et worktree_owned sur un fresh install', () => {
+    const db = new Database(':memory:')
+    migrateFixture(db)
+    const cols = db.prepare("PRAGMA table_info('workspaces')").all() as Array<{
+      name: string
+      type: string
+      notnull: number
+      dflt_value: string | null
+    }>
+    const wtPath = cols.find((c) => c.name === 'worktree_path')
+    const wtOwned = cols.find((c) => c.name === 'worktree_owned')
+    expect(wtPath).toBeDefined()
+    expect(wtPath?.type).toBe('TEXT')
+    expect(wtOwned).toBeDefined()
+    expect(wtOwned?.type).toBe('INTEGER')
+    expect(wtOwned?.notnull).toBe(1)
+    db.close()
+  })
+})
+
+describe('migration v11: add-pending-wakeups-table', () => {
+  it('adds pending_wakeups table with expected columns after runMigrations', () => {
+    const db = new Database(':memory:')
+    migrateFixture(db)
+
+    const table = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='pending_wakeups'").get()
+    expect(table).toBeTruthy()
+
+    const cols = db.prepare('PRAGMA table_info(pending_wakeups)').all() as Array<{
+      name: string
+      pk: number
+    }>
+    expect(cols.map((c) => c.name).sort()).toEqual(
+      ['agent_session_id', 'created_at', 'prompt', 'reason', 'retry_at', 'target_at', 'workspace_id'].sort(),
+    )
+    const pk = cols.find((c) => c.pk === 1)
+    expect(pk?.name).toBe('workspace_id')
+    db.close()
+  })
+
+  it('fresh install via initSchema produces the same pending_wakeups shape as runMigrations', () => {
+    const freshDb = new Database(':memory:')
+    initSchema(freshDb)
+    const freshCols = freshDb.prepare('PRAGMA table_info(pending_wakeups)').all()
+
+    const upgradedDb = new Database(':memory:')
+    runMigrations(upgradedDb)
+    const upgradedCols = upgradedDb.prepare('PRAGMA table_info(pending_wakeups)').all()
+
+    expect(freshCols).toEqual(upgradedCols)
+    freshDb.close()
+    upgradedDb.close()
+  })
+
+  it('v10 → v11 upgrade preserves existing workspace data', () => {
+    const db = new Database(':memory:')
+    // Seed via runMigrations up through v10, then simulate an existing row
+    migrateFixture(db)
+    db.prepare(
+      `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run('w1', 'legacy', '/tmp/p', 'main', 'feat', '2025-01-01', '2025-01-01')
+
+    // Verify the workspace row survived and pending_wakeups is empty.
+    const ws = db.prepare('SELECT id, name FROM workspaces WHERE id = ?').get('w1') as
+      | { id: string; name: string }
+      | undefined
+    expect(ws).toEqual({ id: 'w1', name: 'legacy' })
+
+    const countRow = db.prepare('SELECT COUNT(*) as c FROM pending_wakeups').get() as { c: number }
+    expect(countRow.c).toBe(0)
+    db.close()
+  })
+})
+
+describe('migration v12: add-auto-loop-columns', () => {
+  it('adds 3 columns to workspaces with correct defaults', () => {
+    const db = new Database(':memory:')
+    migrateFixture(db)
+    const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{
+      name: string
+      dflt_value: string | null
+    }>
+    const names = cols.map((c) => c.name)
+    expect(names).toContain('auto_loop')
+    expect(names).toContain('auto_loop_ready')
+    expect(names).toContain('no_progress_streak')
+    expect(cols.find((c) => c.name === 'auto_loop')?.dflt_value).toBe('0')
+    expect(cols.find((c) => c.name === 'auto_loop_ready')?.dflt_value).toBe('0')
+    expect(cols.find((c) => c.name === 'no_progress_streak')?.dflt_value).toBe('0')
+    db.close()
+  })
+
+  it('fresh install via initSchema produces the same 3 columns', () => {
+    const freshDb = new Database(':memory:')
+    initSchema(freshDb)
+    const upgradedDb = new Database(':memory:')
+    runMigrations(upgradedDb)
+    const freshCols = (freshDb.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>)
+      .map((c) => c.name)
+      .sort()
+    const upgradedCols = (upgradedDb.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>)
+      .map((c) => c.name)
+      .sort()
+    expect(freshCols).toEqual(upgradedCols)
+    expect(freshCols).toContain('auto_loop')
+    freshDb.close()
+    upgradedDb.close()
+  })
+
+  // Per CLAUDE.md migration discipline: test the upgrade-with-data path,
+  // not just the fresh install. A workspace seeded at v11 must survive the
+  // v12 migration with its data intact and the 3 new columns defaulted to 0.
+  it('v11 → v12 upgrade preserves existing workspace data', () => {
+    const db = new Database(':memory:')
+    migrateFixture(db)
+
+    db.prepare(
+      `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run('w1', 'legacy', '/tmp/p', 'main', 'feat', '2025-01-01', '2025-01-01')
+
+    const ws = db
+      .prepare('SELECT id, name, auto_loop, auto_loop_ready, no_progress_streak FROM workspaces WHERE id = ?')
+      .get('w1') as
+      | {
+          id: string
+          name: string
+          auto_loop: number
+          auto_loop_ready: number
+          no_progress_streak: number
+        }
+      | undefined
+
+    expect(ws).toEqual({
+      id: 'w1',
+      name: 'legacy',
+      auto_loop: 0,
+      auto_loop_ready: 0,
+      no_progress_streak: 0,
+    })
+    db.close()
+  })
+
+  // Migration v13: adds `permission_profile` so a user can switch a workspace
+  // to strict mode (respect the project's .claude/settings.json allow/deny
+  // list) instead of the --dangerously-skip-permissions bypass default.
+  it('v13 upgrade: workspaces gain permission_profile column defaulted to bypass', () => {
+    const db = new Database(':memory:')
+    migrateFixture(db)
+
+    db.prepare(
+      `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run('w2', 'legacy-v13', '/tmp/p', 'main', 'feat', '2025-01-01', '2025-01-01')
+
+    const ws = db.prepare('SELECT id, permission_profile FROM workspaces WHERE id = ?').get('w2') as
+      | { id: string; permission_profile: string }
+      | undefined
+
+    expect(ws).toEqual({ id: 'w2', permission_profile: 'bypass' })
+    db.close()
+  })
+})
+
+describe('usage_snapshots table', () => {
+  it('is created by runMigrations on a fresh install', () => {
+    const db = new Database(':memory:')
+    migrateFixture(db)
+    const cols = db.prepare('PRAGMA table_info(usage_snapshots)').all() as Array<{ name: string }>
+    const names = cols.map((c) => c.name).sort()
+    expect(names).toEqual(['buckets_json', 'error_message', 'fetched_at', 'provider_id', 'status'])
+    db.close()
+  })
+
+  it('is created when applying migration v16 on a database that already has versions 1..15', () => {
+    const db = new Database(':memory:')
+    migrateFixture(db)
+    db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(16)
+    db.prepare('DROP TABLE usage_snapshots').run()
+
+    migrateFixture(db)
+
+    const cols = db.prepare('PRAGMA table_info(usage_snapshots)').all() as Array<{ name: string }>
+    expect(cols.length).toBe(5)
+    const versions = (db.prepare('SELECT version FROM schema_migrations').all() as { version: number }[]).map(
+      (r) => r.version,
+    )
+    expect(versions).toContain(16)
+    db.close()
+  })
+})
+
+describe('migration v18: add-pending-wakeup-agent-session-id', () => {
+  it('adds the agent_session_id column to pending_wakeups (nullable)', () => {
+    const db = new Database(':memory:')
+    migrateFixture(db)
+
+    const cols = db.prepare('PRAGMA table_info(pending_wakeups)').all() as Array<{
+      name: string
+      notnull: number
+    }>
+    const sessionCol = cols.find((c) => c.name === 'agent_session_id')
+    expect(sessionCol).toBeDefined()
+    expect(sessionCol?.notnull).toBe(0)
+    db.close()
+  })
+
+  it('preserves existing pending_wakeups rows when upgrading from v17', () => {
+    const db = new Database(':memory:')
+    db.exec(`
+      CREATE TABLE workspaces (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        project_path TEXT NOT NULL,
+        source_branch TEXT NOT NULL,
+        working_branch TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'created',
+        model TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE pending_wakeups (
+        workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+        target_at    TEXT NOT NULL,
+        prompt       TEXT NOT NULL,
+        reason       TEXT,
+        created_at   TEXT NOT NULL
+      );
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+    `)
+    const now = '2025-01-01'
+    db.prepare('INSERT INTO schema_migrations VALUES (?, ?, ?)').run(1, 'init-schema', now)
+    for (const m of migrations) {
+      if (m.version <= 17) {
+        db.prepare('INSERT INTO schema_migrations VALUES (?, ?, ?)').run(m.version, m.name, now)
+      }
+    }
+    db.prepare("INSERT INTO workspaces VALUES ('w1', 'W', '/p', 'main', 'feat', 'idle', 'auto', ?, ?)").run(now, now)
+    db.prepare('INSERT INTO pending_wakeups VALUES (?, ?, ?, ?, ?)').run('w1', now, 'resume', null, now)
+
+    migrateFixture(db)
+
+    const row = db.prepare('SELECT * FROM pending_wakeups WHERE workspace_id = ?').get('w1') as {
+      workspace_id: string
+      prompt: string
+      agent_session_id: string | null
+    }
+    expect(row.workspace_id).toBe('w1')
+    expect(row.prompt).toBe('resume')
+    expect(row.agent_session_id).toBeNull()
+    db.close()
+  })
+})
+
+describe('migration v19 — add-pending-quota-backoffs', () => {
+  it('creates pending_quota_backoffs table on a v18 database', () => {
+    const db = new Database(':memory:')
+    // Build a v18 schema by running all migrations, then unwinding v19 history.
+    migrateFixture(db)
+    db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(19)
+    db.prepare('DROP TABLE IF EXISTS pending_quota_backoffs').run()
+
+    migrateFixture(db)
+
+    const cols = db.prepare('PRAGMA table_info(pending_quota_backoffs)').all() as Array<{
+      name: string
+      type: string
+      notnull: number
+      pk: number
+    }>
+    expect(cols.map((c) => c.name).sort()).toEqual(
+      ['created_at', 'resets_at', 'retry_count', 'source', 'target_at', 'workspace_id'].sort(),
+    )
+    const pk = cols.find((c) => c.pk === 1)
+    expect(pk?.name).toBe('workspace_id')
+    db.close()
+  })
+
+  it('fresh-install initSchema produces the same table at v19', () => {
+    const db = new Database(':memory:')
+    initSchema(db)
+    const row = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get('pending_quota_backoffs')
+    expect(row).toBeDefined()
+    db.close()
+  })
+
+  it('cascade-deletes the row when the workspace is deleted', () => {
+    const db = new Database(':memory:')
+    initSchema(db)
+    // Foreign keys are off by default in SQLite — enable them for the cascade test.
+    db.pragma('foreign_keys = ON')
+    db.prepare(
+      "INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, status, created_at, updated_at) VALUES ('w1','n','/p','main','feature/x','idle','t','t')",
+    ).run()
+    db.prepare(
+      "INSERT INTO pending_quota_backoffs (workspace_id, target_at, source, created_at) VALUES ('w1', 't', 'fallback_ladder', 't')",
+    ).run()
+    db.prepare("DELETE FROM workspaces WHERE id = 'w1'").run()
+    const row = db.prepare("SELECT * FROM pending_quota_backoffs WHERE workspace_id = 'w1'").get()
+    expect(row).toBeUndefined()
+    db.close()
+  })
+})
+
+describe('migration v20 — add-workspace-description', () => {
+  it('seeds a fresh DB with the description column', () => {
+    const db = new Database(':memory:')
+    migrateFixture(db)
+    const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string; type: string }>
+    const desc = cols.find((c) => c.name === 'description')
+    expect(desc).toBeDefined()
+    expect(desc?.type.toUpperCase()).toBe('TEXT')
+    db.close()
+  })
+
+  it('upgrades a v19 DB without losing existing rows', () => {
+    const db = new Database(':memory:')
+    // Build a v19-shaped DB by mirroring the v18 migration test setup: create
+    // the legacy workspaces, pending_wakeups and pending_quota_backoffs tables,
+    // then mark every migration up to v19 as already applied so runMigrations
+    // only applies v20.
+    db.exec(`
+      CREATE TABLE workspaces (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        project_path TEXT NOT NULL,
+        source_branch TEXT NOT NULL,
+        working_branch TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'created',
+        notion_url TEXT,
+        notion_page_id TEXT,
+        sentry_url TEXT,
+        worktree_path TEXT,
+        worktree_owned INTEGER NOT NULL DEFAULT 1,
+        model TEXT NOT NULL,
+        reasoning_effort TEXT NOT NULL DEFAULT 'auto',
+        permission_mode TEXT NOT NULL DEFAULT 'auto-accept',
+        dev_server_status TEXT NOT NULL DEFAULT 'stopped',
+        has_unread INTEGER NOT NULL DEFAULT 0,
+        archived_at TEXT,
+        favorited_at TEXT,
+        tags TEXT NOT NULL DEFAULT '[]',
+        engine TEXT NOT NULL DEFAULT 'claude-code',
+        auto_loop INTEGER NOT NULL DEFAULT 0,
+        auto_loop_ready INTEGER NOT NULL DEFAULT 0,
+        no_progress_streak INTEGER NOT NULL DEFAULT 0,
+        permission_profile TEXT NOT NULL DEFAULT 'bypass',
+        agent_permission_mode TEXT NOT NULL DEFAULT 'bypass',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE pending_wakeups (
+        workspace_id     TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+        target_at        TEXT NOT NULL,
+        prompt           TEXT NOT NULL,
+        reason           TEXT,
+        created_at       TEXT NOT NULL,
+        agent_session_id TEXT
+      );
+      CREATE TABLE pending_quota_backoffs (
+        workspace_id TEXT PRIMARY KEY,
+        target_at    TEXT NOT NULL,
+        resets_at    TEXT,
+        source       TEXT NOT NULL CHECK (source IN ('rate_limit_info', 'usage_api', 'fallback_ladder')),
+        retry_count  INTEGER NOT NULL DEFAULT 0,
+        created_at   TEXT NOT NULL,
+        FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+      );
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+    `)
+    const now = '2026-05-06T00:00:00Z'
+    db.prepare('INSERT INTO schema_migrations VALUES (?, ?, ?)').run(1, 'init-schema', now)
+    for (const m of migrations) {
+      if (m.version <= 19) {
+        db.prepare('INSERT INTO schema_migrations VALUES (?, ?, ?)').run(m.version, m.name, now)
+      }
+    }
+    db.prepare(
+      `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, status, model, reasoning_effort, permission_mode, dev_server_status, has_unread, worktree_owned, tags, engine, auto_loop, auto_loop_ready, no_progress_streak, permission_profile, agent_permission_mode, created_at, updated_at)
+       VALUES ('w1', 'Test', '/tmp/p', 'main', 'feature/x', 'created', 'claude-opus-4-7', 'auto', 'auto-accept', 'stopped', 0, 1, '[]', 'claude-code', 0, 0, 0, 'bypass', 'bypass', ?, ?)`,
+    ).run(now, now)
+
+    migrateFixture(db)
+
+    const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>
+    expect(cols.some((c) => c.name === 'description')).toBe(true)
+    const row = db.prepare('SELECT id, name, description FROM workspaces WHERE id=?').get('w1') as {
+      id: string
+      name: string
+      description: string | null
+    }
+    expect(row.id).toBe('w1')
+    expect(row.name).toBe('Test')
+    expect(row.description).toBeNull()
+    db.close()
+  })
+
+  it('is idempotent (re-running migrations does not fail or duplicate the column)', () => {
+    const db = new Database(':memory:')
+    migrateFixture(db)
+    expect(() => runMigrations(db)).not.toThrow()
+    const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>
+    const descCount = cols.filter((c) => c.name === 'description').length
+    expect(descCount).toBe(1)
+    db.close()
+  })
+})
+
+describe('migration v21 — add-workspace-agent-description', () => {
+  it('seeds a fresh DB with the agent_description column', () => {
+    const db = new Database(':memory:')
+    migrateFixture(db)
+    const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string; type: string }>
+    const agentDesc = cols.find((c) => c.name === 'agent_description')
+    expect(agentDesc).toBeDefined()
+    expect(agentDesc?.type.toUpperCase()).toBe('TEXT')
+    db.close()
+  })
+
+  it('upgrades a v20 DB without losing existing rows', () => {
+    const db = new Database(':memory:')
+    // Build a v20-shaped DB by mirroring the v20 migration test setup: create
+    // the legacy workspaces (with `description` from v20), pending_wakeups and
+    // pending_quota_backoffs tables, then mark every migration up to v20 as
+    // already applied so runMigrations only applies v21.
+    db.exec(`
+      CREATE TABLE workspaces (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        project_path TEXT NOT NULL,
+        source_branch TEXT NOT NULL,
+        working_branch TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'created',
+        notion_url TEXT,
+        notion_page_id TEXT,
+        sentry_url TEXT,
+        worktree_path TEXT,
+        worktree_owned INTEGER NOT NULL DEFAULT 1,
+        model TEXT NOT NULL,
+        reasoning_effort TEXT NOT NULL DEFAULT 'auto',
+        permission_mode TEXT NOT NULL DEFAULT 'auto-accept',
+        dev_server_status TEXT NOT NULL DEFAULT 'stopped',
+        has_unread INTEGER NOT NULL DEFAULT 0,
+        archived_at TEXT,
+        favorited_at TEXT,
+        tags TEXT NOT NULL DEFAULT '[]',
+        engine TEXT NOT NULL DEFAULT 'claude-code',
+        auto_loop INTEGER NOT NULL DEFAULT 0,
+        auto_loop_ready INTEGER NOT NULL DEFAULT 0,
+        no_progress_streak INTEGER NOT NULL DEFAULT 0,
+        permission_profile TEXT NOT NULL DEFAULT 'bypass',
+        agent_permission_mode TEXT NOT NULL DEFAULT 'bypass',
+        description TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE pending_wakeups (
+        workspace_id     TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+        target_at        TEXT NOT NULL,
+        prompt           TEXT NOT NULL,
+        reason           TEXT,
+        created_at       TEXT NOT NULL,
+        agent_session_id TEXT
+      );
+      CREATE TABLE pending_quota_backoffs (
+        workspace_id TEXT PRIMARY KEY,
+        target_at    TEXT NOT NULL,
+        resets_at    TEXT,
+        source       TEXT NOT NULL CHECK (source IN ('rate_limit_info', 'usage_api', 'fallback_ladder')),
+        retry_count  INTEGER NOT NULL DEFAULT 0,
+        created_at   TEXT NOT NULL,
+        FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+      );
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+    `)
+    const now = '2026-05-06T00:00:00Z'
+    db.prepare('INSERT INTO schema_migrations VALUES (?, ?, ?)').run(1, 'init-schema', now)
+    for (const m of migrations) {
+      if (m.version <= 20) {
+        db.prepare('INSERT INTO schema_migrations VALUES (?, ?, ?)').run(m.version, m.name, now)
+      }
+    }
+    db.prepare(
+      `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, status, model, reasoning_effort, permission_mode, dev_server_status, has_unread, worktree_owned, tags, engine, auto_loop, auto_loop_ready, no_progress_streak, permission_profile, agent_permission_mode, description, created_at, updated_at)
+       VALUES ('w1', 'Test', '/tmp/p', 'main', 'feature/x', 'created', 'claude-opus-4-7', 'auto', 'auto-accept', 'stopped', 0, 1, '[]', 'claude-code', 0, 0, 0, 'bypass', 'bypass', 'human summary', ?, ?)`,
+    ).run(now, now)
+
+    migrateFixture(db)
+
+    const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>
+    expect(cols.some((c) => c.name === 'agent_description')).toBe(true)
+    const row = db.prepare('SELECT id, description, agent_description FROM workspaces WHERE id=?').get('w1') as {
+      id: string
+      description: string | null
+      agent_description: string | null
+    }
+    expect(row.id).toBe('w1')
+    expect(row.description).toBe('human summary')
+    expect(row.agent_description).toBeNull()
+    db.close()
+  })
+
+  it('is idempotent — re-running migrations does not fail or duplicate the column', () => {
+    const db = new Database(':memory:')
+    expect(() => {
+      migrateFixture(db)
+      migrateFixture(db)
+    }).not.toThrow()
+    const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>
+    const agentDescCount = cols.filter((c) => c.name === 'agent_description').length
+    expect(agentDescCount).toBe(1)
+    db.close()
+  })
+})
+
+describe('migration v22 — add-pending-crons', () => {
+  it('seeds a fresh DB with the pending_crons table', () => {
+    const db = new Database(':memory:')
+    migrateFixture(db)
+    const cols = db.prepare('PRAGMA table_info(pending_crons)').all() as Array<{
+      name: string
+      type: string
+      notnull: number
+    }>
+    expect(cols.length).toBeGreaterThan(0)
+    const colByName = Object.fromEntries(cols.map((c) => [c.name, c]))
+    expect(colByName.id?.type.toUpperCase()).toBe('TEXT')
+    expect(colByName.workspace_id?.type.toUpperCase()).toBe('TEXT')
+    expect(colByName.workspace_id?.notnull).toBe(1)
+    expect(colByName.expression?.type.toUpperCase()).toBe('TEXT')
+    expect(colByName.expression?.notnull).toBe(1)
+    expect(colByName.prompt?.type.toUpperCase()).toBe('TEXT')
+    expect(colByName.prompt?.notnull).toBe(1)
+    expect(colByName.label?.type.toUpperCase()).toBe('TEXT')
+    expect(colByName.agent_session_id?.type.toUpperCase()).toBe('TEXT')
+    expect(colByName.next_fire_at?.type.toUpperCase()).toBe('TEXT')
+    expect(colByName.next_fire_at?.notnull).toBe(1)
+    expect(colByName.last_fired_at?.type.toUpperCase()).toBe('TEXT')
+    expect(colByName.created_at?.type.toUpperCase()).toBe('TEXT')
+    expect(colByName.created_at?.notnull).toBe(1)
+    db.close()
+  })
+
+  it('upgrades a v21 DB without losing existing rows', () => {
+    const db = new Database(':memory:')
+    // Build a v21-shaped DB (workspaces with description + agent_description)
+    // and mark every migration up to v21 as already applied so runMigrations
+    // only applies v22.
+    db.exec(`
+      CREATE TABLE workspaces (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        project_path TEXT NOT NULL,
+        source_branch TEXT NOT NULL,
+        working_branch TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'created',
+        notion_url TEXT,
+        notion_page_id TEXT,
+        sentry_url TEXT,
+        worktree_path TEXT,
+        worktree_owned INTEGER NOT NULL DEFAULT 1,
+        model TEXT NOT NULL,
+        reasoning_effort TEXT NOT NULL DEFAULT 'auto',
+        permission_mode TEXT NOT NULL DEFAULT 'auto-accept',
+        dev_server_status TEXT NOT NULL DEFAULT 'stopped',
+        has_unread INTEGER NOT NULL DEFAULT 0,
+        archived_at TEXT,
+        favorited_at TEXT,
+        tags TEXT NOT NULL DEFAULT '[]',
+        engine TEXT NOT NULL DEFAULT 'claude-code',
+        auto_loop INTEGER NOT NULL DEFAULT 0,
+        auto_loop_ready INTEGER NOT NULL DEFAULT 0,
+        no_progress_streak INTEGER NOT NULL DEFAULT 0,
+        permission_profile TEXT NOT NULL DEFAULT 'bypass',
+        agent_permission_mode TEXT NOT NULL DEFAULT 'bypass',
+        description TEXT,
+        agent_description TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE pending_wakeups (
+        workspace_id     TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+        target_at        TEXT NOT NULL,
+        prompt           TEXT NOT NULL,
+        reason           TEXT,
+        created_at       TEXT NOT NULL,
+        agent_session_id TEXT
+      );
+      CREATE TABLE pending_quota_backoffs (
+        workspace_id TEXT PRIMARY KEY,
+        target_at    TEXT NOT NULL,
+        resets_at    TEXT,
+        source       TEXT NOT NULL CHECK (source IN ('rate_limit_info', 'usage_api', 'fallback_ladder')),
+        retry_count  INTEGER NOT NULL DEFAULT 0,
+        created_at   TEXT NOT NULL,
+        FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+      );
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+    `)
+    const now = '2026-05-07T00:00:00Z'
+    db.prepare('INSERT INTO schema_migrations VALUES (?, ?, ?)').run(1, 'init-schema', now)
+    for (const m of migrations) {
+      if (m.version <= 21) {
+        db.prepare('INSERT INTO schema_migrations VALUES (?, ?, ?)').run(m.version, m.name, now)
+      }
+    }
+    db.prepare(
+      `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, status, model, reasoning_effort, permission_mode, dev_server_status, has_unread, worktree_owned, tags, engine, auto_loop, auto_loop_ready, no_progress_streak, permission_profile, agent_permission_mode, description, agent_description, created_at, updated_at)
+       VALUES ('w1', 'Test', '/tmp/p', 'main', 'feature/x', 'created', 'claude-opus-4-7', 'auto', 'auto-accept', 'stopped', 0, 1, '[]', 'claude-code', 0, 0, 0, 'bypass', 'bypass', 'pre-existing description', 'pre-existing agent description', ?, ?)`,
+    ).run(now, now)
+
+    migrateFixture(db)
+
+    const cols = db.prepare('PRAGMA table_info(pending_crons)').all() as Array<{ name: string }>
+    expect(cols.some((c) => c.name === 'id')).toBe(true)
+    const wsRow = db.prepare('SELECT id, description, agent_description FROM workspaces WHERE id=?').get('w1') as {
+      id: string
+      description: string | null
+      agent_description: string | null
+    }
+    expect(wsRow.id).toBe('w1')
+    expect(wsRow.description).toBe('pre-existing description')
+    expect(wsRow.agent_description).toBe('pre-existing agent description')
+    db.close()
+  })
+
+  it('cascade deletes pending_crons on workspace delete', () => {
+    const db = new Database(':memory:')
+    migrateFixture(db)
+    // Foreign keys must be enabled for ON DELETE CASCADE to fire.
+    db.pragma('foreign_keys = ON')
+    db.prepare(
+      `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, status, model, reasoning_effort, permission_mode, agent_permission_mode, dev_server_status, has_unread, worktree_owned, tags, engine, auto_loop, auto_loop_ready, no_progress_streak, permission_profile, created_at, updated_at)
+       VALUES ('w1', 'T', '/p', 'main', 'feature/c', 'created', 'claude-opus-4-7', 'auto', 'auto-accept', 'bypass', 'stopped', 0, 1, '[]', 'claude-code', 0, 0, 0, 'bypass', '2026-05-07T00:00:00Z', '2026-05-07T00:00:00Z')`,
+    ).run()
+    db.prepare(
+      `INSERT INTO pending_crons (id, workspace_id, expression, prompt, next_fire_at, created_at)
+       VALUES ('c1', 'w1', '*/5 * * * *', 'do something', '2026-05-07T01:00:00Z', '2026-05-07T00:00:00Z')`,
+    ).run()
+    expect(db.prepare('SELECT COUNT(*) AS c FROM pending_crons WHERE workspace_id=?').get('w1')).toEqual({ c: 1 })
+
+    db.prepare('DELETE FROM workspaces WHERE id = ?').run('w1')
+    expect(db.prepare('SELECT COUNT(*) AS c FROM pending_crons WHERE workspace_id=?').get('w1')).toEqual({ c: 0 })
+    db.close()
+  })
+
+  it('is idempotent — re-running migrations does not fail or duplicate the table', () => {
+    const db = new Database(':memory:')
+    migrateFixture(db)
+    expect(() => runMigrations(db)).not.toThrow()
+    const dupes = db
+      .prepare(
+        `SELECT name, COUNT(*) AS c FROM sqlite_master WHERE type='table' AND name='pending_crons' GROUP BY name`,
+      )
+      .get() as { name: string; c: number } | undefined
+    expect(dupes?.c ?? 0).toBe(1)
+    db.close()
+  })
+})
+
+describe('migration v23 — add-pending-crons-one-shot', () => {
+  it('adds the one_shot column with NOT NULL DEFAULT 0 on a fresh install', () => {
+    const db = new Database(':memory:')
+    db.pragma('foreign_keys = ON')
+    initSchema(db)
+    migrateFixture(db)
+    const cols = db.prepare('PRAGMA table_info(pending_crons)').all() as Array<{
+      name: string
+      type: string
+      notnull: number
+      dflt_value: string | null
+    }>
+    const oneShot = cols.find((c) => c.name === 'one_shot')
+    expect(oneShot).toBeDefined()
+    expect(oneShot?.type.toUpperCase()).toBe('INTEGER')
+    expect(oneShot?.notnull).toBe(1)
+    expect(oneShot?.dflt_value).toBe('0')
+    db.close()
+  })
+
+  it('upgrades a v22 DB by adding one_shot=0 to existing rows', () => {
+    const db = new Database(':memory:')
+    db.pragma('foreign_keys = ON')
+    // Bring the DB up to v22 only — no one_shot column yet.
+    db.prepare(
+      `CREATE TABLE pending_crons (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        expression TEXT NOT NULL,
+        prompt TEXT NOT NULL,
+        label TEXT,
+        agent_session_id TEXT,
+        next_fire_at TEXT NOT NULL,
+        last_fired_at TEXT,
+        created_at TEXT NOT NULL
+      )`,
+    ).run()
+    db.prepare(
+      'CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)',
+    ).run()
+    for (let v = 1; v <= 22; v++) {
+      db.prepare('INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)').run(
+        v,
+        `seed-v${v}`,
+        new Date().toISOString(),
+      )
+    }
+    db.prepare(
+      `INSERT INTO pending_crons (id, workspace_id, expression, prompt, next_fire_at, created_at)
+       VALUES ('c1', 'w1', '@hourly', 'tick', '2027-01-01T00:00:00Z', '2026-05-07T00:00:00Z')`,
+    ).run()
+
+    migrateFixture(db)
+
+    const row = db.prepare('SELECT id, one_shot FROM pending_crons WHERE id=?').get('c1') as {
+      id: string
+      one_shot: number
+    }
+    expect(row.id).toBe('c1')
+    expect(row.one_shot).toBe(0)
+    db.close()
+  })
+
+  it('is idempotent — re-running runMigrations does not fail or add the column twice', () => {
+    const db = new Database(':memory:')
+    initSchema(db)
+    migrateFixture(db)
+    expect(() => runMigrations(db)).not.toThrow()
+    const dupes = db
+      .prepare('PRAGMA table_info(pending_crons)')
+      .all()
+      .filter((c) => (c as { name: string }).name === 'one_shot')
+    expect(dupes).toHaveLength(1)
+    db.close()
+  })
+})
+
+describe('getPendingMigrations(db)', () => {
+  it('returns [] for a fresh, uninitialised database', () => {
+    const db = new Database(':memory:')
+    expect(getPendingMigrations(db)).toEqual([])
+    db.close()
+  })
+
+  it('returns [] for a fully-migrated database', () => {
+    const db = new Database(':memory:')
+    migrateFixture(db)
+    expect(getPendingMigrations(db)).toEqual([])
+    db.close()
+  })
+
+  it('lists versions not yet applied (database migrated by an older build)', () => {
+    const db = new Database(':memory:')
+    migrateFixture(db)
+    // Simulate a DB last migrated by an older Kōbō: drop the 2 latest records.
+    const versionsDesc = migrations.map((m) => m.version).sort((a, b) => b - a)
+    db.prepare('DELETE FROM schema_migrations WHERE version IN (?, ?)').run(versionsDesc[0], versionsDesc[1])
+
+    expect(getPendingMigrations(db).sort((a, b) => a - b)).toEqual(
+      [versionsDesc[0], versionsDesc[1]].sort((a, b) => a - b),
+    )
+    db.close()
+  })
+})
+
+describe('runMigrations(db) — soft downgrade guard', () => {
+  it('warns when the database carries a schema version newer than this build', () => {
+    const db = new Database(':memory:')
+    migrateFixture(db)
+    // Simulate a DB migrated by a FUTURE Kōbō build.
+    db.prepare('INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)').run(
+      SCHEMA_VERSION + 5,
+      'future-migration',
+      new Date().toISOString(),
+    )
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    migrateFixture(db)
+    // Read calls BEFORE mockRestore — restoring also clears mock.calls.
+    const warned = warnSpy.mock.calls.some((c) => String(c[0]).includes('Database schema version'))
+    warnSpy.mockRestore()
+
+    expect(warned).toBe(true)
+    db.close()
+  })
+
+  it('does not warn for a normally-migrated database', () => {
+    const db = new Database(':memory:')
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    migrateFixture(db)
+    const warned = warnSpy.mock.calls.some((c) => String(c[0]).includes('Database schema version'))
+    warnSpy.mockRestore()
+
+    expect(warned).toBe(false)
+    db.close()
+  })
+})
+
+describe('migration v24: add-workspace-chat-history-table', () => {
+  it('adds workspace_chat_history table with expected columns after runMigrations', () => {
+    const db = new Database(':memory:')
+    migrateFixture(db)
+
+    const table = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='workspace_chat_history'")
+      .get()
+    expect(table).toBeTruthy()
+
+    const cols = db.prepare('PRAGMA table_info(workspace_chat_history)').all() as Array<{
+      name: string
+      pk: number
+      notnull: number
+    }>
+    expect(cols.map((c) => c.name).sort()).toEqual(['created_at', 'id', 'message', 'workspace_id'].sort())
+    expect(cols.find((c) => c.name === 'id')?.pk).toBe(1)
+    expect(cols.find((c) => c.name === 'workspace_id')?.notnull).toBe(1)
+    expect(cols.find((c) => c.name === 'message')?.notnull).toBe(1)
+
+    const index = db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_workspace_chat_history_workspace_id_id'",
+      )
+      .get()
+    expect(index).toBeTruthy()
+
+    db.close()
+  })
+
+  it('fresh install via initSchema produces the same workspace_chat_history shape as runMigrations', () => {
+    const freshDb = new Database(':memory:')
+    initSchema(freshDb)
+    const freshCols = freshDb.prepare('PRAGMA table_info(workspace_chat_history)').all()
+
+    const upgradedDb = new Database(':memory:')
+    runMigrations(upgradedDb)
+    const upgradedCols = upgradedDb.prepare('PRAGMA table_info(workspace_chat_history)').all()
+
+    expect(freshCols).toEqual(upgradedCols)
+    freshDb.close()
+    upgradedDb.close()
+  })
+
+  it('v23 → v24 upgrade preserves existing workspace data', () => {
+    const db = new Database(':memory:')
+    migrateFixture(db)
+    db.prepare(
+      `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run('w1', 'legacy', '/tmp/p', 'main', 'feat', '2025-01-01', '2025-01-01')
+
+    const ws = db.prepare('SELECT id, name FROM workspaces WHERE id = ?').get('w1') as
+      | { id: string; name: string }
+      | undefined
+    expect(ws).toEqual({ id: 'w1', name: 'legacy' })
+
+    const countRow = db.prepare('SELECT COUNT(*) as c FROM workspace_chat_history').get() as { c: number }
+    expect(countRow.c).toBe(0)
+    db.close()
+  })
+
+  it('ON DELETE CASCADE removes history rows when workspace is deleted', () => {
+    const db = new Database(':memory:')
+    db.pragma('foreign_keys=ON')
+    migrateFixture(db)
+    db.prepare(
+      `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run('w1', 'ws', '/tmp/p', 'main', 'feat', '2025-01-01', '2025-01-01')
+    db.prepare('INSERT INTO workspace_chat_history (workspace_id, message) VALUES (?, ?)').run('w1', 'hello')
+
+    expect((db.prepare('SELECT COUNT(*) as c FROM workspace_chat_history').get() as { c: number }).c).toBe(1)
+
+    db.prepare('DELETE FROM workspaces WHERE id = ?').run('w1')
+    expect((db.prepare('SELECT COUNT(*) as c FROM workspace_chat_history').get() as { c: number }).c).toBe(0)
+
+    db.close()
+  })
+})
+
+describe('migration v25: add-workspace-initial-prompt', () => {
+  it('adds the nullable initial_prompt column to workspaces after runMigrations', () => {
+    const db = new Database(':memory:')
+    migrateFixture(db)
+    const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{
+      name: string
+      notnull: number
+      dflt_value: unknown
+    }>
+    const col = cols.find((c) => c.name === 'initial_prompt')
+    expect(col).toBeTruthy()
+    expect(col?.notnull).toBe(0)
+    expect(col?.dflt_value).toBeNull()
+    db.close()
+  })
+
+  it('fresh install via initSchema produces the same initial_prompt column as runMigrations', () => {
+    const freshDb = new Database(':memory:')
+    initSchema(freshDb)
+    const freshCol = (freshDb.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>).find(
+      (c) => c.name === 'initial_prompt',
+    )
+
+    const upgradedDb = new Database(':memory:')
+    runMigrations(upgradedDb)
+    const upgradedCol = (upgradedDb.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>).find(
+      (c) => c.name === 'initial_prompt',
+    )
+
+    expect(freshCol).toEqual(upgradedCol)
+    freshDb.close()
+    upgradedDb.close()
+  })
+
+  it('v24 → v25 upgrade preserves existing workspace data and defaults initial_prompt to NULL', () => {
+    const db = new Database(':memory:')
+    migrateFixture(db)
+    db.prepare(
+      `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run('w1', 'legacy', '/tmp/p', 'main', 'feat', '2025-01-01', '2025-01-01')
+
+    const row = db.prepare('SELECT id, name, initial_prompt FROM workspaces WHERE id = ?').get('w1') as
+      | { id: string; name: string; initial_prompt: string | null }
+      | undefined
+    expect(row).toEqual({ id: 'w1', name: 'legacy', initial_prompt: null })
+    db.close()
+  })
+
+  it('is idempotent — re-running runMigrations does not re-add the column', () => {
+    const db = new Database(':memory:')
+    migrateFixture(db)
+    migrateFixture(db) // second pass should be a no-op
+    const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>
+    expect(cols.filter((c) => c.name === 'initial_prompt')).toHaveLength(1)
+    db.close()
+  })
+})
+
+describe('migration v28: add-auto-loop-session-mode', () => {
+  it('adds the auto_loop_session_mode column with default per_task after runMigrations', () => {
+    const db = new Database(':memory:')
+    migrateFixture(db)
+    const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{
+      name: string
+      notnull: number
+      dflt_value: unknown
+    }>
+    const col = cols.find((c) => c.name === 'auto_loop_session_mode')
+    expect(col).toBeTruthy()
+    expect(col?.notnull).toBe(1)
+    expect(col?.dflt_value).toBe("'per_task'")
+    db.close()
+  })
+
+  it('fresh install via initSchema produces the same column as runMigrations', () => {
+    const freshDb = new Database(':memory:')
+    initSchema(freshDb)
+    const freshCol = (freshDb.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>).find(
+      (c) => c.name === 'auto_loop_session_mode',
+    )
+
+    const upgradedDb = new Database(':memory:')
+    runMigrations(upgradedDb)
+    const upgradedCol = (upgradedDb.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>).find(
+      (c) => c.name === 'auto_loop_session_mode',
+    )
+
+    expect(freshCol).toEqual(upgradedCol)
+    freshDb.close()
+    upgradedDb.close()
+  })
+
+  it('v27 → v28 upgrade defaults existing rows to per_task', () => {
+    const db = new Database(':memory:')
+    migrateFixture(db)
+    db.prepare(
+      `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run('w1', 'legacy', '/tmp/p', 'main', 'feat', '2025-01-01', '2025-01-01')
+
+    const row = db.prepare('SELECT auto_loop_session_mode FROM workspaces WHERE id = ?').get('w1') as {
+      auto_loop_session_mode: string
+    }
+    expect(row.auto_loop_session_mode).toBe('per_task')
+    db.close()
+  })
+
+  it('is idempotent — re-running runMigrations does not re-add the column', () => {
+    const db = new Database(':memory:')
+    migrateFixture(db)
+    migrateFixture(db)
+    const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>
+    expect(cols.filter((c) => c.name === 'auto_loop_session_mode')).toHaveLength(1)
+    db.close()
+  })
+})
+
+describe('migration v29: add-brainstorm-model', () => {
+  it('adds the brainstorm_model column (nullable, no default) after runMigrations', () => {
+    const db = new Database(':memory:')
+    migrateFixture(db)
+    const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{
+      name: string
+      notnull: number
+      dflt_value: unknown
+    }>
+    const col = cols.find((c) => c.name === 'brainstorm_model')
+    expect(col).toBeTruthy()
+    expect(col?.notnull).toBe(0)
+    expect(col?.dflt_value).toBeNull()
+    db.close()
+  })
+
+  it('fresh install via initSchema produces the same column as runMigrations', () => {
+    const freshDb = new Database(':memory:')
+    initSchema(freshDb)
+    const freshCol = (freshDb.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>).find(
+      (c) => c.name === 'brainstorm_model',
+    )
+
+    const upgradedDb = new Database(':memory:')
+    runMigrations(upgradedDb)
+    const upgradedCol = (upgradedDb.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>).find(
+      (c) => c.name === 'brainstorm_model',
+    )
+
+    expect(freshCol).toEqual(upgradedCol)
+    freshDb.close()
+    upgradedDb.close()
+  })
+
+  it('v28 → v29 upgrade leaves existing rows with a null brainstorm_model', () => {
+    const db = new Database(':memory:')
+    migrateFixture(db)
+    db.prepare(
+      `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run('w1', 'legacy', '/tmp/p', 'main', 'feat', '2025-01-01', '2025-01-01')
+
+    const row = db.prepare('SELECT brainstorm_model FROM workspaces WHERE id = ?').get('w1') as {
+      brainstorm_model: string | null
+    }
+    expect(row.brainstorm_model).toBeNull()
+    db.close()
+  })
+
+  it('is idempotent — re-running runMigrations does not re-add the column', () => {
+    const db = new Database(':memory:')
+    migrateFixture(db)
+    migrateFixture(db)
+    const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>
+    expect(cols.filter((c) => c.name === 'brainstorm_model')).toHaveLength(1)
+    db.close()
+  })
+})
+
+describe('migration v30: add-pr-watch-disabled', () => {
+  it('adds the pr_watch_disabled_at column (nullable, no default) after runMigrations', () => {
+    const db = new Database(':memory:')
+    migrateFixture(db)
+    const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{
+      name: string
+      notnull: number
+      dflt_value: unknown
+    }>
+    const col = cols.find((c) => c.name === 'pr_watch_disabled_at')
+    expect(col).toBeTruthy()
+    expect(col?.notnull).toBe(0)
+    expect(col?.dflt_value).toBeNull()
+    db.close()
+  })
+
+  it('fresh install via initSchema produces the same column as runMigrations', () => {
+    const freshDb = new Database(':memory:')
+    initSchema(freshDb)
+    const freshCol = (freshDb.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>).find(
+      (c) => c.name === 'pr_watch_disabled_at',
+    )
+
+    const upgradedDb = new Database(':memory:')
+    runMigrations(upgradedDb)
+    const upgradedCol = (upgradedDb.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>).find(
+      (c) => c.name === 'pr_watch_disabled_at',
+    )
+
+    expect(freshCol).toEqual(upgradedCol)
+    freshDb.close()
+    upgradedDb.close()
+  })
+
+  it('v29 → v30 upgrade leaves existing rows with a null pr_watch_disabled_at', () => {
+    const db = new Database(':memory:')
+    migrateFixture(db)
+    db.prepare(
+      `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run('w1', 'legacy', '/tmp/p', 'main', 'feat', '2025-01-01', '2025-01-01')
+
+    const row = db.prepare('SELECT pr_watch_disabled_at FROM workspaces WHERE id = ?').get('w1') as {
+      pr_watch_disabled_at: string | null
+    }
+    expect(row.pr_watch_disabled_at).toBeNull()
+    db.close()
+  })
+
+  it('is idempotent — re-running runMigrations does not re-add the column', () => {
+    const db = new Database(':memory:')
+    migrateFixture(db)
+    migrateFixture(db)
+    const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>
+    expect(cols.filter((c) => c.name === 'pr_watch_disabled_at')).toHaveLength(1)
+    db.close()
+  })
+})
+
+describe('v39 — agent_sessions.end_reason', () => {
+  it('adds the column to a database that predates it, without losing rows', () => {
+    const db = new Database(':memory:')
+    migrateFixture(db)
+    // Rewind to v38: drop the column and forget the migration ever ran.
+    db.exec('ALTER TABLE agent_sessions DROP COLUMN end_reason')
+    db.prepare('DELETE FROM schema_migrations WHERE version = 39').run()
+    db.prepare(
+      `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
+       VALUES ('w1', 'legacy', '/tmp/p', 'main', 'feat', '2026-01-01', '2026-01-01')`,
+    ).run()
+    db.prepare(
+      "INSERT INTO agent_sessions (id, workspace_id, status, started_at) VALUES ('s1', 'w1', 'completed', '2026-01-01')",
+    ).run()
+
+    migrateFixture(db)
+
+    const row = db.prepare('SELECT status, end_reason FROM agent_sessions WHERE id = ?').get('s1') as {
+      status: string
+      end_reason: string | null
+    }
+    expect(row.status).toBe('completed')
+    // Left NULL on purpose: we do not know why the old rows ended.
+    expect(row.end_reason).toBeNull()
+    expect(db.prepare('SELECT version FROM schema_migrations WHERE version = 39').get()).toEqual({ version: 39 })
+    db.close()
+  })
+})
+
+describe('v40 — workspaces.comparison_id', () => {
+  it('adds the column to a database that predates it, without losing rows', () => {
+    const db = new Database(':memory:')
+    migrateFixture(db)
+    // Rewind to v39: drop the column and forget the migration ever ran.
+    db.exec('ALTER TABLE workspaces DROP COLUMN comparison_id')
+    db.prepare('DELETE FROM schema_migrations WHERE version = 40').run()
+    db.prepare(
+      `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
+       VALUES ('w1', 'legacy', '/tmp/p', 'main', 'feat', '2026-01-01', '2026-01-01')`,
+    ).run()
+
+    migrateFixture(db)
+
+    const row = db.prepare('SELECT name, comparison_id FROM workspaces WHERE id = ?').get('w1') as {
+      name: string
+      comparison_id: string | null
+    }
+    expect(row.name).toBe('legacy')
+    // An existing workspace belongs to no comparison — that is a fact, not a gap.
+    expect(row.comparison_id).toBeNull()
+    db.close()
+  })
+})
+
+describe('schema convergence', () => {
+  /** Column shape, order-independent: ALTER TABLE appends, initSchema declares in place. */
+  function describeTable(db: Database.Database, table: string) {
+    const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{
+      name: string
+      type: string
+      notnull: number
+      dflt_value: string | null
+      pk: number
+    }>
+    return cols
+      .map((c) => ({ name: c.name, type: c.type.toUpperCase(), notnull: c.notnull, dflt: c.dflt_value, pk: c.pk }))
+      .sort((a, b) => a.name.localeCompare(b.name))
+  }
+
+  function describeSchema(db: Database.Database) {
+    const tables = (
+      db
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('schema_migrations', 'schema_version') ORDER BY name",
+        )
+        .all() as Array<{ name: string }>
+    ).map((t) => t.name)
+    const indexes = (
+      db
+        .prepare(
+          "SELECT name, tbl_name FROM sqlite_master WHERE type = 'index' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+        )
+        .all() as Array<{ name: string; tbl_name: string }>
+    ).map((i) => `${i.tbl_name}.${i.name}`)
+    return { tables, indexes, columns: Object.fromEntries(tables.map((t) => [t, describeTable(db, t)])) }
+  }
+
+  it('a v1 database migrated all the way up matches a fresh install', () => {
+    // AGENTS.md requires both paths to converge. A previous version of this
+    // test ran `runMigrations` on an EMPTY database, which takes the
+    // fresh-install branch and calls initSchema — it compared initSchema to
+    // itself and could never fail. Starting from the v1 fixture below forces
+    // every migration block to actually run.
+    const fresh = new Database(':memory:')
+    initSchema(fresh)
+
+    const migrated = new Database(':memory:')
+    migrated.exec(
+      [
+        'CREATE TABLE schema_version (version INTEGER NOT NULL)',
+        'INSERT INTO schema_version (version) VALUES (1)',
+        "CREATE TABLE workspaces (id TEXT PRIMARY KEY, name TEXT NOT NULL, project_path TEXT NOT NULL, source_branch TEXT NOT NULL, working_branch TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'created', notion_url TEXT, notion_page_id TEXT, model TEXT NOT NULL DEFAULT 'claude-opus-4-6', dev_server_status TEXT NOT NULL DEFAULT 'stopped', archived_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
+        "CREATE TABLE tasks (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, title TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', is_acceptance_criterion INTEGER NOT NULL DEFAULT 0, sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
+        "CREATE TABLE agent_sessions (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, pid INTEGER, claude_session_id TEXT, status TEXT NOT NULL DEFAULT 'running', started_at TEXT NOT NULL, ended_at TEXT)",
+        'CREATE TABLE ws_events (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, type TEXT NOT NULL, payload TEXT NOT NULL, session_id TEXT, created_at TEXT NOT NULL)',
+      ].join('; '),
+    )
+    // Columns the v1 fixture already had: a migration cannot change their
+    // NOT NULL or default without rebuilding the table, so for those only the
+    // name and type are compared. Everything a migration ADDED is compared in
+    // full — that is the part initSchema and migrations.ts must agree on.
+    const v1Columns = new Map<string, Set<string>>()
+    for (const table of ['workspaces', 'tasks', 'agent_sessions', 'ws_events']) {
+      v1Columns.set(table, new Set(describeTable(migrated, table).map((c) => c.name)))
+    }
+    runMigrations(migrated)
+
+    const a = describeSchema(fresh)
+    const b = describeSchema(migrated)
+    expect(b.tables).toEqual(a.tables)
+    expect(b.indexes).toEqual(a.indexes)
+    for (const table of a.tables) {
+      const legacy = v1Columns.get(table) ?? new Set<string>()
+      const shape = (cols: ReturnType<typeof describeTable>) =>
+        cols.map((c) => (legacy.has(c.name) ? { name: c.name, type: c.type } : c))
+      expect(shape(b.columns[table]), `table ${table}`).toEqual(shape(a.columns[table]))
+    }
+    fresh.close()
+    migrated.close()
+  })
+})
+
+it('migration v42 preserves historical events and can be reapplied safely', () => {
+  const db = new Database(':memory:')
+  db.exec(`CREATE TABLE workspaces(id TEXT PRIMARY KEY);
+    CREATE TABLE ws_events(id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, session_id TEXT, type TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL);
+    INSERT INTO workspaces VALUES ('old');
+    INSERT INTO ws_events VALUES ('event', 'old', NULL, 'user:message', '{"content":"Keep this history"}', '2026-09-11');`)
+  const source = db.prepare('SELECT * FROM ws_events').all()
+  const migration = migrations.find((entry) => entry.version === 42)!
+  migration.migrate(db)
+  migration.migrate(db)
+  expect(db.prepare('SELECT * FROM ws_events').all()).toEqual(source)
+  expect(db.prepare('SELECT complete FROM search_index_state').get()).toEqual({ complete: 0 })
+  expect(db.prepare("SELECT name FROM sqlite_master WHERE name = 'search_messages_fts'").get()).toBeDefined()
+  db.close()
+})
+
+it('upgrades v42 with durable MCP receipts without losing existing data', () => {
+  const db = new Database(':memory:')
+  runMigrations(db)
+  db.exec('DROP TABLE IF EXISTS mcp_message_requests; DELETE FROM schema_migrations WHERE version > 42;')
+  db.exec(
+    "INSERT INTO workspaces(id,name,project_path,source_branch,working_branch,created_at,updated_at) VALUES ('kept','kept','/tmp','main','work','now','now')",
+  )
+  runMigrations(db)
+  runMigrations(db)
+  expect(db.prepare("SELECT name FROM workspaces WHERE id='kept'").get()).toEqual({ name: 'kept' })
+  const fresh = new Database(':memory:')
+  runMigrations(fresh)
+  const shape = (database: Database.Database) =>
+    database.prepare("SELECT sql FROM sqlite_master WHERE tbl_name='mcp_message_requests' ORDER BY name").all()
+  expect(shape(db)).toEqual(shape(fresh))
+  expect(db.prepare("SELECT name FROM sqlite_master WHERE name='mcp_message_requests'").get()).toBeTruthy()
+  expect(getMigrationHistory(db).at(-1)?.version).toBe(SCHEMA_VERSION)
+  db.close()
+  fresh.close()
+})
+
+it('upgrades v43 with review returns without losing workspace or session data', () => {
+  const db = new Database(':memory:')
+  runMigrations(db)
+  db.exec('DROP TABLE IF EXISTS pending_review_returns; DELETE FROM schema_migrations WHERE version > 43;')
+  db.exec(
+    "INSERT INTO workspaces(id,name,project_path,source_branch,working_branch,created_at,updated_at) VALUES ('kept','kept','/tmp','main','work','now','now')",
+  )
+  db.exec(
+    "INSERT INTO agent_sessions(id,workspace_id,engine_session_id,started_at) VALUES ('original','kept','native-thread','now')",
+  )
+  runMigrations(db)
+  runMigrations(db)
+  expect(db.prepare("SELECT engine_session_id FROM agent_sessions WHERE id='original'").get()).toEqual({
+    engine_session_id: 'native-thread',
+  })
+  expect(db.prepare("SELECT name FROM workspaces WHERE id='kept'").get()).toEqual({ name: 'kept' })
+  expect(db.prepare("SELECT name FROM sqlite_master WHERE name='pending_review_returns'").get()).toBeTruthy()
+  const fresh = new Database(':memory:')
+  initSchema(fresh)
+  const shape = (database: Database.Database) =>
+    database.prepare("SELECT sql FROM sqlite_master WHERE tbl_name='pending_review_returns' ORDER BY name").all()
+  expect(shape(db)).toEqual(shape(fresh))
+  expect(getMigrationHistory(db).at(-1)?.version).toBe(SCHEMA_VERSION)
+  fresh.close()
+  db.close()
+})
+
+it('upgrades v45 without losing workspaces and converges with a fresh handoff schema', () => {
+  const old = new Database(':memory:')
+  const fresh = new Database(':memory:')
+  initSchema(old)
+  old.exec(`DROP TABLE IF EXISTS session_handoffs;
+    CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+    INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
+      VALUES ('mission', 'Keep me', '/tmp', 'main', 'work', 'now', 'now');`)
+  for (let version = 1; version <= 45; version++) {
+    old.prepare('INSERT INTO schema_migrations VALUES (?, ?, ?)').run(version, `v${version}`, 'now')
+  }
+  runMigrations(old)
+  runMigrations(fresh)
+  expect(old.prepare("SELECT name FROM workspaces WHERE id = 'mission'").get()).toEqual({ name: 'Keep me' })
+  expect(old.prepare('PRAGMA table_info(session_handoffs)').all().length).toBeGreaterThan(0)
+  expect(old.prepare('PRAGMA table_info(session_handoffs)').all()).toEqual(
+    fresh.prepare('PRAGMA table_info(session_handoffs)').all(),
+  )
+  expect(getMigrationHistory(old).at(-1)?.version).toBe(SCHEMA_VERSION)
+  old.close()
+  fresh.close()
+})
+
+it('upgrades v46 with session activation order without rewriting history', () => {
+  const old = new Database(':memory:')
+  const fresh = new Database(':memory:')
+  runMigrations(old)
+  old.exec(`ALTER TABLE agent_sessions DROP COLUMN activation_order;
+    DELETE FROM schema_migrations WHERE version > 46;
+    INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
+      VALUES ('mission', 'Keep me', '/tmp', 'main', 'work', 'now', 'now');
+    INSERT INTO agent_sessions (id, workspace_id, status, started_at, ended_at, engine_session_id)
+      VALUES ('source', 'mission', 'completed', '2026-09-17T09:00:00Z', '2026-09-17T09:05:00Z', 'native-source');`)
+  runMigrations(old)
+  runMigrations(fresh)
+  expect(old.prepare('SELECT * FROM agent_sessions WHERE id=?').get('source')).toMatchObject({
+    status: 'completed',
+    started_at: '2026-09-17T09:00:00Z',
+    ended_at: '2026-09-17T09:05:00Z',
+    engine_session_id: 'native-source',
+    activation_order: 0,
+  })
+  expect(old.prepare('PRAGMA table_info(agent_sessions)').all()).toEqual(
+    fresh.prepare('PRAGMA table_info(agent_sessions)').all(),
+  )
+  expect(getMigrationHistory(old).at(-1)?.version).toBe(SCHEMA_VERSION)
+  old.close()
+  fresh.close()
+})
+
+describe('workflow preferences migration v48', () => {
+  it('preserves existing workspaces, is repeatable, and converges with fresh installs', () => {
+    const db = new Database(':memory:')
+    initSchema(db)
+    db.exec('ALTER TABLE workspaces DROP COLUMN workflow_policy')
+    db.exec(
+      "INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at) VALUES ('existing', 'Preserved', '/repo', 'main', 'feature', '2020', '2020')",
+    )
+    const migration = migrations.find((entry) => entry.version === 48)!
+    migration.migrate(db)
+    migration.migrate(db)
+    expect(db.prepare('SELECT name, workflow_policy FROM workspaces').get()).toEqual({
+      name: 'Preserved',
+      workflow_policy: null,
+    })
+    const fresh = new Database(':memory:')
+    initSchema(fresh)
+    const columns = (connection: Database.Database) =>
+      (
+        connection.prepare('PRAGMA table_info(workspaces)').all() as Array<{
+          name: string
+          type: string
+          notnull: number
+          dflt_value: unknown
+        }>
+      )
+        .map(({ name, type, notnull, dflt_value }) => ({ name, type, notnull, dflt_value }))
+        .sort((a, b) => a.name.localeCompare(b.name))
+    expect(columns(db)).toEqual(columns(fresh))
+    db.close()
+    fresh.close()
+  })
+})
+
+describe('wakeup retry migration v49', () => {
+  it('preserves deadlines and pending prompts and converges with a fresh database', () => {
+    const old = new Database(':memory:')
+    old.exec(
+      'CREATE TABLE pending_wakeups (workspace_id TEXT PRIMARY KEY, target_at TEXT NOT NULL, prompt TEXT NOT NULL, reason TEXT, created_at TEXT NOT NULL, agent_session_id TEXT)',
+    )
+    old.exec(
+      "INSERT INTO pending_wakeups VALUES ('w', '2026-01-01', 'preserve prompt', 'reason', '2025-12-31', 'session')",
+    )
+    const migration = migrations.find((entry) => entry.version === 49)!
+    migration.migrate(old)
+    migration.migrate(old)
+    expect(old.prepare('SELECT * FROM pending_wakeups').get()).toEqual({
+      workspace_id: 'w',
+      target_at: '2026-01-01',
+      prompt: 'preserve prompt',
+      reason: 'reason',
+      created_at: '2025-12-31',
+      agent_session_id: 'session',
+      retry_at: null,
+    })
+    const fresh = new Database(':memory:')
+    initSchema(fresh)
+    const columns = (db: Database.Database) =>
+      (db.prepare('PRAGMA table_info(pending_wakeups)').all() as Array<{ name: string; type: string }>)
+        .map(({ name, type }) => ({ name, type }))
+        .sort((a, b) => a.name.localeCompare(b.name))
+    expect(columns(old)).toEqual(columns(fresh))
+    old.close()
+    fresh.close()
+  })
+})

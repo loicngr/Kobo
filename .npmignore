@@ -1,0 +1,10 @@
+# Override .gitignore for npm publish. The `files` field in package.json is the
+# authoritative allowlist for what ends up in the published tarball; this file
+# simply prevents npm from inheriting .gitignore exclusions like `dist/` and
+# `src/client/dist/` which we actually WANT to publish.
+#
+# Keep this minimal. Add entries only for files that match `files` patterns but
+# should still be excluded from the tarball (e.g., test fixtures, source maps).
+
+# Source maps are only useful during local debugging, skip them in the tarball
+*.map

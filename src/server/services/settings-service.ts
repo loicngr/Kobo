@@ -1,0 +1,2320 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import { MASK_CHARACTER, MASKED_SECRET, SECRET_GLOBAL_KEYS, WORKTREES_PATH } from '../../shared/consts.js'
+import { normalizePublicSounds } from '../../shared/notification-assets.js'
+import { isValidProjectColor, type ProjectColor } from '../../shared/project-colors.js'
+import { isValidSkillSuite, type SkillSuite } from '../../shared/skill-suite-prompts.js'
+import { DEFAULT_WHIP_SHORTCUT, isValidWhipShortcut } from '../../shared/whip-shortcut.js'
+import {
+  isWorkflowPolicy,
+  LEGACY_WORKFLOW_POLICY,
+  MANUAL_WORKFLOW_POLICY,
+  resolveWorkflowPolicy,
+  type WorkflowPolicy,
+} from '../../shared/workflow-policy.js'
+import { listClaudeMcpEntries } from '../utils/mcp-client.js'
+import { getSettingsPath } from '../utils/paths.js'
+import {
+  InvalidWorktreesPathError,
+  resolveGlobalWorktreesRoot,
+  sanitizeWorktreesPath,
+  validateWorktreesPath,
+} from '../utils/worktree-paths.js'
+import { DEFAULT_NOTION_INITIAL_PROMPT, DEFAULT_SENTRY_INITIAL_PROMPT } from './initial-prompt-template-service.js'
+import {
+  LEGACY_AGNOSTIC_AUTO_LOOP_REVIEW_GATE,
+  LEGACY_AGNOSTIC_REVIEW_TEMPLATE,
+  LEGACY_CI_FIX_PROMPT_TEMPLATE,
+  LEGACY_FINALIZATION_PROMPT,
+  LEGACY_NOTION_INITIAL_PROMPT,
+  LEGACY_PR_PROMPT_TEMPLATE,
+  LEGACY_SENTRY_INITIAL_PROMPT,
+} from './legacy-public-prompts.js'
+import { DEFAULT_REVIEW_PROMPT_TEMPLATE } from './review-template-service.js'
+import {
+  DEFAULT_CHANGE_SOURCE_BRANCH_SCRIPT,
+  DEFAULT_MODEL_BY_ENGINE,
+  FRESH_MODEL_BY_ENGINE,
+} from './settings-defaults.js'
+import { AGNOSTIC_PROMPTS } from './skill-suite-prompts.js'
+
+export const STANDARD_GIT_CONVENTIONS = `Follow the repository's existing Git conventions and the user's instructions.
+Work locally by default. Commit, push, publish comments or open pull requests only when explicitly authorized.
+Inspect git status and all staged, unstaged and untracked changes before staging. Preserve unrelated work.
+Never rewrite shared history or run destructive Git commands without explicit authorization.
+`
+
+export const DEFAULT_GIT_CONVENTIONS = `# Git conventions
+
+## Commits
+- Use Conventional Commits: \`type(scope): subject\`
+- Types: feat, fix, docs, style, refactor, test, chore, perf, build, ci
+- Subject: imperative mood, lowercase, no trailing period, max 72 chars
+- Body: wrap at 72 chars, explain *why* not *what*
+- Reference issues with \`Refs #123\` or \`Closes #123\`
+
+## Branches
+- Feature: \`feature/<short-kebab-case>\`
+- Fix: \`fix/<short-kebab-case>\`
+- Never commit directly to main/master/develop
+
+## Workflow
+- Rebase on the source branch before opening a PR, do not merge it in
+- Keep commits atomic and self-contained (each compiles and passes tests)
+- Squash fixup commits before pushing
+- Never force-push to shared branches
+
+## Safety
+- Never run destructive commands (reset --hard, push --force, clean -fd) without explicit user confirmation
+- Never skip hooks (--no-verify) unless the user explicitly asks
+- Always inspect \`git status\` and \`git diff\` before staging
+`
+
+/**
+ * Cleanup-script trigger modes:
+ * - `idle` — run after every session where the agent finished, even if tasks remain.
+ * - `no-tasks` — run after a session only when no non-done Kōbō task remains.
+ *
+ * In auto-loop mode the cleanup script runs only when the loop completes (all
+ * tasks done), regardless of this mode.
+ */
+export type CleanupScriptMode = 'idle' | 'no-tasks'
+
+const CLEANUP_SCRIPT_MODES: CleanupScriptMode[] = ['idle', 'no-tasks']
+
+export function isValidCleanupScriptMode(value: unknown): value is CleanupScriptMode {
+  return typeof value === 'string' && (CLEANUP_SCRIPT_MODES as string[]).includes(value)
+}
+
+export const DEFAULT_CI_FIX_PROMPT_TEMPLATE = `The CI pipeline is failing on this branch. Investigate and fix every failing job.
+
+Context:
+- Workspace: {{workspace_name}}
+- Project: {{project_name}}
+- Branch: \`{{branch_name}}\` → \`{{source_branch}}\`
+- PR: {{pr_url}} (#{{pr_number}})
+
+Failing jobs:
+{{failed_jobs}}
+
+Steps:
+1. For each failing job, fetch its logs from the forge and pinpoint the root cause.
+2. Fix the underlying issue locally — never disable a check or skip a test to "fix" CI.
+3. Run the relevant lint / type-check / test commands locally to verify the fix.
+4. Report the local changes and checks. Commit or push only when explicitly authorized; otherwise leave the fix local.
+5. If a push was authorized, wait for CI to re-run and report its result.
+`
+
+export const DEFAULT_PR_PROMPT_TEMPLATE = `A pull request has been opened: {{pr_url}} (#{{pr_number}})
+
+Context:
+- Workspace: {{workspace_name}}
+- Project: {{project_name}}
+- Branch: \`{{branch_name}}\` → \`{{source_branch}}\`
+- Notion: {{notion_url}}
+
+Changes:
+{{diff_stats}}
+
+Commits:
+{{commits}}
+
+Tasks:
+{{tasks}}
+
+Acceptance criteria:
+{{acceptance_criteria}}
+
+Please:
+1. Read the PR/MR description using the configured forge and propose improvements locally (summary, screenshots if relevant, test plan)
+2. Verify that all acceptance criteria are checked
+3. Draft a summary of the work and follow-up items locally. Publish comments or edit the PR/MR only when explicitly authorized.
+4. Follow the repository policy for attribution and PR/MR formatting.
+`
+
+/** Dev-server start/stop commands for a project. */
+export interface DevServerConfig {
+  startCommand: string
+  stopCommand: string
+}
+
+/** E2E testing configuration for a project. */
+export interface E2eSettings {
+  framework: 'cypress' | 'playwright' | 'jest' | 'vitest' | 'other' | ''
+  skill: string
+  prompt: string
+}
+
+/** Auto-loop finalization configuration for a project. */
+export interface FinalizationSettings {
+  prompt: string
+}
+
+export const DEFAULT_FINALIZATION_PROMPT = `Run final quality checks before closing the workspace:
+
+1. Verify all work tasks and acceptance criteria are marked \`done\`. If any remain pending/in_progress, keep finalization open and report them.
+2. Run the project's linters, type-checkers, and tests (see the repository instructions and existing build/test configuration).
+3. If any check fails or cannot be run, create a regular repair task with a title like \`Fix lint failure in X\` (role \`work\`, no \`[FINAL]\` prefix), record the failed/not_run checks and leave this finalization task pending. Kōbō will process the repairs first, then run final verification again against the repaired state.
+4. Only after all required checks actually pass, mark this task as \`done\` with structured verification: method, summary, and the named checks with status \`passed\`.
+
+HARD RULE: Do NOT open a pull request, do NOT run \`gh pr create\` or any equivalent command. The finalization step never opens a PR — that is a separate, explicit user action via the "Open PR" button.`
+
+/** Per-project settings, stored in settings.json. */
+export interface ProjectSettings {
+  workflowPolicy: Partial<WorkflowPolicy>
+  path: string
+  displayName: string
+  defaultSourceBranch: string
+  defaultModel: string
+  dangerouslySkipPermissions: boolean
+  prPromptTemplate: string
+  reviewPromptTemplate: string
+  /**
+   * Per-project override of the global CI-fix prompt. Empty inherits the
+   * global value. Seeded by settings migration v34.
+   */
+  ciFixPromptTemplate: string
+  notionInitialPromptTemplate: string
+  sentryInitialPromptTemplate: string
+  gitConventions: string
+  setupScript: string
+  /**
+   * Custom prompt auto-injected into the task-description textarea on the
+   * workspace creation page when this project is selected. Empty by default.
+   * Seeded by migration v27.
+   */
+  taskPromptTemplate: string
+  /**
+   * Per-project override of the global cleanup script. Empty string inherits
+   * the global value (`global.cleanupScript`). Seeded by migration v28.
+   */
+  cleanupScript: string
+  /**
+   * Per-project override of the cleanup trigger mode. Empty string inherits the
+   * global `cleanupScriptMode`. Seeded by migration v28.
+   */
+  cleanupScriptMode: '' | CleanupScriptMode
+  /**
+   * Per-project override of the global archive script. Empty string inherits
+   * the global value (`global.archiveScript`). Seeded by migration v29.
+   */
+  archiveScript: string
+  /**
+   * Per-project override. Empty inherits `global.changeSourceBranchScript`.
+   * Seeded by settings migration v33.
+   */
+  changeSourceBranchScript: string
+  /**
+   * Per-project overrides of the lifecycle hooks. Empty string inherits the
+   * global value, exactly like every other script above. Seeded by v55.
+   */
+  sessionEndedScript: string
+  prMergedScript: string
+  autoLoopDisabledScript: string
+  devServer: DevServerConfig
+  e2e: E2eSettings
+  finalization: FinalizationSettings
+  color: ProjectColor | null
+  /**
+   * Which forge provides PR/MR features for this project. `auto` detects
+   * from the git remote URL; the others force a specific provider.
+   * Seeded by settings migration v32.
+   */
+  forge: 'auto' | 'github' | 'gitlab' | 'bitbucket-community' | 'none'
+}
+
+/** Global settings that apply as defaults when no project override is set. */
+export interface GlobalSettings {
+  workflowPolicy: WorkflowPolicy
+  onboardingComplete: boolean
+  /**
+   * Default model id per engine. Keys are engine ids (e.g. `'claude-code'`,
+   * `'codex'`), values are model ids from the engine's catalogue (or `'auto'`).
+   * Populated by migration v19 from the legacy single-string `defaultModel`.
+   */
+  defaultModelByEngine: Record<string, string>
+  dangerouslySkipPermissions: boolean
+  prPromptTemplate: string
+  reviewPromptTemplate: string
+  /**
+   * Template rendered and dispatched to the agent by the "Fix CI" action when
+   * a workspace's PR has failing CI. Empty disables the feature. Seeded with
+   * DEFAULT_CI_FIX_PROMPT_TEMPLATE by settings migration v34.
+   */
+  ciFixPromptTemplate: string
+  /**
+   * Default auto-loop finalization prompt. Used when a project leaves its own
+   * `finalization.prompt` empty (cascade: project || global). Seeded with
+   * DEFAULT_FINALIZATION_PROMPT by settings migration v38.
+   */
+  finalizationPrompt: string
+  notionInitialPromptTemplate: string
+  sentryInitialPromptTemplate: string
+  gitConventions: string
+  /**
+   * Shell script run in a worktree after it is created (before the agent
+   * starts). Empty = disabled. Projects may override it; see
+   * `ProjectSettings.setupScript`.
+   */
+  setupScript: string
+  /**
+   * Shell script run after a session completes. Empty = disabled. Projects may
+   * override it; see `ProjectSettings.cleanupScript`.
+   */
+  cleanupScript: string
+  /** When the global cleanup script fires. See {@link CleanupScriptMode}. */
+  cleanupScriptMode: CleanupScriptMode
+  /**
+   * When true, the cleanup script runs only if the worktree has uncommitted
+   * changes (modified / added / deleted / untracked files). Default false.
+   */
+  cleanupScriptOnlyOnChanges: boolean
+  /**
+   * Shell script run server-side when a workspace is archived. Empty = disabled.
+   * Projects may override it; see `ProjectSettings.archiveScript`.
+   */
+  archiveScript: string
+  /**
+   * Default custom change-source-branch script — when non-empty, replaces
+   * Kōbō's built-in cherry-pick. The script owns git + PR base + force-push
+   * + conflicts. Projects may override via `ProjectSettings.changeSourceBranchScript`.
+   * Seeded by settings migration v33.
+   */
+  changeSourceBranchScript: string
+  /**
+   * Shell script run when an agent session ends, whatever the reason. Reads
+   * `KOBO_SESSION_END_REASON` (completed / error / killed / watchdog) and
+   * `KOBO_SESSION_ID` to tell a clean finish from a forced one. Empty =
+   * disabled. Projects may override; see `ProjectSettings.sessionEndedScript`.
+   */
+  sessionEndedScript: string
+  /**
+   * Shell script run when the pr-watcher sees a PR go to MERGED. Runs before
+   * the workspace is archived or purged, so the worktree is still on disk.
+   * Reads `KOBO_PR_NUMBER` and `KOBO_PR_URL`. Empty = disabled.
+   */
+  prMergedScript: string
+  /**
+   * Shell script run when auto-loop turns itself off. Reads
+   * `KOBO_AUTOLOOP_REASON` (completed / stall / error / …) and
+   * `KOBO_TASKS_PENDING`. Empty = disabled.
+   */
+  autoLoopDisabledScript: string
+  editorCommand: string
+  /**
+   * Optional shell command spawned with the worktree path as the first
+   * argument to open it in the user's file manager (e.g. `xdg-open`, `open`,
+   * `nautilus`, `dolphin`, `explorer`). Empty = feature off.
+   * Seeded by settings migration v35.
+   */
+  fileManagerCommand: string
+  /**
+   * Optional shell command spawned with the worktree path as the first
+   * argument to open it in the user's terminal emulator (e.g. `xterm`,
+   * `gnome-terminal`, `wt`, `iTerm`). Empty = feature off.
+   * Seeded by settings migration v37.
+   */
+  terminalCommand: string
+  autoPurgeOnPrMerged: boolean
+  autoLoopMaxRetries: number
+  /**
+   * Minutes a workspace may sit in `awaiting-user` before Kōbō reminds you,
+   * then again at every further interval. `0` disables the reminder entirely
+   * — the default, since it is the user's attention being spent.
+   */
+  awaitingUserReminderMinutes: number
+  /** Show the absence digest and record significant activity. Default true. */
+  activityDigestEnabled: boolean
+  /**
+   * How many agent sessions may run at once. `0` — the default — means no
+   * limit, which is what every install did before this setting existed.
+   *
+   * Only unattended spawns respect it: the auto-loop, which is the one thing
+   * that starts sessions on its own and can have ten workspaces wake up
+   * together, hammer the same rate limit and each hit their own backoff. A
+   * session the user starts by hand always goes through, because they are
+   * standing right there and asked for it.
+   */
+  maxConcurrentAgents: number
+  /**
+   * Delete agent events (`ws_events`) older than this many days, once at server
+   * start-up. `0` — the default — disables retention entirely: nothing is ever
+   * deleted, which is what every install did before this setting existed. The
+   * feature is opt-in because it destroys conversation history for good.
+   */
+  wsEventsRetentionDays: number
+  /**
+   * Newest events kept per workspace whatever their age, so an old but still
+   * open workspace keeps a readable history. Irrelevant while
+   * `wsEventsRetentionDays` is 0.
+   */
+  wsEventsKeepPerWorkspace: number
+  /**
+   * Opt-in LAN network access. When false (default) the server binds
+   * 127.0.0.1 only; when true it binds all interfaces and requires the
+   * token for every non-loopback request. Seeded by settings migration v39.
+   */
+  networkAccessEnabled: boolean
+  /** Shared secret required for non-loopback access. Empty until first enabled. */
+  networkAccessToken: string
+  /**
+   * When true, disables the loopback-trust bypass entirely — every request,
+   * including ones that look like they came from 127.0.0.1, must present the
+   * token. Only meaningful when networkAccessEnabled is also true. Needed
+   * behind a reverse proxy (Traefik, nginx, Caddy…), where a proxied request
+   * can appear to originate from loopback. Seeded by settings migration v41.
+   */
+  networkAccessBehindProxy: boolean
+  browserNotifications: boolean
+  audioNotifications: boolean
+  audioQuestionNotifications: boolean
+  audioWorkspaceCreatedNotifications: boolean
+  audioAgentErrorNotifications: boolean
+  audioNotificationSound: string
+  /** Sound played specifically when the agent asks a question. Seeded by migration v40. */
+  audioQuestionSound: string
+  audioWorkspaceCreatedSound: string
+  audioAgentErrorSound: string
+  audioPrCiFailedSound: string
+  audioPrCiFailedEnabled: boolean
+  audioPrCiFailedVolume: number
+  audioPrCiRecoveredSound: string
+  audioPrCiRecoveredEnabled: boolean
+  audioPrCiRecoveredVolume: number
+  audioPrChangesRequestedSound: string
+  audioPrChangesRequestedEnabled: boolean
+  audioPrChangesRequestedVolume: number
+  audioPrApprovedSound: string
+  audioPrApprovedEnabled: boolean
+  audioPrApprovedVolume: number
+  audioPrMergeConflictSound: string
+  audioPrMergeConflictEnabled: boolean
+  audioPrMergeConflictVolume: number
+  audioPrReadyToMergeSound: string
+  audioPrReadyToMergeEnabled: boolean
+  audioPrReadyToMergeVolume: number
+  audioPrMergedSound: string
+  audioPrMergedEnabled: boolean
+  audioPrMergedVolume: number
+  audioNotificationVolume: number
+  audioQuestionVolume: number
+  audioWorkspaceCreatedVolume: number
+  audioAgentErrorVolume: number
+  notionStatusProperty: string
+  notionInProgressStatus: string
+  notionAssigneeProperty: string
+  notionUserId: string
+  /**
+   * Default permission mode per engine, applied at workspace creation when the
+   * user doesn't pick one explicitly. Keys are engine ids. Codex's map entry
+   * must be a mode it supports (`'plan' | 'bypass' | 'strict'` — never
+   * `'interactive'`, which requires Claude's canUseTool hook). Populated by
+   * migration v20 from the legacy single-string `defaultPermissionMode`.
+   */
+  defaultPermissionModeByEngine: Record<string, string>
+  notionMcpKey: string
+  sentryMcpKey: string
+  bitbucketToken: string
+  bitbucketUsername: string
+  notionEnabled: boolean
+  sentryEnabled: boolean
+  /** Whether agent thinking/reasoning blocks are displayed in the activity feed. */
+  showThinkingBlocks: boolean
+  /** Opt-in workspace whip control. Seeded disabled by settings migration v51. */
+  whipEnabled: boolean
+  /** Portable keyboard shortcut that toggles the workspace whip overlay. */
+  whipShortcut: string
+  /** Independent whip crack volume, normalized to the inclusive range 0..1. */
+  whipVolume: number
+  tags: string[]
+  /**
+   * User-managed git branch prefixes shown on the workspace creation page.
+   * Stored without the trailing `/`. The first entry is the default
+   * pre-selection. Seeded by migration v26 from `DEFAULT_BRANCH_PREFIXES`.
+   */
+  branchPrefixes: string[]
+  worktreesPath: string
+  worktreesPrefixByProject: boolean
+  voiceEnabled: boolean
+  voicePttKey: 'alt' | 'ctrl+space'
+  voiceLanguage: string
+  voiceModel: string | null
+  voiceCommandPath: string
+  voiceFfmpegPath: string
+  voiceTemperature: number
+  voicePrompt: string
+  voiceTranslateToEnglish: boolean
+  voiceSuppressNonSpeechTokens: boolean
+  flattenWorkspaceList: boolean
+  /**
+   * Skill suite selector — controls which ecosystem Kōbō's auto-generated
+   * prompts reference (review, auto-loop review gate, grooming intro, QA).
+   * Default `'superpowers'` for both fresh installs and migrated users.
+   */
+  skillSuite: SkillSuite
+  /** Custom review template — only consulted when `skillSuite === 'custom'`. */
+  customReviewTemplate: string
+  /** Custom auto-loop review gate — only consulted when `skillSuite === 'custom'`. */
+  customAutoLoopReviewGate: string
+  /** Custom auto-loop grooming intro — only consulted when `skillSuite === 'custom'`. */
+  customAutoLoopGroomingIntro: string
+  /** Custom QA prompt template — only consulted when `skillSuite === 'custom'`. */
+  customQaPromptTemplate: string
+  /** Custom brainstorming-phase instruction injected into the workspace
+   *  bootstrap prompt — only consulted when `skillSuite === 'custom'`. */
+  customBrainstormingInstruction: string
+}
+
+/** Default workspace tags seeded on fresh install and on settings upgrade. */
+export const DEFAULT_WORKSPACE_TAGS: string[] = [
+  'bug',
+  'feature',
+  'refactor',
+  'docs',
+  'wip',
+  'urgent',
+  'blocked',
+  'notion',
+  'sentry',
+]
+
+/**
+ * Default git branch prefixes seeded on fresh install and on settings upgrade.
+ * Stored without the trailing `/` — it's a separator added at display time and
+ * when composing the working branch (`<prefix>/<slug>`). The first entry is the
+ * one pre-selected on the workspace creation page.
+ */
+export const DEFAULT_BRANCH_PREFIXES: string[] = ['feature', 'fix', 'hotfix', 'chore', 'refactor', 'docs', 'test']
+
+function normalizeWhipShortcut(value: unknown): string {
+  return isValidWhipShortcut(value) ? value : DEFAULT_WHIP_SHORTCUT
+}
+
+function normalizeWhipVolume(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1 ? value : 1
+}
+
+/**
+ * Sanitize a raw branch-prefix list: trim, strip surrounding slashes, drop
+ * entries that aren't valid git branch segments, dedupe, cap length. Returns
+ * an empty array when nothing survives — callers decide the fallback.
+ */
+export function sanitizeBranchPrefixes(input: unknown): string[] {
+  if (!Array.isArray(input)) return []
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const raw of input) {
+    if (typeof raw !== 'string') continue
+    const value = raw.trim().replace(/^\/+|\/+$/g, '')
+    if (value.length === 0 || value.length > 50) continue
+    // Allow only characters safe in a git branch name; reject `..` runs.
+    if (!/^[A-Za-z0-9._/-]+$/.test(value) || value.includes('..')) continue
+    if (seen.has(value)) continue
+    seen.add(value)
+    result.push(value)
+  }
+  return result
+}
+
+/** Top-level settings structure persisted to settings.json. */
+export interface Settings {
+  schemaVersion: number
+  global: GlobalSettings
+  projects: ProjectSettings[]
+}
+
+// ── Settings migration registry ───────────────────────────────────────────────
+// Each entry describes a single settings upgrade step.
+// Append-only — never edit or reorder shipped entries.
+
+interface SettingsMigration {
+  version: number
+  name: string
+  migrate: (current: { global: Record<string, unknown>; projects: Array<Record<string, unknown>> }) => void
+}
+
+const settingsMigrations: SettingsMigration[] = [
+  {
+    version: 1,
+    name: 'add-git-conventions',
+    migrate: ({ global, projects }) => {
+      if (typeof global.gitConventions !== 'string') global.gitConventions = ''
+      for (const p of projects) {
+        if (typeof p.gitConventions !== 'string') p.gitConventions = ''
+      }
+    },
+  },
+  {
+    version: 2,
+    name: 'add-dangerously-skip-permissions',
+    migrate: ({ global, projects }) => {
+      if (typeof global.dangerouslySkipPermissions !== 'boolean') global.dangerouslySkipPermissions = true
+      for (const p of projects) {
+        if (typeof p.dangerouslySkipPermissions !== 'boolean') p.dangerouslySkipPermissions = true
+      }
+    },
+  },
+  {
+    version: 3,
+    name: 'add-setup-script',
+    migrate({ projects }) {
+      for (const project of projects) {
+        if (!('setupScript' in project)) {
+          ;(project as Record<string, unknown>).setupScript = ''
+        }
+      }
+    },
+  },
+  {
+    version: 4,
+    name: 'add-editor-and-notifications',
+    migrate({ global }) {
+      if (typeof global.editorCommand !== 'string') global.editorCommand = ''
+      if (typeof global.browserNotifications !== 'boolean') global.browserNotifications = true
+      if (typeof global.audioNotifications !== 'boolean') global.audioNotifications = true
+    },
+  },
+  {
+    version: 5,
+    name: 'add-notion-in-progress-status',
+    migrate({ global, projects }) {
+      if (typeof global.notionStatusProperty !== 'string') global.notionStatusProperty = ''
+      if (typeof global.notionInProgressStatus !== 'string') global.notionInProgressStatus = ''
+      for (const p of projects) {
+        if (typeof p.notionStatusProperty !== 'string') p.notionStatusProperty = ''
+        if (typeof p.notionInProgressStatus !== 'string') p.notionInProgressStatus = ''
+      }
+    },
+  },
+  {
+    version: 6,
+    name: 'add-default-permission-mode',
+    migrate({ global }) {
+      if (typeof global.defaultPermissionMode !== 'string') global.defaultPermissionMode = 'plan'
+    },
+  },
+  {
+    version: 7,
+    name: 'add-mcp-selection-keys',
+    migrate({ global }) {
+      if (typeof global.notionMcpKey !== 'string') global.notionMcpKey = ''
+      if (typeof global.sentryMcpKey !== 'string') global.sentryMcpKey = ''
+    },
+  },
+  {
+    version: 8,
+    name: 'add-workspace-tags',
+    migrate({ global }) {
+      if (!Array.isArray(global.tags)) global.tags = [...DEFAULT_WORKSPACE_TAGS]
+    },
+  },
+  {
+    version: 9,
+    name: 'add-notion-sentry-default-tags',
+    migrate({ global }) {
+      if (!Array.isArray(global.tags)) {
+        global.tags = [...DEFAULT_WORKSPACE_TAGS]
+        return
+      }
+      for (const t of ['notion', 'sentry']) {
+        if (!(global.tags as string[]).includes(t)) (global.tags as string[]).push(t)
+      }
+    },
+  },
+  {
+    version: 10,
+    name: 'add-project-finalization',
+    migrate({ projects }) {
+      for (const p of projects) {
+        if (!p.finalization || typeof p.finalization !== 'object') {
+          p.finalization = { prompt: LEGACY_FINALIZATION_PROMPT }
+        } else if (typeof (p.finalization as { prompt?: unknown }).prompt !== 'string') {
+          ;(p.finalization as { prompt: string }).prompt = LEGACY_FINALIZATION_PROMPT
+        }
+      }
+    },
+  },
+  {
+    version: 11,
+    name: 'add-global-worktrees-path',
+    migrate({ global }) {
+      global.worktreesPath = sanitizeWorktreesPath(global.worktreesPath)
+    },
+  },
+  {
+    version: 12,
+    name: 'add-audio-notification-sound',
+    migrate({ global }) {
+      if (typeof global.audioNotificationSound !== 'string' || global.audioNotificationSound.length === 0) {
+        global.audioNotificationSound = 'hey.mp3'
+      }
+    },
+  },
+  {
+    version: 13,
+    name: 'add-audio-notification-volume',
+    migrate({ global }) {
+      const v = global.audioNotificationVolume
+      if (typeof v !== 'number' || Number.isNaN(v) || v < 0 || v > 1) {
+        global.audioNotificationVolume = 1
+      }
+    },
+  },
+  {
+    version: 14,
+    name: 'add-worktrees-prefix-by-project',
+    migrate({ global }) {
+      if (typeof global.worktreesPrefixByProject !== 'boolean') {
+        global.worktreesPrefixByProject = false
+      }
+    },
+  },
+  {
+    version: 15,
+    name: 'add-review-prompt-template',
+    migrate({ global, projects }) {
+      if (typeof global.reviewPromptTemplate !== 'string') {
+        global.reviewPromptTemplate = DEFAULT_REVIEW_PROMPT_TEMPLATE
+      }
+      for (const p of projects) {
+        if (typeof p.reviewPromptTemplate !== 'string') {
+          p.reviewPromptTemplate = ''
+        }
+      }
+    },
+  },
+  {
+    version: 16,
+    name: 'add-notion-sentry-initial-prompts',
+    migrate({ global, projects }) {
+      if (typeof global.notionInitialPromptTemplate !== 'string') {
+        global.notionInitialPromptTemplate = LEGACY_NOTION_INITIAL_PROMPT
+      }
+      if (typeof global.sentryInitialPromptTemplate !== 'string') {
+        global.sentryInitialPromptTemplate = LEGACY_SENTRY_INITIAL_PROMPT
+      }
+      for (const p of projects) {
+        if (typeof p.notionInitialPromptTemplate !== 'string') {
+          p.notionInitialPromptTemplate = ''
+        }
+        if (typeof p.sentryInitialPromptTemplate !== 'string') {
+          p.sentryInitialPromptTemplate = ''
+        }
+      }
+    },
+  },
+  {
+    version: 17,
+    name: 'add-voice-transcription-settings',
+    migrate({ global }) {
+      if (typeof global.voiceEnabled !== 'boolean') global.voiceEnabled = false
+      if (global.voicePttKey !== 'alt' && global.voicePttKey !== 'ctrl+space') global.voicePttKey = 'alt'
+      if (typeof global.voiceLanguage !== 'string' || global.voiceLanguage.length === 0) global.voiceLanguage = 'auto'
+      if (typeof global.voiceModel !== 'string' && global.voiceModel !== null) global.voiceModel = null
+      if (typeof global.voiceCommandPath !== 'string') global.voiceCommandPath = ''
+      if (typeof global.voiceFfmpegPath !== 'string') global.voiceFfmpegPath = ''
+    },
+  },
+  {
+    version: 18,
+    name: 'add-voice-advanced-settings',
+    migrate({ global }) {
+      const t = Number(global.voiceTemperature)
+      if (!Number.isFinite(t) || t < 0 || t > 1) global.voiceTemperature = 0
+      if (typeof global.voicePrompt !== 'string') global.voicePrompt = ''
+      if (typeof global.voiceTranslateToEnglish !== 'boolean') global.voiceTranslateToEnglish = false
+      if (typeof global.voiceSuppressNonSpeechTokens !== 'boolean') global.voiceSuppressNonSpeechTokens = true
+    },
+  },
+  {
+    version: 19,
+    name: 'split-default-model-by-engine',
+    // Codex was added alongside Claude Code; the single `defaultModel` is now
+    // ambiguous (different engines have different model catalogues). Split it
+    // into a per-engine map. Preserve the legacy value as the claude-code
+    // default for back-compat, and seed codex with `'auto'`.
+    migrate({ global }) {
+      const existing = global.defaultModelByEngine
+      if (typeof existing !== 'object' || existing === null || Array.isArray(existing)) {
+        const legacyModel =
+          typeof global.defaultModel === 'string' && global.defaultModel.length > 0
+            ? (global.defaultModel as string)
+            : 'auto'
+        global.defaultModelByEngine = {
+          'claude-code': legacyModel,
+          codex: 'auto',
+        }
+      } else {
+        // Backfill any missing engine entries idempotently.
+        const map = existing as Record<string, unknown>
+        if (typeof map['claude-code'] !== 'string') map['claude-code'] = 'auto'
+        if (typeof map.codex !== 'string') map.codex = 'auto'
+      }
+      // Drop the legacy field once migrated.
+      delete global.defaultModel
+    },
+  },
+  {
+    version: 20,
+    name: 'split-default-permission-mode-by-engine',
+    // Mirrors v19 for permission modes. Both engines accept the full mode set.
+    migrate({ global }) {
+      const existing = global.defaultPermissionModeByEngine
+      const legacyMode =
+        typeof global.defaultPermissionMode === 'string' && global.defaultPermissionMode.length > 0
+          ? (global.defaultPermissionMode as string)
+          : 'plan'
+      if (typeof existing !== 'object' || existing === null || Array.isArray(existing)) {
+        global.defaultPermissionModeByEngine = {
+          'claude-code': legacyMode,
+          codex: legacyMode,
+        }
+      } else {
+        const map = existing as Record<string, unknown>
+        if (typeof map['claude-code'] !== 'string') map['claude-code'] = legacyMode
+        if (typeof map.codex !== 'string') map.codex = legacyMode
+      }
+      delete global.defaultPermissionMode
+    },
+  },
+  {
+    version: 21,
+    name: 'add-project-color-and-flatten',
+    migrate: ({ global, projects }) => {
+      if (typeof global.flattenWorkspaceList !== 'boolean') {
+        global.flattenWorkspaceList = false
+      }
+      for (const p of projects) {
+        if (!('color' in p) || (p.color !== null && !isValidProjectColor(p.color))) {
+          ;(p as Record<string, unknown>).color = null
+        }
+      }
+    },
+  },
+  {
+    version: 22,
+    name: 'add-skill-suite-selector',
+    // Auto-migrate every existing user to `superpowers` (the closest match to
+    // today's behaviour). New installs get the same default via
+    // `defaultSettings()`. The 4 `custom*` fields seed with the agnostic
+    // baseline so users switching to `custom` mode have a sane editable start.
+    migrate: ({ global }) => {
+      if (!isValidSkillSuite(global.skillSuite)) {
+        global.skillSuite = 'superpowers'
+      }
+      if (typeof global.customReviewTemplate !== 'string') {
+        global.customReviewTemplate = LEGACY_AGNOSTIC_REVIEW_TEMPLATE
+      }
+      if (typeof global.customAutoLoopReviewGate !== 'string') {
+        global.customAutoLoopReviewGate = LEGACY_AGNOSTIC_AUTO_LOOP_REVIEW_GATE
+      }
+      if (typeof global.customAutoLoopGroomingIntro !== 'string') {
+        global.customAutoLoopGroomingIntro = AGNOSTIC_PROMPTS.autoLoopGroomingIntro
+      }
+      if (typeof global.customQaPromptTemplate !== 'string') {
+        global.customQaPromptTemplate = AGNOSTIC_PROMPTS.qaPromptTemplate
+      }
+    },
+  },
+  {
+    version: 23,
+    name: 'add-custom-brainstorming-instruction',
+    // Adds the 5th `custom*` field — the brainstorming-phase instruction
+    // injected into the workspace bootstrap prompt. Seeds with the agnostic
+    // baseline so users in `custom` mode can edit from a neutral start.
+    migrate: ({ global }) => {
+      if (typeof global.customBrainstormingInstruction !== 'string') {
+        global.customBrainstormingInstruction = AGNOSTIC_PROMPTS.brainstormingInstruction
+      }
+    },
+  },
+  {
+    version: 24,
+    name: 'add-notion-assignee-property',
+    migrate: ({ global }) => {
+      if (typeof global.notionAssigneeProperty !== 'string') {
+        global.notionAssigneeProperty = ''
+      }
+    },
+  },
+  {
+    version: 25,
+    name: 'add-notion-user-id',
+    migrate: ({ global }) => {
+      if (typeof global.notionUserId !== 'string') {
+        global.notionUserId = ''
+      }
+    },
+  },
+  {
+    version: 26,
+    name: 'add-branch-prefixes',
+    migrate: ({ global }) => {
+      if (!Array.isArray(global.branchPrefixes)) {
+        global.branchPrefixes = [...DEFAULT_BRANCH_PREFIXES]
+      }
+    },
+  },
+  {
+    version: 27,
+    name: 'add-project-task-prompt',
+    migrate: ({ projects }) => {
+      for (const p of projects) {
+        if (typeof p.taskPromptTemplate !== 'string') p.taskPromptTemplate = ''
+      }
+    },
+  },
+  {
+    version: 28,
+    name: 'add-cleanup-script',
+    migrate: ({ global, projects }) => {
+      if (typeof global.cleanupScript !== 'string') global.cleanupScript = ''
+      if (!isValidCleanupScriptMode(global.cleanupScriptMode)) global.cleanupScriptMode = 'no-tasks'
+      for (const p of projects) {
+        if (typeof p.cleanupScript !== 'string') p.cleanupScript = ''
+        // '' = inherit; any other value must be a valid mode.
+        if (p.cleanupScriptMode !== '' && !isValidCleanupScriptMode(p.cleanupScriptMode)) {
+          p.cleanupScriptMode = ''
+        }
+      }
+    },
+  },
+  {
+    version: 29,
+    name: 'add-archive-script',
+    migrate: ({ global, projects }) => {
+      if (typeof global.archiveScript !== 'string') global.archiveScript = ''
+      for (const p of projects) {
+        if (typeof p.archiveScript !== 'string') p.archiveScript = ''
+      }
+    },
+  },
+  {
+    version: 30,
+    name: 'add-global-setup-script',
+    migrate: ({ global }) => {
+      if (typeof global.setupScript !== 'string') global.setupScript = ''
+    },
+  },
+  {
+    version: 31,
+    name: 'add-cleanup-script-only-on-changes',
+    migrate: ({ global }) => {
+      if (typeof global.cleanupScriptOnlyOnChanges !== 'boolean') {
+        global.cleanupScriptOnlyOnChanges = false
+      }
+    },
+  },
+  {
+    version: 32,
+    name: 'add-project-forge',
+    migrate: ({ projects }) => {
+      for (const p of projects) {
+        if (typeof p.forge !== 'string') p.forge = 'auto'
+      }
+    },
+  },
+  {
+    version: 33,
+    name: 'add-change-source-branch-script',
+    migrate: ({ global, projects }) => {
+      // Seed global with the default so the feature is enabled out-of-the-box;
+      // projects stay empty (= inherit global).
+      if (typeof global.changeSourceBranchScript !== 'string') {
+        global.changeSourceBranchScript = DEFAULT_CHANGE_SOURCE_BRANCH_SCRIPT
+      }
+      for (const p of projects) {
+        if (typeof p.changeSourceBranchScript !== 'string') p.changeSourceBranchScript = ''
+      }
+    },
+  },
+  {
+    version: 34,
+    name: 'add-ci-fix-prompt-template',
+    migrate: ({ global, projects }) => {
+      if (typeof global.ciFixPromptTemplate !== 'string') {
+        global.ciFixPromptTemplate = LEGACY_CI_FIX_PROMPT_TEMPLATE
+      }
+      for (const p of projects) {
+        if (typeof p.ciFixPromptTemplate !== 'string') p.ciFixPromptTemplate = ''
+      }
+    },
+  },
+  {
+    version: 35,
+    name: 'add-file-manager-command',
+    migrate: ({ global }) => {
+      // Empty by default — the "Open in file manager" button only shows
+      // when the user explicitly fills it (`xdg-open`, `open`, `nautilus`…).
+      if (typeof global.fileManagerCommand !== 'string') {
+        global.fileManagerCommand = ''
+      }
+    },
+  },
+  {
+    version: 36,
+    name: 'add-auto-purge-on-pr-merged',
+    migrate: ({ global }) => {
+      if (typeof global.autoPurgeOnPrMerged !== 'boolean') {
+        global.autoPurgeOnPrMerged = false
+      }
+    },
+  },
+  {
+    version: 37,
+    name: 'add-terminal-command',
+    migrate: ({ global }) => {
+      // Empty by default — the "Open in terminal" button only shows
+      // when the user explicitly fills it (`xterm`, `gnome-terminal`, `wt`…).
+      if (typeof global.terminalCommand !== 'string') {
+        global.terminalCommand = ''
+      }
+    },
+  },
+  {
+    version: 38,
+    name: 'add-global-finalization-prompt',
+    migrate: ({ global }) => {
+      // Seed the global default; projects keep their own override (or empty to
+      // inherit this global value — cascade handled by getEffectiveFinalization).
+      if (typeof global.finalizationPrompt !== 'string') {
+        global.finalizationPrompt = LEGACY_FINALIZATION_PROMPT
+      }
+    },
+  },
+  {
+    version: 39,
+    name: 'add-network-access',
+    migrate: ({ global }) => {
+      // Opt-in LAN access with token auth. Disabled by default (localhost-only
+      // bind). Token is generated lazily on first enable via POST /network.
+      if (typeof global.networkAccessEnabled !== 'boolean') {
+        global.networkAccessEnabled = false
+      }
+      if (typeof global.networkAccessToken !== 'string') {
+        global.networkAccessToken = ''
+      }
+    },
+  },
+  {
+    version: 40,
+    name: 'add-question-notification-sound',
+    migrate: ({ global }) => {
+      // Distinct sound played when the agent asks a question. Defaults to 'hey.mp3'
+      // so questions are audibly distinct from a customised task-done sound.
+      if (typeof global.audioQuestionSound !== 'string' || global.audioQuestionSound.length === 0) {
+        global.audioQuestionSound = 'hey.mp3'
+      }
+    },
+  },
+  {
+    version: 41,
+    name: 'add-network-access-behind-proxy',
+    migrate: ({ global }) => {
+      // Disables the loopback-trust bypass when true — every request needs
+      // the token, even ones that look like they came from 127.0.0.1. Only
+      // meaningful when networkAccessEnabled is also true.
+      if (typeof global.networkAccessBehindProxy !== 'boolean') {
+        global.networkAccessBehindProxy = false
+      }
+    },
+  },
+  {
+    version: 42,
+    name: 'add-per-event-notification-audio-settings',
+    migrate: ({ global }) => {
+      const legacyVolume = global.audioNotificationVolume
+      const volume =
+        typeof legacyVolume === 'number' && Number.isFinite(legacyVolume) && legacyVolume >= 0 && legacyVolume <= 1
+          ? legacyVolume
+          : 1
+      if (typeof global.audioWorkspaceCreatedSound !== 'string' || global.audioWorkspaceCreatedSound.length === 0) {
+        global.audioWorkspaceCreatedSound = 'warcraft-3-humain-travail.mp3'
+      }
+      if (typeof global.audioQuestionVolume !== 'number' || !Number.isFinite(global.audioQuestionVolume)) {
+        global.audioQuestionVolume = volume
+      }
+      if (
+        typeof global.audioWorkspaceCreatedVolume !== 'number' ||
+        !Number.isFinite(global.audioWorkspaceCreatedVolume)
+      ) {
+        global.audioWorkspaceCreatedVolume = volume
+      }
+    },
+  },
+  {
+    version: 43,
+    name: 'add-per-event-notification-audio-toggles',
+    migrate: ({ global }) => {
+      if (typeof global.audioQuestionNotifications !== 'boolean') {
+        global.audioQuestionNotifications = true
+      }
+      if (typeof global.audioWorkspaceCreatedNotifications !== 'boolean') {
+        global.audioWorkspaceCreatedNotifications = true
+      }
+    },
+  },
+  {
+    version: 44,
+    name: 'add-pr-notification-sounds',
+    migrate: ({ global }) => {
+      const keys = [
+        'audioPrCiFailedSound',
+        'audioPrCiRecoveredSound',
+        'audioPrChangesRequestedSound',
+        'audioPrApprovedSound',
+        'audioPrMergeConflictSound',
+        'audioPrReadyToMergeSound',
+        'audioPrMergedSound',
+      ]
+      for (const key of keys) {
+        if (typeof global[key] !== 'string' || global[key].length === 0) {
+          global[key] = 'inherit'
+        }
+      }
+    },
+  },
+  {
+    version: 45,
+    name: 'add-pr-notification-audio-controls',
+    migrate: ({ global }) => {
+      const legacyVolume = global.audioNotificationVolume
+      const volume =
+        typeof legacyVolume === 'number' && Number.isFinite(legacyVolume) && legacyVolume >= 0 && legacyVolume <= 1
+          ? legacyVolume
+          : 1
+      const events = [
+        'CiFailed',
+        'CiRecovered',
+        'ChangesRequested',
+        'Approved',
+        'MergeConflict',
+        'ReadyToMerge',
+        'Merged',
+      ]
+      for (const event of events) {
+        const soundKey = `audioPr${event}Sound`
+        const enabledKey = `audioPr${event}Enabled`
+        const volumeKey = `audioPr${event}Volume`
+        const muted = global[soundKey] === 'none'
+        if (muted) global[soundKey] = 'inherit'
+        if (typeof global[enabledKey] !== 'boolean') global[enabledKey] = !muted
+        if (typeof global[volumeKey] !== 'number' || !Number.isFinite(global[volumeKey])) {
+          global[volumeKey] = volume
+        }
+      }
+    },
+  },
+  {
+    version: 46,
+    name: 'add-integration-enabled-switches',
+    migrate: ({ global }) => {
+      if (typeof global.notionEnabled !== 'boolean') global.notionEnabled = true
+      if (typeof global.sentryEnabled !== 'boolean') global.sentryEnabled = true
+    },
+  },
+  {
+    version: 47,
+    name: 'add-thinking-block-visibility',
+    migrate: ({ global }) => {
+      if (typeof global.showThinkingBlocks !== 'boolean') global.showThinkingBlocks = true
+    },
+  },
+  {
+    version: 48,
+    name: 'add-agent-error-notification-sound',
+    migrate: ({ global }) => {
+      if (typeof global.audioAgentErrorNotifications !== 'boolean') global.audioAgentErrorNotifications = false
+      if (typeof global.audioAgentErrorSound !== 'string' || global.audioAgentErrorSound.length === 0) {
+        global.audioAgentErrorSound = 'inherit'
+      }
+      if (typeof global.audioAgentErrorVolume !== 'number' || !Number.isFinite(global.audioAgentErrorVolume)) {
+        global.audioAgentErrorVolume = 1
+      }
+    },
+  },
+  {
+    version: 49,
+    name: 'add-auto-loop-max-retries',
+    migrate: ({ global }) => {
+      if (
+        typeof global.autoLoopMaxRetries !== 'number' ||
+        !Number.isInteger(global.autoLoopMaxRetries) ||
+        global.autoLoopMaxRetries < 1
+      ) {
+        global.autoLoopMaxRetries = 5
+      }
+    },
+  },
+  {
+    version: 50,
+    name: 'add-bitbucket-credentials',
+    migrate: ({ global }) => {
+      if (typeof global.bitbucketToken !== 'string') global.bitbucketToken = ''
+      if (typeof global.bitbucketUsername !== 'string') global.bitbucketUsername = ''
+    },
+  },
+  {
+    version: 51,
+    name: 'add-whip-feature-toggle',
+    migrate: ({ global }) => {
+      if (typeof global.whipEnabled !== 'boolean') global.whipEnabled = false
+    },
+  },
+  {
+    version: 52,
+    name: 'add-whip-keyboard-shortcut',
+    migrate: ({ global }) => {
+      global.whipShortcut = normalizeWhipShortcut(global.whipShortcut)
+    },
+  },
+  {
+    version: 53,
+    name: 'add-whip-volume',
+    migrate: ({ global }) => {
+      global.whipVolume = normalizeWhipVolume(global.whipVolume)
+    },
+  },
+  {
+    version: 54,
+    name: 'add-ws-events-retention',
+    migrate: ({ global }) => {
+      // Seeded DISABLED (0), on fresh installs as well as migrated ones. This
+      // feature permanently deletes conversation history, so it is opt-in: a
+      // silent loss of history is worse than a growing file. A window the user
+      // already chose survives untouched; only a negative or non-integer value
+      // falls back to 0.
+      if (
+        typeof global.wsEventsRetentionDays !== 'number' ||
+        !Number.isInteger(global.wsEventsRetentionDays) ||
+        global.wsEventsRetentionDays < 0
+      ) {
+        global.wsEventsRetentionDays = 0
+      }
+      if (
+        typeof global.wsEventsKeepPerWorkspace !== 'number' ||
+        !Number.isInteger(global.wsEventsKeepPerWorkspace) ||
+        global.wsEventsKeepPerWorkspace < 0
+      ) {
+        global.wsEventsKeepPerWorkspace = 0
+      }
+    },
+  },
+  {
+    version: 55,
+    name: 'add-lifecycle-hook-scripts',
+    migrate: ({ global, projects }) => {
+      // Seeded empty everywhere: a hook runs arbitrary shell on the user's
+      // machine, so it only ever exists because the user wrote it.
+      for (const key of ['sessionEndedScript', 'prMergedScript', 'autoLoopDisabledScript']) {
+        if (typeof global[key] !== 'string') global[key] = ''
+        for (const p of projects) {
+          if (typeof p[key] !== 'string') p[key] = ''
+        }
+      }
+    },
+  },
+  {
+    version: 56,
+    name: 'add-awaiting-user-reminder',
+    migrate: ({ global }) => {
+      // Seeded off. Same reasoning as the retention window: a feature that
+      // spends the user's attention without being asked is not a default.
+      if (
+        typeof global.awaitingUserReminderMinutes !== 'number' ||
+        !Number.isInteger(global.awaitingUserReminderMinutes) ||
+        global.awaitingUserReminderMinutes < 0 ||
+        global.awaitingUserReminderMinutes > 1440
+      ) {
+        global.awaitingUserReminderMinutes = 0
+      }
+    },
+  },
+  {
+    version: 57,
+    name: 'seed-default-model-per-engine',
+    migrate: ({ global }) => {
+      // Only an engine still on the seeded `auto` (or with no entry) moves to
+      // the shipped default; a model the user picked is theirs to keep.
+      const existing = global.defaultModelByEngine
+      const map: Record<string, unknown> =
+        typeof existing === 'object' && existing !== null && !Array.isArray(existing)
+          ? (existing as Record<string, unknown>)
+          : {}
+      for (const [engine, model] of Object.entries(DEFAULT_MODEL_BY_ENGINE)) {
+        const current = map[engine]
+        if (typeof current !== 'string' || current.length === 0 || current === 'auto') map[engine] = model
+      }
+      global.defaultModelByEngine = map
+    },
+  },
+  {
+    version: 58,
+    name: 'add-activity-digest-toggle',
+    migrate: ({ global }) => {
+      if (typeof global.activityDigestEnabled !== 'boolean') global.activityDigestEnabled = true
+    },
+  },
+  {
+    version: 59,
+    name: 'neutral-built-in-prompts',
+    migrate: ({ global, projects }) => {
+      const defaults = [
+        ['customReviewTemplate', LEGACY_AGNOSTIC_REVIEW_TEMPLATE, AGNOSTIC_PROMPTS.reviewTemplate],
+        ['customAutoLoopReviewGate', LEGACY_AGNOSTIC_AUTO_LOOP_REVIEW_GATE, AGNOSTIC_PROMPTS.autoLoopReviewGate],
+        ['notionInitialPromptTemplate', LEGACY_NOTION_INITIAL_PROMPT, DEFAULT_NOTION_INITIAL_PROMPT],
+        ['sentryInitialPromptTemplate', LEGACY_SENTRY_INITIAL_PROMPT, DEFAULT_SENTRY_INITIAL_PROMPT],
+        ['ciFixPromptTemplate', LEGACY_CI_FIX_PROMPT_TEMPLATE, DEFAULT_CI_FIX_PROMPT_TEMPLATE],
+        ['prPromptTemplate', LEGACY_PR_PROMPT_TEMPLATE, DEFAULT_PR_PROMPT_TEMPLATE],
+        ['finalizationPrompt', LEGACY_FINALIZATION_PROMPT, DEFAULT_FINALIZATION_PROMPT],
+      ] as const
+      for (const [key, previous, next] of defaults) {
+        if (global[key] === previous) global[key] = next
+        for (const project of projects) {
+          if (project[key] === previous) project[key] = next
+        }
+      }
+      for (const project of projects) {
+        const finalization = project.finalization as { prompt?: unknown } | undefined
+        if (finalization?.prompt === LEGACY_FINALIZATION_PROMPT) finalization.prompt = DEFAULT_FINALIZATION_PROMPT
+      }
+    },
+  },
+  {
+    version: 60,
+    name: 'add-onboarding-completion',
+    migrate: ({ global }) => {
+      if (typeof global.onboardingComplete !== 'boolean') global.onboardingComplete = true
+    },
+  },
+  {
+    version: 61,
+    name: 'original-public-notification-sounds',
+    migrate: ({ global }) => normalizePublicSounds(global),
+  },
+  {
+    version: 62,
+    name: 'explicit-workflow-preferences',
+    migrate: ({ global, projects }) => {
+      if (!isWorkflowPolicy(global.workflowPolicy)) global.workflowPolicy = { ...LEGACY_WORKFLOW_POLICY }
+      for (const project of projects) {
+        if (!isWorkflowPolicy(project.workflowPolicy)) project.workflowPolicy = {}
+      }
+    },
+  },
+]
+
+/** Current settings schema version — always equals the highest migration version. */
+export const SETTINGS_SCHEMA_VERSION =
+  settingsMigrations.length > 0 ? settingsMigrations[settingsMigrations.length - 1].version : 0
+
+/** Merged settings for a project (project overrides + global defaults). */
+export interface EffectiveSettings {
+  model: string
+  dangerouslySkipPermissions: boolean
+  prPromptTemplate: string
+  reviewPromptTemplate: string
+  ciFixPromptTemplate: string
+  notionInitialPromptTemplate: string
+  sentryInitialPromptTemplate: string
+  gitConventions: string
+  sourceBranch: string
+  devServer: DevServerConfig | null
+  setupScript: string
+  cleanupScript: string
+  cleanupScriptMode: CleanupScriptMode
+  cleanupScriptOnlyOnChanges: boolean
+  archiveScript: string
+  changeSourceBranchScript: string
+  sessionEndedScript: string
+  prMergedScript: string
+  autoLoopDisabledScript: string
+  notionStatusProperty: string
+  notionInProgressStatus: string
+}
+
+// In Vitest runs, default to a sentinel path so any test that reaches a real
+// read/write without explicitly calling `_setSettingsPath()` first fails loud
+// instead of silently clobbering the user's production `~/.config/kobo/settings.json`.
+// A past incident (see investigation 2026-04-17) showed a `vi.spyOn(fs, 'readFileSync')`
+// in another test file indirectly triggered `readSettings()` and overwrote the
+// real settings file. This guard ensures such a regression cannot recur.
+const VITEST_UNINITIALIZED_PATH = '__VITEST_SETTINGS_PATH_NOT_SET__'
+let settingsFilePath: string = process.env.VITEST ? VITEST_UNINITIALIZED_PATH : getSettingsPath()
+let settingsBackupSequence = 0
+
+function ensureSettingsPathInitialized(): void {
+  if (settingsFilePath === VITEST_UNINITIALIZED_PATH) {
+    throw new Error(
+      '[settings-service] Attempted to access settings in test mode without calling `_setSettingsPath()` first. ' +
+        'This means a test is exercising settings-service indirectly (e.g. via `extractSentryIssue`, `getEffectiveSettings`) ' +
+        'without proper isolation. Either `vi.mock("../server/services/settings-service.js", ...)` or call `_setSettingsPath(tmpPath)` in `beforeEach`.',
+    )
+  }
+}
+
+/** Override the settings file path (used by tests). */
+export function _setSettingsPath(p: string): void {
+  settingsFilePath = p
+  // Pointing at a different file must not serve the previous one's contents.
+  invalidateSettingsCache()
+}
+
+function defaultSettings(): Settings {
+  return {
+    schemaVersion: SETTINGS_SCHEMA_VERSION,
+    global: {
+      workflowPolicy: { ...MANUAL_WORKFLOW_POLICY },
+      onboardingComplete: false,
+      defaultModelByEngine: { ...FRESH_MODEL_BY_ENGINE },
+      dangerouslySkipPermissions: true,
+      prPromptTemplate: DEFAULT_PR_PROMPT_TEMPLATE,
+      reviewPromptTemplate: DEFAULT_REVIEW_PROMPT_TEMPLATE,
+      ciFixPromptTemplate: DEFAULT_CI_FIX_PROMPT_TEMPLATE,
+      finalizationPrompt: DEFAULT_FINALIZATION_PROMPT,
+      notionInitialPromptTemplate: DEFAULT_NOTION_INITIAL_PROMPT,
+      sentryInitialPromptTemplate: DEFAULT_SENTRY_INITIAL_PROMPT,
+      gitConventions: STANDARD_GIT_CONVENTIONS,
+      setupScript: '',
+      cleanupScript: '',
+      cleanupScriptMode: 'no-tasks',
+      cleanupScriptOnlyOnChanges: false,
+      archiveScript: '',
+      changeSourceBranchScript: DEFAULT_CHANGE_SOURCE_BRANCH_SCRIPT,
+      sessionEndedScript: '',
+      prMergedScript: '',
+      autoLoopDisabledScript: '',
+      editorCommand: '',
+      fileManagerCommand: '',
+      terminalCommand: '',
+      autoPurgeOnPrMerged: false,
+      autoLoopMaxRetries: 5,
+      awaitingUserReminderMinutes: 0,
+      activityDigestEnabled: true,
+      maxConcurrentAgents: 2,
+      wsEventsRetentionDays: 0,
+      wsEventsKeepPerWorkspace: 0,
+      networkAccessEnabled: false,
+      networkAccessToken: '',
+      networkAccessBehindProxy: false,
+      bitbucketToken: '',
+      bitbucketUsername: '',
+      browserNotifications: true,
+      audioNotifications: false,
+      audioQuestionNotifications: false,
+      audioWorkspaceCreatedNotifications: false,
+      audioAgentErrorNotifications: false,
+      audioNotificationSound: 'neutral.wav',
+      audioQuestionSound: 'inherit',
+      audioWorkspaceCreatedSound: 'inherit',
+      audioAgentErrorSound: 'inherit',
+      audioPrCiFailedSound: 'inherit',
+      audioPrCiFailedEnabled: false,
+      audioPrCiFailedVolume: 1,
+      audioPrCiRecoveredSound: 'inherit',
+      audioPrCiRecoveredEnabled: false,
+      audioPrCiRecoveredVolume: 1,
+      audioPrChangesRequestedSound: 'inherit',
+      audioPrChangesRequestedEnabled: false,
+      audioPrChangesRequestedVolume: 1,
+      audioPrApprovedSound: 'inherit',
+      audioPrApprovedEnabled: false,
+      audioPrApprovedVolume: 1,
+      audioPrMergeConflictSound: 'inherit',
+      audioPrMergeConflictEnabled: false,
+      audioPrMergeConflictVolume: 1,
+      audioPrReadyToMergeSound: 'inherit',
+      audioPrReadyToMergeEnabled: false,
+      audioPrReadyToMergeVolume: 1,
+      audioPrMergedSound: 'inherit',
+      audioPrMergedEnabled: false,
+      audioPrMergedVolume: 1,
+      audioNotificationVolume: 1,
+      audioQuestionVolume: 1,
+      audioWorkspaceCreatedVolume: 1,
+      audioAgentErrorVolume: 1,
+      notionStatusProperty: '',
+      notionInProgressStatus: '',
+      notionAssigneeProperty: '',
+      notionUserId: '',
+      defaultPermissionModeByEngine: { 'claude-code': 'plan', codex: 'plan' },
+      notionMcpKey: '',
+      sentryMcpKey: '',
+      notionEnabled: false,
+      sentryEnabled: false,
+      showThinkingBlocks: true,
+      whipEnabled: false,
+      whipShortcut: DEFAULT_WHIP_SHORTCUT,
+      whipVolume: 1,
+      tags: [...DEFAULT_WORKSPACE_TAGS],
+      branchPrefixes: [...DEFAULT_BRANCH_PREFIXES],
+      worktreesPath: WORKTREES_PATH,
+      worktreesPrefixByProject: false,
+      voiceEnabled: false,
+      voicePttKey: 'alt',
+      voiceLanguage: 'auto',
+      voiceModel: null,
+      voiceCommandPath: '',
+      voiceFfmpegPath: '',
+      voiceTemperature: 0,
+      voicePrompt: '',
+      voiceTranslateToEnglish: false,
+      voiceSuppressNonSpeechTokens: true,
+      flattenWorkspaceList: false,
+      skillSuite: 'standard',
+      customReviewTemplate: AGNOSTIC_PROMPTS.reviewTemplate,
+      customAutoLoopReviewGate: AGNOSTIC_PROMPTS.autoLoopReviewGate,
+      customAutoLoopGroomingIntro: AGNOSTIC_PROMPTS.autoLoopGroomingIntro,
+      customQaPromptTemplate: AGNOSTIC_PROMPTS.qaPromptTemplate,
+      customBrainstormingInstruction: AGNOSTIC_PROMPTS.brainstormingInstruction,
+    },
+    projects: [],
+  }
+}
+
+function defaultProjectSettings(projectPath: string): ProjectSettings {
+  return {
+    workflowPolicy: {},
+    path: projectPath,
+    displayName: '',
+    defaultSourceBranch: '',
+    defaultModel: '',
+    dangerouslySkipPermissions: true,
+    prPromptTemplate: '',
+    reviewPromptTemplate: '',
+    ciFixPromptTemplate: '',
+    notionInitialPromptTemplate: '',
+    sentryInitialPromptTemplate: '',
+    gitConventions: '',
+    setupScript: '',
+    taskPromptTemplate: '',
+    cleanupScript: '',
+    cleanupScriptMode: '',
+    archiveScript: '',
+    changeSourceBranchScript: '',
+    sessionEndedScript: '',
+    prMergedScript: '',
+    autoLoopDisabledScript: '',
+    devServer: {
+      startCommand: '',
+      stopCommand: '',
+    },
+    e2e: {
+      framework: '',
+      skill: '',
+      prompt: '',
+    },
+    finalization: {
+      // Empty by default — a project inherits the global finalization prompt
+      // (`global.finalizationPrompt`) unless it sets its own override. Cascade
+      // resolved by getEffectiveFinalization (project || global).
+      prompt: '',
+    },
+    color: null,
+    forge: 'auto',
+  }
+}
+
+function pickKnownKeys<T>(data: Record<string, unknown>, allowedKeys: string[]): Partial<T> {
+  return Object.fromEntries(Object.entries(data).filter(([key]) => allowedKeys.includes(key))) as Partial<T>
+}
+
+/** Apply settings migrations sequentially up to SETTINGS_SCHEMA_VERSION. Append-only. */
+export function runSettingsMigrations(raw: Record<string, unknown>): Settings {
+  const current = raw as {
+    schemaVersion?: number
+    global?: Record<string, unknown>
+    projects?: unknown[]
+  }
+  if (!current.global || typeof current.global !== 'object') {
+    current.global = {}
+  }
+  if (!Array.isArray(current.projects)) {
+    current.projects = []
+  }
+
+  let version = typeof current.schemaVersion === 'number' ? current.schemaVersion : 0
+
+  for (const m of settingsMigrations) {
+    if (version < m.version) {
+      m.migrate({ global: current.global, projects: current.projects as Array<Record<string, unknown>> })
+      version = m.version
+    }
+  }
+
+  if (typeof current.global.onboardingComplete !== 'boolean') current.global.onboardingComplete = true
+  current.global.workflowPolicy = resolveWorkflowPolicy(current.global.workflowPolicy as Partial<WorkflowPolicy>)
+  for (const project of current.projects as Array<Record<string, unknown>>) {
+    if (!isWorkflowPolicy(project.workflowPolicy)) project.workflowPolicy = {}
+  }
+  current.global.worktreesPath = sanitizeWorktreesPath(current.global.worktreesPath)
+  current.global.whipEnabled = current.global.whipEnabled === true
+  current.global.whipShortcut = normalizeWhipShortcut(current.global.whipShortcut)
+  current.global.whipVolume = normalizeWhipVolume(current.global.whipVolume)
+
+  normalizePublicSounds(current.global)
+  current.schemaVersion = version
+  return current as unknown as Settings
+}
+
+/**
+ * Parsed settings, kept between calls. `getGlobalSettings` runs on every HTTP
+ * request through the auth middleware and 50-odd other call sites, while
+ * `readSettings` below does existsSync + readFileSync + JSON.parse + the whole
+ * migration chain — all synchronous, on the event loop that also drives the
+ * WebSocket streams.
+ *
+ * The file stays hand-editable (CONFIGURATION.md says so), so the cache is
+ * keyed on the file's mtime and size rather than held blindly: an external edit
+ * is picked up on the very next call, and the check costs one stat instead of a
+ * full parse and migration pass.
+ */
+let settingsCache: { value: Settings; mtimeMs: number; size: number } | null = null
+
+/** Drop the cached settings, so the next read goes back to disk. */
+function invalidateSettingsCache(): void {
+  settingsCache = null
+}
+
+/** Identity of the settings file on disk, or null when it is unreadable. */
+function settingsFileStamp(): { mtimeMs: number; size: number } | null {
+  try {
+    const stat = fs.statSync(settingsFilePath)
+    return { mtimeMs: stat.mtimeMs, size: stat.size }
+  } catch {
+    return null
+  }
+}
+
+function readSettings(): Settings {
+  ensureSettingsPathInitialized()
+  const stamp = settingsFileStamp()
+  if (stamp && settingsCache && settingsCache.mtimeMs === stamp.mtimeMs && settingsCache.size === stamp.size) {
+    return settingsCache.value
+  }
+  const settings = readSettingsFromDisk()
+  // Re-stat: readSettingsFromDisk writes the file when it was missing or
+  // corrupt, so the stamp taken above would be stale.
+  const after = settingsFileStamp()
+  settingsCache = after ? { value: settings, ...after } : null
+  return settings
+}
+
+function readSettingsFromDisk(): Settings {
+  ensureSettingsPathInitialized()
+  if (!fs.existsSync(settingsFilePath)) {
+    const defaults = defaultSettings()
+    writeSettings(defaults)
+    return defaults
+  }
+
+  const raw = fs.readFileSync(settingsFilePath, 'utf-8')
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    createSettingsBackupIfPresent()
+    const defaults = defaultSettings()
+    writeSettings(defaults)
+    return defaults
+  }
+  if (!parsed || typeof parsed !== 'object') {
+    createSettingsBackupIfPresent()
+    const defaults = defaultSettings()
+    writeSettings(defaults)
+    return defaults
+  }
+
+  const originalVersion = (parsed as { schemaVersion?: number }).schemaVersion
+  const globalBeforeMigrations = JSON.stringify((parsed as { global?: unknown }).global ?? null)
+  const migrated = runSettingsMigrations(parsed as Record<string, unknown>)
+  const normalizedGlobalFields = JSON.stringify(migrated.global) !== globalBeforeMigrations
+
+  // Restore any global fields that may have been removed by external edits.
+  // Defaults act as fallback for missing keys; existing values are preserved.
+  const globalDefaults = defaultSettings().global
+  const globalBeforeDefaults = JSON.stringify(migrated.global)
+  migrated.global = { ...globalDefaults, ...migrated.global } as GlobalSettings
+  const restoredGlobalFields = JSON.stringify(migrated.global) !== globalBeforeDefaults
+
+  // Persist if migrations bumped the version, known fields were normalized,
+  // or missing global fields were restored.
+  if (migrated.schemaVersion !== originalVersion || normalizedGlobalFields || restoredGlobalFields) {
+    writeSettings(migrated)
+  }
+
+  return migrated
+}
+
+/** Number of `settings.json.backup-*` files kept; older ones are rotated out. */
+const SETTINGS_BACKUP_KEEP = 5
+
+/**
+ * Keep only the `SETTINGS_BACKUP_KEEP` most recent `settings.json.backup-*`
+ * files in `dir`, deleting the rest. Best-effort — never throws.
+ */
+function pruneSettingsBackups(dir: string): void {
+  try {
+    const backups = fs
+      .readdirSync(dir)
+      .filter((f) => f.startsWith('settings.json.backup-'))
+      .map((f) => {
+        const full = path.join(dir, f)
+        return { path: full, mtimeMs: fs.statSync(full).mtimeMs }
+      })
+      .sort((a, b) => b.mtimeMs - a.mtimeMs)
+
+    for (const entry of backups.slice(SETTINGS_BACKUP_KEEP)) {
+      try {
+        fs.unlinkSync(entry.path)
+      } catch (err) {
+        console.error(`[settings] Failed to prune backup ${entry.path}:`, err)
+      }
+    }
+  } catch (err) {
+    console.error('[settings] Failed to prune settings backups:', err)
+  }
+}
+
+function createSettingsBackupIfPresent(): void {
+  if (!fs.existsSync(settingsFilePath)) return
+
+  const dir = path.dirname(settingsFilePath)
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+  settingsBackupSequence += 1
+  const backupPath = path.join(dir, `settings.json.backup-${stamp}-${settingsBackupSequence}`)
+  fs.copyFileSync(settingsFilePath, backupPath)
+  pruneSettingsBackups(dir)
+}
+
+function writeSettings(settings: Settings, options?: { backup?: boolean }): void {
+  // Our own writes must be visible at once, whatever the TTL says.
+  invalidateSettingsCache()
+  ensureSettingsPathInitialized()
+  const tmpPath = `${settingsFilePath}.tmp`
+  const dir = path.dirname(settingsFilePath)
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true })
+  }
+  if (options?.backup) {
+    createSettingsBackupIfPresent()
+  }
+  fs.writeFileSync(tmpPath, JSON.stringify(settings, null, 2), 'utf-8')
+  fs.renameSync(tmpPath, settingsFilePath)
+}
+
+/** Read and return the full settings object, creating defaults if missing. */
+export function getSettings(): Settings {
+  return readSettings()
+}
+
+/** True for a value made of nothing but mask characters (never a real token). */
+function isMaskOnly(value: unknown): boolean {
+  return typeof value === 'string' && value.length > 0 && [...value].every((c) => c === MASK_CHARACTER)
+}
+
+/**
+ * Copy of the global settings safe to hand to a client: every stored credential
+ * becomes `MASKED_SECRET`, an unset one stays empty so the UI can tell "not
+ * configured" from "configured, hidden". The caller's object is left alone.
+ *
+ * The credentials are of no use to the settings screen — it only ever shows
+ * them in a password field — but they are very useful to anything else that
+ * gets to read a response: a paired device on the LAN, a proxy log, a
+ * screenshot. `updateGlobalSettings` reads the mask back as "keep the stored
+ * value", so a round-trip through the form is lossless.
+ */
+export function redactGlobalSecrets(global: GlobalSettings): GlobalSettings {
+  const redacted: GlobalSettings = { ...global }
+  for (const key of SECRET_GLOBAL_KEYS) {
+    if (redacted[key]) redacted[key] = MASKED_SECRET
+  }
+  return redacted
+}
+
+export interface ConfigBundle {
+  bundleVersion: number
+  exportedAt: string
+  settings: Settings
+  templates: Array<Record<string, unknown>>
+}
+
+/** Build an export bundle with settings + templates. MCP keys are stripped. */
+export function exportConfigBundle(templates: Array<Record<string, unknown>>): ConfigBundle {
+  const settings = readSettings()
+  const sanitizedGlobal: GlobalSettings = { ...settings.global }
+  for (const key of SECRET_GLOBAL_KEYS) {
+    sanitizedGlobal[key] = ''
+  }
+  return {
+    bundleVersion: 1,
+    exportedAt: new Date().toISOString(),
+    settings: { ...settings, global: sanitizedGlobal },
+    templates,
+  }
+}
+
+/** Replace the settings file with an imported bundle. MCP keys in the current settings are preserved. */
+export function importConfigBundle(bundle: ConfigBundle): void {
+  if (!bundle || typeof bundle !== 'object') {
+    throw new Error('Invalid bundle: payload must be an object')
+  }
+  if (bundle.bundleVersion !== 1) {
+    throw new Error('Invalid bundle: expected bundleVersion = 1')
+  }
+  const incoming = bundle.settings as unknown
+  if (!incoming || typeof incoming !== 'object') {
+    throw new Error('Invalid bundle: missing or malformed settings')
+  }
+  const incomingSettings = incoming as { global?: unknown; projects?: unknown }
+  if (
+    !incomingSettings.global ||
+    typeof incomingSettings.global !== 'object' ||
+    Array.isArray(incomingSettings.global)
+  ) {
+    throw new Error('Invalid bundle: settings.global must be an object')
+  }
+  if (!Array.isArray(incomingSettings.projects)) {
+    throw new Error('Invalid bundle: settings.projects must be an array')
+  }
+  for (let i = 0; i < incomingSettings.projects.length; i++) {
+    const p = incomingSettings.projects[i]
+    if (!p || typeof p !== 'object' || Array.isArray(p)) {
+      throw new Error(`Invalid bundle: settings.projects[${i}] must be an object`)
+    }
+  }
+  const current = readSettings()
+  // Run the incoming through the migration pipeline in case an older version is imported.
+  const migrated = runSettingsMigrations(incoming as Record<string, unknown>)
+  // Preserve existing MCP keys — the export stripped them and we don't want to clobber a local config.
+  for (const key of SECRET_GLOBAL_KEYS) {
+    migrated.global[key] = current.global[key]
+  }
+  writeSettings(migrated, { backup: true })
+}
+
+/** Return only the global settings section. */
+export function getGlobalSettings(): GlobalSettings {
+  return readSettings().global
+}
+
+/** Return project-specific settings, or null if the project is not configured. */
+export function getProjectSettings(projectPath: string): ProjectSettings | null {
+  const settings = readSettings()
+  return settings.projects.find((p) => p.path === projectPath) ?? null
+}
+
+/**
+ * Effective auto-loop finalization config for a project: the per-project prompt
+ * if the user set one, otherwise the global default (`global.finalizationPrompt`).
+ * Mirrors the project-||-global cascade used for `ciFixPromptTemplate` etc.
+ */
+export function getEffectiveFinalization(projectPath: string): FinalizationSettings {
+  const settings = readSettings()
+  const project = settings.projects.find((p) => p.path === projectPath) ?? null
+  const projectPrompt = project?.finalization?.prompt ?? ''
+  return { prompt: projectPrompt.trim() ? projectPrompt : settings.global.finalizationPrompt }
+}
+
+/** Compute effective settings for a project (project overrides merged with global defaults). */
+export function getEffectiveSettings(projectPath: string): EffectiveSettings {
+  const settings = readSettings()
+  const project = settings.projects.find((p) => p.path === projectPath) ?? null
+
+  if (!project) {
+    const claudeCodeDefault = settings.global.defaultModelByEngine?.['claude-code'] ?? 'auto'
+    return {
+      model: claudeCodeDefault,
+      dangerouslySkipPermissions: settings.global.dangerouslySkipPermissions,
+      prPromptTemplate: settings.global.prPromptTemplate,
+      reviewPromptTemplate: settings.global.reviewPromptTemplate,
+      ciFixPromptTemplate: settings.global.ciFixPromptTemplate,
+      notionInitialPromptTemplate: settings.global.notionInitialPromptTemplate,
+      sentryInitialPromptTemplate: settings.global.sentryInitialPromptTemplate,
+      gitConventions: settings.global.gitConventions,
+      sourceBranch: '',
+      devServer: null,
+      setupScript: settings.global.setupScript,
+      cleanupScript: settings.global.cleanupScript,
+      cleanupScriptMode: settings.global.cleanupScriptMode,
+      cleanupScriptOnlyOnChanges: settings.global.cleanupScriptOnlyOnChanges,
+      archiveScript: settings.global.archiveScript,
+      changeSourceBranchScript: settings.global.changeSourceBranchScript,
+      sessionEndedScript: settings.global.sessionEndedScript,
+      prMergedScript: settings.global.prMergedScript,
+      autoLoopDisabledScript: settings.global.autoLoopDisabledScript,
+      notionStatusProperty: settings.global.notionStatusProperty,
+      notionInProgressStatus: settings.global.notionInProgressStatus,
+    }
+  }
+
+  // `model` here is the legacy single-string field exposed via EffectiveSettings
+  // for back-compat with existing callers. The engine-aware default lives in
+  // `global.defaultModelByEngine[engineId]` and is read directly by the create
+  // flow / settings UI. Fall back through claude-code's entry (the historical
+  // semantics) so this field never goes empty.
+  const claudeCodeDefault = settings.global.defaultModelByEngine?.['claude-code'] ?? 'auto'
+  return {
+    model: project.defaultModel || claudeCodeDefault,
+    dangerouslySkipPermissions: project.dangerouslySkipPermissions ?? settings.global.dangerouslySkipPermissions,
+    prPromptTemplate: project.prPromptTemplate || settings.global.prPromptTemplate,
+    reviewPromptTemplate: project.reviewPromptTemplate || settings.global.reviewPromptTemplate,
+    ciFixPromptTemplate: project.ciFixPromptTemplate || settings.global.ciFixPromptTemplate,
+    notionInitialPromptTemplate: project.notionInitialPromptTemplate || settings.global.notionInitialPromptTemplate,
+    sentryInitialPromptTemplate: project.sentryInitialPromptTemplate || settings.global.sentryInitialPromptTemplate,
+    gitConventions: project.gitConventions || settings.global.gitConventions,
+    sourceBranch: project.defaultSourceBranch,
+    devServer: project.devServer,
+    setupScript: project.setupScript || settings.global.setupScript,
+    cleanupScript: project.cleanupScript || settings.global.cleanupScript,
+    cleanupScriptMode: (project.cleanupScriptMode || settings.global.cleanupScriptMode) as CleanupScriptMode,
+    cleanupScriptOnlyOnChanges: settings.global.cleanupScriptOnlyOnChanges,
+    archiveScript: project.archiveScript || settings.global.archiveScript,
+    changeSourceBranchScript: project.changeSourceBranchScript || settings.global.changeSourceBranchScript,
+    sessionEndedScript: project.sessionEndedScript || settings.global.sessionEndedScript,
+    prMergedScript: project.prMergedScript || settings.global.prMergedScript,
+    autoLoopDisabledScript: project.autoLoopDisabledScript || settings.global.autoLoopDisabledScript,
+    notionStatusProperty: settings.global.notionStatusProperty,
+    notionInProgressStatus: settings.global.notionInProgressStatus,
+  }
+}
+
+/** Merge partial updates into global settings and persist. */
+export function updateGlobalSettings(input: Partial<GlobalSettings>): GlobalSettings {
+  const settings = readSettings()
+  // Work on a copy: the validation below drops keys, and mutating the caller's
+  // object would be a surprise (the route hands us its parsed request body).
+  const data: Partial<GlobalSettings> = { ...input }
+  // A client only ever sees the mask in place of a stored credential, so it
+  // hands the mask back on every save. Dropping the key preserves the stored
+  // value (same "drop it and keep the previous one" pattern as below), while a
+  // real value still overwrites and an empty one still clears.
+  //
+  // Any run of mask characters counts, not just the exact sentinel: a stray
+  // Backspace in the field leaves a shorter run, and writing that as the new
+  // credential would break the integration silently, long after the fact. No
+  // real token is made of nothing but bullets.
+  for (const key of SECRET_GLOBAL_KEYS) {
+    if (isMaskOnly(data[key])) delete data[key]
+  }
+  // Validate skillSuite before merging: drop invalid values so the previous
+  // value is preserved (same pattern as `upsertProject`'s color validation).
+  if ('skillSuite' in data) {
+    if (!isValidSkillSuite(data.skillSuite)) {
+      console.warn(`[settings] Invalid skillSuite value rejected: ${data.skillSuite}`)
+      delete (data as Record<string, unknown>).skillSuite
+    }
+  }
+  // Validate cleanupScriptMode: drop invalid values so the previous one stays.
+  if ('cleanupScriptMode' in data) {
+    if (!isValidCleanupScriptMode(data.cleanupScriptMode)) {
+      console.warn(`[settings] Invalid cleanupScriptMode rejected: ${data.cleanupScriptMode}`)
+      delete (data as Record<string, unknown>).cleanupScriptMode
+    }
+  }
+  if ('autoLoopMaxRetries' in data) {
+    if (
+      typeof data.autoLoopMaxRetries !== 'number' ||
+      !Number.isInteger(data.autoLoopMaxRetries) ||
+      data.autoLoopMaxRetries < 1 ||
+      data.autoLoopMaxRetries > 20
+    ) {
+      console.warn(`[settings] Invalid autoLoopMaxRetries value rejected: ${data.autoLoopMaxRetries}`)
+      delete (data as Record<string, unknown>).autoLoopMaxRetries
+    }
+  }
+  // 0 is a legitimate value here — it means "never remind me" — so the floor is
+  // 0, not 1. The ceiling of a day keeps a typo from arming a reminder that
+  // never fires and looks like a broken feature.
+  if ('awaitingUserReminderMinutes' in data) {
+    const value = data.awaitingUserReminderMinutes
+    if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 1440) {
+      console.warn(`[settings] Invalid awaitingUserReminderMinutes value rejected: ${value}`)
+      delete (data as Record<string, unknown>).awaitingUserReminderMinutes
+    }
+  }
+  // Same shape as the autoLoopMaxRetries guard above: an invalid value is
+  // dropped so the stored one survives. Retention deletes history — a bad write
+  // here would delete more than the user ever asked for. `0` is NOT invalid:
+  // it is the default, and it means "never delete anything".
+  for (const key of ['wsEventsRetentionDays', 'wsEventsKeepPerWorkspace'] as const) {
+    if (key in data) {
+      const value = data[key]
+      const max = key === 'wsEventsRetentionDays' ? 3650 : 1_000_000
+      if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > max) {
+        console.warn(`[settings] Invalid ${key} value rejected: ${value}`)
+        delete (data as Record<string, unknown>)[key]
+      }
+    }
+  }
+  if ('activityDigestEnabled' in data && typeof data.activityDigestEnabled !== 'boolean') {
+    delete data.activityDigestEnabled
+  }
+  if ('onboardingComplete' in data && typeof data.onboardingComplete !== 'boolean') delete data.onboardingComplete
+  if ('workflowPolicy' in data) {
+    if (!isWorkflowPolicy(data.workflowPolicy)) throw new Error('Invalid workflowPolicy')
+    data.workflowPolicy = resolveWorkflowPolicy(settings.global.workflowPolicy, data.workflowPolicy)
+  }
+  const allowedGlobalKeys = [
+    'workflowPolicy',
+    'onboardingComplete',
+    'defaultModelByEngine',
+    'dangerouslySkipPermissions',
+    'prPromptTemplate',
+    'reviewPromptTemplate',
+    'ciFixPromptTemplate',
+    'finalizationPrompt',
+    'notionInitialPromptTemplate',
+    'sentryInitialPromptTemplate',
+    'gitConventions',
+    'setupScript',
+    'cleanupScript',
+    'cleanupScriptMode',
+    'cleanupScriptOnlyOnChanges',
+    'archiveScript',
+    'changeSourceBranchScript',
+    'sessionEndedScript',
+    'prMergedScript',
+    'autoLoopDisabledScript',
+    'editorCommand',
+    'fileManagerCommand',
+    'terminalCommand',
+    'autoPurgeOnPrMerged',
+    'autoLoopMaxRetries',
+    'awaitingUserReminderMinutes',
+    'activityDigestEnabled',
+    'maxConcurrentAgents',
+    'wsEventsRetentionDays',
+    'wsEventsKeepPerWorkspace',
+    'browserNotifications',
+    'audioNotifications',
+    'audioQuestionNotifications',
+    'audioWorkspaceCreatedNotifications',
+    'audioAgentErrorNotifications',
+    'audioNotificationSound',
+    'audioQuestionSound',
+    'audioWorkspaceCreatedSound',
+    'audioAgentErrorSound',
+    'audioPrCiFailedSound',
+    'audioPrCiFailedEnabled',
+    'audioPrCiFailedVolume',
+    'audioPrCiRecoveredSound',
+    'audioPrCiRecoveredEnabled',
+    'audioPrCiRecoveredVolume',
+    'audioPrChangesRequestedSound',
+    'audioPrChangesRequestedEnabled',
+    'audioPrChangesRequestedVolume',
+    'audioPrApprovedSound',
+    'audioPrApprovedEnabled',
+    'audioPrApprovedVolume',
+    'audioPrMergeConflictSound',
+    'audioPrMergeConflictEnabled',
+    'audioPrMergeConflictVolume',
+    'audioPrReadyToMergeSound',
+    'audioPrReadyToMergeEnabled',
+    'audioPrReadyToMergeVolume',
+    'audioPrMergedSound',
+    'audioPrMergedEnabled',
+    'audioPrMergedVolume',
+    'audioNotificationVolume',
+    'audioQuestionVolume',
+    'audioWorkspaceCreatedVolume',
+    'audioAgentErrorVolume',
+    'notionStatusProperty',
+    'notionInProgressStatus',
+    'notionAssigneeProperty',
+    'notionUserId',
+    'defaultPermissionModeByEngine',
+    'notionMcpKey',
+    'sentryMcpKey',
+    'bitbucketToken',
+    'bitbucketUsername',
+    'notionEnabled',
+    'sentryEnabled',
+    'showThinkingBlocks',
+    'whipEnabled',
+    'whipShortcut',
+    'whipVolume',
+    'tags',
+    'branchPrefixes',
+    'worktreesPath',
+    'worktreesPrefixByProject',
+    'voiceEnabled',
+    'voicePttKey',
+    'voiceLanguage',
+    'voiceModel',
+    'voiceCommandPath',
+    'voiceFfmpegPath',
+    'voiceTemperature',
+    'voicePrompt',
+    'voiceTranslateToEnglish',
+    'voiceSuppressNonSpeechTokens',
+    'flattenWorkspaceList',
+    'skillSuite',
+    'customReviewTemplate',
+    'customAutoLoopReviewGate',
+    'customAutoLoopGroomingIntro',
+    'customQaPromptTemplate',
+    'customBrainstormingInstruction',
+  ]
+  const filtered = pickKnownKeys<GlobalSettings>(data as Record<string, unknown>, allowedGlobalKeys)
+  normalizePublicSounds(filtered as Record<string, unknown>)
+  if (filtered.tags !== undefined) {
+    filtered.tags = Array.isArray(filtered.tags)
+      ? Array.from(
+          new Set(
+            (filtered.tags as unknown[])
+              .map((t) => (typeof t === 'string' ? t.trim() : ''))
+              .filter((t) => t.length > 0 && t.length <= 50),
+          ),
+        )
+      : settings.global.tags
+  }
+  if (filtered.branchPrefixes !== undefined) {
+    // Drop invalid entries; never let the list collapse to empty (the creation
+    // page needs at least one prefix) — fall back to the previous value.
+    const sanitized = sanitizeBranchPrefixes(filtered.branchPrefixes)
+    filtered.branchPrefixes = sanitized.length > 0 ? sanitized : settings.global.branchPrefixes
+  }
+  if (filtered.whipVolume !== undefined) {
+    const rawWhipVolume = filtered.whipVolume as unknown
+    const whipVolume =
+      typeof rawWhipVolume === 'number'
+        ? rawWhipVolume
+        : typeof rawWhipVolume === 'string' && rawWhipVolume.trim().length > 0
+          ? Number(rawWhipVolume)
+          : Number.NaN
+    filtered.whipVolume = Number.isFinite(whipVolume) ? Math.max(0, Math.min(1, whipVolume)) : 1
+  }
+  for (const key of [
+    'audioNotificationVolume',
+    'audioQuestionVolume',
+    'audioWorkspaceCreatedVolume',
+    'audioPrCiFailedVolume',
+    'audioPrCiRecoveredVolume',
+    'audioPrChangesRequestedVolume',
+    'audioPrApprovedVolume',
+    'audioPrMergeConflictVolume',
+    'audioPrReadyToMergeVolume',
+    'audioPrMergedVolume',
+  ] as const) {
+    if (filtered[key] !== undefined) {
+      const v = Number(filtered[key])
+      filtered[key] = Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 1
+    }
+  }
+  if (filtered.voiceTemperature !== undefined) {
+    const t = Number(filtered.voiceTemperature)
+    filtered.voiceTemperature = Number.isFinite(t) ? Math.max(0, Math.min(1, t)) : settings.global.voiceTemperature
+  }
+  if (filtered.whipEnabled !== undefined) {
+    filtered.whipEnabled = filtered.whipEnabled === true
+  }
+  if (filtered.whipShortcut !== undefined) {
+    filtered.whipShortcut = normalizeWhipShortcut(filtered.whipShortcut)
+  }
+  if (filtered.worktreesPath !== undefined) {
+    filtered.worktreesPath = validateWorktreesPath(filtered.worktreesPath, { allowEmpty: false })
+    ensureGlobalWorktreesRootExists(filtered.worktreesPath)
+  }
+  settings.global = { ...settings.global, ...filtered }
+  writeSettings(settings, { backup: true })
+  return settings.global
+}
+
+/**
+ * Persist network-access settings (enabled flag and/or token) directly.
+ *
+ * Network access is managed exclusively through this path (POST /api/settings/network),
+ * never the generic `updateGlobalSettings` allowlist: `networkAccessToken` is a secret
+ * (kept out of the allowlist so a config import can't inject one) and `networkAccessEnabled`
+ * is kept out too so it can't be flipped on via PUT /global without an accompanying token
+ * (which would leave the server bound wide but unauthenticatable after a restart).
+ */
+export function updateNetworkAccessSettings(patch: {
+  networkAccessEnabled?: boolean
+  networkAccessToken?: string
+  networkAccessBehindProxy?: boolean
+}): GlobalSettings {
+  const settings = readSettings()
+  if (typeof patch.networkAccessEnabled === 'boolean') {
+    settings.global.networkAccessEnabled = patch.networkAccessEnabled
+  }
+  if (typeof patch.networkAccessToken === 'string') {
+    settings.global.networkAccessToken = patch.networkAccessToken
+  }
+  if (typeof patch.networkAccessBehindProxy === 'boolean') {
+    settings.global.networkAccessBehindProxy = patch.networkAccessBehindProxy
+  }
+  writeSettings(settings, { backup: true })
+  return settings.global
+}
+
+function ensureGlobalWorktreesRootExists(worktreesPath: string): void {
+  const root = resolveGlobalWorktreesRoot(worktreesPath)
+  if (!root || isNonNativeWindowsPath(root)) return
+
+  try {
+    fs.mkdirSync(root, { recursive: true })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    throw new InvalidWorktreesPathError(`Cannot create worktrees directory '${root}': ${message}`)
+  }
+}
+
+function isNonNativeWindowsPath(value: string): boolean {
+  return (
+    process.platform !== 'win32' &&
+    (/^[A-Za-z]:[\\/]/.test(value) || value.startsWith('\\\\') || value.startsWith('//'))
+  )
+}
+
+/** Create or update project-specific settings. Merges devServer, e2e, and finalization fields on update. */
+export function upsertProject(projectPath: string, data: Partial<Omit<ProjectSettings, 'path'>>): ProjectSettings {
+  // Validate color: accept null or a valid palette entry; drop anything else.
+  if ('color' in data) {
+    if (data.color !== null && !isValidProjectColor(data.color)) {
+      console.warn(`[settings] Invalid color value rejected for project '${projectPath}': ${data.color}`)
+      delete (data as Record<string, unknown>).color
+    }
+  }
+  // Validate cleanupScriptMode: '' means inherit; any other value must be a
+  // valid mode. Drop anything else so the stored value is preserved.
+  if ('cleanupScriptMode' in data) {
+    if (data.cleanupScriptMode !== '' && !isValidCleanupScriptMode(data.cleanupScriptMode)) {
+      console.warn(
+        `[settings] Invalid cleanupScriptMode rejected for project '${projectPath}': ${data.cleanupScriptMode}`,
+      )
+      delete (data as Record<string, unknown>).cleanupScriptMode
+    }
+  }
+  if ('workflowPolicy' in data && !isWorkflowPolicy(data.workflowPolicy)) throw new Error('Invalid workflowPolicy')
+  const allowedProjectKeys = [
+    'workflowPolicy',
+    'displayName',
+    'defaultSourceBranch',
+    'defaultModel',
+    'dangerouslySkipPermissions',
+    'prPromptTemplate',
+    'reviewPromptTemplate',
+    'ciFixPromptTemplate',
+    'notionInitialPromptTemplate',
+    'sentryInitialPromptTemplate',
+    'gitConventions',
+    'setupScript',
+    'taskPromptTemplate',
+    'cleanupScript',
+    'cleanupScriptMode',
+    'archiveScript',
+    'changeSourceBranchScript',
+    'sessionEndedScript',
+    'prMergedScript',
+    'autoLoopDisabledScript',
+    'devServer',
+    'e2e',
+    'finalization',
+    'color',
+    'forge',
+  ]
+  const allowedDevServerKeys = ['startCommand', 'stopCommand']
+  const allowedE2eKeys: Array<keyof E2eSettings> = ['framework', 'skill', 'prompt']
+  const allowedFinalizationKeys: Array<keyof FinalizationSettings> = ['prompt']
+  const filtered = pickKnownKeys<Omit<ProjectSettings, 'path'>>(data as Record<string, unknown>, allowedProjectKeys)
+  if (filtered.devServer) {
+    filtered.devServer = pickKnownKeys<DevServerConfig>(
+      filtered.devServer as unknown as Record<string, unknown>,
+      allowedDevServerKeys,
+    ) as DevServerConfig
+  }
+  if (filtered.e2e) {
+    filtered.e2e = pickKnownKeys<E2eSettings>(
+      filtered.e2e as unknown as Record<string, unknown>,
+      allowedE2eKeys as string[],
+    ) as E2eSettings
+  }
+  if (filtered.finalization) {
+    filtered.finalization = pickKnownKeys<FinalizationSettings>(
+      filtered.finalization as unknown as Record<string, unknown>,
+      allowedFinalizationKeys as string[],
+    ) as FinalizationSettings
+  }
+
+  const settings = readSettings()
+  const idx = settings.projects.findIndex((p) => p.path === projectPath)
+
+  if (idx >= 0) {
+    // Update existing project — merge devServer, e2e, and finalization separately to allow partial updates
+    const existing = settings.projects[idx]
+    const updatedDevServer = filtered.devServer ? { ...existing.devServer, ...filtered.devServer } : existing.devServer
+    const existingE2e = existing.e2e ?? defaultProjectSettings(projectPath).e2e
+    const updatedE2e = filtered.e2e ? { ...existingE2e, ...filtered.e2e } : existingE2e
+    const existingFinalization = existing.finalization ?? defaultProjectSettings(projectPath).finalization
+    const updatedFinalization = filtered.finalization
+      ? { ...existingFinalization, ...filtered.finalization }
+      : existingFinalization
+    settings.projects[idx] = {
+      ...existing,
+      ...filtered,
+      path: projectPath,
+      devServer: updatedDevServer,
+      e2e: updatedE2e,
+      finalization: updatedFinalization,
+    }
+  } else {
+    // Add new project
+    const newProject: ProjectSettings = {
+      ...defaultProjectSettings(projectPath),
+      ...filtered,
+      path: projectPath,
+    }
+    if (filtered.devServer) {
+      newProject.devServer = { ...defaultProjectSettings(projectPath).devServer, ...filtered.devServer }
+    }
+    if (filtered.e2e) {
+      newProject.e2e = { ...defaultProjectSettings(projectPath).e2e, ...filtered.e2e }
+    }
+    if (filtered.finalization) {
+      newProject.finalization = { ...defaultProjectSettings(projectPath).finalization, ...filtered.finalization }
+    }
+    settings.projects.push(newProject)
+  }
+
+  writeSettings(settings, { backup: true })
+  return settings.projects.find((p) => p.path === projectPath) as ProjectSettings
+}
+
+/** Remove a project from the settings file. */
+export function deleteProject(projectPath: string): void {
+  const settings = readSettings()
+  settings.projects = settings.projects.filter((p) => p.path !== projectPath)
+  writeSettings(settings, { backup: true })
+}
+
+/** List all configured projects. */
+export function listProjects(): ProjectSettings[] {
+  return readSettings().projects
+}
+
+export interface ActiveClaudeMcpServerSummary {
+  key: string
+  command: string
+  args: string[]
+}
+
+/** List active MCP servers from Claude Code config (~/.claude.json). */
+export function listActiveClaudeMcpServers(): ActiveClaudeMcpServerSummary[] {
+  return listClaudeMcpEntries().map(({ key, entry }) => ({
+    key,
+    command: entry.command ?? 'npx',
+    args: entry.args ?? [],
+  }))
+}
+
+/** Resolve inheritance before taking a new workspace snapshot. */
+export function getEffectiveWorkflowPolicy(projectPath: string, override?: Partial<WorkflowPolicy>): WorkflowPolicy {
+  return resolveWorkflowPolicy(
+    getGlobalSettings().workflowPolicy,
+    getProjectSettings(projectPath)?.workflowPolicy,
+    override,
+  )
+}
