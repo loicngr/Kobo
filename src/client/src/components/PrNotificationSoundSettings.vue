@@ -61,6 +61,7 @@
 </template>
 
 <script setup lang="ts">
+import { useCustomSoundsStore } from 'src/stores/custom-sounds'
 import {
   INHERIT_NOTIFICATION_SOUND,
   NOTIFICATION_SOUNDS,
@@ -146,9 +147,11 @@ const rows = computed<PrSoundRow[]>(() => [
   },
 ])
 
+const customSounds = useCustomSoundsStore()
 const soundOptions = computed(() => [
   { label: t('settings.soundGeneral'), value: INHERIT_NOTIFICATION_SOUND },
   ...NOTIFICATION_SOUNDS.map((sound) => ({ label: t(sound.labelKey), value: sound.id })),
+  ...customSounds.options,
 ])
 
 function update(key: keyof PrNotificationAudioSettings, value: boolean | number | string): void {

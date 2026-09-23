@@ -11,13 +11,13 @@ import { useWebSocketStore } from '../stores/websocket'
 import { useWorkspaceStore } from '../stores/workspace'
 
 const CASES = [
-  ['pr:ci-failed', 'audioPrCiFailedSound', 'faaah.mp3'],
-  ['pr:ci-recovered', 'audioPrCiRecoveredSound', 'for-shure.mp3'],
-  ['pr:changes-requested', 'audioPrChangesRequestedSound', 'arrete-de-mentir.mp3'],
-  ['pr:approved', 'audioPrApprovedSound', 'hey.mp3'],
-  ['pr:merge-conflict', 'audioPrMergeConflictSound', 'gta-v-death.mp3'],
-  ['pr:ready-to-merge', 'audioPrReadyToMergeSound', 'travail_termine.mp3'],
-  ['pr:merged', 'audioPrMergedSound', '7eme-compagnie-03.mp3'],
+  ['pr:ci-failed', 'audioPrCiFailedSound', 'ready.wav'],
+  ['pr:ci-recovered', 'audioPrCiRecoveredSound', 'ready.wav'],
+  ['pr:changes-requested', 'audioPrChangesRequestedSound', 'ready.wav'],
+  ['pr:approved', 'audioPrApprovedSound', 'neutral.wav'],
+  ['pr:merge-conflict', 'audioPrMergeConflictSound', 'ready.wav'],
+  ['pr:ready-to-merge', 'audioPrReadyToMergeSound', 'ready.wav'],
+  ['pr:merged', 'audioPrMergedSound', 'ready.wav'],
 ] as const satisfies ReadonlyArray<[string, keyof GlobalSettings, string]>
 
 describe('PR notification WebSocket dispatch', () => {
@@ -105,7 +105,7 @@ describe('PR notification WebSocket dispatch', () => {
   it('uses the approved event volume instead of the general volume', () => {
     const settings = useSettingsStore().global
     settings.audioNotificationVolume = 0.9
-    settings.audioPrApprovedSound = 'hey.mp3'
+    settings.audioPrApprovedSound = 'neutral.wav'
     settings.audioPrApprovedVolume = 0.35
 
     useWebSocketStore()._routeMessage({
@@ -114,7 +114,7 @@ describe('PR notification WebSocket dispatch', () => {
       payload: { prNumber: 42, prUrl: 'https://example.test/pr/42' },
     })
 
-    expect(notify).toHaveBeenLastCalledWith(expect.any(String), undefined, 'w1', 'hey.mp3', 0.35, true)
+    expect(notify).toHaveBeenLastCalledWith(expect.any(String), undefined, 'w1', 'neutral.wav', 0.35, true)
   })
 
   it.each(['inherit', 'unknown.mp3', ''])('inherits for stored value %j', (selection) => {

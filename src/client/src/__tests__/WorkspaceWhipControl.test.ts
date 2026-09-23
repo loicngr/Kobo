@@ -282,7 +282,7 @@ describe('WorkspaceWhipControl', () => {
 
     expect(createWhipCrackCoordinator).toHaveBeenCalledWith(
       { workspaceId: 'ws-1', sessionId: 'session-1' },
-      expect.arrayContaining(['Move faster, tocard!', 'Less thinking, more doing, tocard!']),
+      expect.arrayContaining(['Continue, please.', 'Keep working through the task list.']),
       expect.any(Object),
     )
     const overlay = wrapper.getComponent(WhipOverlayStub)
@@ -462,14 +462,14 @@ describe('WorkspaceWhipControl', () => {
     await openWhip(wrapper)
     const dependencies = vi.mocked(createWhipCrackCoordinator).mock.calls[0]![2]
     await dependencies.interruptAgent('ws-1')
-    dependencies.sendMessage('ws-1', 'Move faster, tocard!', 'session-1')
+    dependencies.sendMessage('ws-1', 'Continue, please.', 'session-1')
     dependencies.onError()
 
     expect(interrupt).toHaveBeenCalledWith('ws-1', {
       expectedSessionId: 'session-1',
       disableAutoLoop: true,
     })
-    expect(send).toHaveBeenCalledWith('ws-1', 'Move faster, tocard!', 'session-1')
+    expect(send).toHaveBeenCalledWith('ws-1', 'Continue, please.', 'session-1')
     expect(doubles.notify).toHaveBeenCalledWith({
       type: 'negative',
       message: 'Unable to send the whip message',

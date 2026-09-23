@@ -22,6 +22,8 @@ vi.mock('../server/services/settings-service.js', () => ({
   SETTINGS_SCHEMA_VERSION: 1,
 }))
 
+vi.mock('../server/services/agent/integration-mcp.js', () => ({ hasIntegrationMcpConfig: vi.fn(() => false) }))
+
 let tmpDir: string
 let dbPath: string
 let app: Hono
@@ -44,6 +46,8 @@ async function resetDb(): Promise<void> {
 
 describe('GET /api/health/report — active state', () => {
   beforeEach(async () => {
+    const { hasIntegrationMcpConfig } = await import('../server/services/agent/integration-mcp.js')
+    vi.mocked(hasIntegrationMcpConfig).mockReturnValue(false)
     await resetDb()
     const { getDb } = await import('../server/db/index.js')
     getDb(dbPath)
@@ -58,6 +62,15 @@ describe('GET /api/health/report — active state', () => {
     if (tmpDir && fs.existsSync(tmpDir)) {
       fs.rmSync(tmpDir, { recursive: true, force: true })
     }
+  })
+
+  it('reports direct connections even without a selected Claude MCP key', async () => {
+    const { hasIntegrationMcpConfig } = await import('../server/services/agent/integration-mcp.js')
+    vi.mocked(hasIntegrationMcpConfig).mockReturnValue(true)
+    const response = await app.request('/api/health/report')
+    const report = await response.json()
+    expect(report.integrations.notion.configured).toBe(true)
+    expect(report.integrations.sentry.configured).toBe(true)
   })
 
   it('returns an `active` object with five empty arrays for an empty DB', async () => {

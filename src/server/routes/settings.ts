@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
 import { isValidSkillSuite } from '../../shared/skill-suite-prompts.js'
+import { isWorkflowPolicy } from '../../shared/workflow-policy.js'
 import { getDb } from '../db/index.js'
 import { getBackendPort } from '../services/agent/orchestrator.js'
 import {
@@ -181,6 +182,8 @@ app.put('/global', async (c) => {
     // `{}` merges nothing but still rewrites settings.json; a parse failure
     // must answer 400 rather than do that.
     if (!body) return c.json({ error: 'Invalid JSON body' }, 400)
+    if (body.workflowPolicy !== undefined && !isWorkflowPolicy(body.workflowPolicy))
+      return c.json({ error: 'Invalid workflowPolicy' }, 400)
     const updated = settingsService.updateGlobalSettings(body)
     // The client assigns this response straight into its store, so echoing the
     // real credentials back would undo the masking on GET the first time
@@ -230,6 +233,8 @@ app.put('/projects/:encodedPath', async (c) => {
     const body = await c.req.json<Partial<Omit<ProjectSettings, 'path'>>>().catch(() => null)
     // `{}` CREATES a project entry with defaults; a malformed body must not.
     if (!body) return c.json({ error: 'Invalid JSON body' }, 400)
+    if (body.workflowPolicy !== undefined && !isWorkflowPolicy(body.workflowPolicy))
+      return c.json({ error: 'Invalid workflowPolicy' }, 400)
     const project = settingsService.upsertProject(projectPath, body)
     return c.json(project)
   } catch (err) {

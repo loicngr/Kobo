@@ -2,6 +2,11 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  LEGACY_AGNOSTIC_AUTO_LOOP_REVIEW_GATE,
+  LEGACY_AGNOSTIC_REVIEW_TEMPLATE,
+  LEGACY_CI_FIX_PROMPT_TEMPLATE,
+} from '../server/services/legacy-public-prompts.js'
 import type { GlobalSettings, ProjectSettings, Settings } from '../server/services/settings-service.js'
 import {
   _setSettingsPath,
@@ -47,12 +52,15 @@ describe('getSettings()', () => {
     expect(fs.existsSync(settingsPath)).toBe(false)
     const settings = getSettings()
     expect(fs.existsSync(settingsPath)).toBe(true)
-    expect(settings.global.defaultModelByEngine['claude-code']).toBe('claude-sonnet-5')
-    expect(settings.global.defaultModelByEngine.codex).toBe('gpt-5.6-terra')
+    expect(settings.global.defaultModelByEngine['claude-code']).toBe('auto')
+    expect(settings.global.defaultModelByEngine.codex).toBe('auto')
     expect(settings.global.worktreesPath).toBe('.worktrees')
-    expect(settings.global.notionEnabled).toBe(true)
-    expect(settings.global.sentryEnabled).toBe(true)
+    expect(settings.global.notionEnabled).toBe(false)
+    expect(settings.global.sentryEnabled).toBe(false)
     expect(typeof settings.global.prPromptTemplate).toBe('string')
+    expect(settings.global.skillSuite).toBe('standard')
+    expect(settings.global.audioNotifications).toBe(false)
+    expect(settings.global.maxConcurrentAgents).toBe(2)
     expect(settings.projects).toEqual([])
   })
 
@@ -93,7 +101,7 @@ describe('getSettings()', () => {
     expect(backups.length).toBe(1)
     // The new settings.json should contain valid defaults
     const written = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'))
-    expect(written.global.defaultModelByEngine?.['claude-code']).toBe('claude-sonnet-5')
+    expect(written.global.defaultModelByEngine?.['claude-code']).toBe('auto')
   })
 
   it('restores missing global fields to defaults when schemaVersion is current', () => {
@@ -121,7 +129,7 @@ describe('getSettings()', () => {
     const settings = getSettings()
 
     // Missing fields must be restored to their defaults
-    expect(settings.global.defaultModelByEngine['claude-code']).toBe('claude-sonnet-5')
+    expect(settings.global.defaultModelByEngine['claude-code']).toBe('auto')
     expect(typeof settings.global.prPromptTemplate).toBe('string')
     expect(settings.global.prPromptTemplate.length).toBeGreaterThan(0)
     // Existing custom values must be preserved
@@ -253,7 +261,7 @@ describe('updateGlobalSettings()', () => {
     updateGlobalSettings({ prPromptTemplate: 'new template' })
 
     const global = getGlobalSettings()
-    expect(global.defaultModelByEngine['claude-code']).toBe('claude-sonnet-5') // unchanged
+    expect(global.defaultModelByEngine['claude-code']).toBe('auto') // unchanged
     expect(global.prPromptTemplate).toBe('new template') // updated
   })
 
@@ -731,7 +739,7 @@ describe('default prefills', () => {
     try {
       const global = getGlobalSettings()
       expect(global.gitConventions.length).toBeGreaterThan(0)
-      expect(global.gitConventions).toContain('Conventional Commits')
+      expect(global.gitConventions).toContain('explicitly authorized')
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })
     }
@@ -1403,7 +1411,7 @@ describe('worktreesPrefixByProject migration', () => {
         editorCommand: '',
         browserNotifications: true,
         audioNotifications: true,
-        audioNotificationSound: 'hey.mp3',
+        audioNotificationSound: 'neutral.wav',
         audioNotificationVolume: 1,
         notionStatusProperty: '',
         notionInProgressStatus: '',
@@ -1436,7 +1444,7 @@ describe('worktreesPrefixByProject migration', () => {
         editorCommand: '',
         browserNotifications: true,
         audioNotifications: true,
-        audioNotificationSound: 'hey.mp3',
+        audioNotificationSound: 'neutral.wav',
         audioNotificationVolume: 1,
         notionStatusProperty: '',
         notionInProgressStatus: '',
@@ -1473,7 +1481,7 @@ describe('reviewPromptTemplate (migration v15)', () => {
         editorCommand: '',
         browserNotifications: true,
         audioNotifications: true,
-        audioNotificationSound: 'hey.mp3',
+        audioNotificationSound: 'neutral.wav',
         audioNotificationVolume: 1,
         notionStatusProperty: '',
         notionInProgressStatus: '',
@@ -1504,7 +1512,7 @@ describe('reviewPromptTemplate (migration v15)', () => {
         editorCommand: '',
         browserNotifications: true,
         audioNotifications: true,
-        audioNotificationSound: 'hey.mp3',
+        audioNotificationSound: 'neutral.wav',
         audioNotificationVolume: 1,
         notionStatusProperty: '',
         notionInProgressStatus: '',
@@ -1631,7 +1639,7 @@ describe('settings migration v16 — add Notion/Sentry initial prompts', () => {
         editorCommand: '',
         browserNotifications: true,
         audioNotifications: true,
-        audioNotificationSound: 'hey.mp3',
+        audioNotificationSound: 'neutral.wav',
         audioNotificationVolume: 1,
         notionStatusProperty: '',
         notionInProgressStatus: '',
@@ -1680,7 +1688,7 @@ describe('settings migration v16 — add Notion/Sentry initial prompts', () => {
         editorCommand: '',
         browserNotifications: true,
         audioNotifications: true,
-        audioNotificationSound: 'hey.mp3',
+        audioNotificationSound: 'neutral.wav',
         audioNotificationVolume: 1,
         notionStatusProperty: '',
         notionInProgressStatus: '',
@@ -1730,7 +1738,7 @@ describe('settings migration v16 — add Notion/Sentry initial prompts', () => {
         editorCommand: '',
         browserNotifications: true,
         audioNotifications: true,
-        audioNotificationSound: 'hey.mp3',
+        audioNotificationSound: 'neutral.wav',
         audioNotificationVolume: 1,
         notionStatusProperty: '',
         notionInProgressStatus: '',
@@ -1783,7 +1791,7 @@ describe('settings migration v19 — split defaultModel by engine', () => {
         editorCommand: '',
         browserNotifications: true,
         audioNotifications: true,
-        audioNotificationSound: 'hey.mp3',
+        audioNotificationSound: 'neutral.wav',
         audioNotificationVolume: 1,
         notionStatusProperty: '',
         notionInProgressStatus: '',
@@ -1930,9 +1938,9 @@ describe('migration v21 — add-project-color-and-flatten', () => {
 })
 
 describe('migration v22 — add-skill-suite-selector', () => {
-  it('fresh project defaults include skillSuite=superpowers', () => {
+  it('fresh project defaults include skillSuite=standard', () => {
     const settings = getSettings()
-    expect(settings.global.skillSuite).toBe('superpowers')
+    expect(settings.global.skillSuite).toBe('standard')
   })
 
   it('fresh project seeds the 4 custom* fields with agnostic defaults', () => {
@@ -2181,20 +2189,20 @@ describe('question notification sound (v40)', () => {
       settingsPath,
       JSON.stringify({
         schemaVersion: 39,
-        global: { audioNotificationSound: 'travail_termine.mp3', networkAccessToken: 'keep-me' },
+        global: { audioNotificationSound: 'ready.wav', networkAccessToken: 'keep-me' },
         projects: [],
       }),
     )
     getSettings()
     const global = getGlobalSettings()
-    expect(global.audioNotificationSound).toBe('travail_termine.mp3') // preserved
+    expect(global.audioNotificationSound).toBe('ready.wav') // preserved
     expect(global.networkAccessToken).toBe('keep-me') // preserved
-    expect(global.audioQuestionSound).toBe('hey.mp3') // seeded
+    expect(global.audioQuestionSound).toBe('neutral.wav') // seeded
   })
 
   it('updateGlobalSettings can change the question sound (it is in the allowlist)', () => {
-    updateGlobalSettings({ audioQuestionSound: 'faaah.mp3' })
-    expect(getGlobalSettings().audioQuestionSound).toBe('faaah.mp3')
+    updateGlobalSettings({ audioQuestionSound: 'ready.wav' })
+    expect(getGlobalSettings().audioQuestionSound).toBe('ready.wav')
   })
 })
 
@@ -2211,7 +2219,7 @@ describe('workspace-created notification settings', () => {
 
     const global = getGlobalSettings()
 
-    expect(global.audioWorkspaceCreatedSound).toBe('warcraft-3-humain-travail.mp3')
+    expect(global.audioWorkspaceCreatedSound).toBe('neutral.wav')
     expect(global.audioQuestionVolume).toBe(0.35)
     expect(global.audioWorkspaceCreatedVolume).toBe(0.35)
     expect(global.audioQuestionNotifications).toBe(true)
@@ -2220,13 +2228,13 @@ describe('workspace-created notification settings', () => {
 
   it('allows updating the dedicated sounds and volumes', () => {
     updateGlobalSettings({
-      audioWorkspaceCreatedSound: 'hey.mp3',
+      audioWorkspaceCreatedSound: 'neutral.wav',
       audioQuestionVolume: 0.4,
       audioWorkspaceCreatedVolume: 0.65,
     })
 
     const global = getGlobalSettings()
-    expect(global.audioWorkspaceCreatedSound).toBe('hey.mp3')
+    expect(global.audioWorkspaceCreatedSound).toBe('neutral.wav')
     expect(global.audioQuestionVolume).toBe(0.4)
     expect(global.audioWorkspaceCreatedVolume).toBe(0.65)
   })
@@ -2260,7 +2268,7 @@ describe('PR notification sounds (v45)', () => {
   it('fresh installs inherit the general sound for every PR event', () => {
     expect(getGlobalSettings()).toMatchObject(PR_SOUND_DEFAULTS)
     expect(getGlobalSettings()).toMatchObject({
-      audioNotifications: true,
+      audioNotifications: false,
       audioQuestionNotifications: false,
       audioWorkspaceCreatedNotifications: false,
     })
@@ -2272,8 +2280,8 @@ describe('PR notification sounds (v45)', () => {
       JSON.stringify({
         schemaVersion: 43,
         global: {
-          audioNotificationSound: 'travail_termine.mp3',
-          audioQuestionSound: 'hey.mp3',
+          audioNotificationSound: 'ready.wav',
+          audioQuestionSound: 'neutral.wav',
           networkAccessToken: 'keep-me',
         },
         projects: [],
@@ -2293,8 +2301,8 @@ describe('PR notification sounds (v45)', () => {
       audioPrMergeConflictEnabled: true,
       audioPrReadyToMergeEnabled: true,
       audioPrMergedEnabled: true,
-      audioNotificationSound: 'travail_termine.mp3',
-      audioQuestionSound: 'hey.mp3',
+      audioNotificationSound: 'ready.wav',
+      audioQuestionSound: 'neutral.wav',
       networkAccessToken: 'keep-me',
     })
     expect(getSettings().schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
@@ -2322,7 +2330,7 @@ describe('PR notification sounds (v45)', () => {
       JSON.stringify({
         schemaVersion: 43,
         global: {
-          audioPrCiFailedSound: 'faaah.mp3',
+          audioPrCiFailedSound: 'ready.wav',
           audioPrMergedSound: 'none',
         },
         projects: [],
@@ -2331,7 +2339,7 @@ describe('PR notification sounds (v45)', () => {
 
     getSettings()
 
-    expect(getGlobalSettings().audioPrCiFailedSound).toBe('faaah.mp3')
+    expect(getGlobalSettings().audioPrCiFailedSound).toBe('ready.wav')
     expect(getGlobalSettings().audioPrMergedSound).toBe('inherit')
     expect(getGlobalSettings().audioPrMergedEnabled).toBe(false)
   })
@@ -2344,7 +2352,7 @@ describe('PR notification sounds (v45)', () => {
         global: {
           audioNotificationVolume: 0.35,
           audioPrCiFailedSound: 'none',
-          audioPrApprovedSound: 'hey.mp3',
+          audioPrApprovedSound: 'neutral.wav',
         },
         projects: [],
       }),
@@ -2356,7 +2364,7 @@ describe('PR notification sounds (v45)', () => {
       audioPrCiFailedSound: 'inherit',
       audioPrCiFailedEnabled: false,
       audioPrCiFailedVolume: 0.35,
-      audioPrApprovedSound: 'hey.mp3',
+      audioPrApprovedSound: 'neutral.wav',
       audioPrApprovedEnabled: true,
       audioPrApprovedVolume: 0.35,
     })
@@ -2364,23 +2372,23 @@ describe('PR notification sounds (v45)', () => {
 
   it('allows all seven fields through updateGlobalSettings', () => {
     updateGlobalSettings({
-      audioPrCiFailedSound: 'faaah.mp3',
-      audioPrCiRecoveredSound: 'for-shure.mp3',
+      audioPrCiFailedSound: 'ready.wav',
+      audioPrCiRecoveredSound: 'ready.wav',
       audioPrChangesRequestedSound: 'none',
-      audioPrApprovedSound: 'hey.mp3',
-      audioPrMergeConflictSound: 'dry-fart.mp3',
-      audioPrReadyToMergeSound: 'travail_termine.mp3',
-      audioPrMergedSound: 'ca_va_peter.mp3',
+      audioPrApprovedSound: 'neutral.wav',
+      audioPrMergeConflictSound: 'ready.wav',
+      audioPrReadyToMergeSound: 'ready.wav',
+      audioPrMergedSound: 'ready.wav',
     })
 
     expect(getGlobalSettings()).toMatchObject({
-      audioPrCiFailedSound: 'faaah.mp3',
-      audioPrCiRecoveredSound: 'for-shure.mp3',
+      audioPrCiFailedSound: 'ready.wav',
+      audioPrCiRecoveredSound: 'ready.wav',
       audioPrChangesRequestedSound: 'none',
-      audioPrApprovedSound: 'hey.mp3',
-      audioPrMergeConflictSound: 'dry-fart.mp3',
-      audioPrReadyToMergeSound: 'travail_termine.mp3',
-      audioPrMergedSound: 'ca_va_peter.mp3',
+      audioPrApprovedSound: 'neutral.wav',
+      audioPrMergeConflictSound: 'ready.wav',
+      audioPrReadyToMergeSound: 'ready.wav',
+      audioPrMergedSound: 'ready.wav',
     })
   })
 
@@ -2563,7 +2571,7 @@ describe('whip feature toggle (v51)', () => {
       whipVolume: 1,
       futureGlobalSetting: 'preserved',
     })
-    expect(persisted.projects).toEqual([{ path: '/future/project', futureProjectSetting: true }])
+    expect(persisted.projects).toMatchObject([{ path: '/future/project', futureProjectSetting: true }])
 
     const repairedTimestamp = new Date('2000-01-01T00:00:00.000Z')
     fs.utimesSync(settingsPath, repairedTimestamp, repairedTimestamp)
@@ -2577,7 +2585,7 @@ describe('whip feature toggle (v51)', () => {
       whipVolume: 1,
       futureGlobalSetting: 'preserved',
     })
-    expect(loadedAgain.projects).toEqual([{ path: '/future/project', futureProjectSetting: true }])
+    expect(loadedAgain.projects).toMatchObject([{ path: '/future/project', futureProjectSetting: true }])
     expect(fs.statSync(settingsPath).mtimeMs).toBe(mtimeBeforeSecondRead)
   })
 
@@ -2612,12 +2620,12 @@ describe('whip feature toggle (v51)', () => {
 
 describe('updateNetworkAccessSettings()', () => {
   it('persists the token to disk (real write path, not mocked)', () => {
-    updateNetworkAccessSettings({ networkAccessEnabled: true, networkAccessToken: 'lan-secret-123' })
+    updateNetworkAccessSettings({ networkAccessEnabled: true, networkAccessToken: 'test-token' })
     // Re-read from disk to prove the write actually landed — this is the path the
     // generic updateGlobalSettings allowlist silently dropped.
     const global = getGlobalSettings()
     expect(global.networkAccessEnabled).toBe(true)
-    expect(global.networkAccessToken).toBe('lan-secret-123')
+    expect(global.networkAccessToken).toBe('test-token')
   })
 
   it('updates only the provided fields', () => {
@@ -2787,5 +2795,88 @@ describe('awaiting-user reminder (v56)', () => {
     updateGlobalSettings({ awaitingUserReminderMinutes: 20 })
 
     expect(updateGlobalSettings({ awaitingUserReminderMinutes: 0 }).awaitingUserReminderMinutes).toBe(0)
+  })
+})
+
+describe('public release settings migrations', () => {
+  it('preserves existing preferences and custom prompts through two upgrades', () => {
+    const before = {
+      schemaVersion: 58,
+      global: {
+        skillSuite: 'custom',
+        customReviewTemplate: 'my review',
+        prPromptTemplate: 'my PR',
+        defaultModelByEngine: { codex: 'my-model' },
+        audioNotifications: true,
+        notionEnabled: true,
+        maxConcurrentAgents: 0,
+        gitConventions: 'my git policy',
+        eventRetentionDays: 123,
+      },
+      projects: [{ path: '/project', ciFixPromptTemplate: 'my CI' }],
+    }
+    const upgraded = runSettingsMigrations(structuredClone(before))
+    expect(upgraded.global).toMatchObject(before.global)
+    expect(upgraded.projects).toMatchObject(before.projects)
+    expect(upgraded.global.onboardingComplete).toBe(true)
+    expect(runSettingsMigrations(structuredClone(upgraded) as unknown as Record<string, unknown>)).toEqual(upgraded)
+  })
+
+  it('updates only exact shipped prompt text, including project overrides', () => {
+    const upgraded = runSettingsMigrations({
+      schemaVersion: 58,
+      global: { ciFixPromptTemplate: LEGACY_CI_FIX_PROMPT_TEMPLATE },
+      projects: [
+        { ciFixPromptTemplate: LEGACY_CI_FIX_PROMPT_TEMPLATE },
+        { ciFixPromptTemplate: `${LEGACY_CI_FIX_PROMPT_TEMPLATE} Custom instruction.` },
+      ],
+    })
+    expect(upgraded.global.ciFixPromptTemplate).toContain('only when explicitly authorized')
+    expect(upgraded.projects[0].ciFixPromptTemplate).toBe(upgraded.global.ciFixPromptTemplate)
+    expect(upgraded.projects[1].ciFixPromptTemplate).toBe(`${LEGACY_CI_FIX_PROMPT_TEMPLATE} Custom instruction.`)
+  })
+
+  it('keeps onboarding incomplete until explicitly acknowledged', () => {
+    expect(getSettings().global.onboardingComplete).toBe(false)
+    updateGlobalSettings({ onboardingComplete: 'true' } as unknown as Partial<GlobalSettings>)
+    expect(getSettings().global.onboardingComplete).toBe(false)
+    updateGlobalSettings({ onboardingComplete: true })
+    expect(getSettings().global.onboardingComplete).toBe(true)
+  })
+})
+
+describe('legacy agnostic prompt upgrades', () => {
+  it('updates exact shipped review prompts but preserves custom variants on repeated migrations', () => {
+    const customized = `${LEGACY_AGNOSTIC_AUTO_LOOP_REVIEW_GATE} My review policy.`
+    const migrated = runSettingsMigrations({
+      schemaVersion: 58,
+      global: { customReviewTemplate: LEGACY_AGNOSTIC_REVIEW_TEMPLATE, customAutoLoopReviewGate: customized },
+      projects: [],
+    })
+    expect(migrated.global.customReviewTemplate).toContain('git diff --cached')
+    expect(migrated.global.customAutoLoopReviewGate).toBe(customized)
+    expect(runSettingsMigrations(structuredClone(migrated) as unknown as Record<string, unknown>)).toEqual(migrated)
+    const migratedGate = runSettingsMigrations({
+      schemaVersion: 58,
+      global: { customAutoLoopReviewGate: LEGACY_AGNOSTIC_AUTO_LOOP_REVIEW_GATE },
+      projects: [],
+    })
+    expect(migratedGate.global.customAutoLoopReviewGate).toContain('uncommitted')
+  })
+})
+
+describe('workflow settings inheritance', () => {
+  it('defaults new installs to manual and preserves existing preferences on migration twice', () => {
+    expect(getGlobalSettings().workflowPolicy).toEqual({ commit: 'manual', push: 'manual', publish: 'manual' })
+    const old = runSettingsMigrations({ schemaVersion: 61, global: { gitConventions: 'No commits' }, projects: [] })
+    expect(old.global.workflowPolicy).toEqual({ commit: 'automatic', push: 'automatic', publish: 'automatic' })
+    expect(old.global.gitConventions).toBe('No commits')
+    expect(runSettingsMigrations(structuredClone(old) as unknown as Record<string, unknown>)).toEqual(old)
+    updateGlobalSettings({ workflowPolicy: { commit: 'automatic', push: 'manual', publish: 'manual' } })
+    upsertProject('/repo', { workflowPolicy: { push: 'automatic' } })
+    expect(getProjectSettings('/repo')?.workflowPolicy).toEqual({ push: 'automatic' })
+    expect(() => updateGlobalSettings({ workflowPolicy: { merge: 'automatic' } as never })).toThrow(
+      'Invalid workflowPolicy',
+    )
   })
 })

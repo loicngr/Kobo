@@ -32,6 +32,9 @@ npm test               # backend vitest suite
 npm run test:client    # client vitest suite
 npm run test:all       # both
 
+npm run test:package   # after build: install tarball in a disposable home and exercise it
+npm run security:scan  # requires Gitleaks 8.30.1; history + current nonignored source
+
 npm run lint           # biome check (lint + format)
 npm run lint:fix       # biome check --write
 
@@ -69,4 +72,12 @@ Full commit and branch conventions are in [`AGENTS.md`](./AGENTS.md#git-workflow
 
 Releases are cut from `main`. Prepare the version change in a branch targeting `develop`, keeping `package.json` and its lockfile synchronized; then merge `develop` into `main`. A push to `main` starts the release workflow. Manual dispatch also requires `main`.
 
-The workflow installs and audits dependencies, lints, type-checks the server and client, runs both test suites, and builds. Before publishing, it refuses a version or tag that already exists. It then publishes to npm with provenance, tags `v<version>`, and creates the GitHub Release. `make release` runs the local CI gates plus the version/tag availability checks; publishing remains the workflow's responsibility.
+The read-only preparation job scans secrets, installs and audits dependencies, lints, type-checks, runs both suites and builds. It creates one tarball and installs that exact artifact in a disposable environment, checking native modules, server/PWA assets and both MCP transports. A separate privileged job verifies its SHA-256 and version/tag availability, publishes that tarball with provenance without rebuilding or running lifecycle hooks, and creates the tag and GitHub Release. `make release` runs the local CI gates plus the version/tag availability checks; publishing remains the workflow's responsibility.
+
+## Public contribution boundaries
+
+Read [Security](./SECURITY.md) before attaching diagnostics and follow the [Code of conduct](./CODE_OF_CONDUCT.md). No paid provider account is needed for deterministic CI; real-provider tests are separate opt-in work. Add new public documentation through the narrow `.gitignore` allowlist instead of publishing all internal plans or captures.
+
+Run secret scanning with Gitleaks 8.30.1 (`GITLEAKS_BINARY` may point to the executable). Findings must be redacted. The single historical fingerprint in `.gitleaksignore` is a reviewed synthetic test fixture; do not add broad path or rule exclusions. A passing scan is evidence for known signatures, not proof that every historical document or binary is public-safe.
+
+See the [opening checklist](./docs/release/public-opening-checklist.md) for remaining human and platform gates. No release, visibility change or repository-history rewrite is implied by local development.

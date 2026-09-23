@@ -7,8 +7,14 @@ vi.mock('../../server/services/websocket-service.js', () => ({
   emitEphemeral: vi.fn(),
 }))
 
+const integrationSettings = vi.hoisted(() => ({
+  notionEnabled: false,
+  sentryEnabled: false,
+  notionMcpKey: '',
+  sentryMcpKey: '',
+}))
 vi.mock('../../server/services/settings-service.js', () => ({
-  getGlobalSettings: () => ({ autoLoopMaxRetries: 5 }),
+  getGlobalSettings: () => ({ autoLoopMaxRetries: 5, ...integrationSettings }),
   getEffectiveSettings: () => ({
     model: 'claude-opus-4-7',
     dangerouslySkipPermissions: true,
@@ -26,6 +32,8 @@ vi.mock('../../server/services/usage/poller.js', () => ({
   refreshNow: vi.fn().mockResolvedValue(null),
 }))
 
+const startOptions = vi.fn()
+
 async function flushControllerStart(): Promise<void> {
   await Promise.resolve()
   await Promise.resolve()
@@ -33,6 +41,8 @@ async function flushControllerStart(): Promise<void> {
 
 describe('Orchestrator — startAgent', () => {
   beforeEach(async () => {
+    integrationSettings.notionEnabled = false
+    integrationSettings.sentryEnabled = false
     vi.resetModules()
     await resetDb()
     const { _registerEngineForTest } = await import('../../server/services/agent/engines/registry.js')
@@ -49,6 +59,7 @@ describe('Orchestrator — startAgent', () => {
         supportsQuotaStatus: false,
       },
       async start(_opts, _onEvent) {
+        startOptions(_opts)
         return {
           pid: 1111,
           engineSessionId: 'session-id',
@@ -59,6 +70,71 @@ describe('Orchestrator — startAgent', () => {
         }
       },
     })
+  })
+
+  it.each(['claude-code', 'codex'])(
+    'injects enabled managed integrations and their current namespace into %s launches',
+    async (engineId) => {
+      integrationSettings.notionEnabled = true
+      integrationSettings.sentryEnabled = true
+      const { saveIntegrationConfig } = await import('../../server/services/integration-config-service.js')
+      saveIntegrationConfig('notion', {
+        command: 'node',
+        args: ['notion-test.js'],
+        env: { NOTION_TOKEN: 'synthetic-token' },
+      })
+      saveIntegrationConfig('sentry', {
+        command: 'node',
+        args: ['sentry-test.js'],
+        env: { SENTRY_ACCESS_TOKEN: 'synthetic-token' },
+      })
+      const { _registerEngineForTest, resolveEngine } = await import('../../server/services/agent/engines/registry.js')
+      if (engineId === 'codex') _registerEngineForTest({ ...resolveEngine('claude-code'), id: 'codex' })
+      const { createWorkspace } = await import('../../server/services/workspace-service.js')
+      const ws = createWorkspace({
+        name: 'Managed MCP',
+        projectPath: '/tmp',
+        sourceBranch: 'main',
+        workingBranch: 'managed-mcp',
+        engine: engineId,
+      })
+      const { startAgent } = await import('../../server/services/agent/orchestrator.js')
+      startOptions.mockClear()
+      startAgent(ws.id, '/tmp', 'Read my ticket')
+      await flushControllerStart()
+      const options = startOptions.mock.calls[0][0]
+      expect(options.mcpServers).toHaveLength(3)
+      expect(options.mcpServers[0].name).toBe('kobo-tasks')
+      for (const server of options.mcpServers.slice(1)) {
+        expect(options.prompt).toContain(server.name)
+        expect(server.command).toBe('node')
+      }
+      expect(options.prompt).not.toContain('synthetic-token')
+    },
+  )
+
+  it('injects the workspace policy before the user prompt without altering its constraints', async () => {
+    const { createWorkspace } = await import('../../server/services/workspace-service.js')
+    const workspace = createWorkspace({
+      name: 'Policy',
+      projectPath: '/tmp',
+      sourceBranch: 'main',
+      workingBranch: 'policy',
+      workflowPolicy: { commit: 'automatic', push: 'manual' },
+    })
+    const { startAgent } = await import('../../server/services/agent/orchestrator.js')
+    startOptions.mockClear()
+    startAgent(workspace.id, '/tmp', 'Do not commit any changes.')
+    await flushControllerStart()
+    expect(startOptions).toHaveBeenCalledWith(
+      expect.objectContaining({ prompt: expect.stringContaining('commit: automatic') }),
+    )
+    expect(startOptions).toHaveBeenCalledWith(
+      expect.objectContaining({ prompt: expect.stringContaining('more restrictive user instructions') }),
+    )
+    expect(startOptions).toHaveBeenCalledWith(
+      expect.objectContaining({ prompt: expect.stringContaining('Do not commit any changes.') }),
+    )
   })
 
   it('spawns a new SessionController for a workspace and records the agent session in DB', async () => {

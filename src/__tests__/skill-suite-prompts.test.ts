@@ -7,9 +7,17 @@ import {
   getSuitePrompts,
   SUPERPOWERS_PROMPTS,
 } from '../server/services/skill-suite-prompts.js'
-import { getGroomingIntro } from '../shared/skill-suite-prompts.js'
+import { getGroomingIntro, isValidSkillSuite } from '../shared/skill-suite-prompts.js'
 
 describe('skill-suite-prompts', () => {
+  it('standard requires no suite and ignores custom overrides', () => {
+    expect(isValidSkillSuite('standard')).toBe(true)
+    expect(getGroomingIntro('standard', 'custom')).toBe(AGNOSTIC_PROMPTS.autoLoopGroomingIntro)
+    expect(getSuitePrompts('standard', { reviewTemplate: 'custom override' })).toEqual(AGNOSTIC_PROMPTS)
+    expect(getSuitePrompts('standard', {}).reviewTemplate).toContain('git diff --cached')
+    expect(getSuitePrompts('standard', {}).autoLoopReviewGate).toContain('uncommitted')
+  })
+
   it('every constant has all 5 fields populated', () => {
     for (const c of [SUPERPOWERS_PROMPTS, GSTACK_PROMPTS, ECC_PROMPTS, ALL_THREE_PROMPTS, AGNOSTIC_PROMPTS]) {
       expect(c.reviewTemplate).toBeTruthy()
@@ -104,5 +112,22 @@ describe('skill-suite-prompts', () => {
       expect(tripleIntro).not.toBe(combinedIntro)
       expect(eccIntro).not.toBe(superpowersIntro)
     })
+  })
+})
+
+describe('optional skill safeguards', () => {
+  it('keeps planning fallbacks consistent for explicit skill suites', () => {
+    for (const prompts of [SUPERPOWERS_PROMPTS, ECC_PROMPTS]) {
+      expect(prompts.brainstormingInstruction).toContain('when a named skill is unavailable')
+      expect(prompts.brainstormingInstruction).not.toContain('Do NOT skip the skills')
+    }
+  })
+  it('guards QA skills that otherwise commit automatically', () => {
+    for (const suite of ['gstack', 'superpowers+gstack', 'superpowers+gstack+ecc'] as const) {
+      const prompt = getSuitePrompts(suite, {}).qaPromptTemplate
+      expect(prompt).toContain('Commit only when explicitly authorized')
+      expect(prompt).toContain('perform the visual audit manually')
+      expect(prompt).not.toContain('Commits atomic fixes')
+    }
   })
 })

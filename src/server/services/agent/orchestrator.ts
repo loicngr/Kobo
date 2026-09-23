@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { nanoid } from 'nanoid'
+import { renderWorkflowPolicy } from '../../../shared/workflow-policy.js'
 import type { MessageSource } from '../../../shared/workspace-message-types.js'
 import { getDb } from '../../db/index.js'
 import { assertAgentStopped, type StopAgentOutcome } from '../../utils/agent-stop-result.js'
@@ -43,6 +44,7 @@ import {
   type StartOptions,
 } from './engines/types.js'
 import { routeEvent } from './event-router.js'
+import { buildIntegrationMcpServers, integrationMcpPrompt } from './integration-mcp.js'
 import { SessionController, type StopCause } from './session-controller.js'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -1641,10 +1643,17 @@ export function startAgent(
 
   const settings = ws ? readEffectiveSettingsSafe(ws.projectPath) : readEffectiveSettingsSafe(workingDir)
 
+  const unavailableIntegrations: Array<'notion' | 'sentry'> = []
+  const integrationServers = buildIntegrationMcpServers(getGlobalSettings(), (name) =>
+    unavailableIntegrations.push(name),
+  )
   const options: StartOptions = {
     workspaceId,
     workingDir,
-    prompt: buildAgentPrompt(prompt, ws?.projectPath),
+    prompt: buildAgentPrompt(
+      `${ws ? renderWorkflowPolicy(ws.workflowPolicy) : ''}\n${integrationMcpPrompt(integrationServers, unavailableIntegrations)}\n${prompt}`,
+      ws?.projectPath,
+    ),
     model,
     effort: reasoningEffort,
     // Cascade: explicit caller override → workspace setting → 'bypass'.
@@ -1659,7 +1668,7 @@ export function startAgent(
       }
     })(),
     settings,
-    mcpServers: buildMcpServers(workspaceId, launch?.mcpEnv),
+    mcpServers: [...buildMcpServers(workspaceId, launch?.mcpEnv), ...integrationServers],
     env: ws ? buildAgentEnv(ws.projectPath) : undefined,
   }
 

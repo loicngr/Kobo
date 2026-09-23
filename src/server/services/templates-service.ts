@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { getTemplatesPath } from '../utils/paths.js'
@@ -16,6 +17,12 @@ interface TemplatesFile {
   templates: Template[]
   /** Default slugs ever seeded into this install. Drives the seed-once migration. */
   seededDefaultSlugs?: string[]
+}
+
+const LEGACY_DEFAULT_CONTENT_HASHES: Record<string, string> = {
+  'kobo-context': 'ee29ebb56186ce9537e682c25d9d7737ff8d824ab6f29c095c925b27eed70552',
+  'pr-review-comments': '67dfc29fb0c566349a72d9375e314269f061fd184d3a73c9a6bf00451a0f4d9e',
+  'ci-status': 'a96fc75efa7c1f11b58163d8a0d2912f9b22d980087ed224341979c08c250bc8',
 }
 
 const CURRENT_FILE_VERSION = 2
@@ -40,7 +47,20 @@ export function listTemplates(): Template[] {
         `[templates-service] templates.json has version ${parsed.version}, expected ${CURRENT_FILE_VERSION}. Reading best-effort.`,
       )
     }
-    return Array.isArray(parsed.templates) ? parsed.templates : []
+    const templates = Array.isArray(parsed.templates) ? parsed.templates : []
+    let changed = false
+    for (const template of templates) {
+      const previousHash = LEGACY_DEFAULT_CONTENT_HASHES[template.slug]
+      if (!previousHash || typeof template.content !== 'string') continue
+      if (createHash('sha256').update(template.content).digest('hex') !== previousHash) continue
+      const next = DEFAULT_TEMPLATES.find((value) => value.slug === template.slug)
+      if (!next || next.content === template.content) continue
+      template.content = next.content
+      template.updatedAt = new Date().toISOString()
+      changed = true
+    }
+    if (changed) writeTemplates(templates, parsed.seededDefaultSlugs)
+    return templates
   } catch (err) {
     console.error('[templates-service] Failed to read templates.json:', err)
     return []
@@ -232,9 +252,9 @@ export const DEFAULT_TEMPLATES: readonly DefaultTemplate[] = [
       `- A dedicated MCP server (\`kobo-tasks\`) exposing tools to read/write workspace state\n\n` +
       `# Lifecycle\n` +
       `1. **Brainstorming** — you scope the work, output a plan, end with the literal marker \`[BRAINSTORM_COMPLETE]\`\n` +
-      `2. **Executing** — you implement the plan, commit, push\n` +
-      `3. **Auto-loop (opt-in)** — Kōbō re-spawns a fresh session per task; each iteration sees a clean context\n` +
-      `4. **Completed / Archived** — the workspace freezes; the worktree stays available read-only\n\n` +
+      `2. **Executing** — you implement and verify the plan locally; commit, push and publication require explicit authorization\n` +
+      `3. **Auto-loop (opt-in)** — Kōbō runs iterations using the configured session mode, with durable tasks and instructions\n` +
+      `4. **Completed / Archived** — completion records lifecycle state; archiving hides the workspace without making its worktree read-only\n\n` +
       `# Kōbō MCP tools (always namespaced \`kobo__…\`)\n` +
       `These are the main tools — the full \`kobo__\` set is larger and is listed in your available tools; consult that list for the rest (dev-server, search_codebase, documents, settings, session usage…).\n` +
       `- \`kobo__list_tasks\` / \`create_task\` / \`update_task\` / \`mark_task_done\` / \`delete_task\` — manage the visible task list\n` +
@@ -247,7 +267,7 @@ export const DEFAULT_TEMPLATES: readonly DefaultTemplate[] = [
       `- \`kobo__mark_auto_loop_ready\` — flip the loop into auto-execution after grooming\n\n` +
       `# Foreground & waking yourself\n` +
       `- You run in the FOREGROUND of an interactive session — do your work within the current turn\n` +
-      `- When a turn ends the workspace goes idle; nothing re-invokes you automatically. A background task or detached process finishing does NOT wake you\n` +
+      `- When a turn ends the workspace goes idle; automatic continuation depends on enabled auto-loop, schedules and lifecycle settings. A background task or detached process finishing does NOT wake you\n` +
       `- To wait and continue later (CI, long build, scheduled check), schedule your own wake-up: \`kobo__schedule_wakeup\` (one-off delay) or \`kobo__cron_create\` (recurring), then end the turn\n\n` +
       `# Conventions\n` +
       `- \`CLAUDE.md\` / \`AGENTS.md\` at the project root override default behavior — read them first\n` +
@@ -313,13 +333,13 @@ export const DEFAULT_TEMPLATES: readonly DefaultTemplate[] = [
     slug: 'pr-review-comments',
     description: 'List PR review comments requesting changes',
     content:
-      'Check if a pull request exists for branch {working_branch}.\n\nIf a PR exists (PR {pr_url}):\n1. Use the GitHub MCP tools to fetch the PR reviews and comments\n2. Filter for reviews with status "CHANGES_REQUESTED"\n3. List each review comment with:\n   - The reviewer name\n   - The file and line referenced\n   - The comment body\n   - Whether it has been resolved\n4. Summarize the outstanding requested changes that still need to be addressed\n\nIf no PR exists, say so and suggest pushing the branch first.',
+      'Check if a pull request exists for branch {working_branch}.\n\nIf a PR exists (PR {pr_url}):\n1. Use the configured forge tools or CLI to fetch the PR reviews and comments\n2. Filter for reviews with status "CHANGES_REQUESTED"\n3. List each review comment with:\n   - The reviewer name\n   - The file and line referenced\n   - The comment body\n   - Whether it has been resolved\n4. Summarize the outstanding requested changes that still need to be addressed\n\nIf no PR exists, report that no PR/MR exists; do not push or publish without authorization.',
   },
   {
     slug: 'ci-status',
-    description: 'Check GitHub Actions status on PR',
+    description: 'Check CI status on the configured forge',
     content:
-      'Check the CI/CD status for the pull request on branch {working_branch}.\n\nIf a PR exists (PR {pr_url}):\n1. Use the GitHub MCP tools to list the check runs / status checks on the latest commit of the PR\n2. For each check, report:\n   - Check name\n   - Status (queued, in_progress, completed)\n   - Conclusion (success, failure, neutral, skipped, etc.)\n   - Duration if available\n3. If any checks failed, fetch the logs or annotations and summarize what went wrong\n4. Give an overall summary: all green, some failing, or still running\n\nIf no PR exists, say so and suggest creating one first.',
+      'Check the CI/CD status for the pull request on branch {working_branch}.\n\nIf a PR exists (PR {pr_url}):\n1. Use the configured forge tools or CLI to list the check runs / status checks on the latest commit of the PR\n2. For each check, report:\n   - Check name\n   - Status (queued, in_progress, completed)\n   - Conclusion (success, failure, neutral, skipped, etc.)\n   - Duration if available\n3. If any checks failed, fetch the logs or annotations and summarize what went wrong\n4. Give an overall summary: all green, some failing, or still running\n\nIf no PR exists, report that no PR/MR exists; do not create one without authorization.',
   },
   {
     slug: 'council',

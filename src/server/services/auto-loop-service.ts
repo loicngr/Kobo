@@ -7,6 +7,7 @@ import {
   buildFinalizationIterationBlock,
 } from '../../shared/auto-loop-prompts.js'
 import type { AutoLoopRuntime } from '../../shared/auto-loop-types.js'
+import type { AutomaticAdmissionReason, AutomaticAdmissionStatus } from '../../shared/automatic-admission.js'
 import type { MessageSource } from '../../shared/workspace-message-types.js'
 import { getDb } from '../db/index.js'
 import { slugifyProjectName } from '../utils/project-slug.js'
@@ -140,24 +141,32 @@ export function block(workspaceId: string, reason: string): void {
   setRuntime(workspaceId, { state: 'blocked', reason })
 }
 
-/** Shared admission gate for all unattended starts. */
-export function canStartAutomatically(workspaceId: string): boolean {
+/** Read-only explanation of the shared admission gate; does not consume or reschedule work. */
+export function getAutomaticAdmissionStatus(workspaceId: string): AutomaticAdmissionStatus {
   const row = getRow(workspaceId)
-  return (
-    !!row &&
-    !row.archived_at &&
-    !row.worktree_purged_at &&
-    !orchestrator.isShuttingDown() &&
-    !isWorkspaceLifecycleBusy(workspaceId) &&
-    !orchestrator.hasController(workspaceId) &&
-    !['awaiting-user', 'compacting'].includes(row.status) &&
-    // A manual workspace keeps its quota status after expiry. Its explicit
-    // wakeup/cron may resume then; an enabled loop still belongs to quota recovery.
-    !(row.status === 'quota' && row.auto_loop === 1) &&
-    !quotaBackoffService.getPending(workspaceId) &&
-    getRuntime(workspaceId).state !== 'blocked' &&
-    hasFreeAgentSlot()
-  )
+  const running = orchestrator.runningAgentCount()
+  const configuredLimit = settingsService.getGlobalSettings().maxConcurrentAgents
+  const limit = typeof configuredLimit === 'number' && configuredLimit > 0 ? configuredLimit : 0
+  let reason: AutomaticAdmissionReason | null = null
+  if (!row) reason = 'not-found'
+  else if (row.archived_at) reason = 'archived'
+  else if (row.worktree_purged_at) reason = 'purged'
+  else if (orchestrator.isShuttingDown()) reason = 'shutdown'
+  else if (isWorkspaceLifecycleBusy(workspaceId)) reason = 'lifecycle'
+  else if (orchestrator.hasController(workspaceId)) reason = 'active-session'
+  else if (row.status === 'awaiting-user') reason = 'awaiting-user'
+  else if (row.status === 'compacting') reason = 'compacting'
+  // Manual schedules can resume an expired quota; active loops remain owned by quota recovery.
+  else if ((row.status === 'quota' && row.auto_loop === 1) || quotaBackoffService.getPending(workspaceId))
+    reason = 'quota'
+  else if (getRuntime(workspaceId).state === 'blocked') reason = 'blocked'
+  else if (limit > 0 && running >= limit) reason = 'capacity'
+  return { allowed: reason === null, reason, running, limit }
+}
+
+/** Shared admission gate for all unattended starts. Manual launches remain exempt. */
+export function canStartAutomatically(workspaceId: string): boolean {
+  return getAutomaticAdmissionStatus(workspaceId).allowed
 }
 
 /**
@@ -458,9 +467,9 @@ function ensureFinalVerification(workspaceId: string): void {
  * `orchestrator.startAgent` throws during engine.start — caught below.
  */
 /**
- * Whether another unattended session may start right now. `0` — the default —
- * means no limit. Only the auto-loop consults this: a session the user starts
- * by hand always goes through.
+ * Whether another unattended session may start right now. Fresh installs use
+ * a limit of 2; an explicit 0 means unlimited. Auto-loop, cron and wakeup
+ * launches share admission, while manual launches remain exempt.
  */
 function hasFreeAgentSlot(): boolean {
   const limit = settingsService.getGlobalSettings().maxConcurrentAgents
@@ -581,15 +590,15 @@ ${prompt}`
   const worktreePath =
     row.worktree_path ??
     resolveWorkspaceWorktreePath(row.project_path, row.working_branch, globalSettings.worktreesPath, projectSlug)
-  // Plan mode would deadlock the loop (blocks MCP + edits) — promote to bypass.
-  // Other modes (bypass/strict/interactive) are honored.
-  const stored = (row.agent_permission_mode ?? 'bypass') as 'plan' | 'bypass' | 'strict' | 'interactive'
-  const agentPermissionMode: 'bypass' | 'strict' | 'interactive' = stored === 'plan' ? 'bypass' : stored
-  if (stored === 'plan') {
-    console.warn(
-      `[auto-loop-service] Promoting plan → bypass for workspace ${workspaceId} — auto-loop cannot run in plan mode`,
-    )
-    emitEphemeral(workspaceId, 'autoloop:permission-overridden', { from: 'plan', to: 'bypass' })
+  const storedMode = row.agent_permission_mode
+  const agentPermissionMode =
+    storedMode === 'bypass' || storedMode === 'strict' || storedMode === 'interactive' ? storedMode : 'plan'
+  if (!grooming && agentPermissionMode === 'plan') {
+    const message =
+      'Execution requires an explicit permission choice. Change this workspace from Plan to an execution mode (strict, interactive where supported, or bypass), then resume auto-loop. Permissions were not changed.'
+    block(workspaceId, message)
+    if (opts.throwOnStartAgentError) throw new Error(message)
+    return
   }
 
   // Pre-check: if the worktree directory is gone (user `rm -rf`-ed it),

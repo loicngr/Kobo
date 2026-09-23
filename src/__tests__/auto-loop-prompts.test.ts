@@ -34,7 +34,9 @@ describe('buildAutoLoopGroomingSteps(e2e, finalization)', () => {
       { framework: 'cypress', skill: 'cypress-tester', prompt: '' },
       { prompt: '' },
     )
-    expect(out).toContain('Use the `cypress-tester` skill for this task.')
+    expect(out).toContain(
+      'Use the `cypress-tester` skill for this task if available; otherwise use the existing project test tools directly.',
+    )
   })
 
   it('mentions the configured prompt in the E2E step', () => {
@@ -50,14 +52,18 @@ describe('buildAutoLoopGroomingSteps(e2e, finalization)', () => {
       { framework: 'playwright', skill: 'pw-skill', prompt: 'extra' },
       { prompt: '' },
     )
-    expect(out).toContain('Use the `pw-skill` skill for this task.')
+    expect(out).toContain(
+      'Use the `pw-skill` skill for this task if available; otherwise use the existing project test tools directly.',
+    )
     expect(out).toContain('Additional guidance: extra')
   })
 
   it('uses the literal "other" framework name', () => {
     const out = buildAutoLoopGroomingSteps({ framework: 'other', skill: 'wdio', prompt: '' }, { prompt: '' })
     expect(out).toContain('The project uses `other`.')
-    expect(out).toContain('Use the `wdio` skill for this task.')
+    expect(out).toContain(
+      'Use the `wdio` skill for this task if available; otherwise use the existing project test tools directly.',
+    )
   })
 
   it('inserts the finalization step at position 4 when only finalization is set', () => {
@@ -102,7 +108,9 @@ describe('buildE2eIterationBlock(e2e)', () => {
     const out = buildE2eIterationBlock({ framework: 'cypress', skill: 'cy', prompt: 'pop' })
     expect(out).toContain('This is an **E2E regression test** task.')
     expect(out).toContain('Project E2E framework: cypress')
-    expect(out).toContain('Use the `cy` skill for this task.')
+    expect(out).toContain(
+      'Use the `cy` skill for this task if available; otherwise use the existing project test tools directly.',
+    )
     expect(out).toContain('Additional guidance: pop')
     expect(out).toContain('mandatory completion and lifecycle rules')
   })

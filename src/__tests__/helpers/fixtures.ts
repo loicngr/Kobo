@@ -9,9 +9,11 @@
 // test files `vi.mock()` these services before importing anything else.
 import type { EffectiveSettings, GlobalSettings, ProjectSettings } from '../../server/services/settings-service.js'
 import type { Task, Workspace, WorkspaceWithTasks } from '../../server/services/workspace-service.js'
+import { LEGACY_WORKFLOW_POLICY } from '../../shared/workflow-policy.js'
 
 export function makeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
   return {
+    workflowPolicy: { ...LEGACY_WORKFLOW_POLICY },
     id: 'ws-1',
     name: 'Test Workspace',
     projectPath: '/tmp/project',
@@ -101,6 +103,7 @@ export function makeEffectiveSettings(overrides: Partial<EffectiveSettings> = {}
 
 export function makeProjectSettings(overrides: Partial<ProjectSettings> = {}): ProjectSettings {
   return {
+    workflowPolicy: { ...LEGACY_WORKFLOW_POLICY },
     path: '/tmp/project',
     displayName: '',
     defaultSourceBranch: '',
@@ -138,6 +141,8 @@ export function makeProjectSettings(overrides: Partial<ProjectSettings> = {}): P
  */
 export function makeGlobalSettings(overrides: Partial<GlobalSettings> = {}): GlobalSettings {
   return {
+    workflowPolicy: { ...LEGACY_WORKFLOW_POLICY },
+    onboardingComplete: true,
     defaultModelByEngine: {},
     dangerouslySkipPermissions: true,
     prPromptTemplate: '',

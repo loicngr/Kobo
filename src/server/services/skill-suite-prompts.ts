@@ -49,7 +49,7 @@ const REVIEW_BODY = `## Scope
 
 Review ALL changes — both committed and uncommitted in the working tree:
 - \`git diff {{base_commit}}..HEAD\` — committed changes on this branch
-- \`git status\` and \`git diff\` — uncommitted changes (staged + unstaged)
+- \`git status\` and \`git diff\` / \`git diff --cached\` — unstaged / staged changes; inspect untracked files too
 
 ## Diff summary
 {{diff_stats}}
@@ -76,16 +76,17 @@ export const SUPERPOWERS_PROMPTS: SuitePrompts = {
     'If a code-review skill is available (e.g. superpowers:requesting-code-review), invoke it to drive this review. Otherwise follow the steps below directly.\n\n' +
     REVIEW_BODY,
   autoLoopReviewGate:
-    'Code review gate — BEFORE marking the task done, dispatch an independent code-reviewer subagent via the Task tool with `subagent_type: "code-reviewer"` (or `"superpowers:code-reviewer"` / `"pr-review-toolkit:code-reviewer"` — use whichever exists in this environment; fall back to `superpowers:requesting-code-review` skill if none is available). Brief the reviewer with: what you just implemented, the task title, and the commit SHA (via `git rev-parse HEAD`). Ask specifically whether the change matches the task scope, whether edge cases are handled, and whether the commit is clean.',
+    'If the named skills or subagents are unavailable, review the full diff manually with the same checks. Code review gate — BEFORE marking the task done, dispatch an independent code-reviewer subagent via the Task tool with `subagent_type: "code-reviewer"` (or `"superpowers:code-reviewer"` / `"pr-review-toolkit:code-reviewer"` — use whichever exists in this environment; fall back to `superpowers:requesting-code-review` skill if none is available). Brief the reviewer with: what you just implemented, the task title, and the commit SHA (via `git rev-parse HEAD`). Ask specifically whether the change matches the task scope, whether edge cases are handled, and whether committed and uncommitted changes (including staged and untracked files) are correct.',
   autoLoopGroomingIntro: GROOMING_INTRO_SUPERPOWERS,
   qaPromptTemplate:
     'QA pass for workspace "{{workspace_name}}" in project {{project_name}}.\n\nBranch: {{branch_name}}\nStaging URL: {{staging_url}}\n\nIf a QA-style skill that drives a real browser is available in this environment (e.g. via the superpowers-chrome browsing skill), use it to navigate the staging URL and exercise the changes. Otherwise, fall back to manually scripting the smoke checks and recording your findings as a bug report.',
   brainstormingInstruction:
+    'Use only skills and tools actually available in this session. If a named skill is unavailable, perform its described planning or review steps directly. Do not install tools or expand permissions automatically.\n' +
     'Brainstorm the implementation approach with discipline:\n' +
     '1. Use the `superpowers:brainstorming` skill — it walks you through purpose, requirements, and design BEFORE any code. Ask clarifying questions and wait for explicit user approval on the design before moving on.\n' +
     '2. Use `superpowers:writing-plans` to turn the approved design into a multi-step implementation plan, saved under `docs/superpowers/plans/`.\n' +
     '3. If you encounter a bug or unexpected behaviour during exploration, use `superpowers:systematic-debugging` rather than guessing.\n' +
-    "Do NOT skip the skills or rationalise around them — that's how the rigour gets lost.",
+    'Apply the planning and review steps rigorously; when a named skill is unavailable, perform those steps directly.',
 }
 
 export const GSTACK_PROMPTS: SuitePrompts = {
@@ -94,7 +95,7 @@ export const GSTACK_PROMPTS: SuitePrompts = {
     'Run /review to drive this audit (the gstack Staff Engineer skill — finds bugs that pass CI but blow up in production, auto-fixes the obvious ones, flags completeness gaps). If /review is unavailable in this environment, fall back to the manual checklist below.\n\n' +
     REVIEW_BODY,
   autoLoopReviewGate:
-    'Code review gate — BEFORE marking the task done, run /review (the gstack Staff Engineer skill). Brief it with: what you just implemented, the task title, and the commit SHA (via `git rev-parse HEAD`). Ask specifically whether the change matches the task scope, whether edge cases are handled, and whether the commit is clean. If /review auto-fixes minor issues, accept the fixes via an amend or fix-up commit, then re-run step 3 checks.',
+    'If the named skills or subagents are unavailable, review the full diff manually with the same checks. Code review gate — BEFORE marking the task done, run /review (the gstack Staff Engineer skill). Brief it with: what you just implemented, the task title, and the commit SHA (via `git rev-parse HEAD`). Ask specifically whether the change matches the task scope, whether edge cases are handled, and whether committed and uncommitted changes (including staged and untracked files) are correct. If /review auto-fixes minor issues, apply fixes locally and re-run checks; commit only when explicitly authorized.',
   autoLoopGroomingIntro: GROOMING_INTRO_GSTACK,
   qaPromptTemplate: `QA pass for workspace "{{workspace_name}}" in project {{project_name}}.
 
@@ -109,10 +110,11 @@ Pick the right gstack tool for the situation:
   - **Standard** — adds medium-severity bugs.
   - **Exhaustive** — adds cosmetic issues.
 - \`/qa-only {{staging_url}}\` — Same methodology as \`/qa\` but report only, no code changes. Use when you only want a bug report.
-- \`/design-review\` — Visual audit (consistency, spacing, hierarchy, AI slop). Commits atomic fixes with before/after screenshots.
+- \`/design-review\` — Visual audit (consistency, spacing, hierarchy, AI slop). Prepare local fixes with before/after screenshots. Commit only when explicitly authorized; if the skill cannot avoid automatic commits, perform the visual audit manually.
 
-For reproducible regression coverage that runs on every PR, prefer **Cypress** specs in \`test/cypress/\` instead of \`/qa\`. Reserve the gstack tools above for exploration, dogfooding, and one-shot visual debugging.`,
+For reproducible regression coverage that runs on every PR, use the project's configured test framework and existing test directory instead of \`/qa\`. Reserve the gstack tools above for exploration, dogfooding, and one-shot visual debugging.`,
   brainstormingInstruction:
+    'Use only skills and tools actually available in this session. If a named skill is unavailable, perform its described planning or review steps directly. Do not install tools or expand permissions automatically.\n' +
     'Brainstorm the implementation approach using the gstack sprint pipeline:\n' +
     '1. Run `/office-hours` — six forcing questions that reframe the problem and write a design doc. This is where you challenge premises and surface alternatives before any code.\n' +
     '2. Run `/autoplan` — it chains CEO → design → eng → DX reviews automatically (auto-detects which apply) and surfaces only the taste decisions you need to approve. Prefer this over manual orchestration.\n' +
@@ -126,16 +128,17 @@ export const ECC_PROMPTS: SuitePrompts = {
     'If a code-review skill is available (e.g. `ecc:code-review`, or dispatch a subagent via the Task tool with `subagent_type: "ecc:code-reviewer"`), invoke it to drive this review. Otherwise follow the steps below directly.\n\n' +
     REVIEW_BODY,
   autoLoopReviewGate:
-    'Code review gate — BEFORE marking the task done, dispatch an independent code-reviewer subagent via the Task tool with `subagent_type: "ecc:code-reviewer"` (or run the `ecc:code-review` / `ecc:quality-gate` skill if you prefer a driven workflow over a bare subagent). Brief the reviewer with: what you just implemented, the task title, and the commit SHA (via `git rev-parse HEAD`). Ask specifically whether the change matches the task scope, whether edge cases are handled, and whether the commit is clean.',
+    'If the named skills or subagents are unavailable, review the full diff manually with the same checks. Code review gate — BEFORE marking the task done, dispatch an independent code-reviewer subagent via the Task tool with `subagent_type: "ecc:code-reviewer"` (or run the `ecc:code-review` / `ecc:quality-gate` skill if you prefer a driven workflow over a bare subagent). Brief the reviewer with: what you just implemented, the task title, and the commit SHA (via `git rev-parse HEAD`). Ask specifically whether the change matches the task scope, whether edge cases are handled, and whether committed and uncommitted changes (including staged and untracked files) are correct.',
   autoLoopGroomingIntro: GROOMING_INTRO_ECC,
   qaPromptTemplate:
     'QA pass for workspace "{{workspace_name}}" in project {{project_name}}.\n\nBranch: {{branch_name}}\nStaging URL: {{staging_url}}\n\nIf a QA-style skill is available in this environment (e.g. `ecc:browser-qa`, or dispatch a subagent via the Task tool with `subagent_type: "ecc:e2e-runner"`), use it to exercise the staging URL. Otherwise, fall back to manually scripting the smoke checks and recording your findings as a bug report.',
   brainstormingInstruction:
+    'Use only skills and tools actually available in this session. If a named skill is unavailable, perform its described planning or review steps directly. Do not install tools or expand permissions automatically.\n' +
     'Brainstorm the implementation approach using the ECC pipeline:\n' +
     '1. Run the `ecc:plan` skill (or dispatch a subagent via the Task tool with `subagent_type: "ecc:planner"`) — it expands the request into a full spec with features, sprints, and evaluation criteria before any code. Ask clarifying questions and wait for explicit user approval on the design before moving on.\n' +
     '2. Use `ecc:tdd-workflow` to shape the approved design into a test-first implementation plan.\n' +
     '3. If you encounter a bug or unexpected behaviour during exploration, dispatch a subagent via the Task tool with `subagent_type: "ecc:architect"` (or the relevant language-specific `ecc:*-reviewer` agent) rather than guessing.\n' +
-    "Do NOT skip the skills or rationalise around them — that's how the rigour gets lost.",
+    'Apply the planning and review steps rigorously; when a named skill is unavailable, perform those steps directly.',
 }
 
 export const AGNOSTIC_PROMPTS: SuitePrompts = {
@@ -158,16 +161,16 @@ export const AGNOSTIC_PROMPTS: SuitePrompts = {
 export const COMBINED_PROMPTS: SuitePrompts = {
   reviewTemplate:
     REVIEW_HEADER +
-    'Two complementary review skills are available — pick by intent:\n' +
+    'If installed, these complementary review skills can be used — pick by intent:\n' +
     '- `/review` (gstack Staff Engineer) for tactical bug-hunting that finds issues passing CI but blowing up in production. Auto-fixes the obvious ones.\n' +
     '- `superpowers:requesting-code-review` for principles-level critique — silent failures, test-design soundness, surface-area discipline.\n' +
     'You can run both on the same diff if the change is large. If neither is available, fall back to the manual checklist below.\n\n' +
     REVIEW_BODY,
   autoLoopReviewGate:
-    'Code review gate — BEFORE marking the task done, pick the appropriate review skill (two are installed):\n' +
+    'If the named skills or subagents are unavailable, review the full diff manually with the same checks. Code review gate — BEFORE marking the task done, pick the appropriate review skill from those actually available:\n' +
     '- Default to `/review` (gstack Staff Engineer) for tactical code-level bugs and auto-fixes.\n' +
     '- Use `superpowers:requesting-code-review` instead when the task introduces tests, refactors, or design decisions worth a principles-level critique.\n\n' +
-    'Brief the chosen reviewer with: what you just implemented, the task title, and the commit SHA (via `git rev-parse HEAD`). Ask specifically whether the change matches the task scope, whether edge cases are handled, and whether the commit is clean. If the reviewer auto-fixes minor issues, accept the fixes via an amend or fix-up commit, then re-run step 3 checks.',
+    'Brief the chosen reviewer with: what you just implemented, the task title, and the commit SHA (via `git rev-parse HEAD`). Ask specifically whether the change matches the task scope, whether edge cases are handled, and whether committed and uncommitted changes (including staged and untracked files) are correct. If the reviewer auto-fixes minor issues, apply fixes locally and re-run checks; commit only when explicitly authorized.',
   autoLoopGroomingIntro: GROOMING_INTRO_COMBINED,
   qaPromptTemplate: `QA pass for workspace "{{workspace_name}}" in project {{project_name}}.
 
@@ -183,13 +186,14 @@ gstack QA toolkit (preferred for interactive QA):
   - **Standard** — adds medium-severity bugs.
   - **Exhaustive** — adds cosmetic issues.
 - \`/qa-only {{staging_url}}\` — Same methodology as \`/qa\` but report only, no code changes.
-- \`/design-review\` — Visual audit (consistency, spacing, hierarchy, AI slop). Commits atomic fixes with before/after screenshots.
+- \`/design-review\` — Visual audit (consistency, spacing, hierarchy, AI slop). Prepare local fixes with before/after screenshots. Commit only when explicitly authorized; if the skill cannot avoid automatic commits, perform the visual audit manually.
 
 Superpowers alternative (low-level browser control):
 - \`superpowers-chrome:browsing\` — Direct Chrome DevTools Protocol control over an existing Chrome session: multi-tab management, form automation, content extraction. Use when you need fine-grained control beyond what \`/browse\` exposes.
 
-For reproducible regression coverage that runs on every PR, prefer **Cypress** specs in \`test/cypress/\` instead of any interactive QA skill. Reserve the tools above for exploration, dogfooding, and one-shot visual debugging.`,
+For reproducible regression coverage that runs on every PR, use the project's configured test framework and existing test directory instead of any interactive QA skill. Reserve the tools above for exploration, dogfooding, and one-shot visual debugging.`,
   brainstormingInstruction:
+    'Use only skills and tools actually available in this session. If a named skill is unavailable, perform its described planning or review steps directly. Do not install tools or expand permissions automatically.\n' +
     'Brainstorm using both suites — each plays to its strength:\n' +
     '1. Early product framing: prefer gstack `/office-hours` for product-shaped work (six forcing questions + design doc). Fall back to `superpowers:brainstorming` for purely infra/refactor work where the product lens does not apply.\n' +
     '2. Plan construction — pick whichever fits the work better:\n' +
@@ -217,11 +221,11 @@ export const ALL_THREE_PROMPTS: SuitePrompts = {
     'You can run more than one on the same diff if the change is large. If none is available, fall back to the manual checklist below.\n\n' +
     REVIEW_BODY,
   autoLoopReviewGate:
-    'Code review gate — BEFORE marking the task done, pick the appropriate review path (three are installed):\n' +
+    'If the named skills or subagents are unavailable, review the full diff manually with the same checks. Code review gate — BEFORE marking the task done, pick the appropriate review path (three are installed):\n' +
     '- Default to `/review` (gstack Staff Engineer) for tactical code-level bugs and auto-fixes.\n' +
     '- Use `superpowers:requesting-code-review` instead when the task introduces tests, refactors, or design decisions worth a principles-level critique.\n' +
     "- Use a Task-dispatched `ecc:code-reviewer` subagent (or the `ecc:quality-gate` skill) when you want ECC's structured multi-agent pass.\n\n" +
-    'Brief the chosen reviewer with: what you just implemented, the task title, and the commit SHA (via `git rev-parse HEAD`). Ask specifically whether the change matches the task scope, whether edge cases are handled, and whether the commit is clean. If the reviewer auto-fixes minor issues, accept the fixes via an amend or fix-up commit, then re-run step 3 checks.',
+    'Brief the chosen reviewer with: what you just implemented, the task title, and the commit SHA (via `git rev-parse HEAD`). Ask specifically whether the change matches the task scope, whether edge cases are handled, and whether committed and uncommitted changes (including staged and untracked files) are correct. If the reviewer auto-fixes minor issues, apply fixes locally and re-run checks; commit only when explicitly authorized.',
   autoLoopGroomingIntro: GROOMING_INTRO_ALL,
   qaPromptTemplate: `QA pass for workspace "{{workspace_name}}" in project {{project_name}}.
 
@@ -237,7 +241,7 @@ gstack QA toolkit (preferred for interactive QA):
   - **Standard** — adds medium-severity bugs.
   - **Exhaustive** — adds cosmetic issues.
 - \`/qa-only {{staging_url}}\` — Same methodology as \`/qa\` but report only, no code changes.
-- \`/design-review\` — Visual audit (consistency, spacing, hierarchy, AI slop). Commits atomic fixes with before/after screenshots.
+- \`/design-review\` — Visual audit (consistency, spacing, hierarchy, AI slop). Prepare local fixes with before/after screenshots. Commit only when explicitly authorized; if the skill cannot avoid automatic commits, perform the visual audit manually.
 
 ECC toolkit:
 - \`ecc:browser-qa\` skill — structured browser-driven QA pass.
@@ -246,8 +250,9 @@ ECC toolkit:
 Superpowers alternative (low-level browser control):
 - \`superpowers-chrome:browsing\` — Direct Chrome DevTools Protocol control over an existing Chrome session: multi-tab management, form automation, content extraction. Use when you need fine-grained control beyond what \`/browse\` exposes.
 
-For reproducible regression coverage that runs on every PR, prefer **Cypress** specs in \`test/cypress/\` instead of any interactive QA skill. Reserve the tools above for exploration, dogfooding, and one-shot visual debugging.`,
+For reproducible regression coverage that runs on every PR, use the project's configured test framework and existing test directory instead of any interactive QA skill. Reserve the tools above for exploration, dogfooding, and one-shot visual debugging.`,
   brainstormingInstruction:
+    'Use only skills and tools actually available in this session. If a named skill is unavailable, perform its described planning or review steps directly. Do not install tools or expand permissions automatically.\n' +
     'Brainstorm using all three suites — each plays to its strength:\n' +
     '1. Early product framing: prefer gstack `/office-hours` for product-shaped work (six forcing questions + design doc), or `ecc:plan` (or `subagent_type: "ecc:planner"`) for ECC-style spec expansion (features, sprints, evaluation criteria). Fall back to `superpowers:brainstorming` for purely infra/refactor work where neither product lens applies.\n' +
     '2. Plan construction — pick whichever fits the work better:\n' +
@@ -268,6 +273,7 @@ For reproducible regression coverage that runs on every PR, prefer **Cypress** s
  * Empty-string or whitespace-only overrides fall back to AGNOSTIC defaults.
  */
 export function getSuitePrompts(suite: SkillSuite, overrides: Partial<SuitePrompts>): SuitePrompts {
+  if (suite === 'standard') return AGNOSTIC_PROMPTS
   if (suite === 'superpowers') return SUPERPOWERS_PROMPTS
   if (suite === 'gstack') return GSTACK_PROMPTS
   if (suite === 'ecc') return ECC_PROMPTS

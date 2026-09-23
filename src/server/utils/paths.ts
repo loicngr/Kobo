@@ -114,6 +114,14 @@ export function getWorkspaceTemplatesPath(): string {
 }
 
 /**
+ * Directory holding the user's imported notification sounds and their manifest.
+ * Separate from the bundled tones shipped inside the SPA under `/sounds`.
+ */
+export function getCustomSoundsDir(): string {
+  return path.join(getKoboHome(), 'sounds')
+}
+
+/**
  * Absolute path to the compiled MCP server entry (shipped in the published
  * package as dist/mcp-server/kobo-tasks-server.js). Returns null if not
  * present — callers (orchestrator) then fall back to the TS source for dev.

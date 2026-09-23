@@ -10,6 +10,12 @@
       </div>
     </header>
 
+    <div v-if="activeCount > 0 && admission && !admission.allowed" role="status" class="text-caption q-pa-sm bg-blue-grey-9 rounded-borders" data-test="admission-status">
+      {{ $t('schedule.admissionTitle') }}
+      {{ $t(`schedule.admission.${admission.reason}`, { running: admission.running, limit: admission.limit }) }}
+      <div>{{ $t('schedule.admissionHint') }}</div>
+    </div>
+
     <section>
       <div class="row items-center justify-between q-mb-sm">
         <div class="text-subtitle2">{{ $t('schedule.activeTitle') }}</div>
@@ -274,9 +280,11 @@
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
 import { useWorkspaceStore } from 'src/stores/workspace'
+import { apiFetch } from 'src/utils/api'
 import { type CronUnit, cronDaysHasMonthBoundaryDrift, cronExpressionFromPicker } from 'src/utils/cron-expression'
-import { computed, ref, watch } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import type { AutomaticAdmissionStatus } from '../../../shared/automatic-admission'
 
 const props = defineProps<{ workspaceId: string }>()
 const { t } = useI18n()
@@ -296,6 +304,42 @@ watch(
   },
   { immediate: true },
 )
+
+const admission = ref<AutomaticAdmissionStatus | null>(null)
+let admissionTimer: ReturnType<typeof setInterval> | undefined
+let admissionGeneration = 0
+watch(
+  () => props.workspaceId,
+  (id) => {
+    if (admissionTimer) clearInterval(admissionTimer)
+    admission.value = null
+    const generation = ++admissionGeneration
+    let inFlight = false
+    async function refresh() {
+      if (!id || inFlight) return
+      inFlight = true
+      try {
+        const result = await apiFetch<AutomaticAdmissionStatus>(
+          `/api/workspaces/${encodeURIComponent(id)}/automatic-admission`,
+        )
+        if (generation === admissionGeneration) admission.value = result
+      } catch {
+        if (generation === admissionGeneration) admission.value = null
+      } finally {
+        inFlight = false
+      }
+    }
+    void refresh()
+    admissionTimer = setInterval(() => {
+      void refresh()
+    }, 5000)
+  },
+  { immediate: true },
+)
+onUnmounted(() => {
+  admissionGeneration++
+  if (admissionTimer) clearInterval(admissionTimer)
+})
 
 function formatDateTime(iso: string): string {
   return new Date(iso).toLocaleString(undefined, {

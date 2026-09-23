@@ -120,6 +120,38 @@
       </q-select>
     </q-item-section>
   </q-item>
+  <q-item v-for="action in WORKFLOW_ACTIONS" v-if="section !== 'session'" :key="action">
+    <q-item-section @click.stop>
+      <q-select
+        :label="$t(`workflow.${action}`)"
+        :model-value="workflowPolicy[action]"
+        :options="workflowOptions"
+        :disable="workflowLocked"
+        :data-test="`workflow-${action}`"
+        emit-value
+        map-options
+        dense
+        dark
+        borderless
+        options-dense
+        style="min-width: 160px; font-size: 11px;"
+        @update:model-value="(mode: WorkflowMode) => emit('updateWorkflow', action, mode)"
+      >
+        <template #selected>
+          <span class="row items-center no-wrap text-caption text-kobo-2">
+            <q-icon
+              :name="workflowPolicy[action] === 'automatic' ? 'bolt' : 'back_hand'"
+              :color="workflowPolicy[action] === 'automatic' ? 'amber-6' : 'kobo-3'"
+              size="12px"
+              class="q-mr-xs"
+            />
+            {{ $t(`workflow.${workflowPolicy[action]}`) }}
+          </span>
+        </template>
+        <q-tooltip>{{ workflowLocked ? $t('workflow.locked') : $t('workflow.hint') }}</q-tooltip>
+      </q-select>
+    </q-item-section>
+  </q-item>
   <q-item v-if="section !== 'session'">
     <q-item-section @click.stop>
       <q-select
@@ -152,6 +184,13 @@
 import AutoLoopChip from 'src/components/AutoLoopChip.vue'
 import type { AgentSession } from 'src/stores/workspace'
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
+import {
+  WORKFLOW_ACTIONS,
+  type WorkflowAction,
+  type WorkflowMode,
+  type WorkflowPolicy,
+} from '../../../shared/workflow-policy'
 
 type AgentPermissionModeValue = 'plan' | 'bypass' | 'strict' | 'interactive'
 type SpawnField = 'model' | 'reasoningEffort' | 'agentPermissionMode'
@@ -179,13 +218,23 @@ const props = defineProps<{
   pendingSpawnChanges: Set<SpawnField>
   creatingSession: boolean
   canDeleteSession: (sessionId: string) => boolean
+  workflowPolicy: WorkflowPolicy
+  /** A running agent already holds these preferences; the backend refuses a change. */
+  workflowLocked: boolean
 }>()
 
 const emit = defineEmits<{
   rename: [sessionId: string, label: string]
   copySessionId: [sessionId: string]
   deleteSession: [sessionId: string]
+  updateWorkflow: [action: WorkflowAction, mode: WorkflowMode]
 }>()
+
+const { t } = useI18n()
+const workflowOptions = computed(() => [
+  { label: t('workflow.manual'), value: 'manual' },
+  { label: t('workflow.automatic'), value: 'automatic' },
+])
 
 const selectedSessionId = defineModel<string | null>('selectedSessionId')
 const permissionMode = defineModel<AgentPermissionModeValue>('permissionMode', { required: true })

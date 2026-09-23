@@ -1848,3 +1848,33 @@ describe('engine comparison grouping', () => {
     expect(listComparisonMembers('cmp_1').map((m) => m.id)).toEqual([b.id])
   })
 })
+
+describe('workspace workflow policy snapshots', () => {
+  it('persists independent preferences and validates updates without modifying permissions', async () => {
+    const { createWorkspace, getWorkspace, updateWorkspaceFields } = await import(
+      '../server/services/workspace-service.js'
+    )
+    const workspace = createWorkspace({
+      name: 'Policy',
+      projectPath: '/repo',
+      sourceBranch: 'main',
+      workingBranch: 'policy',
+      agentPermissionMode: 'plan',
+      workflowPolicy: { commit: 'automatic' },
+    })
+    expect(getWorkspace(workspace.id)?.workflowPolicy).toEqual({
+      commit: 'automatic',
+      push: 'manual',
+      publish: 'manual',
+    })
+    const updated = updateWorkspaceFields(workspace.id, {
+      workflowPolicy: { commit: 'manual', push: 'automatic', publish: 'manual' },
+    })
+    expect(updated.agentPermissionMode).toBe('plan')
+    expect(updated.workflowPolicy).toEqual({ commit: 'manual', push: 'automatic', publish: 'manual' })
+    expect(() => updateWorkspaceFields(workspace.id, { workflowPolicy: { merge: 'automatic' } as never })).toThrow(
+      'Invalid workflowPolicy',
+    )
+    expect(getWorkspace(workspace.id)?.workflowPolicy).toEqual(updated.workflowPolicy)
+  })
+})

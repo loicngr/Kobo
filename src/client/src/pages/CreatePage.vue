@@ -81,16 +81,7 @@
         </q-card>
       </q-dialog>
 
-      <!--
-        Both silent overrides (forced skip-setup-script, plan->bypass under
-        auto-loop) are surfaced here, at the top of the form, rather than only
-        as a note buried inside a collapsed "Advanced options" / "Configure
-        agent" panel. A change of security posture (permission mode) in
-        particular deserves to be seen without the user having to go looking
-        for it. `resolvedOverrides` is the single source of truth also used to
-        build the request payload, so this can never drift from what actually
-        gets sent.
-      -->
+      <!-- Resolved setup-script overrides are shown beside the form and reused in its payload. -->
       <div v-if="resolvedOverrides.applied.length > 0" class="create-page__overrides q-mb-lg">
         <div class="create-page__overrides-title text-caption">
           <q-icon name="info" size="16px" />
@@ -769,13 +760,13 @@
                   option-value="value"
                   option-label="label"
                   :option-disable="isOptionDisabled"
-                  :disable="autoLoop"
                   :label="$t('agentPermissionMode.label')"
-                  :hint="autoLoop ? $t('agentPermissionMode.autoLoopLocked') : undefined"
+                  :hint="autoLoop ? $t('workflow.planExecution') : undefined"
                   @update:model-value="(val) => (agentPermissionMode = val as AgentPermissionMode)"
                 />
               </div>
 
+              <div class="col-12"><WorkflowPolicyEditor v-model="workflowPolicy" inherit /></div>
               <template v-if="comparisonMode">
                 <div class="col-12 text-overline text-kobo-3 q-mt-md q-mb-xs">
                   {{ $t('createPage.engineB') }}
@@ -856,9 +847,8 @@
                     option-value="value"
                     option-label="label"
                     :option-disable="isOptionDisabled"
-                    :disable="autoLoop"
                     :label="$t('agentPermissionMode.label')"
-                    :hint="autoLoop ? $t('agentPermissionMode.autoLoopLocked') : undefined"
+                    :hint="autoLoop ? $t('workflow.planExecution') : undefined"
                     @update:model-value="(val) => (comparisonPermissionMode = val as AgentPermissionMode)"
                   />
                 </div>
@@ -1000,6 +990,7 @@ import PrCheckoutStepper from 'src/components/PrCheckoutStepper.vue'
 import PrPickerDialog, { type PullRequestSummary } from 'src/components/PrPickerDialog.vue'
 import SlashSuggestionsPopup from 'src/components/SlashSuggestionsPopup.vue'
 import TourReplayButton from 'src/components/TourReplayButton.vue'
+import WorkflowPolicyEditor from 'src/components/WorkflowPolicyEditor.vue'
 import { type SlashDropdownItem, useSlashAutocomplete } from 'src/composables/use-slash-autocomplete'
 import { useTours } from 'src/composables/use-tours'
 import { EFFORT_OPTION_DEFS_BY_ENGINE } from 'src/constants/efforts'
@@ -1023,6 +1014,7 @@ import { applyPreset, capturePreset, type PresetFormState, type WorkspacePreset 
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
+import type { WorkflowPolicy } from '../../../shared/workflow-policy'
 
 /**
  * QSelect `:option-disable` predicate. Kept in the script (not inline in the
@@ -1102,6 +1094,7 @@ const comparisonEngineId = ref<string>('codex')
  */
 const comparisonModel = ref<string>('auto')
 const comparisonReasoningEffort = ref<string>('auto')
+const workflowPolicy = ref<Partial<WorkflowPolicy>>({})
 const comparisonPermissionMode = ref<AgentPermissionMode>('bypass')
 const engineSelectOptions = computed(() => engines.value.map((e) => ({ value: e.id, label: e.displayName })))
 /** The engine to compare against — never the one already selected. */
@@ -1167,7 +1160,7 @@ const agentPermissionModeIcon = computed<string>(() => {
   }
 })
 
-// 'plan' is disabled when auto-loop is on — picking it would deadlock the loop.
+// Plan remains selectable for grooming; execution pauses until the user chooses an execution mode.
 // Driven by the local per-engine constant to avoid a flicker before
 // `/api/engines` returns; the backend capabilities still validate at POST time.
 const agentPermissionModeOptions = computed(() => {
@@ -1175,7 +1168,7 @@ const agentPermissionModeOptions = computed(() => {
   return supported.map((value) => ({
     value,
     label: t(`agentPermissionMode.${value}`),
-    disabled: value === 'plan' && autoLoop.value,
+    disabled: false,
   }))
 })
 
@@ -1429,7 +1422,7 @@ const comparisonPermissionModeOptions = computed(() => {
   return supported.map((value) => ({
     value,
     label: t(`agentPermissionMode.${value}`),
-    disabled: value === 'plan' && autoLoop.value,
+    disabled: false,
   }))
 })
 
@@ -1952,7 +1945,7 @@ function unlockPrCheckout() {
 }
 
 // Single source of truth for both silent overrides this form applies
-// (forced skip-setup-script on worktree reuse, plan->bypass under auto-loop).
+// (forced skip-setup-script on worktree reuse).
 // The template and the request payload both read from here, so what the UI
 // displays can never drift from what actually goes out over the wire.
 const resolvedOverrides = computed(() =>
@@ -2124,12 +2117,27 @@ function onProjectPathInput(val: string) {
   projectPath.value = known ?? val
 }
 
+// Setup can be reopened while this page is already mounted: query changes must
+// still select the chosen engine/project through the ordinary defaults watchers.
+watch(
+  () => [route.query.engine, route.query.project, route.query.setupRequest],
+  ([engine, project]) => {
+    if (!settingsStore.loaded) return
+    if (engine === 'claude-code' || engine === 'codex') selectedEngineId.value = engine
+    if (typeof project === 'string' && settingsStore.projectPaths.includes(project)) projectPath.value = project
+  },
+)
+
 // Fetch settings + available engines on mount. The engine list powers the
 // engine selector and drives the model / effort / permission options.
 onMounted(async () => {
   // Await settings before engines so permission-mode derivation sees the
   // project list. Re-derive after to fix a possible race with applyProjectDefaults.
   await settingsStore.fetchSettings()
+
+  // The setup flow hands off to the ordinary creation form; it never starts an agent itself.
+  const setupEngine = route.query.engine
+  if (setupEngine === 'claude-code' || setupEngine === 'codex') selectedEngineId.value = setupEngine
 
   // Default the branch-type selector to the first configured prefix when the
   // current value isn't part of the user's list (e.g. legacy 'feature' default
@@ -2155,6 +2163,10 @@ onMounted(async () => {
   }
   if (prefs.projectPath && settingsStore.projectPaths.includes(prefs.projectPath)) {
     projectPath.value = prefs.projectPath
+  }
+  const setupProject = route.query.project
+  if (typeof setupProject === 'string' && settingsStore.projectPaths.includes(setupProject)) {
+    projectPath.value = setupProject
   }
 
   agentPermissionMode.value = deriveDefaultAgentPermissionMode(projectPath.value, selectedEngineId.value)
@@ -2623,6 +2635,7 @@ async function createOneWorkspace(
       // Resolved in exactly one place (utils/create-overrides) so what the page
       // displays and what the request carries can never drift apart.
       agentPermissionMode: plan.agentPermissionMode,
+      workflowPolicy: workflowPolicy.value,
     }
 
     const workspace = await store.createWorkspace(payload, creationAttachments.value)

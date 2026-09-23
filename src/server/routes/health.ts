@@ -5,6 +5,7 @@ import { Hono } from 'hono'
 import { getDb } from '../db/index.js'
 import { SCHEMA_VERSION } from '../db/migrations.js'
 import { resolveCodexBinary } from '../services/agent/engines/codex/spawn.js'
+import { hasIntegrationMcpConfig } from '../services/agent/integration-mcp.js'
 import { getGlobalSettings, getProjectSettings, SETTINGS_SCHEMA_VERSION } from '../services/settings-service.js'
 import { type LogLevel, readRecentLogs } from '../utils/logger.js'
 import { getDbPath, getKoboHome, getPackageVersion } from '../utils/paths.js'
@@ -13,6 +14,14 @@ import { resolveWorkspaceWorktreePath } from '../utils/worktree-paths.js'
 
 const app = new Hono()
 const execFileAsync = promisify(execFileCb)
+
+function integrationConfigured(integration: 'notion' | 'sentry', key: string): boolean {
+  try {
+    return hasIntegrationMcpConfig(integration, key)
+  } catch {
+    return false
+  }
+}
 
 interface WorktreeCheck {
   workspaceId: string
@@ -297,8 +306,14 @@ app.get('/report', async (c) => {
     },
     agentSessions: { orphaned },
     integrations: {
-      notion: { configured: Boolean(healthGlobalSettings.notionMcpKey), enabled: healthGlobalSettings.notionEnabled },
-      sentry: { configured: Boolean(healthGlobalSettings.sentryMcpKey), enabled: healthGlobalSettings.sentryEnabled },
+      notion: {
+        configured: integrationConfigured('notion', healthGlobalSettings.notionMcpKey),
+        enabled: healthGlobalSettings.notionEnabled,
+      },
+      sentry: {
+        configured: integrationConfigured('sentry', healthGlobalSettings.sentryMcpKey),
+        enabled: healthGlobalSettings.sentryEnabled,
+      },
       editor: { configured: Boolean(healthGlobalSettings.editorCommand) },
     },
     active: {

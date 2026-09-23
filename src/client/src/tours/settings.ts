@@ -9,8 +9,10 @@ import type { TourDefinition, TourStep } from './types'
  */
 export const SETTINGS_GROUPS = {
   engines: ['agents'],
+  skills: ['skills'],
+  git: ['git'],
   integrations: ['notion', 'sentry', 'forge'],
-  automation: ['scripts', 'prompts', 'templates', 'workspaceTemplates', 'skills'],
+  automation: ['scripts', 'prompts', 'templates', 'workspaceTemplates'],
   worktrees: ['worktrees'],
   projects: ['projects'],
   misc: ['general', 'voice', 'notifications', 'export'],

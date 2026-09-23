@@ -1,6 +1,12 @@
 import type Database from 'better-sqlite3'
 import { nanoid } from 'nanoid'
 import { parseTaskVerification, type TaskRole, type TaskVerification } from '../../shared/task-verification.js'
+import {
+  isWorkflowPolicy,
+  LEGACY_WORKFLOW_POLICY,
+  resolveWorkflowPolicy,
+  type WorkflowPolicy,
+} from '../../shared/workflow-policy.js'
 import { getDb } from '../db/index.js'
 import { isValidBranchName } from '../utils/git-ops.js'
 import { resolveWorkspaceWorktreePath } from '../utils/worktree-paths.js'
@@ -44,6 +50,7 @@ export type LegacyPermissionMode = 'auto-accept' | 'plan'
 
 /** A workspace — the primary unit of work in Kobo. */
 export interface Workspace {
+  workflowPolicy: WorkflowPolicy
   id: string
   name: string
   projectPath: string
@@ -130,6 +137,7 @@ export interface WorkspaceWithTasks extends Workspace {
 
 /** Input payload for creating a new workspace. */
 export interface CreateWorkspaceInput {
+  workflowPolicy?: Partial<WorkflowPolicy>
   name: string
   projectPath: string
   sourceBranch: string
@@ -188,6 +196,7 @@ const VALID_TRANSITIONS: Record<WorkspaceStatus, WorkspaceStatus[]> = {
 }
 
 interface WorkspaceRow {
+  workflow_policy: string | null
   id: string
   name: string
   project_path: string
@@ -259,7 +268,16 @@ function coerceAgentPermissionMode(raw: string | null): AgentPermissionMode {
 }
 
 function mapWorkspace(row: WorkspaceRow): Workspace {
+  let workflowPolicy = { ...LEGACY_WORKFLOW_POLICY }
+  if (row.workflow_policy) {
+    try {
+      workflowPolicy = resolveWorkflowPolicy(JSON.parse(row.workflow_policy))
+    } catch {
+      workflowPolicy = resolveWorkflowPolicy()
+    }
+  }
   return {
+    workflowPolicy,
     id: row.id,
     name: row.name,
     projectPath: row.project_path,
@@ -335,6 +353,9 @@ export function createWorkspace(data: CreateWorkspaceInput): Workspace {
   const computedWorktreePath =
     data.worktreePath ?? resolveWorkspaceWorktreePath(data.projectPath, data.workingBranch, data.worktreesPath)
   const owned = data.worktreeOwned ?? true
+  if (data.workflowPolicy !== undefined && !isWorkflowPolicy(data.workflowPolicy))
+    throw new Error('Invalid workflowPolicy')
+  const workflowPolicy = resolveWorkflowPolicy(data.workflowPolicy)
 
   // Mirror the unified mode into the legacy columns so older readers (in-flight
   // requests during deploy, external scripts) still see a sane value.
@@ -346,8 +367,8 @@ export function createWorkspace(data: CreateWorkspaceInput): Workspace {
     INSERT INTO workspaces (
       id, name, project_path, source_branch, working_branch, status,
       notion_url, notion_page_id, sentry_url, pr_url, worktree_path, worktree_owned,
-      model, brainstorm_model, reasoning_effort, permission_mode, permission_profile, agent_permission_mode, engine, comparison_id, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, 'created', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      model, brainstorm_model, reasoning_effort, permission_mode, permission_profile, agent_permission_mode, engine, comparison_id, created_at, updated_at, workflow_policy
+    ) VALUES (?, ?, ?, ?, ?, 'created', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     data.name,
@@ -372,6 +393,7 @@ export function createWorkspace(data: CreateWorkspaceInput): Workspace {
     data.comparisonId?.trim() ? data.comparisonId : null,
     now,
     now,
+    JSON.stringify(workflowPolicy),
   )
 
   return getWorkspace(id) as Workspace
@@ -646,6 +668,7 @@ export function updateWorkspaceDescription(id: string, description: string | nul
 }
 
 export interface WorkspaceFieldUpdates {
+  workflowPolicy?: WorkflowPolicy
   status?: WorkspaceStatus
   model?: string
   reasoningEffort?: string
@@ -661,6 +684,11 @@ export function updateWorkspaceFields(id: string, fields: WorkspaceFieldUpdates)
 
   const assignments: string[] = []
   const values: unknown[] = []
+  if (fields.workflowPolicy !== undefined) {
+    if (!isWorkflowPolicy(fields.workflowPolicy)) throw new Error('Invalid workflowPolicy')
+    assignments.push('workflow_policy = ?')
+    values.push(JSON.stringify(resolveWorkflowPolicy(workspace.workflowPolicy, fields.workflowPolicy)))
+  }
   if (fields.model !== undefined) {
     if (typeof fields.model !== 'string' || !fields.model.trim()) throw new Error('model must be a non-empty string')
     assignments.push('model = ?')

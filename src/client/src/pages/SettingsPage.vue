@@ -113,6 +113,7 @@
               <q-option-group
                 v-model="globalSkillSuite"
                 :options="[
+                  { label: $t('settings.skillSuite.standard'), value: 'standard' },
                   { label: $t('settings.skillSuite.superpowers'),         value: 'superpowers' },
                   { label: $t('settings.skillSuite.gstack'),              value: 'gstack' },
                   { label: $t('settings.skillSuite.ecc'),                 value: 'ecc' },
@@ -246,6 +247,7 @@
               data-tour="settings-card-agents"
               class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
             >
+
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.defaultModelClaude') }}</div>
               <q-select
                 v-model="globalClaudeModel"
@@ -298,6 +300,19 @@
                 outlined
                 class="settings-input"
               />
+              <q-input
+                v-model.number="globalAutoLoopMaxRetries"
+                :label="$t('settings.autoLoopMaxRetries')"
+                :hint="$t('settings.autoLoopMaxRetriesHint')"
+                type="number"
+                min="1"
+                max="20"
+                dense
+                dark
+                outlined
+                class="settings-input q-mt-md"
+              />
+
             </div>
 
             <!-- Activity feed display -->
@@ -371,6 +386,7 @@
               data-tour="settings-card-notifications"
               class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
             >
+
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.notifications') }}</div>
               <q-toggle
                 v-model="globalActivityDigestEnabled"
@@ -378,6 +394,22 @@
                 color="primary"
               />
               <div class="text-kobo-3 text-caption q-mb-md">{{ $t('settings.activityDigestHint') }}</div>
+              <q-input
+                v-model.number="globalAwaitingUserReminderMinutes"
+                :label="$t('settings.awaitingUserReminder')"
+                :hint="$t('settings.awaitingUserReminderHint')"
+                type="number"
+                min="0"
+                max="1440"
+                dense
+                dark
+                outlined
+                class="settings-input q-mt-md"
+              />
+
+              <q-separator dark class="q-my-md" />
+              <CustomSoundManager />
+
               <div class="notification-sounds-grid q-mt-md">
                 <div class="notification-sound-card q-pa-md rounded-borders">
                   <div class="text-subtitle2">{{ $t('settings.notificationSound') }}</div>
@@ -918,6 +950,133 @@ where ffmpeg</pre>
               </q-expansion-item>
             </div>
 
+            <div v-if="activeTab === 'git'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md" data-tour="settings-card-git">
+              <WorkflowPolicyEditor v-model="globalWorkflowPolicy" class="q-my-md" />
+              <div class="row items-center q-mb-sm q-mt-md">
+                <div class="text-subtitle2">{{ $t('settings.gitConventions') }}</div>
+                <q-space />
+                <q-btn
+                  flat
+                  dense
+                  no-caps
+                  size="sm"
+                  color="kobo-2"
+                  icon="restart_alt"
+                  :label="t('settings.resetToDefault')"
+                  :loading="resettingField === 'gitConventions'"
+                  :disable="resettingField !== null && resettingField !== 'gitConventions'"
+                  @click="resetFieldToDefault('gitConventions')"
+                />
+              </div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.gitConventionsHint') }}</div>
+              <q-input
+                v-model="globalGitConventions"
+                type="textarea"
+                dense
+                dark
+                outlined
+                :rows="8"
+                :placeholder="$t('settings.gitConventionsPlaceholder')"
+                class="settings-input mono-textarea"
+              />
+            </div>
+
+            <!-- Branch prefixes -->
+            <div v-if="activeTab === 'git'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.branchPrefixesTitle') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.branchPrefixesHint') }}</div>
+
+              <q-list
+                v-if="globalBranchPrefixes.length > 0"
+                bordered
+                separator
+                class="rounded-borders q-mb-sm"
+              >
+                <q-item v-for="(prefix, index) in globalBranchPrefixes" :key="prefix">
+                  <q-item-section>
+                    <q-item-label class="cursor-pointer">
+                      {{ prefix }}/
+                      <q-popup-edit
+                        :model-value="prefix"
+                        auto-save
+                        @save="(val: string) => updateBranchPrefix(index, val)"
+                      >
+                        <template #default="scope">
+                          <q-input
+                            v-model="scope.value"
+                            dense
+                            dark
+                            autofocus
+                            @keyup.enter="scope.set"
+                          />
+                        </template>
+                      </q-popup-edit>
+                      <q-tooltip>{{ $t('settings.branchPrefixesEditHint') }}</q-tooltip>
+                    </q-item-label>
+                  </q-item-section>
+                  <q-item-section side>
+                    <div class="row items-center no-wrap">
+                      <q-btn
+                        flat
+                        dense
+                        round
+                        size="sm"
+                        icon="keyboard_arrow_up"
+                        color="kobo-3"
+                        :disable="index === 0"
+                        :title="$t('settings.branchPrefixesMoveUp')"
+                        @click="moveBranchPrefix(index, -1)"
+                      />
+                      <q-btn
+                        flat
+                        dense
+                        round
+                        size="sm"
+                        icon="keyboard_arrow_down"
+                        color="kobo-3"
+                        :disable="index === globalBranchPrefixes.length - 1"
+                        :title="$t('settings.branchPrefixesMoveDown')"
+                        @click="moveBranchPrefix(index, 1)"
+                      />
+                      <q-btn
+                        flat
+                        dense
+                        round
+                        size="sm"
+                        icon="delete"
+                        color="kobo-3"
+                        :title="$t('common.delete')"
+                        @click="removeBranchPrefix(index)"
+                      />
+                    </div>
+                  </q-item-section>
+                </q-item>
+              </q-list>
+              <div v-else class="text-caption text-kobo-3 q-mb-sm">
+                {{ $t('settings.branchPrefixesEmpty') }}
+              </div>
+
+              <div class="row items-center q-gutter-sm">
+                <q-input
+                  v-model="newBranchPrefix"
+                  :label="$t('settings.branchPrefixesAddLabel')"
+                  dense
+                  dark
+                  outlined
+                  class="col"
+                  @keyup.enter="addBranchPrefix"
+                />
+                <q-btn
+                  flat
+                  :label="$t('common.add')"
+                  icon="add"
+                  color="primary"
+                  :disable="normalizeBranchPrefix(newBranchPrefix).length === 0"
+                  @click="addBranchPrefix"
+                />
+              </div>
+            </div>
+
             <div
               v-if="activeTab === 'prompts'"
               data-tour="settings-card-prompts"
@@ -986,7 +1145,7 @@ where ffmpeg</pre>
                   @click="resetFieldToDefault('reviewPromptTemplate')"
                 />
               </div>
-              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.prPromptHint') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.reviewPromptHint') }}</div>
               <q-input
                 v-model="globalReviewPrompt"
                 type="textarea"
@@ -1054,33 +1213,6 @@ where ffmpeg</pre>
                 class="settings-input mono-textarea q-mb-md"
               />
 
-              <div class="row items-center q-mb-sm q-mt-md">
-                <div class="text-subtitle2">{{ $t('settings.gitConventions') }}</div>
-                <q-space />
-                <q-btn
-                  flat
-                  dense
-                  no-caps
-                  size="sm"
-                  color="kobo-2"
-                  icon="restart_alt"
-                  :label="t('settings.resetToDefault')"
-                  :loading="resettingField === 'gitConventions'"
-                  :disable="resettingField !== null && resettingField !== 'gitConventions'"
-                  @click="resetFieldToDefault('gitConventions')"
-                />
-              </div>
-              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.gitConventionsHint') }}</div>
-              <q-input
-                v-model="globalGitConventions"
-                type="textarea"
-                dense
-                dark
-                outlined
-                :rows="8"
-                :placeholder="$t('settings.gitConventionsPlaceholder')"
-                class="settings-input mono-textarea"
-              />
             </div>
 
             <!-- Editor -->
@@ -1133,12 +1265,15 @@ where ffmpeg</pre>
               data-tour="settings-card-notion"
               :class="['settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md', { 'opacity-50': !globalNotionEnabled }]"
             >
+              <IntegrationConnectionSettings v-model="integrationDrafts.notion" v-model:connection-status="integrationStatus.notion" integration="notion" />
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.mcpSelection') }}</div>
-              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.mcpSelectionHint') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t(integrationStatus.notion.configured ? 'integration.directOverrides' : 'settings.mcpSelectionHint') }}</div>
               <div class="q-mb-sm">
                 <div class="field-label-sub text-caption q-mb-xs text-kobo-3">{{ $t('settings.notionMcp') }}</div>
                 <q-select
                   v-model="globalNotionMcpKey"
+                  data-test="notion-mcp-key"
+                  :disable="integrationStatus.notion.configured"
                   :options="mcpServerOptions"
                   emit-value
                   map-options
@@ -1178,12 +1313,15 @@ where ffmpeg</pre>
             </div>
 
             <div v-if="activeTab === 'sentry'" :class="['settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md', { 'opacity-50': !globalSentryEnabled }]">
+              <IntegrationConnectionSettings v-model="integrationDrafts.sentry" v-model:connection-status="integrationStatus.sentry" integration="sentry" />
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.mcpSelection') }}</div>
-              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.mcpSelectionHint') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t(integrationStatus.sentry.configured ? 'integration.directOverrides' : 'settings.mcpSelectionHint') }}</div>
               <div class="q-mb-sm">
                 <div class="field-label-sub text-caption q-mb-xs text-kobo-3">{{ $t('settings.sentryMcp') }}</div>
                 <q-select
                   v-model="globalSentryMcpKey"
+                  data-test="sentry-mcp-key"
+                  :disable="integrationStatus.sentry.configured"
                   :options="mcpServerOptions"
                   emit-value
                   map-options
@@ -1397,102 +1535,6 @@ where ffmpeg</pre>
               />
             </div>
 
-            <!-- Branch prefixes -->
-            <div v-if="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
-              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.branchPrefixesTitle') }}</div>
-              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.branchPrefixesHint') }}</div>
-
-              <q-list
-                v-if="globalBranchPrefixes.length > 0"
-                bordered
-                separator
-                class="rounded-borders q-mb-sm"
-              >
-                <q-item v-for="(prefix, index) in globalBranchPrefixes" :key="prefix">
-                  <q-item-section>
-                    <q-item-label class="cursor-pointer">
-                      {{ prefix }}/
-                      <q-popup-edit
-                        :model-value="prefix"
-                        auto-save
-                        @save="(val: string) => updateBranchPrefix(index, val)"
-                      >
-                        <template #default="scope">
-                          <q-input
-                            v-model="scope.value"
-                            dense
-                            dark
-                            autofocus
-                            @keyup.enter="scope.set"
-                          />
-                        </template>
-                      </q-popup-edit>
-                      <q-tooltip>{{ $t('settings.branchPrefixesEditHint') }}</q-tooltip>
-                    </q-item-label>
-                  </q-item-section>
-                  <q-item-section side>
-                    <div class="row items-center no-wrap">
-                      <q-btn
-                        flat
-                        dense
-                        round
-                        size="sm"
-                        icon="keyboard_arrow_up"
-                        color="kobo-3"
-                        :disable="index === 0"
-                        :title="$t('settings.branchPrefixesMoveUp')"
-                        @click="moveBranchPrefix(index, -1)"
-                      />
-                      <q-btn
-                        flat
-                        dense
-                        round
-                        size="sm"
-                        icon="keyboard_arrow_down"
-                        color="kobo-3"
-                        :disable="index === globalBranchPrefixes.length - 1"
-                        :title="$t('settings.branchPrefixesMoveDown')"
-                        @click="moveBranchPrefix(index, 1)"
-                      />
-                      <q-btn
-                        flat
-                        dense
-                        round
-                        size="sm"
-                        icon="delete"
-                        color="kobo-3"
-                        :title="$t('common.delete')"
-                        @click="removeBranchPrefix(index)"
-                      />
-                    </div>
-                  </q-item-section>
-                </q-item>
-              </q-list>
-              <div v-else class="text-caption text-kobo-3 q-mb-sm">
-                {{ $t('settings.branchPrefixesEmpty') }}
-              </div>
-
-              <div class="row items-center q-gutter-sm">
-                <q-input
-                  v-model="newBranchPrefix"
-                  :label="$t('settings.branchPrefixesAddLabel')"
-                  dense
-                  dark
-                  outlined
-                  class="col"
-                  @keyup.enter="addBranchPrefix"
-                />
-                <q-btn
-                  flat
-                  :label="$t('common.add')"
-                  icon="add"
-                  color="primary"
-                  :disable="normalizeBranchPrefix(newBranchPrefix).length === 0"
-                  @click="addBranchPrefix"
-                />
-              </div>
-            </div>
-
             <!-- Setup script -->
             <div
               v-if="activeTab === 'scripts'"
@@ -1683,31 +1725,7 @@ where ffmpeg</pre>
                 <div class="text-caption text-kobo-3 q-mt-xs">{{ $t('settings.autoPurgeOnPrMergedHint') }}</div>
               </div>
 
-              <q-input
-                v-model.number="globalAutoLoopMaxRetries"
-                :label="$t('settings.autoLoopMaxRetries')"
-                :hint="$t('settings.autoLoopMaxRetriesHint')"
-                type="number"
-                min="1"
-                max="20"
-                dense
-                dark
-                outlined
-                class="settings-input q-mt-md"
-              />
 
-              <q-input
-                v-model.number="globalAwaitingUserReminderMinutes"
-                :label="$t('settings.awaitingUserReminder')"
-                :hint="$t('settings.awaitingUserReminderHint')"
-                type="number"
-                min="0"
-                max="1440"
-                dense
-                dark
-                outlined
-                class="settings-input q-mt-md"
-              />
 
               <q-separator dark class="q-my-md" />
 
@@ -2135,6 +2153,26 @@ where ffmpeg</pre>
                     </div>
                   </div>
 
+                  <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md" data-test="project-git-settings">
+                    <div class="text-subtitle2 q-mb-md">{{ $t('settings.nav.git') }}</div>
+                    <WorkflowPolicyEditor v-model="projectForm.workflowPolicy" inherit class="q-my-md" />
+                    <div class="q-mb-md">
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-kobo-3">{{ $t('settings.gitConventions.project') }}</div>
+                      <div class="text-caption text-kobo-3 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
+                      <q-input
+                        v-model="projectForm.gitConventions"
+                        type="textarea"
+                        outlined
+                        autogrow
+                        :input-style="{ minHeight: '140px' }"
+                        :placeholder="$t('settings.gitConventionsEmpty')"
+                        class="settings-input mono-textarea"
+                      />
+                    </div>
+
+
+                  </div>
+
                   <!-- Prompts -->
                   <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
                     <div class="text-subtitle2 q-mb-md">{{ $t('settings.projectGroup.prompts') }}</div>
@@ -2201,20 +2239,6 @@ where ffmpeg</pre>
                         type="textarea"
                         outlined
                         autogrow
-                        class="settings-input mono-textarea"
-                      />
-                    </div>
-
-                    <div class="q-mb-md">
-                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-kobo-3">{{ $t('settings.gitConventions.project') }}</div>
-                      <div class="text-caption text-kobo-3 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
-                      <q-input
-                        v-model="projectForm.gitConventions"
-                        type="textarea"
-                        outlined
-                        autogrow
-                        :input-style="{ minHeight: '140px' }"
-                        :placeholder="$t('settings.gitConventionsEmpty')"
                         class="settings-input mono-textarea"
                       />
                     </div>
@@ -2706,18 +2730,22 @@ where ffmpeg</pre>
 
 <script setup lang="ts">
 import { type QInput, useQuasar } from 'quasar'
+import CustomSoundManager from 'src/components/CustomSoundManager.vue'
 import DrawerToggleButton from 'src/components/DrawerToggleButton.vue'
 import FolderPickerDialog from 'src/components/FolderPickerDialog.vue'
+import IntegrationConnectionSettings from 'src/components/IntegrationConnectionSettings.vue'
 import McpConnectionSettings from 'src/components/McpConnectionSettings.vue'
 import PrNotificationSoundSettings from 'src/components/PrNotificationSoundSettings.vue'
 import SettingsNavList from 'src/components/SettingsNavList.vue'
 import TourReplayButton from 'src/components/TourReplayButton.vue'
 import WhipShortcutRecorder from 'src/components/WhipShortcutRecorder.vue'
+import WorkflowPolicyEditor from 'src/components/WorkflowPolicyEditor.vue'
 import { useIsMobile } from 'src/composables/use-is-mobile'
 import { useTours } from 'src/composables/use-tours'
 import { CODEX_MODEL_OPTION_DEFS, MODEL_OPTION_DEFS } from 'src/constants/models'
 import { type AgentPermissionMode, PERMISSION_MODES_BY_ENGINE } from 'src/constants/permissionModes'
 import { type SupportedLocale, setLocale } from 'src/i18n'
+import { useCustomSoundsStore } from 'src/stores/custom-sounds'
 import { useLayoutStore } from 'src/stores/layout'
 import type { ProjectSettings } from 'src/stores/settings'
 import { useSettingsStore } from 'src/stores/settings'
@@ -2730,11 +2758,11 @@ import {
   DEFAULT_PR_NOTIFICATION_AUDIO_SETTINGS,
   INHERIT_NOTIFICATION_SOUND,
   NOTIFICATION_SOUNDS,
-  normalizeNotificationSoundSelection,
+  normalizeSoundSelectionForForm,
   PR_NOTIFICATION_AUDIO_CONTROL_SETTING_KEYS,
   PR_NOTIFICATION_SOUND_SETTING_KEYS,
   type PrNotificationAudioSettings as PrNotificationSoundSettingsModel,
-  resolveSoundId,
+  resolveSoundIdForForm,
 } from 'src/utils/notification-sounds'
 import { playNotificationSound } from 'src/utils/notifications'
 import { PROJECT_COLOR_PALETTE, type ProjectColor } from 'src/utils/project-color'
@@ -2754,6 +2782,7 @@ import {
   AGNOSTIC_REVIEW_TEMPLATE,
   type SkillSuite,
 } from '../../../shared/skill-suite-prompts'
+import { resolveWorkflowPolicy, type WorkflowPolicy } from '../../../shared/workflow-policy'
 
 const $q = useQuasar()
 const store = useSettingsStore()
@@ -2782,6 +2811,7 @@ const navItems = computed(() => [
   { value: 'general', icon: 'tune', label: t('settings.nav.general') },
   { value: 'agents', icon: 'smart_toy', label: t('settings.nav.agents') },
   { value: 'skills', icon: 'extension', label: t('settings.nav.skills') },
+  { value: 'git', icon: 'source', label: t('settings.nav.git') },
   { value: 'prompts', icon: 'text_snippet', label: t('settings.nav.prompts') },
   { value: 'scripts', icon: 'terminal', label: t('settings.nav.scripts') },
   { value: 'notion', icon: 'integration_instructions', label: t('settings.nav.notion') },
@@ -2791,7 +2821,7 @@ const navItems = computed(() => [
   { value: 'notifications', icon: 'notifications', label: t('settings.nav.notifications') },
   { value: 'worktrees', icon: 'account_tree', label: t('settings.nav.worktrees') },
   { value: 'projects', icon: 'folder', label: t('settings.projects') },
-  { value: 'templates', icon: 'description', label: t('templates.title') },
+  { value: 'templates', icon: 'description', label: t('settings.nav.promptTemplates') },
   { value: 'workspaceTemplates', icon: 'bookmarks', label: t('settings.nav.workspaceTemplates') },
   { value: 'export', icon: 'import_export', label: t('settings.nav.export') },
 ])
@@ -2812,6 +2842,7 @@ const isGlobalSection = computed(() =>
     'agents',
     'skills',
     'prompts',
+    'git',
     'scripts',
     'notion',
     'sentry',
@@ -3154,9 +3185,11 @@ function moveBranchPrefix(index: number, direction: -1 | 1) {
   ;[list[index], list[target]] = [list[target], list[index]]
 }
 const globalFlattenWorkspaceList = ref(false)
-const globalSkillSuite = ref<SkillSuite>('superpowers')
+const globalSkillSuite = ref<SkillSuite>('standard')
 const skillSuiteHintKey = computed(() => {
   switch (globalSkillSuite.value) {
+    case 'standard':
+      return 'settings.skillSuite.standardHint'
     case 'gstack':
       return 'settings.skillSuite.gstackHint'
     case 'ecc':
@@ -3292,11 +3325,25 @@ function recommendedTemperatureForModel(modelName: string | null): number {
 }
 const worktreesPathRules = [(value: string) => value.trim().length > 0 || t('settings.worktreesPathRequired')]
 const savingGlobal = ref(false)
+const globalWorkflowPolicy = ref<Partial<WorkflowPolicy>>(resolveWorkflowPolicy())
+
+// Credentials remain only in this page's memory, outside settings and exports.
+const integrationStatus = ref({ notion: { configured: false }, sentry: { configured: false } })
+const integrationDrafts = ref({
+  notion: { command: '', args: '', environment: '' },
+  sentry: { command: '', args: '', environment: '' },
+})
+const hasIntegrationDrafts = computed(() =>
+  Object.values(integrationDrafts.value).some(
+    (draft) => draft.command !== '' || draft.args !== '' || draft.environment !== '',
+  ),
+)
 
 // Project form
 const selectedProjectIndex = ref(-1)
 const isNewProject = ref(false)
 const projectForm = ref({
+  workflowPolicy: {} as Partial<WorkflowPolicy>,
   path: '',
   displayName: '',
   color: null as ProjectColor | null,
@@ -3329,6 +3376,7 @@ const projectForm = ref({
 // Fields copied verbatim from the source project when "Copy from" is set.
 // Excludes path/displayName/defaultSourceBranch — those stay user-filled.
 const COPYABLE_FIELDS = [
+  'workflowPolicy',
   'defaultModel',
   'forge',
   'prPromptTemplate',
@@ -3368,6 +3416,7 @@ function applyCopyFrom(sourcePath: string) {
   // settings.json may be missing nested objects (e.g. older e2e/finalization
   // schema), so always coalesce to a defined default. New nested objects also
   // ensure no reference is shared with the source project.
+  projectForm.value.workflowPolicy = { ...source.workflowPolicy }
   projectForm.value.defaultModel = source.defaultModel ?? ''
   projectForm.value.forge = source.forge ?? 'auto'
   projectForm.value.prPromptTemplate = source.prPromptTemplate ?? ''
@@ -3395,6 +3444,7 @@ function isFormPristine(): boolean {
   // Pristine when every COPYABLE_FIELDS value matches the empty-form default.
   // Defaults are inlined to match exactly what `syncProjectForm(null)` produces.
   const defaults: Record<string, unknown> = {
+    workflowPolicy: {},
     defaultModel: '',
     forge: 'auto',
     prPromptTemplate: '',
@@ -3774,7 +3824,11 @@ const mcpServerOptions = computed(() => [
   })),
 ])
 
-const soundSelectOptions = computed(() => NOTIFICATION_SOUNDS.map((s) => ({ label: t(s.labelKey), value: s.id })))
+const customSoundsStore = useCustomSoundsStore()
+const soundSelectOptions = computed(() => [
+  ...NOTIFICATION_SOUNDS.map((s) => ({ label: t(s.labelKey), value: s.id })),
+  ...customSoundsStore.options,
+])
 const eventSoundSelectOptions = computed(() => [
   { label: t('settings.soundGeneral'), value: INHERIT_NOTIFICATION_SOUND },
   ...soundSelectOptions.value,
@@ -3855,6 +3909,7 @@ const projectSavedSnapshot = ref<Record<string, unknown>>({})
  */
 function readGlobalForm(): Record<string, unknown> {
   return {
+    workflowPolicy: globalWorkflowPolicy.value,
     claudeModel: globalClaudeModel.value,
     codexModel: globalCodexModel.value,
     prPrompt: globalPrPrompt.value,
@@ -3985,6 +4040,7 @@ function savebarSave() {
 
 // Init global form from store
 function syncGlobalForm() {
+  globalWorkflowPolicy.value = resolveWorkflowPolicy(store.global.workflowPolicy)
   hydratingVoiceForm.value = true
   const modelMap = store.global.defaultModelByEngine ?? {}
   globalClaudeModel.value = modelMap['claude-code'] ?? 'auto'
@@ -4008,12 +4064,15 @@ function syncGlobalForm() {
   globalAudioQuestionNotifications.value = store.global.audioQuestionNotifications ?? false
   globalAudioWorkspaceCreatedNotifications.value = store.global.audioWorkspaceCreatedNotifications ?? false
   globalAudioAgentErrorNotifications.value = store.global.audioAgentErrorNotifications ?? false
-  globalAudioNotificationSound.value = resolveSoundId(store.global.audioNotificationSound)
-  globalAudioQuestionSound.value = normalizeNotificationSoundSelection(store.global.audioQuestionSound)
-  globalAudioWorkspaceCreatedSound.value = normalizeNotificationSoundSelection(store.global.audioWorkspaceCreatedSound)
-  globalAudioAgentErrorSound.value = normalizeNotificationSoundSelection(store.global.audioAgentErrorSound)
+  // Shape-level normalisation only. `resolveSoundId` would answer "not playable"
+  // for an imported sound while its catalogue is still loading, and this form
+  // value is written straight back on save — which would erase the selection.
+  globalAudioNotificationSound.value = resolveSoundIdForForm(store.global.audioNotificationSound)
+  globalAudioQuestionSound.value = normalizeSoundSelectionForForm(store.global.audioQuestionSound)
+  globalAudioWorkspaceCreatedSound.value = normalizeSoundSelectionForForm(store.global.audioWorkspaceCreatedSound)
+  globalAudioAgentErrorSound.value = normalizeSoundSelectionForForm(store.global.audioAgentErrorSound)
   const prSounds = Object.fromEntries(
-    PR_NOTIFICATION_SOUND_SETTING_KEYS.map((key) => [key, normalizeNotificationSoundSelection(store.global[key])]),
+    PR_NOTIFICATION_SOUND_SETTING_KEYS.map((key) => [key, normalizeSoundSelectionForForm(store.global[key])]),
   )
   const prAudioControls = Object.fromEntries(
     PR_NOTIFICATION_AUDIO_CONTROL_SETTING_KEYS.map((key) => {
@@ -4080,7 +4139,7 @@ function syncGlobalForm() {
   globalWorktreesPath.value = store.global.worktreesPath ?? WORKTREES_PATH
   globalWorktreesPrefixByProject.value = store.global.worktreesPrefixByProject ?? false
   globalFlattenWorkspaceList.value = store.global.flattenWorkspaceList ?? false
-  globalSkillSuite.value = store.global.skillSuite ?? 'superpowers'
+  globalSkillSuite.value = store.global.skillSuite ?? 'standard'
   globalCustomReviewTemplate.value = store.global.customReviewTemplate ?? ''
   globalCustomAutoLoopReviewGate.value = store.global.customAutoLoopReviewGate ?? ''
   globalCustomAutoLoopGroomingIntro.value = store.global.customAutoLoopGroomingIntro ?? ''
@@ -4113,6 +4172,7 @@ watch(
 function syncProjectForm(project: ProjectSettings | null) {
   if (!project) {
     projectForm.value = {
+      workflowPolicy: {},
       path: '',
       displayName: '',
       color: null,
@@ -4143,6 +4203,7 @@ function syncProjectForm(project: ProjectSettings | null) {
     return
   }
   projectForm.value = {
+    workflowPolicy: { ...project.workflowPolicy },
     path: project.path,
     displayName: project.displayName,
     color: project.color ?? null,
@@ -4357,6 +4418,7 @@ async function saveGlobal() {
   savingGlobal.value = true
   try {
     await store.updateGlobal({
+      workflowPolicy: resolveWorkflowPolicy(globalWorkflowPolicy.value),
       defaultModelByEngine: {
         'claude-code': globalClaudeModel.value,
         codex: globalCodexModel.value,
@@ -4535,6 +4597,7 @@ async function saveProject() {
   savingProject.value = true
   try {
     await store.upsertProject(projectForm.value.path.trim(), {
+      workflowPolicy: { ...projectForm.value.workflowPolicy },
       displayName: projectForm.value.displayName,
       color: projectForm.value.color,
       defaultSourceBranch: projectForm.value.defaultSourceBranch,
@@ -4672,10 +4735,10 @@ onMounted(async () => {
   syncGlobalForm()
   // Armed once the settings are loaded so the `settings-card-*` anchors exist.
   scheduleAutoRun('settings')
-  if (store.global.notionEnabled) loadNotionUsers().catch(() => {})
   void fetchNetwork()
   void workspaceTemplatesStore.fetchTemplates()
   registerUnsavedScope('settings:global', () => isGlobalDirty.value)
+  registerUnsavedScope('settings:integrations', () => hasIntegrationDrafts.value)
   // Mirrors savebarVisible's own gate: `isProjectDirty` alone is trivially true
   // from mount (captureProjectSnapshot() on the default form is never the
   // initial empty-string snapshot), so without this gate the guard fired on
@@ -4691,6 +4754,7 @@ onUnmounted(() => {
   if (pathDebounce) clearTimeout(pathDebounce)
   stopVoiceModelsPolling()
   unregisterUnsavedScope('settings:global')
+  unregisterUnsavedScope('settings:integrations')
   unregisterUnsavedScope('settings:project')
 })
 </script>

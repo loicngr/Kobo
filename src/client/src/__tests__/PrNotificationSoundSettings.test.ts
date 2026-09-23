@@ -1,4 +1,5 @@
 import { mount } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent, h } from 'vue'
 import { createI18n } from 'vue-i18n'
@@ -35,7 +36,7 @@ const stubs = {
 }
 
 const modelValue = {
-  audioPrCiFailedSound: 'faaah.mp3',
+  audioPrCiFailedSound: 'ready.wav',
   audioPrCiFailedEnabled: true,
   audioPrCiFailedVolume: 0.35,
   audioPrCiRecoveredSound: 'inherit',
@@ -62,14 +63,17 @@ function mountSettings() {
   return mount(PrNotificationSoundSettings, {
     props: {
       modelValue,
-      generalSound: 'hey.mp3',
+      generalSound: 'neutral.wav',
     },
     global: { plugins: [i18n], stubs },
   })
 }
 
 describe('PrNotificationSoundSettings', () => {
-  beforeEach(() => vi.clearAllMocks())
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+  })
 
   it('renders every PR event as a complete notification card', () => {
     const wrapper = mountSettings()
@@ -108,6 +112,6 @@ describe('PrNotificationSoundSettings', () => {
 
     wrapper.findAllComponents({ name: 'QBtn' })[0]!.vm.$emit('click')
 
-    expect(playNotificationSound).toHaveBeenCalledWith('faaah.mp3', 0.35)
+    expect(playNotificationSound).toHaveBeenCalledWith('ready.wav', 0.35)
   })
 })

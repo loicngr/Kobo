@@ -37,6 +37,7 @@ export function initSchema(db: Database.Database): void {
       auto_loop_session_mode TEXT NOT NULL DEFAULT 'per_task',
       no_progress_streak INTEGER NOT NULL DEFAULT 0,
       permission_profile TEXT NOT NULL DEFAULT 'bypass',
+      workflow_policy TEXT,
       agent_permission_mode TEXT NOT NULL DEFAULT 'bypass',
       description TEXT,
       agent_description TEXT,
@@ -153,6 +154,7 @@ export function initSchema(db: Database.Database): void {
     CREATE TABLE IF NOT EXISTS pending_wakeups (
       workspace_id     TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
       target_at        TEXT NOT NULL,
+      retry_at         TEXT,
       prompt           TEXT NOT NULL,
       reason           TEXT,
       created_at       TEXT NOT NULL,

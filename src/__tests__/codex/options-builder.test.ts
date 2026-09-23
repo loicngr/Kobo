@@ -89,6 +89,7 @@ describe('buildCodexOptions — MCP servers', () => {
     expect(threadParams.config).toBeDefined()
     const config = threadParams.config as { mcp_servers: Record<string, unknown> }
     expect(config.mcp_servers['kobo-tasks']).toEqual({
+      enabled: true,
       command: 'node',
       args: ['/path/to/server.js'],
       env: { KEY: 'VALUE' },

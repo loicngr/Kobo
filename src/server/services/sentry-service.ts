@@ -5,6 +5,8 @@ import {
   spawnMcpProcess,
   unwrapMcpResult,
 } from '../utils/mcp-client.js'
+import { stopMcpProcess } from '../utils/mcp-process.js'
+import { getIntegrationConfig } from './integration-config-service.js'
 import { getGlobalSettings } from './settings-service.js'
 
 // ─── parseSentryUrl ───────────────────────────────────────────────────────────
@@ -51,8 +53,7 @@ export async function testSentryConnection(): Promise<IntegrationTestResult> {
       detail: 'MCP connection and Sentry authentication succeeded',
     }
   } finally {
-    mcpProcess.stdin?.end()
-    mcpProcess.kill()
+    stopMcpProcess(mcpProcess)
   }
 }
 
@@ -67,7 +68,16 @@ const SENTRY_CONFIG_ERROR =
  *
  * Throws with a clear setup message when no enabled Sentry entry exists.
  */
-export function readSentryMcpConfig(preferredKey?: string): SentryMcpConfig {
+export function readSentryMcpConfig(preferredKey?: string, inheritProcessEnv = true): SentryMcpConfig {
+  const inheritedEnv = inheritProcessEnv
+    ? (process.env as Record<string, string>)
+    : Object.fromEntries(
+        ['SENTRY_ACCESS_TOKEN', 'SENTRY_AUTH_TOKEN', 'SENTRY_HOST'].flatMap((key) =>
+          process.env[key] === undefined ? [] : [[key, process.env[key]!]],
+        ),
+      )
+  const direct = getIntegrationConfig('sentry')
+  if (direct) return { ...direct, env: { ...inheritedEnv, ...direct.env } }
   const normalizedPreferred = preferredKey?.trim()
   const match = normalizedPreferred
     ? readClaudeMcpEntry((k) => k === normalizedPreferred)
@@ -80,7 +90,7 @@ export function readSentryMcpConfig(preferredKey?: string): SentryMcpConfig {
     command: entry.command ?? 'npx',
     args: entry.args ?? [],
     env: {
-      ...(process.env as Record<string, string>),
+      ...inheritedEnv,
       ...(entry.env ?? {}),
     },
   }
@@ -197,9 +207,9 @@ export async function extractSentryIssue(url: string): Promise<SentryIssueConten
     // Give the process a moment to start; reject if it errors immediately.
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => resolve(), 1000)
-      mcpProcess.on('error', (err: Error) => {
+      mcpProcess.on('error', () => {
         clearTimeout(timeout)
-        reject(new Error(`Failed to start Sentry MCP server: ${err.message}`))
+        reject(new Error('Failed to start Sentry MCP server; check the configured executable'))
       })
     })
 
@@ -214,8 +224,7 @@ export async function extractSentryIssue(url: string): Promise<SentryIssueConten
 
     return parseSentryResponse(markdown, numericId)
   } finally {
-    mcpProcess.stdin?.end()
-    mcpProcess.kill()
+    stopMcpProcess(mcpProcess)
   }
 }
 
@@ -255,9 +264,9 @@ export async function assignSentryIssueToSelf(issueUrl: string): Promise<{
   try {
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => resolve(), 1000)
-      mcpProcess.on('error', (err: Error) => {
+      mcpProcess.on('error', () => {
         clearTimeout(timeout)
-        reject(new Error(`Failed to start Sentry MCP server: ${err.message}`))
+        reject(new Error('Failed to start Sentry MCP server; check the configured executable'))
       })
     })
 
@@ -278,7 +287,6 @@ export async function assignSentryIssueToSelf(issueUrl: string): Promise<{
   } catch (err) {
     return { assigned: false, reason: err instanceof Error ? err.message : String(err) }
   } finally {
-    mcpProcess.stdin?.end()
-    mcpProcess.kill()
+    stopMcpProcess(mcpProcess)
   }
 }

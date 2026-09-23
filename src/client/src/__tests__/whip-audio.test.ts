@@ -27,15 +27,15 @@ describe('whip audio', () => {
     expect(createAudio).not.toHaveBeenCalled()
   })
 
-  it('plays one recorded crack per call with clamped volume', () => {
+  it('plays one neutral cue per call with clamped volume', () => {
     const { createAudio, players } = createFakeAudio()
 
     playWhipCrack({ enabled: true, volume: 2, createAudio })
     playWhipCrack({ enabled: true, volume: 0.4, createAudio })
 
     expect(createAudio).toHaveBeenCalledTimes(2)
-    expect(createAudio).toHaveBeenNthCalledWith(1, expect.stringContaining('fouet-ahh.mp3'))
-    expect(createAudio).toHaveBeenNthCalledWith(2, expect.stringContaining('fouet-ahh.mp3'))
+    expect(createAudio).toHaveBeenNthCalledWith(1, expect.stringContaining('neutral.wav'))
+    expect(createAudio).toHaveBeenNthCalledWith(2, expect.stringContaining('neutral.wav'))
     expect(players.map(({ volume }) => volume)).toEqual([1, 0.4])
     expect(players[0]?.play).toHaveBeenCalledOnce()
     expect(players[1]?.play).toHaveBeenCalledOnce()

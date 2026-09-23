@@ -57,8 +57,8 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 47', () => {
-    expect(SCHEMA_VERSION).toBe(47)
+  it('exporte SCHEMA_VERSION = 49', () => {
+    expect(SCHEMA_VERSION).toBe(49)
   })
 
   it('migration v33 records and backfills the engine on agent sessions', () => {
@@ -1131,7 +1131,7 @@ describe('migration v11: add-pending-wakeups-table', () => {
       pk: number
     }>
     expect(cols.map((c) => c.name).sort()).toEqual(
-      ['agent_session_id', 'created_at', 'prompt', 'reason', 'target_at', 'workspace_id'].sort(),
+      ['agent_session_id', 'created_at', 'prompt', 'reason', 'retry_at', 'target_at', 'workspace_id'].sort(),
     )
     const pk = cols.find((c) => c.pk === 1)
     expect(pk?.name).toBe('workspace_id')
@@ -2458,4 +2458,71 @@ it('upgrades v46 with session activation order without rewriting history', () =>
   expect(getMigrationHistory(old).at(-1)?.version).toBe(SCHEMA_VERSION)
   old.close()
   fresh.close()
+})
+
+describe('workflow preferences migration v48', () => {
+  it('preserves existing workspaces, is repeatable, and converges with fresh installs', () => {
+    const db = new Database(':memory:')
+    initSchema(db)
+    db.exec('ALTER TABLE workspaces DROP COLUMN workflow_policy')
+    db.exec(
+      "INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at) VALUES ('existing', 'Preserved', '/repo', 'main', 'feature', '2020', '2020')",
+    )
+    const migration = migrations.find((entry) => entry.version === 48)!
+    migration.migrate(db)
+    migration.migrate(db)
+    expect(db.prepare('SELECT name, workflow_policy FROM workspaces').get()).toEqual({
+      name: 'Preserved',
+      workflow_policy: null,
+    })
+    const fresh = new Database(':memory:')
+    initSchema(fresh)
+    const columns = (connection: Database.Database) =>
+      (
+        connection.prepare('PRAGMA table_info(workspaces)').all() as Array<{
+          name: string
+          type: string
+          notnull: number
+          dflt_value: unknown
+        }>
+      )
+        .map(({ name, type, notnull, dflt_value }) => ({ name, type, notnull, dflt_value }))
+        .sort((a, b) => a.name.localeCompare(b.name))
+    expect(columns(db)).toEqual(columns(fresh))
+    db.close()
+    fresh.close()
+  })
+})
+
+describe('wakeup retry migration v49', () => {
+  it('preserves deadlines and pending prompts and converges with a fresh database', () => {
+    const old = new Database(':memory:')
+    old.exec(
+      'CREATE TABLE pending_wakeups (workspace_id TEXT PRIMARY KEY, target_at TEXT NOT NULL, prompt TEXT NOT NULL, reason TEXT, created_at TEXT NOT NULL, agent_session_id TEXT)',
+    )
+    old.exec(
+      "INSERT INTO pending_wakeups VALUES ('w', '2026-01-01', 'preserve prompt', 'reason', '2025-12-31', 'session')",
+    )
+    const migration = migrations.find((entry) => entry.version === 49)!
+    migration.migrate(old)
+    migration.migrate(old)
+    expect(old.prepare('SELECT * FROM pending_wakeups').get()).toEqual({
+      workspace_id: 'w',
+      target_at: '2026-01-01',
+      prompt: 'preserve prompt',
+      reason: 'reason',
+      created_at: '2025-12-31',
+      agent_session_id: 'session',
+      retry_at: null,
+    })
+    const fresh = new Database(':memory:')
+    initSchema(fresh)
+    const columns = (db: Database.Database) =>
+      (db.prepare('PRAGMA table_info(pending_wakeups)').all() as Array<{ name: string; type: string }>)
+        .map(({ name, type }) => ({ name, type }))
+        .sort((a, b) => a.name.localeCompare(b.name))
+    expect(columns(old)).toEqual(columns(fresh))
+    old.close()
+    fresh.close()
+  })
 })

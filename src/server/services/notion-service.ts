@@ -6,6 +6,8 @@ import {
   spawnMcpProcess,
   unwrapMcpResult,
 } from '../utils/mcp-client.js'
+import { stopMcpProcess } from '../utils/mcp-process.js'
+import { getIntegrationConfig } from './integration-config-service.js'
 import { getGlobalSettings } from './settings-service.js'
 
 /** A to-do item extracted from a Notion page. */
@@ -95,12 +97,16 @@ function readNotionMcpEntryFromClaudeConfig(preferredKey?: string) {
   return match
 }
 
-export function buildNotionMcpConfig(preferredKey?: string): {
+export function buildNotionMcpConfig(
+  preferredKey?: string,
+  inheritProcessEnv = true,
+): {
   command: string
   args: string[]
   env: Record<string, string>
 } {
-  const configEntry = readNotionMcpEntryFromClaudeConfig(preferredKey)
+  const direct = getIntegrationConfig('notion')
+  const configEntry = direct ? { entry: direct } : readNotionMcpEntryFromClaudeConfig(preferredKey)
   const configEnv = configEntry?.entry.env ?? {}
   const notionToken =
     process.env.NOTION_API_TOKEN ??
@@ -115,9 +121,15 @@ export function buildNotionMcpConfig(preferredKey?: string): {
     : (configEntry?.entry.args ?? ['-y', '@notionhq/notion-mcp-server'])
 
   const env: Record<string, string> = {
-    ...(process.env as Record<string, string>),
+    ...(inheritProcessEnv ? (process.env as Record<string, string>) : {}),
+    ...(process.env.OPENAPI_MCP_HEADERS ? { OPENAPI_MCP_HEADERS: process.env.OPENAPI_MCP_HEADERS } : {}),
     ...configEnv,
   }
+  if (notionToken) {
+    env.NOTION_TOKEN = notionToken
+    env.NOTION_API_TOKEN = notionToken
+  }
+  // Explicit headers remain authoritative for compatibility with custom MCPs.
   if (!env.OPENAPI_MCP_HEADERS && notionToken) {
     env.OPENAPI_MCP_HEADERS = JSON.stringify({
       Authorization: `Bearer ${notionToken}`,
@@ -281,9 +293,9 @@ export async function extractNotionPage(notionUrl: string): Promise<NotionPageCo
   // Give the process a moment to start
   await new Promise<void>((resolve, reject) => {
     const timeout = setTimeout(() => resolve(), 1000)
-    mcpProcess.on('error', (err) => {
+    mcpProcess.on('error', () => {
       clearTimeout(timeout)
-      reject(new Error(`Failed to start MCP Notion server: ${err.message}`))
+      reject(new Error('Failed to start MCP Notion server; check the configured executable'))
     })
   })
 
@@ -341,13 +353,7 @@ export async function extractNotionPage(notionUrl: string): Promise<NotionPageCo
 
     return { title, ticketId, status, goal, todos, gherkinFeatures }
   } finally {
-    mcpProcess.stdin?.end()
-    try {
-      if (mcpProcess.pid) process.kill(-mcpProcess.pid, 'SIGTERM')
-      else mcpProcess.kill()
-    } catch {
-      mcpProcess.kill()
-    }
+    stopMcpProcess(mcpProcess)
   }
 }
 
@@ -378,13 +384,7 @@ export async function testNotionConnection(): Promise<IntegrationTestResult> {
       detail: 'MCP connection and Notion authentication succeeded',
     }
   } finally {
-    mcpProcess.stdin?.end()
-    try {
-      if (mcpProcess.pid) process.kill(-mcpProcess.pid, 'SIGTERM')
-      else mcpProcess.kill()
-    } catch {
-      mcpProcess.kill()
-    }
+    stopMcpProcess(mcpProcess)
   }
 }
 
@@ -395,9 +395,9 @@ export async function listNotionUsers(): Promise<NotionUser[]> {
   try {
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => resolve(), 1000)
-      mcpProcess.on('error', (err) => {
+      mcpProcess.on('error', () => {
         clearTimeout(timeout)
-        reject(new Error(`Failed to start MCP Notion server: ${err.message}`))
+        reject(new Error('Failed to start MCP Notion server; check the configured executable'))
       })
       mcpProcess.stdout?.once('data', () => {
         clearTimeout(timeout)
@@ -434,13 +434,7 @@ export async function listNotionUsers(): Promise<NotionUser[]> {
     collected.sort((a, b) => a.name.localeCompare(b.name, 'fr'))
     return collected
   } finally {
-    mcpProcess.stdin?.end()
-    try {
-      if (mcpProcess.pid) process.kill(-mcpProcess.pid, 'SIGTERM')
-      else mcpProcess.kill()
-    } catch {
-      mcpProcess.kill()
-    }
+    stopMcpProcess(mcpProcess)
   }
 }
 
@@ -471,9 +465,9 @@ export async function assignNotionPageToSelf(
   try {
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => resolve(), 1000)
-      mcpProcess.on('error', (err) => {
+      mcpProcess.on('error', () => {
         clearTimeout(timeout)
-        reject(new Error(`Failed to start MCP Notion server: ${err.message}`))
+        reject(new Error('Failed to start MCP Notion server; check the configured executable'))
       })
       mcpProcess.stdout?.once('data', () => {
         clearTimeout(timeout)
@@ -503,13 +497,7 @@ export async function assignNotionPageToSelf(
   } catch (err) {
     return { assigned: false, reason: err instanceof Error ? err.message : String(err) }
   } finally {
-    mcpProcess.stdin?.end()
-    try {
-      if (mcpProcess.pid) process.kill(-mcpProcess.pid, 'SIGTERM')
-      else mcpProcess.kill()
-    } catch {
-      mcpProcess.kill()
-    }
+    stopMcpProcess(mcpProcess)
   }
 }
 
@@ -522,9 +510,9 @@ export async function updateNotionStatus(notionUrl: string, propertyName: string
   try {
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => resolve(), 1000)
-      mcpProcess.on('error', (err) => {
+      mcpProcess.on('error', () => {
         clearTimeout(timeout)
-        reject(new Error(`Failed to start MCP Notion server: ${err.message}`))
+        reject(new Error('Failed to start MCP Notion server; check the configured executable'))
       })
       mcpProcess.stdout?.once('data', () => {
         clearTimeout(timeout)
@@ -545,12 +533,6 @@ export async function updateNotionStatus(notionUrl: string, propertyName: string
   } catch (err) {
     console.error('[notion] Failed to update status:', err instanceof Error ? err.message : err)
   } finally {
-    mcpProcess.stdin?.end()
-    try {
-      if (mcpProcess.pid) process.kill(-mcpProcess.pid, 'SIGTERM')
-      else mcpProcess.kill()
-    } catch {
-      mcpProcess.kill()
-    }
+    stopMcpProcess(mcpProcess)
   }
 }

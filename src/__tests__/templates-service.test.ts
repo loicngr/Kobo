@@ -454,3 +454,32 @@ describe('templates-service', () => {
     })
   })
 })
+
+describe('public release template migration', () => {
+  it('upgrades shipped text once while preserving custom text, descriptions and deletions', async () => {
+    const { listTemplates, DEFAULT_TEMPLATES } = await import('../server/services/templates-service.js')
+    const legacy = {
+      slug: 'ci-status',
+      description: 'Check GitHub Actions status on PR',
+      content:
+        'Check the CI/CD status for the pull request on branch {working_branch}.\n\nIf a PR exists (PR {pr_url}):\n1. Use the GitHub MCP tools to list the check runs / status checks on the latest commit of the PR\n2. For each check, report:\n   - Check name\n   - Status (queued, in_progress, completed)\n   - Conclusion (success, failure, neutral, skipped, etc.)\n   - Duration if available\n3. If any checks failed, fetch the logs or annotations and summarize what went wrong\n4. Give an overall summary: all green, some failing, or still running\n\nIf no PR exists, say so and suggest creating one first.',
+    }
+    const row = { ...legacy, description: 'My label', createdAt: '2020-01-01', updatedAt: '2020-01-01' }
+    const custom = { ...row, slug: 'pr-review-comments', content: 'My custom content' }
+    fs.writeFileSync(
+      tmpFile,
+      JSON.stringify({
+        version: 2,
+        templates: [row, custom],
+        seededDefaultSlugs: ['ci-status', 'pr-review-comments', 'kobo-context'],
+      }),
+    )
+    const upgraded = listTemplates()
+    expect(upgraded).toHaveLength(2)
+    expect(upgraded[0].content).toBe(DEFAULT_TEMPLATES.find((entry) => entry.slug === 'ci-status')?.content)
+    expect(upgraded[0].description).toBe('My label')
+    expect(upgraded[0].createdAt).toBe('2020-01-01')
+    expect(upgraded[1]).toEqual(custom)
+    expect(listTemplates()).toEqual(upgraded)
+  })
+})

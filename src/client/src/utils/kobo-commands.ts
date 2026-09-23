@@ -29,9 +29,8 @@ function buildPrepAutoloopPrompt(): string {
 }
 
 /** Static fallback used in slash-command listings where no settings store is
- * accessible (always returns the `superpowers` variant — byte-identical to
- * the historical hardcoded constant). */
-const PREP_AUTOLOOP_PROMPT_STATIC = `${getGroomingIntro('superpowers')}\n\n${PREP_AUTOLOOP_BODY}`
+ * accessible (uses the neutral Standard suite). */
+const PREP_AUTOLOOP_PROMPT_STATIC = `${getGroomingIntro('standard')}\n\n${PREP_AUTOLOOP_BODY}`
 
 /** Map of Kobo built-in slash commands. */
 export const KOBO_COMMANDS: Record<string, { prompt: string; descriptionKey: string }> = {
@@ -62,28 +61,13 @@ export function sendCheckProgress(
   })
 }
 
-/** Send the prep-autoloop grooming prompt. Forces auto-accept (persisted + per-message override)
- * because plan mode blocks the MCP tools the grooming session needs (kobo__list_tasks,
- * kobo__create_task, kobo__mark_auto_loop_ready).
- *
- * Fetches the project-aware grooming prompt from the server (which composes E2E review
- * step when configured). Falls back to the local PREP_AUTOLOOP_PROMPT constant on error. */
+/** Send the project-aware grooming prompt without changing the user's permission mode.
+ * Falls back to the local suite-aware prompt when the server is unavailable. */
 export async function sendPrepAutoloop(
   workspaceId: string,
   wsStore: ReturnType<typeof useWebSocketStore>,
   workspaceStore: ReturnType<typeof useWorkspaceStore>,
 ): Promise<void> {
-  // Promote 'plan' → 'bypass' so the prep-autoloop turn can run MCP tools
-  // and edits (plan blocks them). Any other unified mode is honoured.
-  try {
-    const ws = workspaceStore.workspaces.find((w) => w.id === workspaceId)
-    if (ws && ws.agentPermissionMode === 'plan') {
-      await workspaceStore.updateAgentPermissionMode(workspaceId, 'bypass')
-    }
-  } catch {
-    // best-effort — the per-message override below is the safety net
-  }
-
   let prompt = buildPrepAutoloopPrompt()
   try {
     const res = await fetch(`/api/workspaces/${workspaceId}/prep-autoloop-prompt`, { cache: 'no-store' })
@@ -95,7 +79,7 @@ export async function sendPrepAutoloop(
     // best-effort — the local suite-aware fallback still applies
   }
 
-  wsStore.sendChatMessage(workspaceId, prompt, undefined, 'bypass')
+  wsStore.sendChatMessage(workspaceId, prompt)
   workspaceStore.markRead(workspaceId)
   workspaceStore.addActivityItem(workspaceId, {
     id: `user-${Date.now()}`,

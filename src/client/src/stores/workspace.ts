@@ -4,6 +4,7 @@ import { disposeTerminalEntry } from 'src/services/terminal-registry'
 import { getWorkspaceQueueHost } from 'src/services/workspace-queue-bridge'
 import { apiFetch } from 'src/utils/api'
 import type { AutoLoopRuntime, QueuedAutoLoopMessage } from '../../../shared/auto-loop-types'
+import type { WorkflowPolicy } from '../../../shared/workflow-policy'
 import type { ProviderId, UsageSnapshot } from '../types/usage'
 import { hasPrAttention } from '../utils/pr-status'
 import { isBusyStatus } from '../utils/workspace-status'
@@ -11,6 +12,7 @@ import { useAgentStreamStore } from './agent-stream'
 import { useWebSocketStore } from './websocket'
 
 export interface Workspace {
+  workflowPolicy?: WorkflowPolicy
   id: string
   name: string
   projectPath: string
@@ -117,6 +119,7 @@ export interface CreateWorkspaceInput {
   model?: string
   brainstormModel?: string
   reasoningEffort?: string
+  workflowPolicy?: Partial<WorkflowPolicy>
   agentPermissionMode?: 'plan' | 'bypass' | 'strict' | 'interactive'
   tasks?: string[]
   acceptanceCriteria?: string[]
@@ -1210,6 +1213,27 @@ export const useWorkspaceStore = defineStore('workspace', {
       }
     },
 
+    /**
+     * Partial update: the backend merges it into the workspace snapshot. It
+     * answers 409 `workspace-busy` while an agent controller or a lifecycle
+     * operation is still around, because a running session already received
+     * its preferences in a prompt that cannot be taken back.
+     */
+    async updateWorkflowPolicy(id: string, workflowPolicy: Partial<WorkflowPolicy>): Promise<void> {
+      const res = await fetch(`/api/workspaces/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workflowPolicy }),
+      })
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string; code?: string }
+        throw new WorkspaceActionError(body.error ?? `HTTP ${res.status}`, body.code)
+      }
+      const updated = (await res.json()) as Workspace
+      const idx = this.workspaces.findIndex((w) => w.id === id)
+      if (idx >= 0) this.workspaces[idx] = updated
+    },
+
     async pushBranch(id: string, options: { force?: boolean } = {}): Promise<PushResult> {
       const res = await fetch(`/api/workspaces/${id}/push`, {
         method: 'POST',
@@ -1892,16 +1916,6 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
 
     async enableAutoLoop(id: string): Promise<void> {
-      // Plan mode would deadlock the loop (blocks MCP + edits) — promote to bypass.
-      const ws = this.workspaces.find((w) => w.id === id)
-      if (ws && ws.agentPermissionMode === 'plan') {
-        try {
-          await this.updateAgentPermissionMode(id, 'bypass')
-        } catch {
-          // best-effort — the loop forces a non-plan mode regardless
-        }
-      }
-
       const res = await fetch(`/api/workspaces/${id}/auto-loop`, { method: 'POST' })
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))

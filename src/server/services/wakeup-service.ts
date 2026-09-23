@@ -15,6 +15,7 @@ export interface PendingWakeup {
 interface PendingWakeupRow {
   workspace_id: string
   target_at: string
+  retry_at: string | null
   prompt: string
   reason: string | null
   created_at: string
@@ -65,12 +66,12 @@ const failedRetries = new Map<string, number>()
 /** Keep a claimed wakeup durable while the session is still unavailable. */
 function defer(workspaceId: string, row: PendingWakeupRow): void {
   const targetAt = new Date(Date.now() + ACTIVE_SESSION_RETRY_MS).toISOString()
-  getDb().prepare('UPDATE pending_wakeups SET target_at = ? WHERE workspace_id = ?').run(targetAt, workspaceId)
+  getDb().prepare('UPDATE pending_wakeups SET retry_at = ? WHERE workspace_id = ?').run(targetAt, workspaceId)
 
   const timeout = setTimeout(() => fire(workspaceId), ACTIVE_SESSION_RETRY_MS)
   timeout.unref?.()
   timers.set(workspaceId, timeout)
-  emitEphemeral(workspaceId, 'wakeup:scheduled', { targetAt, reason: row.reason ?? undefined })
+  emitEphemeral(workspaceId, 'wakeup:scheduled', { targetAt: row.target_at, reason: row.reason ?? undefined })
 }
 
 /** Schedule a wakeup for the given workspace. Replaces any existing pending wakeup. */
@@ -165,7 +166,7 @@ export function isWakeupScheduled(workspaceId: string): boolean {
   return getPending(workspaceId) !== null
 }
 
-/** Re-register timers for rows persisted across restart. Skips stale entries. */
+/** Re-register persisted timers. Previously deferred work survives downtime; only never-attempted stale wakeups expire. */
 export function rehydrate(): void {
   suspendForShutdown()
   suspended = false
@@ -176,14 +177,16 @@ export function rehydrate(): void {
 
     for (const row of rows) {
       try {
-        const target = new Date(row.target_at).getTime()
+        const target = new Date(row.retry_at ?? row.target_at).getTime()
         const delay = target - now
 
         if (delay > 0) {
           const timeout = setTimeout(() => fire(row.workspace_id), delay)
           timeout.unref?.()
           timers.set(row.workspace_id, timeout)
-        } else if (-delay <= STALE_WAKEUP_GRACE_MS) {
+        } else if (row.retry_at != null || -delay <= STALE_WAKEUP_GRACE_MS) {
+          // Admission deferred this wakeup after its deadline. Downtime does not
+          // revoke the pending instruction; retry through the same admission gate.
           const timeout = setTimeout(() => fire(row.workspace_id), 0)
           timeout.unref?.()
           timers.set(row.workspace_id, timeout)

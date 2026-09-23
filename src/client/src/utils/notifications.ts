@@ -13,11 +13,17 @@ interface QueuedSound {
 const soundQueue: QueuedSound[] = []
 let queuePlaying = false
 
+/**
+ * Keyed by resolved URL, not by sound id: an imported sound starts on its API
+ * URL and moves to a blob URL once the catalogue is preloaded, and a cached
+ * element keeps whatever URL it was built with.
+ */
 function getAudio(soundId: string): HTMLAudioElement {
-  let audio = audioCache.get(soundId)
+  const url = soundUrl(soundId)
+  let audio = audioCache.get(url)
   if (!audio) {
-    audio = new Audio(soundUrl(soundId))
-    audioCache.set(soundId, audio)
+    audio = new Audio(url)
+    audioCache.set(url, audio)
   }
   return audio
 }

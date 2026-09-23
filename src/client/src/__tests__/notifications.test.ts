@@ -52,48 +52,48 @@ describe('playNotificationSound() volume application', () => {
 
   it('clamps volume above 1 down to 1', async () => {
     const { playNotificationSound } = await import('../utils/notifications')
-    playNotificationSound('faaah.mp3', 5)
+    playNotificationSound('ready.wav', 5)
     expect(instances[0]?.volume).toBe(1)
   })
 
   it('clamps negative volume up to 0', async () => {
     const { playNotificationSound } = await import('../utils/notifications')
-    playNotificationSound('faaah.mp3', -0.4)
+    playNotificationSound('ready.wav', -0.4)
     expect(instances[0]?.volume).toBe(0)
   })
 
   it('falls back to volume=1 when volume is undefined', async () => {
     const { playNotificationSound } = await import('../utils/notifications')
-    playNotificationSound('hey.mp3')
+    playNotificationSound('neutral.wav')
     expect(instances[0]?.volume).toBe(1)
   })
 
   it('falls back to volume=1 when volume is NaN', async () => {
     const { playNotificationSound } = await import('../utils/notifications')
-    playNotificationSound('hey.mp3', Number.NaN)
+    playNotificationSound('neutral.wav', Number.NaN)
     expect(instances[0]?.volume).toBe(1)
   })
 
   it('applies a precise volume value (0.42) verbatim', async () => {
     const { playNotificationSound } = await import('../utils/notifications')
-    playNotificationSound('hey.mp3', 0.42)
+    playNotificationSound('neutral.wav', 0.42)
     expect(instances[0]?.volume).toBe(0.42)
   })
 
   it('plays queued sounds strictly one at a time', async () => {
     const { queueNotificationSound } = await import('../utils/notifications')
 
-    queueNotificationSound('hey.mp3', 0.25)
-    queueNotificationSound('faaah.mp3', 0.75)
+    queueNotificationSound('neutral.wav', 0.25)
+    queueNotificationSound('ready.wav', 0.75)
 
     expect(instances).toHaveLength(1)
-    expect(instances[0]?.src).toContain('/sounds/hey.mp3')
+    expect(instances[0]?.src).toContain('/sounds/neutral.wav')
     expect(instances[0]?.volume).toBe(0.25)
 
     instances[0]?.emit('ended')
 
     expect(instances).toHaveLength(2)
-    expect(instances[1]?.src).toContain('/sounds/faaah.mp3')
+    expect(instances[1]?.src).toContain('/sounds/ready.wav')
     expect(instances[1]?.volume).toBe(0.75)
   })
 
@@ -101,8 +101,8 @@ describe('playNotificationSound() volume application', () => {
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
     const { queueNotificationSound } = await import('../utils/notifications')
 
-    queueNotificationSound('hey.mp3', 0.4)
-    queueNotificationSound('faaah.mp3', 0.7)
+    queueNotificationSound('neutral.wav', 0.4)
+    queueNotificationSound('ready.wav', 0.7)
 
     expect(instances).toHaveLength(2)
     expect(instances[0]?.play).toHaveBeenCalledOnce()
@@ -113,8 +113,8 @@ describe('playNotificationSound() volume application', () => {
 
   it('advances after a media error', async () => {
     const { queueNotificationSound } = await import('../utils/notifications')
-    queueNotificationSound('hey.mp3')
-    queueNotificationSound('faaah.mp3')
+    queueNotificationSound('neutral.wav')
+    queueNotificationSound('ready.wav')
 
     instances[0]?.emit('error')
 
@@ -124,13 +124,13 @@ describe('playNotificationSound() volume application', () => {
   it('advances after play rejects', async () => {
     const { queueNotificationSound } = await import('../utils/notifications')
     rejectNextPlay = true
-    queueNotificationSound('hey.mp3')
-    queueNotificationSound('faaah.mp3')
+    queueNotificationSound('neutral.wav')
+    queueNotificationSound('ready.wav')
 
     await Promise.resolve()
     await Promise.resolve()
 
-    expect(instances.at(-1)?.src).toContain('/sounds/faaah.mp3')
+    expect(instances.at(-1)?.src).toContain('/sounds/ready.wav')
   })
 
   it('does not enqueue audio for an explicit null override', async () => {
@@ -148,10 +148,10 @@ describe('playNotificationSound() volume application', () => {
     setActivePinia(createPinia())
     const { notify } = await import('../utils/notifications')
 
-    notify('Question', undefined, 'w1', 'faaah.mp3', 0.42, true)
+    notify('Question', undefined, 'w1', 'ready.wav', 0.42, true)
 
     expect(instances).toHaveLength(1)
-    expect(instances[0]?.src).toContain('/sounds/faaah.mp3')
+    expect(instances[0]?.src).toContain('/sounds/ready.wav')
     expect(instances[0]?.volume).toBe(0.42)
   })
 
@@ -161,7 +161,7 @@ describe('playNotificationSound() volume application', () => {
     useSettingsStore().global.audioNotifications = true
     const { notify } = await import('../utils/notifications')
 
-    notify('Question', undefined, 'w1', 'faaah.mp3', 0.42, false)
+    notify('Question', undefined, 'w1', 'ready.wav', 0.42, false)
 
     expect(instances).toHaveLength(0)
   })
