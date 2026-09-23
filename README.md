@@ -24,13 +24,17 @@ Kōbō (工房, "workshop") turns *one agent, one terminal* into a real workflow
 
 ## Quick start
 
-Requires Node.js ≥ 24.15 and a logged-in Claude Code **or** Codex CLI.
+Requires Node.js ≥ 24.15, Git, Bash and your own Claude Code **or** Codex authentication. No skill plugin or ticket integration is required. Kōbō is a local, single-user tool; each user installs their own instance.
 
 ```bash
 npx @loicngr/kobo@latest
 ```
 
-Open <http://localhost:3000>. Data is persisted under `~/.config/kobo/` (override via `KOBO_HOME`).
+Open <http://localhost:3000> and follow the first-run check. Use **Choose a folder** beside the project field to select a local Git repository; completing setup opens the mission form without launching an agent. New installs use the plugin-free **Standard** suite, **Plan** permissions, manual commit/push/publication preferences, and disabled optional integrations/audio. Existing preferences are preserved on upgrade.
+
+Follow [your first mission](./docs/getting-started.md), [troubleshooting](./docs/troubleshooting.md), or the [security and privacy model](./SECURITY.md).
+
+Data is persisted under `~/.config/kobo/` (override via `KOBO_HOME`).
 
 Default port is `3000`; if it's taken, `SERVER_PORT` (checked first) or `PORT` picks another:
 
@@ -56,11 +60,11 @@ Kōbō's production build is an installable PWA — use your browser's **Install
 - **Interactive Q&A**: an agent can pause mid-session to ask you a question through the UI instead of guessing.
 
   ![Agent asking a clarifying question, awaiting the user's answer](docs/assets/images/agent-question.png)
-- **Quota-aware**: 5-hour / 7-day Claude usage and Codex rate-limit buckets live in the footer; sessions auto-resume after a reset.
+- **Quota-aware**: 5-hour / 7-day Claude usage and Codex rate-limit buckets live in the footer; auto-loops can resume after a reset. Explicit cron/wakeup schedules can also resume work; a manual workspace does not restart solely because its quota resets.
 - **Disk-space purge**: reclaim a merged workspace's `node_modules`/`vendor` weight without losing its chat history — see [`CONFIGURATION.md`](./CONFIGURATION.md#auto-purge-worktree-on-pr-merged).
 - **Lifecycle scripts**: shell scripts run on setup, cleanup, archive, session end, PR merge, or auto-loop stop, with output streamed into the chat.
 - **Observability**: a per-session timeline (duration, tools, tokens, errors) and a downloadable redacted diagnostic JSON.
-- **Optional integrations**: Notion (import missions) and Sentry (fix from issue URL), each independently toggled with a **Test connection** action; local voice transcription via `whisper.cpp`.
+- **Optional integrations**: Notion (import missions) and Sentry (fix from issue URL), usable by both agent engines through saved connections, each independently toggled with a **Test connection** action; local voice transcription via `whisper.cpp`.
 
 ## Fresh sessions and LLM handoffs
 
@@ -88,24 +92,42 @@ The most common knobs:
 
 Everything else — worktree paths, dev server commands, prompt templates, git conventions, lifecycle scripts, forge selection, permission modes — lives in **Settings**, with per-project values inheriting from global ones. The full reference (every env var, every setting key, MCP server registration, forge/Notion/Sentry/voice setup) is in [`CONFIGURATION.md`](./CONFIGURATION.md).
 
+### Workflow and integration settings
+
+**Settings → Git** groups manual/automatic commit, push and publication preferences,
+Git conventions and branch prefixes. **Prompts** contains post-PR/MR, review, CI-fix
+and finalization instructions. New workspaces snapshot the workflow preferences;
+changing global defaults does not alter existing workspaces. These preferences guide
+agents, while engine permissions remain a separate control.
+
+Notion and Sentry are optional. Save a **Direct connection** in the integration tab,
+enable it, save Settings, then use **Test connection**. Saved direct connections take
+priority over the Claude MCP selector, which is disabled while one exists. Enabled
+connections also reach Claude Code and Codex agents through `kobo-notion-*` and
+`kobo-sentry-*` MCP servers. Stop and resume a running agent to apply a connection
+change. See [managed integration MCPs](./CONFIGURATION.md#managed-integration-mcps-in-agent-sessions)
+for credential priority and native-configuration scope.
+
 ### Docker
 
 An official `Dockerfile` and three ready-to-use Compose files ship in this repository: a quick local test stack, a Traefik-fronted local rehearsal (no domain needed), and a full VPS reference (Traefik + Let's Encrypt, SSH access, optional Docker-socket passthrough). See [`CONFIGURATION.md`](./CONFIGURATION.md#docker-deployment) for every compose file, env var, and volume mount.
 
 ### Network access
 
-Kōbō binds to `127.0.0.1` only by default. Enabling **Settings → Global → Network access** re-binds to the LAN behind a shared token (a QR code makes pairing a phone easy). Plain HTTP — keep it to trusted networks, or front it with HTTPS/a VPN for anything further. Details in [`CONFIGURATION.md`](./CONFIGURATION.md#network-access).
+Kōbō binds to `127.0.0.1` only by default. Enabling **Settings → General → Network access** re-binds to the LAN behind a shared token (a QR code makes pairing a phone easy). Plain HTTP — keep it to trusted networks, or front it with HTTPS/a VPN for anything further. Details in [`CONFIGURATION.md`](./CONFIGURATION.md#network-access).
 
 ## Agent runtimes
 
-- **Claude Code**: authenticate once with `claude /login`. Kōbō calls the embedded SDK directly — no `claude` binary needed at runtime.
+- **Claude Code**: authenticate once with `claude /login`. Kōbō calls the embedded SDK directly — no separately installed Claude CLI is required at runtime; the SDK supplies its runtime.
 - **OpenAI Codex**: run `codex login` or export `OPENAI_API_KEY`. Kōbō spawns a long-lived `codex app-server` subprocess per workspace.
 
 Both engines share task tracking, permission modes, the sub-agent panel, and the quota footer. The mapping of Kōbō's four permission modes (`plan` / `bypass` / `strict` / `interactive`) to each engine's native sandbox semantics is in [`CONFIGURATION.md`](./CONFIGURATION.md#permission-modes).
 
 ## Skill suites
 
-Kōbō's auto-generated prompts (review, auto-loop grooming, QA, brainstorming) can target **[superpowers](https://github.com/obra/superpowers)** (brainstorm → spec → plan → execute, TDD, debugging), **[gstack](https://github.com/garrytan/gstack)** (slash-command workflows for QA, design review, ship pipelines), both together, or your own custom prompts — selectable in **Settings → Skills**. Pairs optionally with **[gbrain](https://github.com/garrytan/gbrain)** for per-project semantic search. Full setup in [`CONFIGURATION.md`](./CONFIGURATION.md#skill-suites).
+**Standard** is the default and works without a skill extension. **Settings → Skills** also offers **Superpowers**, **gstack**, **ECC**, **Superpowers + gstack**, **Superpowers + gstack + ECC**, and **Custom** instructions. These choices adapt the review, grooming, QA and brainstorming instructions; selecting one does not install a suite or change permissions. External skills must already be available to the selected Claude Code or Codex engine.
+
+The Settings guided tour includes a dedicated skill-suite explanation; replay it from the help icon or Help menu. See the [skill-suite reference](./CONFIGURATION.md#skill-suites) for the available choices and custom instructions.
 
 ## Architecture
 
@@ -131,3 +153,9 @@ PRs welcome. See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for the from-source setu
 ## License
 
 GPL-3.0-or-later. See [`LICENSE`](./LICENSE).
+
+## Community and support
+
+Report reproducible bugs and feature requests in [GitHub Issues](https://github.com/loicngr/Kobo/issues). Read [Contributing](./CONTRIBUTING.md) and the [Code of conduct](./CODE_OF_CONDUCT.md) before participating. Vulnerabilities belong in the private channel described in [Security](./SECURITY.md), not public issues. Support is maintained on a best-effort basis; no response-time commitment is implied.
+
+Platform validation and release blockers are recorded in the [public-readiness evidence](./docs/release/public-readiness-evidence.md). Linux is locally exercised; macOS CI, WSL and real-provider beta sessions require their own evidence. See [third-party notices](./THIRD_PARTY_NOTICES.md) for redistributed assets.

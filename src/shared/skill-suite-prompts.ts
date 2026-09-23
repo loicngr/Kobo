@@ -4,8 +4,8 @@
  * Skill suite identifier — selects which skill ecosystem Kōbō's
  * auto-generated prompts reference.
  *
- * - `superpowers`: prompts cite `superpowers:*` skills (default for new and
- *    migrated installs).
+ * - `standard`: neutral prompts with no external suite required (new installs).
+ * - `superpowers`: prompts cite `superpowers:*` skills.
  * - `gstack`: prompts cite gstack slash commands (`/review`, `/ship`, `/qa`, …).
  * - `superpowers+gstack`: combined — prompts cite both, specialised by intent
  *    (e.g. `/review` for tactical bug-hunting, `superpowers:requesting-code-review`
@@ -13,10 +13,18 @@
  * - `custom`: prompts come from the user-editable `custom*` fields in settings,
  *    initialised to the AGNOSTIC defaults below.
  */
-export type SkillSuite = 'superpowers' | 'gstack' | 'ecc' | 'superpowers+gstack' | 'superpowers+gstack+ecc' | 'custom'
+export type SkillSuite =
+  | 'standard'
+  | 'superpowers'
+  | 'gstack'
+  | 'ecc'
+  | 'superpowers+gstack'
+  | 'superpowers+gstack+ecc'
+  | 'custom'
 
 export function isValidSkillSuite(value: unknown): value is SkillSuite {
   return (
+    value === 'standard' ||
     value === 'superpowers' ||
     value === 'gstack' ||
     value === 'ecc' ||
@@ -45,7 +53,7 @@ const REVIEW_BODY = `## Scope
 
 Review ALL changes — both committed and uncommitted in the working tree:
 - \`git diff {{base_commit}}..HEAD\` — committed changes on this branch
-- \`git status\` and \`git diff\` — uncommitted changes (staged + unstaged)
+- \`git status\` and \`git diff\` / \`git diff --cached\` — unstaged / staged changes; inspect untracked files too
 
 ## Diff summary
 {{diff_stats}}
@@ -72,7 +80,7 @@ export const AGNOSTIC_REVIEW_TEMPLATE =
   REVIEW_BODY
 
 export const AGNOSTIC_AUTO_LOOP_REVIEW_GATE =
-  'Code review gate — BEFORE marking the task done, run whichever code-review skill is configured in this environment. Brief it with: what you just implemented, the task title, and the commit SHA (via `git rev-parse HEAD`). Ask specifically whether the change matches the task scope, whether edge cases are handled, and whether the commit is clean. If no review skill is available, do a manual self-review against the same criteria.'
+  'Code review gate — BEFORE marking the task done, run whichever code-review skill is configured in this environment. Brief it with: what you just implemented, the task title, and the commit SHA (via `git rev-parse HEAD`). Ask specifically whether the change matches the task scope, whether edge cases are handled, and whether all committed and uncommitted changes are correct. Include staged, unstaged and untracked files. If no review skill is available, do a manual self-review against the same criteria.'
 
 export const AGNOSTIC_AUTO_LOOP_GROOMING_INTRO =
   'You are preparing this workspace for Kōbō auto-loop mode. This is a GROOMING session only — DO NOT implement anything, DO NOT write or edit code, DO NOT run tests or builds, DO NOT invoke any implementation, planning, or release skill (your environment may have several). Your ONLY job is to curate the Kōbō task list via MCP tools.'
@@ -108,6 +116,7 @@ export const GROOMING_INTRO_ALL =
  * user-provided override is used (or AGNOSTIC if the override is empty/blank).
  */
 export function getGroomingIntro(suite: SkillSuite, customOverride?: string): string {
+  if (suite === 'standard') return AGNOSTIC_AUTO_LOOP_GROOMING_INTRO
   if (suite === 'custom') {
     const trimmed = (customOverride ?? '').trim()
     return trimmed || AGNOSTIC_AUTO_LOOP_GROOMING_INTRO

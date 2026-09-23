@@ -698,6 +698,12 @@ describe('autoRun retries', () => {
     }
   })
 
+  it('does not cover the first-run setup with an automatic tour', async () => {
+    document.body.innerHTML = '<section data-test="first-run"></section>'
+    await useTours().autoRun('home')
+    expect(driverInstance.drive).not.toHaveBeenCalled()
+  })
+
   it('retries once when a dialog is open, logging the deferral, and gives up after that', async () => {
     vi.useFakeTimers()
     const debug = vi.spyOn(console, 'debug').mockImplementation(() => {})

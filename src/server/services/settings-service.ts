@@ -1,9 +1,17 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { MASK_CHARACTER, MASKED_SECRET, SECRET_GLOBAL_KEYS, WORKTREES_PATH } from '../../shared/consts.js'
+import { normalizePublicSounds } from '../../shared/notification-assets.js'
 import { isValidProjectColor, type ProjectColor } from '../../shared/project-colors.js'
 import { isValidSkillSuite, type SkillSuite } from '../../shared/skill-suite-prompts.js'
 import { DEFAULT_WHIP_SHORTCUT, isValidWhipShortcut } from '../../shared/whip-shortcut.js'
+import {
+  isWorkflowPolicy,
+  LEGACY_WORKFLOW_POLICY,
+  MANUAL_WORKFLOW_POLICY,
+  resolveWorkflowPolicy,
+  type WorkflowPolicy,
+} from '../../shared/workflow-policy.js'
 import { listClaudeMcpEntries } from '../utils/mcp-client.js'
 import { getSettingsPath } from '../utils/paths.js'
 import {
@@ -13,9 +21,28 @@ import {
   validateWorktreesPath,
 } from '../utils/worktree-paths.js'
 import { DEFAULT_NOTION_INITIAL_PROMPT, DEFAULT_SENTRY_INITIAL_PROMPT } from './initial-prompt-template-service.js'
+import {
+  LEGACY_AGNOSTIC_AUTO_LOOP_REVIEW_GATE,
+  LEGACY_AGNOSTIC_REVIEW_TEMPLATE,
+  LEGACY_CI_FIX_PROMPT_TEMPLATE,
+  LEGACY_FINALIZATION_PROMPT,
+  LEGACY_NOTION_INITIAL_PROMPT,
+  LEGACY_PR_PROMPT_TEMPLATE,
+  LEGACY_SENTRY_INITIAL_PROMPT,
+} from './legacy-public-prompts.js'
 import { DEFAULT_REVIEW_PROMPT_TEMPLATE } from './review-template-service.js'
-import { DEFAULT_CHANGE_SOURCE_BRANCH_SCRIPT, DEFAULT_MODEL_BY_ENGINE } from './settings-defaults.js'
+import {
+  DEFAULT_CHANGE_SOURCE_BRANCH_SCRIPT,
+  DEFAULT_MODEL_BY_ENGINE,
+  FRESH_MODEL_BY_ENGINE,
+} from './settings-defaults.js'
 import { AGNOSTIC_PROMPTS } from './skill-suite-prompts.js'
+
+export const STANDARD_GIT_CONVENTIONS = `Follow the repository's existing Git conventions and the user's instructions.
+Work locally by default. Commit, push, publish comments or open pull requests only when explicitly authorized.
+Inspect git status and all staged, unstaged and untracked changes before staging. Preserve unrelated work.
+Never rewrite shared history or run destructive Git commands without explicit authorization.
+`
 
 export const DEFAULT_GIT_CONVENTIONS = `# Git conventions
 
@@ -74,8 +101,8 @@ Steps:
 1. For each failing job, fetch its logs from the forge and pinpoint the root cause.
 2. Fix the underlying issue locally — never disable a check or skip a test to "fix" CI.
 3. Run the relevant lint / type-check / test commands locally to verify the fix.
-4. Commit with a clear, conventional message and push to the same branch.
-5. Wait for CI to re-run and confirm every job now passes.
+4. Report the local changes and checks. Commit or push only when explicitly authorized; otherwise leave the fix local.
+5. If a push was authorized, wait for CI to re-run and report its result.
 `
 
 export const DEFAULT_PR_PROMPT_TEMPLATE = `A pull request has been opened: {{pr_url}} (#{{pr_number}})
@@ -99,10 +126,10 @@ Acceptance criteria:
 {{acceptance_criteria}}
 
 Please:
-1. Review the PR description on GitHub and improve it if needed (add a proper summary, screenshots if relevant, a test plan)
+1. Read the PR/MR description using the configured forge and propose improvements locally (summary, screenshots if relevant, test plan)
 2. Verify that all acceptance criteria are checked
-3. Post a comment on the PR summarizing what was done and any follow-up items
-4. Do NOT add a "Generated with Claude Code" footer or any AI attribution to the PR description
+3. Draft a summary of the work and follow-up items locally. Publish comments or edit the PR/MR only when explicitly authorized.
+4. Follow the repository policy for attribution and PR/MR formatting.
 `
 
 /** Dev-server start/stop commands for a project. */
@@ -126,7 +153,7 @@ export interface FinalizationSettings {
 export const DEFAULT_FINALIZATION_PROMPT = `Run final quality checks before closing the workspace:
 
 1. Verify all work tasks and acceptance criteria are marked \`done\`. If any remain pending/in_progress, keep finalization open and report them.
-2. Run the project's linters, type-checkers, and tests (see CLAUDE.md or package.json scripts).
+2. Run the project's linters, type-checkers, and tests (see the repository instructions and existing build/test configuration).
 3. If any check fails or cannot be run, create a regular repair task with a title like \`Fix lint failure in X\` (role \`work\`, no \`[FINAL]\` prefix), record the failed/not_run checks and leave this finalization task pending. Kōbō will process the repairs first, then run final verification again against the repaired state.
 4. Only after all required checks actually pass, mark this task as \`done\` with structured verification: method, summary, and the named checks with status \`passed\`.
 
@@ -134,6 +161,7 @@ HARD RULE: Do NOT open a pull request, do NOT run \`gh pr create\` or any equiva
 
 /** Per-project settings, stored in settings.json. */
 export interface ProjectSettings {
+  workflowPolicy: Partial<WorkflowPolicy>
   path: string
   displayName: string
   defaultSourceBranch: string
@@ -197,6 +225,8 @@ export interface ProjectSettings {
 
 /** Global settings that apply as defaults when no project override is set. */
 export interface GlobalSettings {
+  workflowPolicy: WorkflowPolicy
+  onboardingComplete: boolean
   /**
    * Default model id per engine. Keys are engine ids (e.g. `'claude-code'`,
    * `'codex'`), values are model ids from the engine's catalogue (or `'auto'`).
@@ -597,9 +627,9 @@ const settingsMigrations: SettingsMigration[] = [
     migrate({ projects }) {
       for (const p of projects) {
         if (!p.finalization || typeof p.finalization !== 'object') {
-          p.finalization = { prompt: DEFAULT_FINALIZATION_PROMPT }
+          p.finalization = { prompt: LEGACY_FINALIZATION_PROMPT }
         } else if (typeof (p.finalization as { prompt?: unknown }).prompt !== 'string') {
-          ;(p.finalization as { prompt: string }).prompt = DEFAULT_FINALIZATION_PROMPT
+          ;(p.finalization as { prompt: string }).prompt = LEGACY_FINALIZATION_PROMPT
         }
       }
     },
@@ -658,10 +688,10 @@ const settingsMigrations: SettingsMigration[] = [
     name: 'add-notion-sentry-initial-prompts',
     migrate({ global, projects }) {
       if (typeof global.notionInitialPromptTemplate !== 'string') {
-        global.notionInitialPromptTemplate = DEFAULT_NOTION_INITIAL_PROMPT
+        global.notionInitialPromptTemplate = LEGACY_NOTION_INITIAL_PROMPT
       }
       if (typeof global.sentryInitialPromptTemplate !== 'string') {
-        global.sentryInitialPromptTemplate = DEFAULT_SENTRY_INITIAL_PROMPT
+        global.sentryInitialPromptTemplate = LEGACY_SENTRY_INITIAL_PROMPT
       }
       for (const p of projects) {
         if (typeof p.notionInitialPromptTemplate !== 'string') {
@@ -773,10 +803,10 @@ const settingsMigrations: SettingsMigration[] = [
         global.skillSuite = 'superpowers'
       }
       if (typeof global.customReviewTemplate !== 'string') {
-        global.customReviewTemplate = AGNOSTIC_PROMPTS.reviewTemplate
+        global.customReviewTemplate = LEGACY_AGNOSTIC_REVIEW_TEMPLATE
       }
       if (typeof global.customAutoLoopReviewGate !== 'string') {
-        global.customAutoLoopReviewGate = AGNOSTIC_PROMPTS.autoLoopReviewGate
+        global.customAutoLoopReviewGate = LEGACY_AGNOSTIC_AUTO_LOOP_REVIEW_GATE
       }
       if (typeof global.customAutoLoopGroomingIntro !== 'string') {
         global.customAutoLoopGroomingIntro = AGNOSTIC_PROMPTS.autoLoopGroomingIntro
@@ -903,7 +933,7 @@ const settingsMigrations: SettingsMigration[] = [
     name: 'add-ci-fix-prompt-template',
     migrate: ({ global, projects }) => {
       if (typeof global.ciFixPromptTemplate !== 'string') {
-        global.ciFixPromptTemplate = DEFAULT_CI_FIX_PROMPT_TEMPLATE
+        global.ciFixPromptTemplate = LEGACY_CI_FIX_PROMPT_TEMPLATE
       }
       for (const p of projects) {
         if (typeof p.ciFixPromptTemplate !== 'string') p.ciFixPromptTemplate = ''
@@ -948,7 +978,7 @@ const settingsMigrations: SettingsMigration[] = [
       // Seed the global default; projects keep their own override (or empty to
       // inherit this global value — cascade handled by getEffectiveFinalization).
       if (typeof global.finalizationPrompt !== 'string') {
-        global.finalizationPrompt = DEFAULT_FINALIZATION_PROMPT
+        global.finalizationPrompt = LEGACY_FINALIZATION_PROMPT
       }
     },
   },
@@ -1225,6 +1255,53 @@ const settingsMigrations: SettingsMigration[] = [
       if (typeof global.activityDigestEnabled !== 'boolean') global.activityDigestEnabled = true
     },
   },
+  {
+    version: 59,
+    name: 'neutral-built-in-prompts',
+    migrate: ({ global, projects }) => {
+      const defaults = [
+        ['customReviewTemplate', LEGACY_AGNOSTIC_REVIEW_TEMPLATE, AGNOSTIC_PROMPTS.reviewTemplate],
+        ['customAutoLoopReviewGate', LEGACY_AGNOSTIC_AUTO_LOOP_REVIEW_GATE, AGNOSTIC_PROMPTS.autoLoopReviewGate],
+        ['notionInitialPromptTemplate', LEGACY_NOTION_INITIAL_PROMPT, DEFAULT_NOTION_INITIAL_PROMPT],
+        ['sentryInitialPromptTemplate', LEGACY_SENTRY_INITIAL_PROMPT, DEFAULT_SENTRY_INITIAL_PROMPT],
+        ['ciFixPromptTemplate', LEGACY_CI_FIX_PROMPT_TEMPLATE, DEFAULT_CI_FIX_PROMPT_TEMPLATE],
+        ['prPromptTemplate', LEGACY_PR_PROMPT_TEMPLATE, DEFAULT_PR_PROMPT_TEMPLATE],
+        ['finalizationPrompt', LEGACY_FINALIZATION_PROMPT, DEFAULT_FINALIZATION_PROMPT],
+      ] as const
+      for (const [key, previous, next] of defaults) {
+        if (global[key] === previous) global[key] = next
+        for (const project of projects) {
+          if (project[key] === previous) project[key] = next
+        }
+      }
+      for (const project of projects) {
+        const finalization = project.finalization as { prompt?: unknown } | undefined
+        if (finalization?.prompt === LEGACY_FINALIZATION_PROMPT) finalization.prompt = DEFAULT_FINALIZATION_PROMPT
+      }
+    },
+  },
+  {
+    version: 60,
+    name: 'add-onboarding-completion',
+    migrate: ({ global }) => {
+      if (typeof global.onboardingComplete !== 'boolean') global.onboardingComplete = true
+    },
+  },
+  {
+    version: 61,
+    name: 'original-public-notification-sounds',
+    migrate: ({ global }) => normalizePublicSounds(global),
+  },
+  {
+    version: 62,
+    name: 'explicit-workflow-preferences',
+    migrate: ({ global, projects }) => {
+      if (!isWorkflowPolicy(global.workflowPolicy)) global.workflowPolicy = { ...LEGACY_WORKFLOW_POLICY }
+      for (const project of projects) {
+        if (!isWorkflowPolicy(project.workflowPolicy)) project.workflowPolicy = {}
+      }
+    },
+  },
 ]
 
 /** Current settings schema version — always equals the highest migration version. */
@@ -1287,7 +1364,9 @@ function defaultSettings(): Settings {
   return {
     schemaVersion: SETTINGS_SCHEMA_VERSION,
     global: {
-      defaultModelByEngine: { ...DEFAULT_MODEL_BY_ENGINE },
+      workflowPolicy: { ...MANUAL_WORKFLOW_POLICY },
+      onboardingComplete: false,
+      defaultModelByEngine: { ...FRESH_MODEL_BY_ENGINE },
       dangerouslySkipPermissions: true,
       prPromptTemplate: DEFAULT_PR_PROMPT_TEMPLATE,
       reviewPromptTemplate: DEFAULT_REVIEW_PROMPT_TEMPLATE,
@@ -1295,7 +1374,7 @@ function defaultSettings(): Settings {
       finalizationPrompt: DEFAULT_FINALIZATION_PROMPT,
       notionInitialPromptTemplate: DEFAULT_NOTION_INITIAL_PROMPT,
       sentryInitialPromptTemplate: DEFAULT_SENTRY_INITIAL_PROMPT,
-      gitConventions: DEFAULT_GIT_CONVENTIONS,
+      gitConventions: STANDARD_GIT_CONVENTIONS,
       setupScript: '',
       cleanupScript: '',
       cleanupScriptMode: 'no-tasks',
@@ -1312,7 +1391,7 @@ function defaultSettings(): Settings {
       autoLoopMaxRetries: 5,
       awaitingUserReminderMinutes: 0,
       activityDigestEnabled: true,
-      maxConcurrentAgents: 0,
+      maxConcurrentAgents: 2,
       wsEventsRetentionDays: 0,
       wsEventsKeepPerWorkspace: 0,
       networkAccessEnabled: false,
@@ -1321,11 +1400,11 @@ function defaultSettings(): Settings {
       bitbucketToken: '',
       bitbucketUsername: '',
       browserNotifications: true,
-      audioNotifications: true,
+      audioNotifications: false,
       audioQuestionNotifications: false,
       audioWorkspaceCreatedNotifications: false,
       audioAgentErrorNotifications: false,
-      audioNotificationSound: 'hey.mp3',
+      audioNotificationSound: 'neutral.wav',
       audioQuestionSound: 'inherit',
       audioWorkspaceCreatedSound: 'inherit',
       audioAgentErrorSound: 'inherit',
@@ -1361,8 +1440,8 @@ function defaultSettings(): Settings {
       defaultPermissionModeByEngine: { 'claude-code': 'plan', codex: 'plan' },
       notionMcpKey: '',
       sentryMcpKey: '',
-      notionEnabled: true,
-      sentryEnabled: true,
+      notionEnabled: false,
+      sentryEnabled: false,
       showThinkingBlocks: true,
       whipEnabled: false,
       whipShortcut: DEFAULT_WHIP_SHORTCUT,
@@ -1382,7 +1461,7 @@ function defaultSettings(): Settings {
       voiceTranslateToEnglish: false,
       voiceSuppressNonSpeechTokens: true,
       flattenWorkspaceList: false,
-      skillSuite: 'superpowers',
+      skillSuite: 'standard',
       customReviewTemplate: AGNOSTIC_PROMPTS.reviewTemplate,
       customAutoLoopReviewGate: AGNOSTIC_PROMPTS.autoLoopReviewGate,
       customAutoLoopGroomingIntro: AGNOSTIC_PROMPTS.autoLoopGroomingIntro,
@@ -1395,6 +1474,7 @@ function defaultSettings(): Settings {
 
 function defaultProjectSettings(projectPath: string): ProjectSettings {
   return {
+    workflowPolicy: {},
     path: projectPath,
     displayName: '',
     defaultSourceBranch: '',
@@ -1462,11 +1542,17 @@ export function runSettingsMigrations(raw: Record<string, unknown>): Settings {
     }
   }
 
+  if (typeof current.global.onboardingComplete !== 'boolean') current.global.onboardingComplete = true
+  current.global.workflowPolicy = resolveWorkflowPolicy(current.global.workflowPolicy as Partial<WorkflowPolicy>)
+  for (const project of current.projects as Array<Record<string, unknown>>) {
+    if (!isWorkflowPolicy(project.workflowPolicy)) project.workflowPolicy = {}
+  }
   current.global.worktreesPath = sanitizeWorktreesPath(current.global.worktreesPath)
   current.global.whipEnabled = current.global.whipEnabled === true
   current.global.whipShortcut = normalizeWhipShortcut(current.global.whipShortcut)
   current.global.whipVolume = normalizeWhipVolume(current.global.whipVolume)
 
+  normalizePublicSounds(current.global)
   current.schemaVersion = version
   return current as unknown as Settings
 }
@@ -1864,7 +1950,14 @@ export function updateGlobalSettings(input: Partial<GlobalSettings>): GlobalSett
   if ('activityDigestEnabled' in data && typeof data.activityDigestEnabled !== 'boolean') {
     delete data.activityDigestEnabled
   }
+  if ('onboardingComplete' in data && typeof data.onboardingComplete !== 'boolean') delete data.onboardingComplete
+  if ('workflowPolicy' in data) {
+    if (!isWorkflowPolicy(data.workflowPolicy)) throw new Error('Invalid workflowPolicy')
+    data.workflowPolicy = resolveWorkflowPolicy(settings.global.workflowPolicy, data.workflowPolicy)
+  }
   const allowedGlobalKeys = [
+    'workflowPolicy',
+    'onboardingComplete',
     'defaultModelByEngine',
     'dangerouslySkipPermissions',
     'prPromptTemplate',
@@ -1965,6 +2058,7 @@ export function updateGlobalSettings(input: Partial<GlobalSettings>): GlobalSett
     'customBrainstormingInstruction',
   ]
   const filtered = pickKnownKeys<GlobalSettings>(data as Record<string, unknown>, allowedGlobalKeys)
+  normalizePublicSounds(filtered as Record<string, unknown>)
   if (filtered.tags !== undefined) {
     filtered.tags = Array.isArray(filtered.tags)
       ? Array.from(
@@ -2094,7 +2188,9 @@ export function upsertProject(projectPath: string, data: Partial<Omit<ProjectSet
       delete (data as Record<string, unknown>).cleanupScriptMode
     }
   }
+  if ('workflowPolicy' in data && !isWorkflowPolicy(data.workflowPolicy)) throw new Error('Invalid workflowPolicy')
   const allowedProjectKeys = [
+    'workflowPolicy',
     'displayName',
     'defaultSourceBranch',
     'defaultModel',
@@ -2212,4 +2308,13 @@ export function listActiveClaudeMcpServers(): ActiveClaudeMcpServerSummary[] {
     command: entry.command ?? 'npx',
     args: entry.args ?? [],
   }))
+}
+
+/** Resolve inheritance before taking a new workspace snapshot. */
+export function getEffectiveWorkflowPolicy(projectPath: string, override?: Partial<WorkflowPolicy>): WorkflowPolicy {
+  return resolveWorkflowPolicy(
+    getGlobalSettings().workflowPolicy,
+    getProjectSettings(projectPath)?.workflowPolicy,
+    override,
+  )
 }

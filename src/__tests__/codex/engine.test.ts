@@ -160,6 +160,9 @@ describe('createCodexEngine — resolved default model', () => {
         ...BASE_OPTIONS,
         model,
         agentPermissionMode: mode,
+        mcpServers: [
+          { name: 'kobo-notion-launch', command: 'node', args: ['notion.js'], env: { NOTION_TOKEN: 'synthetic' } },
+        ],
         ...(resume ? { resumeFromEngineSessionId: 'thr_model' } : {}),
       },
       () => {},
@@ -172,6 +175,12 @@ describe('createCodexEngine — resolved default model', () => {
       await flush(5)
       const requests = _child._written.map((line) => JSON.parse(line))
       const thread = requests.find((request) => request.method === (resume ? 'thread/resume' : 'thread/start'))
+      expect(thread.params.config.mcp_servers['kobo-notion-launch']).toMatchObject({
+        enabled: true,
+        command: 'node',
+        args: ['notion.js'],
+        env: { NOTION_TOKEN: 'synthetic' },
+      })
       expect(thread.params.model).toBe(model === 'auto' ? undefined : model)
       const turn = requests.find((request) => request.method === 'turn/start')
       expect(turn?.params.collaborationMode).toMatchObject({

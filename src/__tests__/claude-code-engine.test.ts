@@ -88,6 +88,7 @@ describe('claude-code engine (SDK)', () => {
             args: ['/path/to/kobo-tasks-server.js'],
             env: { KOBO_WORKSPACE_ID: 'w-bypass-mcp' },
           },
+          { name: 'kobo-notion-launch', command: 'node', args: ['notion.js'], env: { NOTION_TOKEN: 'synthetic' } },
         ],
       },
       () => {},
@@ -120,6 +121,13 @@ describe('claude-code engine (SDK)', () => {
     expect(opts?.mcpServers?.['kobo-tasks']).toBeDefined()
     expect(opts?.mcpServers?.['kobo-tasks']?.alwaysLoad).toBe(true)
     expect(opts?.mcpServers?.['kobo-tasks']?.type).toBe('stdio')
+    expect(opts?.mcpServers?.['kobo-notion-launch']).toMatchObject({
+      type: 'stdio',
+      command: 'node',
+      args: ['notion.js'],
+      env: { NOTION_TOKEN: 'synthetic' },
+      alwaysLoad: true,
+    })
   })
 
   it('disables the native ScheduleWakeup tool in favor of Kōbō wakeups', async () => {

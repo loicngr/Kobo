@@ -3,6 +3,6 @@ contact_links:
   - name: Kōbō documentation
     url: https://github.com/loicngr/Kobo#readme
     about: Setup, configuration, and usage
-  - name: Discussions
-    url: https://github.com/loicngr/Kobo/discussions
-    about: Questions, ideas, or anything that isn't a bug or feature request
+  - name: Report a security vulnerability privately
+    url: https://github.com/loicngr/Kobo/security/advisories/new
+    about: Do not disclose vulnerabilities or credentials in public issues

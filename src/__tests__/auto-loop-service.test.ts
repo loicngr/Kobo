@@ -91,6 +91,68 @@ describe('auto-loop-service', () => {
     })
   })
 
+  it('reports stable admission reasons without changing workspace or scheduler state', async () => {
+    const svc = await import('../server/services/auto-loop-service.js')
+    const { getDb } = await import('../server/db/index.js')
+    const db = getDb()
+    for (const status of ['awaiting-user', 'compacting']) {
+      db.prepare('UPDATE workspaces SET status=? WHERE id=?').run(status, wsId)
+      const before = db.prepare('SELECT total_changes() AS changes').get()
+      expect(svc.getAutomaticAdmissionStatus(wsId)).toMatchObject({ allowed: false, reason: status })
+      expect(svc.canStartAutomatically(wsId)).toBe(false)
+      expect(db.prepare('SELECT total_changes() AS changes').get()).toEqual(before)
+    }
+    db.prepare("UPDATE workspaces SET status='quota',auto_loop=1 WHERE id=?").run(wsId)
+    expect(svc.getAutomaticAdmissionStatus(wsId).reason).toBe('quota')
+    expect(svc.getAutomaticAdmissionStatus('missing').reason).toBe('not-found')
+  })
+
+  it('can resume grooming in Plan without changing the stored permission mode', async () => {
+    const svc = await import('../server/services/auto-loop-service.js')
+    const { getDb } = await import('../server/db/index.js')
+    const { getWorkspace, updateWorkspaceFields } = await import('../server/services/workspace-service.js')
+    const { startAgent } = await import('../server/services/agent/orchestrator.js')
+    updateWorkspaceFields(wsId, { agentPermissionMode: 'plan' })
+    getDb().prepare("UPDATE workspaces SET auto_loop = 1, auto_loop_ready = 0, status = 'idle' WHERE id = ?").run(wsId)
+    svc.onSessionEnded(wsId, 'completed', 1)
+    expect(startAgent).toHaveBeenCalledWith(
+      wsId,
+      expect.any(String),
+      expect.stringContaining('resume grooming'),
+      expect.any(String),
+      true,
+      'plan',
+      undefined,
+      expect.any(String),
+    )
+    expect(getWorkspace(wsId)?.agentPermissionMode).toBe('plan')
+  })
+
+  it('blocks Plan execution without escalation and resumes after an explicit mode change', async () => {
+    const svc = await import('../server/services/auto-loop-service.js')
+    const { createTask, getWorkspace, updateWorkspaceFields } = await import('../server/services/workspace-service.js')
+    const { startAgent } = await import('../server/services/agent/orchestrator.js')
+    createTask(wsId, { title: 'Implement', sortOrder: 0 })
+    updateWorkspaceFields(wsId, { agentPermissionMode: 'plan' })
+    svc._test_setAutoLoopReady(wsId, true)
+    expect(() => svc.enable(wsId)).toThrow('explicit permission choice')
+    expect(startAgent).not.toHaveBeenCalled()
+    expect(getWorkspace(wsId)?.agentPermissionMode).toBe('plan')
+    expect(svc.getStatus(wsId)).toMatchObject({ state: 'blocked', auto_loop: true })
+    updateWorkspaceFields(wsId, { agentPermissionMode: 'strict' })
+    svc.enable(wsId)
+    expect(startAgent).toHaveBeenCalledWith(
+      wsId,
+      expect.any(String),
+      expect.any(String),
+      expect.any(String),
+      false,
+      'strict',
+      undefined,
+      expect.any(String),
+    )
+  })
+
   it('enable throws when auto_loop_ready is false', async () => {
     const svc = await import('../server/services/auto-loop-service.js')
     expect(() => svc.enable(wsId)).toThrow(/ready/i)
@@ -924,7 +986,9 @@ describe('auto-loop-service', () => {
       const prompt = await getLastIterationPrompt()
       expect(prompt).toContain('This is an **E2E regression test** task.')
       expect(prompt).toContain('Project E2E framework: cypress')
-      expect(prompt).toContain('Use the `cy` skill for this task.')
+      expect(prompt).toContain(
+        'Use the `cy` skill for this task if available; otherwise use the existing project test tools directly.',
+      )
       expect(prompt).toContain('Additional guidance: pop')
     })
 

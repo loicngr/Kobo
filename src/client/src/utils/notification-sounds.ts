@@ -1,3 +1,5 @@
+import { customSoundId, customSoundReference, isCustomNotificationSound } from '../../../shared/notification-assets'
+
 export const SOUNDS_DIR = '/sounds'
 
 export interface NotificationSound {
@@ -6,40 +8,11 @@ export interface NotificationSound {
 }
 
 export const NOTIFICATION_SOUNDS: readonly NotificationSound[] = [
-  { id: 'basic-notification.mp3', labelKey: 'settings.notificationSoundBasic' },
-  { id: 'hey.mp3', labelKey: 'settings.notificationSoundHey' },
-  { id: 'warcraft-3-humain-travail.mp3', labelKey: 'settings.notificationSoundWorkspaceCreated' },
-  { id: 'travail_termine.mp3', labelKey: 'settings.notificationSoundTravailTermine' },
-  { id: 'faaah.mp3', labelKey: 'settings.notificationSoundFaaah' },
-  { id: 'ca_va_peter.mp3', labelKey: 'settings.notificationSoundCaVaPeter' },
-  { id: 'dry-fart.mp3', labelKey: 'settings.notificationSoundDryFart' },
-  { id: 'for-shure.mp3', labelKey: 'settings.notificationSoundForShure' },
-  {
-    id: '7eme-compagnie-03.mp3',
-    labelKey: 'settings.notificationSoundSeptiemeCompagnie03',
-  },
-  { id: 'aller-ftg.mp3', labelKey: 'settings.notificationSoundAllerFtg' },
-  { id: 'arrete-de-mentir.mp3', labelKey: 'settings.notificationSoundArreteDeMentir' },
-  {
-    id: 'arretez-les-messages.mp3',
-    labelKey: 'settings.notificationSoundArretezLesMessages',
-  },
-  { id: 'bah-alors-on-est-nul.mp3', labelKey: 'settings.notificationSoundBahAlorsOnEstNul' },
-  { id: 'gta-v-death.mp3', labelKey: 'settings.notificationSoundGtaVDeath' },
-  { id: 'nan-tu-degages.mp3', labelKey: 'settings.notificationSoundNanTuDegages' },
-  { id: 'nan-wallah-pardon.mp3', labelKey: 'settings.notificationSoundNanWallahPardon' },
-  { id: 'ouais-cest-greg.mp3', labelKey: 'settings.notificationSoundOuaisCestGreg' },
-  { id: 'pas-ca-zinedine.mp3', labelKey: 'settings.notificationSoundPasCaZinedine' },
-  { id: 'ta-gueule.mp3', labelKey: 'settings.notificationSoundTaGueule' },
-  { id: 'tu-vas-la-fermer.mp3', labelKey: 'settings.notificationSoundTuVasLaFermer' },
-  { id: 'yaaa.mp3', labelKey: 'settings.notificationSoundYaaa' },
-  {
-    id: 'mais-laisse-moi-dormir-zebi.mp3',
-    labelKey: 'settings.notificationSoundMaisLaisseMoiDormirZebi',
-  },
-] as const
+  { id: 'neutral.wav', labelKey: 'settings.notificationSoundBasic' },
+  { id: 'ready.wav', labelKey: 'settings.notificationSoundReady' },
+]
 
-export const DEFAULT_NOTIFICATION_SOUND = 'hey.mp3'
+export const DEFAULT_NOTIFICATION_SOUND = 'neutral.wav'
 export const INHERIT_NOTIFICATION_SOUND = 'inherit'
 export const NO_NOTIFICATION_SOUND = 'none'
 export const DEFAULT_WORKSPACE_CREATED_SOUND = INHERIT_NOTIFICATION_SOUND
@@ -121,8 +94,63 @@ export const DEFAULT_PR_NOTIFICATION_AUDIO_SETTINGS: Readonly<PrNotificationAudi
   audioPrMergedVolume: 1,
 }
 
+/**
+ * Sounds the user imported. They live under the Kōbō home, not in the bundle,
+ * so the catalogue is only known once the custom-sounds store has loaded it.
+ * Kept as a plain set: `resolveSoundId` runs outside any component, and a
+ * selection pointing at a deleted sound must fall back rather than fail.
+ */
+const customSoundUrls = new Map<string, string>()
+
+export function setKnownCustomSoundIds(values: readonly string[]): void {
+  const next = new Map<string, string>()
+  for (const value of values) {
+    const reference = isCustomNotificationSound(value) ? value : customSoundReference(value)
+    // Keep an already resolved blob URL so a refresh does not re-download.
+    if (isCustomNotificationSound(reference))
+      next.set(reference, customSoundUrls.get(reference) ?? customSoundApiUrl(reference))
+  }
+  customSoundUrls.clear()
+  for (const [reference, url] of next) customSoundUrls.set(reference, url)
+}
+
+/**
+ * Point a known sound at a local blob URL. A media element is not routed
+ * through the wrapped `window.fetch`, so it carries no `X-Kobo-Token` and the
+ * API URL answers 401 over LAN access or behind a reverse proxy — the very
+ * setups this server-side storage exists for. Same approach as
+ * `services/authenticated-images.ts`.
+ */
+export function setCustomSoundUrl(reference: string, url: string): void {
+  if (customSoundUrls.has(reference)) customSoundUrls.set(reference, url)
+}
+
+export function customSoundApiUrl(reference: string): string {
+  return `/api/sounds/${customSoundId(reference)}/file`
+}
+
 export function isKnownSoundId(id: string): boolean {
+  if (isCustomNotificationSound(id)) return customSoundUrls.has(id)
   return NOTIFICATION_SOUNDS.some((s) => s.id === id)
+}
+
+/**
+ * Shape check only, for the settings form. `isKnownSoundId` answers "can this
+ * be played right now", which is false for an imported sound until the
+ * catalogue loads — and the form writes its value straight back on save, so
+ * using it there would silently erase the user's selection.
+ */
+export function isSelectableSoundId(id: unknown): id is string {
+  return typeof id === 'string' && (isCustomNotificationSound(id) || NOTIFICATION_SOUNDS.some((s) => s.id === id))
+}
+
+export function resolveSoundIdForForm(value: unknown): string {
+  return isSelectableSoundId(value) ? value : DEFAULT_NOTIFICATION_SOUND
+}
+
+export function normalizeSoundSelectionForForm(value: unknown): string {
+  if (value === NO_NOTIFICATION_SOUND || value === INHERIT_NOTIFICATION_SOUND) return value
+  return isSelectableSoundId(value) ? value : INHERIT_NOTIFICATION_SOUND
 }
 
 export function resolveSoundId(id: string | undefined | null): string {
@@ -142,5 +170,8 @@ export function normalizeNotificationSoundSelection(value: unknown): string {
 }
 
 export function soundUrl(id: string): string {
-  return `${SOUNDS_DIR}/${resolveSoundId(id)}`
+  const resolved = resolveSoundId(id)
+  return isCustomNotificationSound(resolved)
+    ? (customSoundUrls.get(resolved) ?? customSoundApiUrl(resolved))
+    : `${SOUNDS_DIR}/${resolved}`
 }

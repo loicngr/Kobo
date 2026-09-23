@@ -1,4 +1,6 @@
-import whipSoundUrl from 'src/assets/audio/fouet-ahh.mp3'
+import { soundUrl } from './notification-sounds'
+
+const whipSoundUrl = soundUrl('neutral.wav')
 
 export interface WhipAudioOptions {
   enabled: boolean

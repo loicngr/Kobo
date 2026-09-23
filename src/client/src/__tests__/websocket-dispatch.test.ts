@@ -668,6 +668,23 @@ describe('websocket dispatch — AgentEvent side-effects to workspace store', ()
     expect(wsStore.sendChatMessage('w1', 'do not lose this message')).toBe(false)
   })
 
+  it('does not elevate permissions on an ExitPlanMode tool event', async () => {
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const { dispatchAgentEvent } = await import('../stores/websocket.js')
+    const store = useWorkspaceStore()
+    store.workspaces = [{ ...workspaceFixture(), agentPermissionMode: 'plan' }]
+    const persist = vi.spyOn(store, 'updateAgentPermissionMode').mockResolvedValue(undefined)
+    dispatchAgentEvent('w1', {
+      kind: 'tool:call',
+      messageId: 'm1',
+      toolCallId: 'exit-plan',
+      name: 'ExitPlanMode',
+      input: {},
+    })
+    expect(store.workspaces[0].agentPermissionMode).toBe('plan')
+    expect(persist).not.toHaveBeenCalled()
+  })
+
   it('accumulates TaskCreate calls into the agent todos panel (Claude Code ≥ v0.3.142)', async () => {
     const { useWorkspaceStore } = await import('../stores/workspace.js')
     const ws = useWorkspaceStore()

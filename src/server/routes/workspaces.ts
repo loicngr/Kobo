@@ -2,6 +2,12 @@ import { execFile as execFileCb, execFileSync, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import { nanoid } from 'nanoid'
 import type { HandoffDecision } from '../../shared/session-handoff.js'
+import {
+  isWorkflowPolicy,
+  resolveWorkflowPolicy,
+  WORKFLOW_ACTIONS,
+  type WorkflowPolicy,
+} from '../../shared/workflow-policy.js'
 import { getSearchIndexStatus, searchEvents } from '../services/search-service.js'
 import {
   createSessionHandoff,
@@ -13,7 +19,7 @@ import {
 } from '../services/session-handoff-service.js'
 import { AgentStopError, assertAgentStopped } from '../utils/agent-stop-result.js'
 import { withGitRepoLock } from '../utils/git-repo-lock.js'
-import { workspaceLifecycleReason } from '../utils/workspace-lifecycle-guard.js'
+import { isWorkspaceLifecycleBusy, workspaceLifecycleReason } from '../utils/workspace-lifecycle-guard.js'
 import autoLoopMessagesRoutes from './auto-loop-messages.js'
 
 const execFileAsync = promisify(execFileCb)
@@ -517,6 +523,7 @@ app.post('/:id/switch-engine', migrationGuard, async (c) => {
 
 // POST /api/workspaces — create workspace
 interface CreateWorkspaceBody {
+  workflowPolicy?: Partial<WorkflowPolicy>
   name: string
   projectPath: string
   sourceBranch: string
@@ -571,6 +578,9 @@ app.post('/', migrationGuard, creationBodyLimit, async (c) => {
   let setupScriptConfigured = false
   try {
     const { body, attachments } = await readWorkspaceCreationRequest<CreateWorkspaceBody>(c.req.raw)
+
+    if (body.workflowPolicy !== undefined && !isWorkflowPolicy(body.workflowPolicy))
+      return c.json({ error: 'Invalid workflowPolicy' }, 400)
 
     // workingBranch is derived from git when worktreePath is provided, so
     // it's not required in that flow. The other 3 fields stay mandatory.
@@ -923,6 +933,11 @@ app.post('/', migrationGuard, creationBodyLimit, async (c) => {
         model: body.model,
         brainstormModel: body.brainstormModel,
         reasoningEffort: body.reasoningEffort,
+        workflowPolicy: resolveWorkflowPolicy(
+          globalSettings.workflowPolicy,
+          projectSettings?.workflowPolicy,
+          body.workflowPolicy,
+        ),
         agentPermissionMode: resolveCreateAgentPermissionMode(
           body.agentPermissionMode,
           body.projectPath,
@@ -1271,9 +1286,9 @@ app.post('/', migrationGuard, creationBodyLimit, async (c) => {
           `## Additional Context\n${extra}\n\n` +
           `## MCP Tools for deeper analysis\n` +
           `If you need more context, the following Sentry MCP tools are available:\n` +
-          `- \`mcp__sentry__get_sentry_resource(url, resourceType)\` — fetch the issue, breadcrumbs, replay, or trace\n` +
-          `- \`mcp__sentry__search_issue_events(organizationSlug, issueId='${sentryContent.issueId}')\` — recent events for this issue\n` +
-          `- \`mcp__sentry__get_issue_tag_values(organizationSlug, issueId='${sentryContent.issueId}', key)\` — filter by tag (environment, user, browser, …)\n`
+          `- \`get_sentry_resource(url, resourceType) [use the Kōbō-managed Sentry namespace supplied for this session]\` — fetch the issue, breadcrumbs, replay, or trace\n` +
+          `- \`search_issue_events(organizationSlug, issueId='${sentryContent.issueId}')\` — recent events for this issue\n` +
+          `- \`get_issue_tag_values(organizationSlug, issueId='${sentryContent.issueId}', key)\` — filter by tag (environment, user, browser, …)\n`
 
         fs.writeFileSync(sentryFilePath, md, 'utf-8')
 
@@ -1410,9 +1425,9 @@ app.post('/', migrationGuard, creationBodyLimit, async (c) => {
           `5. Confirm the test passes, run related tests\n` +
           `6. Commit referencing the Sentry Short-ID (e.g. "fix(scope): description (${sentryContent.issueId})") — Sentry auto-closes the issue when the commit is merged\n` +
           `\nIf you need more context, Sentry MCP tools are available:\n` +
-          `- mcp__sentry__get_sentry_resource(url, resourceType) — fetch the issue, breadcrumbs, replay or trace\n` +
-          `- mcp__sentry__search_issue_events(organizationSlug, issueId='${sentryContent.issueId}') — recent events\n` +
-          `- mcp__sentry__get_issue_tag_values(organizationSlug, issueId='${sentryContent.issueId}', key) — filter by tag\n`
+          `- get_sentry_resource(url, resourceType) [use the Kōbō-managed Sentry namespace supplied for this session] — fetch the issue, breadcrumbs, replay or trace\n` +
+          `- search_issue_events(organizationSlug, issueId='${sentryContent.issueId}') — recent events\n` +
+          `- get_issue_tag_values(organizationSlug, issueId='${sentryContent.issueId}', key) — filter by tag\n`
         if (sentryTpl.trim().length > 0) {
           const renderedSentry = renderSentryInitialPrompt(sentryTpl, {
             issueId: sentryContent.issueId,
@@ -1904,6 +1919,13 @@ app.get('/auto-loop-states', (c) => {
 app.route('/', autoLoopMessagesRoutes)
 
 // GET /api/workspaces/:id/auto-loop — current auto-loop status for one workspace.
+// Admission inspection never changes deadlines, pending schedules or lifecycle state.
+app.get('/:id/automatic-admission', (c) => {
+  const id = c.req.param('id')
+  if (!workspaceService.getWorkspace(id)) return c.json({ error: 'Workspace not found' }, 404)
+  return c.json(autoLoopService.getAutomaticAdmissionStatus(id))
+})
+
 app.get('/:id/auto-loop', (c) => {
   try {
     const id = c.req.param('id')
@@ -3017,6 +3039,23 @@ app.patch('/:id', migrationGuard, async (c) => {
       return c.json({ error: 'agent_description must be set via the agent MCP tool, not via the API' }, 400)
     }
 
+    if (body.workflowPolicy !== undefined && !isWorkflowPolicy(body.workflowPolicy))
+      return c.json({ error: 'Invalid workflowPolicy' }, 400)
+    if (body.workflowPolicy !== undefined) {
+      const policy = resolveWorkflowPolicy(workspace.workflowPolicy, body.workflowPolicy)
+      const changed = WORKFLOW_ACTIONS.some((action) => policy[action] !== workspace.workflowPolicy[action])
+      // A live engine already received its policy. Persisting a different one cannot
+      // revoke that prompt; wait for confirmed closure before accepting the change.
+      if (changed && (agentManager.hasController(id) || isWorkspaceLifecycleBusy(id))) {
+        return c.json(
+          {
+            error: 'Stop the agent and wait for workspace operations to finish before changing workflow preferences.',
+            code: 'workspace-busy',
+          },
+          409,
+        )
+      }
+    }
     if (body.model !== undefined && (typeof body.model !== 'string' || !body.model.trim())) {
       return c.json({ error: 'model must be a non-empty string' }, 400)
     }
@@ -3067,6 +3106,7 @@ app.patch('/:id', migrationGuard, async (c) => {
     }
     if (
       body.status === undefined &&
+      body.workflowPolicy === undefined &&
       body.model === undefined &&
       body.reasoningEffort === undefined &&
       body.agentPermissionMode === undefined &&

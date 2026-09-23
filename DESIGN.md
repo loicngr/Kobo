@@ -5,7 +5,7 @@
 - **What this is:** Kōbō — a Claude Code and Codex multi-agent orchestrator. Each "workspace" is a
   self-contained mission with its own git worktree, branch, agent session, optional dev
   server, optional Notion source-of-truth, and a dedicated MCP tools server.
-- **Who it's for:** Solo developer (the maintainer) + a small community of power-users
+- **Who it's for:** Developers using their own local instance, from a first mission to advanced parallel workflows,
   distributed via `npx @loicngr/kobo`.
 - **Space/industry:** Developer tools. Peers: Linear, Anthropic Console, Tailscale admin,
   Vercel dashboard. Not Notion, not Raycast, not Stripe marketing.
@@ -220,8 +220,11 @@ navigation drawer, an active-section content panel, and a dirty-state save bar.
 The old three-tab redesign description is no longer the implementation baseline.
 
 - Section membership is declared by `navItems` in `SettingsPage.vue`: General,
-  Agents, Skills, Prompts, Scripts, Notion, Sentry, Forge, Voice, Notifications,
+  Agents, Skills, Git, Prompts, Scripts, Notion, Sentry, Forge, Voice, Notifications,
   Worktrees, Projects, prompt Templates, Workspace templates, and Export.
+- Git groups workflow preferences, conventions and branch prefixes.
+  Prompts keeps post-PR/MR, review, CI-fix and finalization instructions. Project overrides use
+  the same Git grouping. Retry limits belong to Agents and reminders to Notifications.
 - Keep new sections in the same navigation and guided-tour registry; all labels
   go through the five locale files.
 - Use flat rows and subtle dividers, a clear section heading, and technical
@@ -285,3 +288,9 @@ must stay consistent with them.
   --kobo-duration-medium: 200ms;
 }
 ```
+
+## First-run and optional configuration
+
+The first-run panel stays hidden until settings load and does not interrupt migrated installations. Its diagnostic statuses distinguish ready, missing, failed and unverified; provider authentication is never inferred from a local executable check. Starting from this panel opens the ordinary creation form without automatically launching an agent. Preserve keyboard access, responsive layout and translated remediation text in all five locales.
+
+Direct integration settings show configured status without fetching stored credentials; replacement is explicit and clears local fields only after success. Scheduled-session admission is diagnostic information, not proof that a pending instruction was delivered. Workflow preferences must state their scope separately from engine permissions. Public audio assets are original quiet tones; avoid insulting labels or unverified third-party clips.

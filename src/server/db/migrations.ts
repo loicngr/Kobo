@@ -788,6 +788,27 @@ export const migrations: Migration[] = [
         db.exec('ALTER TABLE agent_sessions ADD COLUMN activation_order INTEGER NOT NULL DEFAULT 0')
     },
   },
+  {
+    version: 48,
+    name: 'workspace-workflow-preferences',
+    migrate(db) {
+      if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='workspaces'").get()) return
+      const columns = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>
+      if (!columns.some((column) => column.name === 'workflow_policy')) {
+        db.exec('ALTER TABLE workspaces ADD COLUMN workflow_policy TEXT')
+      }
+    },
+  },
+  {
+    version: 49,
+    name: 'preserve-wakeup-deadline-on-retry',
+    migrate(db) {
+      if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='pending_wakeups'").get()) return
+      const columns = db.prepare('PRAGMA table_info(pending_wakeups)').all() as Array<{ name: string }>
+      if (!columns.some((column) => column.name === 'retry_at'))
+        db.exec('ALTER TABLE pending_wakeups ADD COLUMN retry_at TEXT')
+    },
+  },
 ]
 
 /** Current schema version — always equals the highest migration version. */

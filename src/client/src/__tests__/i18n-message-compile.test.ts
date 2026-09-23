@@ -36,10 +36,14 @@ describe('i18n message compilation', () => {
     expect((i18n.global.t as (k: string) => string)('schedule.advancedHint')).toContain('@hourly/@daily')
   })
 
-  it.each(Object.entries(locales))("keeps literal 'tocard' in every %s whip phrase", (_locale, messages) => {
-    const dictionary = messages as Record<string, string>
-    for (const key of whipPhraseKeys) {
-      expect(dictionary[key]).toContain('tocard')
-    }
-  })
+  it.each(Object.entries(locales))(
+    'uses nonempty respectful prompts in every %s continuation phrase',
+    (_locale, messages) => {
+      const dictionary = messages as Record<string, string>
+      for (const key of whipPhraseKeys) {
+        expect(dictionary[key]?.trim().length).toBeGreaterThan(0)
+        expect(dictionary[key]).not.toContain('tocard')
+      }
+    },
+  )
 })

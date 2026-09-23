@@ -8,17 +8,31 @@ on:
   push:
     branches: [develop]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
     name: Lint, type check and tests
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           # Single source of truth, instead of a version repeated here, in
           # release.yml and in .nvmrc, free to drift apart.
@@ -76,3 +90,6 @@ jobs:
       - name: Run frontend tests
         working-directory: src/client
         run: npm test
+
+      - name: Install and smoke-test the distributable tarball
+        run: npm run test:package

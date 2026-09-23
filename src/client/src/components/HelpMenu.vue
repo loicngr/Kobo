@@ -14,6 +14,9 @@
     <q-tooltip>{{ $t('help.title') }}</q-tooltip>
     <q-menu v-model="menuOpen" anchor="bottom right" self="top right">
       <q-list dense role="menu" style="min-width: 260px">
+        <q-item v-close-popup clickable role="menuitem" @click="openSetup">
+          <q-item-section>{{ $t('setup.title') }}</q-item-section>
+        </q-item>
         <q-item-label header>{{ $t('help.tours') }}</q-item-label>
         <q-item
           v-for="tour in tours"
@@ -62,6 +65,10 @@ import { ref } from 'vue'
 
 const { tours, status, runTour, resetAll, markAllSeen } = useTours()
 const menuOpen = ref(false)
+
+function openSetup(): void {
+  window.dispatchEvent(new Event('kobo:setup'))
+}
 
 function run(id: TourId): void {
   void runTour(id)

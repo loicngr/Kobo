@@ -2555,7 +2555,7 @@ describe('POST /api/workspaces — Notion/Sentry initial prompt injection', () =
     const prompt = getCapturedPrompt()
     // The default template substitutes {ticket_id} and {notion_file_path}; we
     // assert on a stable substring that only appears in the rendered default.
-    expect(prompt).toContain('MANDATORY context-enrichment for Notion ticket TK-5')
+    expect(prompt).toContain('Enrich the context for Notion ticket TK-5')
   })
 
   it('does NOT inject the Notion template when notionFilePath ends up null (file-write failure)', async () => {
@@ -6532,7 +6532,9 @@ describe('GET /api/workspaces/:id/prep-autoloop-prompt', () => {
     const data = (await res.json()) as { prompt: string }
     expect(data.prompt).toContain('**E2E review**')
     expect(data.prompt).toContain('The project uses `cypress`.')
-    expect(data.prompt).toContain('Use the `cy` skill for this task.')
+    expect(data.prompt).toContain(
+      'Use the `cy` skill for this task if available; otherwise use the existing project test tools directly.',
+    )
   })
 })
 
@@ -8322,4 +8324,25 @@ it('rejects a client-forced compacting status without changing workspace state',
   expect(res.status).toBe(400)
   expect(workspaceService.updateWorkspaceFields).not.toHaveBeenCalled()
   expect(workspaceService.updateWorkspaceStatus).not.toHaveBeenCalled()
+})
+
+describe('GET automatic admission', () => {
+  it('returns the shared reason and capacity without launching or consuming schedules', async () => {
+    const admission = await import('../server/services/auto-loop-service.js')
+    const status = { allowed: false, reason: 'capacity' as const, running: 2, limit: 2 }
+    const read = vi.spyOn(admission, 'getAutomaticAdmissionStatus').mockReturnValue(status)
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    try {
+      const response = await app.request(`/api/workspaces/${fakeWorkspace.id}/automatic-admission`)
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual(status)
+      expect(read).toHaveBeenCalledWith(fakeWorkspace.id)
+    } finally {
+      read.mockRestore()
+    }
+  })
+  it('returns 404 for a missing workspace', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null)
+    expect((await app.request('/api/workspaces/missing/automatic-admission')).status).toBe(404)
+  })
 })

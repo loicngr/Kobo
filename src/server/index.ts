@@ -13,11 +13,13 @@ import changelogRouter from './routes/changelog.js'
 import devServerRouter from './routes/dev-server.js'
 import documentsRouter from './routes/documents.js'
 import { enginesRouter } from './routes/engines.js'
+import environmentRouter from './routes/environment.js'
 import exportRouter from './routes/export.js'
 import fsRouter from './routes/fs.js'
 import gitRouter from './routes/git.js'
 import healthRouter from './routes/health.js'
 import imagesRouter from './routes/images.js'
+import integrationsRouter from './routes/integrations.js'
 import mcpRouter from './routes/mcp.js'
 import { migrationRouter } from './routes/migration.js'
 import notionRouter from './routes/notion.js'
@@ -25,6 +27,7 @@ import pullRequestsRouter from './routes/pull-requests.js'
 import searchRouter from './routes/search.js'
 import sentryRouter from './routes/sentry.js'
 import settingsRouter from './routes/settings.js'
+import soundsRouter from './routes/sounds.js'
 import templatesRouter from './routes/templates.js'
 import usageRoutes from './routes/usage.js'
 import voiceRouter from './routes/voice.js'
@@ -209,6 +212,9 @@ app.route('/api/workspaces', exportRouter)
 app.route('/api/search', searchRouter)
 app.route('/api/health', healthRouter)
 app.route('/api/engines', enginesRouter)
+app.route('/api/environment', environmentRouter)
+app.route('/api/integrations', integrationsRouter)
+app.route('/api/sounds', soundsRouter)
 app.route('/api/migration', migrationRouter)
 app.route('/api/voice', voiceRouter)
 

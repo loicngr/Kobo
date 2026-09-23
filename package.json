@@ -1,7 +1,7 @@
 {
   "name": "@loicngr/kobo",
-  "version": "1.11.45",
-  "description": "Kōbō — multi-workspace agent manager for Claude Code. Orchestrates isolated git worktrees with dev servers, Notion integration, and MCP tools.",
+  "version": "2.0.0",
+  "description": "Kōbō — local multi-workspace orchestrator for Claude Code and OpenAI Codex, with isolated Git worktrees, live review and optional automation.",
   "type": "module",
   "license": "GPL-3.0-or-later",
   "bin": {
@@ -14,7 +14,17 @@
     "AGENTS.md",
     "README.md",
     "CHANGELOG.md",
-    "LICENSE"
+    "LICENSE",
+    "CONFIGURATION.md",
+    "SECURITY.md",
+    "THIRD_PARTY_NOTICES.md",
+    "docs/getting-started.md",
+    "docs/troubleshooting.md",
+    "CONTRIBUTING.md",
+    "CODE_OF_CONDUCT.md",
+    "DESIGN.md",
+    "docs/release/public-readiness-evidence.md",
+    "docs/release/public-opening-checklist.md"
   ],
   "publishConfig": {
     "access": "public",
@@ -66,7 +76,9 @@
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
     "format:check": "biome format .",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "test:package": "node scripts/smoke-package.mjs",
+    "security:scan": "node scripts/scan-secrets.mjs"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.274",

@@ -1,12 +1,4 @@
-/**
- * Two settings on the create page are silently overridden by the form itself.
- * Both used to live as inline ternaries inside the request payload, so nothing
- * guaranteed the UI showed what the network actually sent — and the user could
- * flip a toggle that had no effect, with no explanation.
- *
- * This resolves both in one place and, crucially, REPORTS which overrides
- * applied so the page can say so out loud.
- */
+/** Keep reused-worktree setup safe without changing the selected permission mode. */
 
 export type CreateOverrideId = 'setup-script-forced' | 'permission-mode-downgraded'
 
@@ -39,13 +31,7 @@ export function resolveCreateOverrides(input: CreateFormInput): CreateResolvedOv
     applied.push('setup-script-forced')
   }
 
-  // Plan mode blocks MCP calls and edits, which an auto-loop needs. The
-  // downgrade is a real change of security posture, not a UI detail.
-  let agentPermissionMode = input.agentPermissionMode
-  if (input.autoLoop && agentPermissionMode === 'plan') {
-    agentPermissionMode = 'bypass'
-    applied.push('permission-mode-downgraded')
-  }
+  const agentPermissionMode = input.agentPermissionMode
 
   return { skipSetupScript, agentPermissionMode, applied }
 }

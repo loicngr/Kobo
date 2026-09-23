@@ -295,7 +295,7 @@ export function useTours() {
    * over a dialog (one retry after `DIALOG_RETRY_DELAY_MS`). Never rejects: failures are logged.
    */
   async function autoRun(id: TourId, retryOnDialog = true): Promise<void> {
-    if (isWorkspacePane) return
+    if (isWorkspacePane || document.querySelector('[data-test="first-run"]')) return
     const definition = findTour(id)
     if (definition?.steps.every((step) => seen[id]?.includes(step.id))) return
     if (starting > 0 || isRunning()) {

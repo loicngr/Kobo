@@ -35,15 +35,15 @@ describe('resolveCreateOverrides', () => {
     expect(resolved.applied).toContain('setup-script-forced')
   })
 
-  it('downgrades plan to bypass under auto-loop, and says so', () => {
+  it('preserves plan under auto-loop without changing permissions', () => {
     const resolved = resolveCreateOverrides({
       useExistingWorktree: false,
       skipSetupScript: false,
       autoLoop: true,
       agentPermissionMode: 'plan',
     })
-    expect(resolved.agentPermissionMode).toBe('bypass')
-    expect(resolved.applied).toContain('permission-mode-downgraded')
+    expect(resolved.agentPermissionMode).toBe('plan')
+    expect(resolved.applied).not.toContain('permission-mode-downgraded')
   })
 
   it('does not claim a downgrade when auto-loop runs on a non-plan mode', () => {
@@ -68,7 +68,7 @@ describe('resolveCreateOverrides', () => {
     expect(resolved.applied).toEqual([])
   })
 
-  it('applies both overrides at once when reusing a worktree and auto-looping on plan', () => {
+  it('only overrides setup when reusing a worktree and auto-looping on plan', () => {
     const resolved = resolveCreateOverrides({
       useExistingWorktree: true,
       skipSetupScript: false,
@@ -76,8 +76,7 @@ describe('resolveCreateOverrides', () => {
       agentPermissionMode: 'plan',
     })
     expect(resolved.skipSetupScript).toBe(true)
-    expect(resolved.agentPermissionMode).toBe('bypass')
-    expect(resolved.applied).toEqual(expect.arrayContaining(['setup-script-forced', 'permission-mode-downgraded']))
-    expect(resolved.applied).toHaveLength(2)
+    expect(resolved.agentPermissionMode).toBe('plan')
+    expect(resolved.applied).toEqual(['setup-script-forced'])
   })
 })

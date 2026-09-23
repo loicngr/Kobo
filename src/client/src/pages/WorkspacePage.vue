@@ -24,9 +24,11 @@
               :permission-mode-options="permissionModeOptions" :model-options="modelOptions"
               :reasoning-options="reasoningOptions" :pending-spawn-changes="pendingSpawnChanges"
               :creating-session="creatingSession" :can-delete-session="sessionCanBeDeleted"
+              :workflow-policy="currentWorkflowPolicy" :workflow-locked="workflowPolicyLocked"
               v-model:selected-session-id="selectedSessionId" v-model:permission-mode="currentPermissionMode"
               v-model:model="currentModel" v-model:reasoning-effort="currentReasoningEffort"
-              @rename="openRenameDialog" @copy-session-id="copyEngineSessionId" @delete-session="confirmDeleteSession" />
+              @rename="openRenameDialog" @copy-session-id="copyEngineSessionId" @delete-session="confirmDeleteSession"
+              @update-workflow="setWorkflowMode" />
           </q-list></q-menu>
         </q-btn>
         <q-badge :label="workspaceStatusLabel(selectedWs.id, selectedWs.status)"
@@ -54,9 +56,11 @@
               :permission-mode-options="permissionModeOptions" :model-options="modelOptions"
               :reasoning-options="reasoningOptions" :pending-spawn-changes="pendingSpawnChanges"
               :creating-session="creatingSession" :can-delete-session="sessionCanBeDeleted"
+              :workflow-policy="currentWorkflowPolicy" :workflow-locked="workflowPolicyLocked"
               v-model:selected-session-id="selectedSessionId" v-model:permission-mode="currentPermissionMode"
               v-model:model="currentModel" v-model:reasoning-effort="currentReasoningEffort"
-              @rename="openRenameDialog" @copy-session-id="copyEngineSessionId" @delete-session="confirmDeleteSession" />
+              @rename="openRenameDialog" @copy-session-id="copyEngineSessionId" @delete-session="confirmDeleteSession"
+              @update-workflow="setWorkflowMode" />
           </q-list></q-menu>
         </q-btn>
         <WorkspaceWhipControl v-if="!selectedWs.archivedAt" :workspace-id="selectedWs.id"
@@ -302,7 +306,7 @@ import { MODEL_OPTION_DEFS, MODEL_OPTION_DEFS_BY_ENGINE } from 'src/constants/mo
 import { PERMISSION_MODES_BY_ENGINE } from 'src/constants/permissionModes'
 import { useLayoutStore } from 'src/stores/layout'
 import type { AgentSession } from 'src/stores/workspace'
-import { useWorkspaceStore } from 'src/stores/workspace'
+import { useWorkspaceStore, WorkspaceActionError } from 'src/stores/workspace'
 import { copyToClipboard } from 'src/utils/clipboard'
 import { isTypingTarget, type PaletteEntry, rankCommands } from 'src/utils/command-palette'
 import { useTimeAgo } from 'src/utils/formatters'
@@ -313,6 +317,12 @@ import { isBusyStatus, workspaceStatusKey } from 'src/utils/workspace-status'
 import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
+import {
+  resolveWorkflowPolicy,
+  type WorkflowAction,
+  type WorkflowMode,
+  type WorkflowPolicy,
+} from '../../../shared/workflow-policy'
 
 // Load immediately; ActivityFeed tracks its own outstanding history requests.
 const ActivityFeed = defineAsyncComponent(() => import('src/components/ActivityFeed.vue'))
@@ -672,14 +682,12 @@ const reasoningOptions = computed(() => {
 })
 
 const permissionModeOptions = computed(() => {
-  const ws = store.selectedWorkspace
-  const autoLoopOn = ws ? (store.autoLoopStates[ws.id]?.auto_loop ?? ws.autoLoop) : false
   const supported = PERMISSION_MODES_BY_ENGINE[currentEngineId.value] ?? PERMISSION_MODES_BY_ENGINE['claude-code']
   return supported.map((mode) => ({
     label: t(`agentPermissionMode.${mode}`),
     value: mode,
-    // `plan` is disabled while auto-loop is on (loop needs to execute, not plan).
-    disable: mode === 'plan' && autoLoopOn,
+    // Returning to Plan is allowed; the loop will pause before execution.
+    disable: false,
   }))
 })
 
@@ -710,6 +718,29 @@ function formatReasoningLabel(label: string): string {
 }
 
 type AgentPermissionModeValue = 'plan' | 'bypass' | 'strict' | 'interactive'
+
+const currentWorkflowPolicy = computed<WorkflowPolicy>(() =>
+  resolveWorkflowPolicy(store.selectedWorkspace?.workflowPolicy),
+)
+
+/**
+ * The backend refuses a change while a controller is alive: the running session
+ * already carries these preferences in a prompt that cannot be revoked. Showing
+ * the selectors disabled explains that up front instead of failing after a click.
+ */
+const workflowPolicyLocked = computed(() => isAgentRunning.value)
+
+async function setWorkflowMode(action: WorkflowAction, mode: WorkflowMode): Promise<void> {
+  const id = store.selectedWorkspaceId
+  if (!id || currentWorkflowPolicy.value[action] === mode) return
+  try {
+    await store.updateWorkflowPolicy(id, { [action]: mode })
+  } catch (err) {
+    // A session may have started between the render and the click.
+    const busy = err instanceof WorkspaceActionError && err.code === 'workspace-busy'
+    $q.notify({ type: 'negative', message: busy ? t('workflow.locked') : t('workflow.updateFailed') })
+  }
+}
 
 const currentPermissionMode = computed<AgentPermissionModeValue>({
   get: () => store.selectedWorkspace?.agentPermissionMode ?? 'bypass',

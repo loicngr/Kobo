@@ -5,6 +5,7 @@ import Database from 'better-sqlite3'
 import { Hono } from 'hono'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { initSchema } from '../server/db/schema.js'
+import { reserveWorkspaceLifecycle } from '../server/utils/workspace-lifecycle-guard.js'
 
 // Only mock what must NOT hit real infra (websocket, MCP, process spawn).
 // We want the REAL workspace-service + auto-loop-service + HTTP routing.
@@ -21,6 +22,7 @@ vi.mock('../server/services/agent/orchestrator.js', () => ({
   stopAgentAndWait: vi.fn().mockResolvedValue('not-running'),
   sendMessage: vi.fn(),
   hasController: vi.fn(() => false),
+  runningAgentCount: vi.fn(() => 0),
   isShuttingDown: vi.fn(() => false),
   resetAutoLoopRetries: vi.fn(),
   getAgentStatus: vi.fn(() => null),
@@ -112,6 +114,73 @@ afterEach(async () => {
   const { closeDb } = await import('../server/db/index.js')
   closeDb()
   if (tmpDir && fs.existsSync(tmpDir)) fs.rmSync(tmpDir, { recursive: true, force: true })
+})
+
+describe('PATCH /api/workspaces/:id — workflow policy ownership', () => {
+  const automatic = { commit: 'automatic', push: 'automatic', publish: 'automatic' } as const
+
+  beforeEach(async () => {
+    const { updateWorkspaceFields } = await import('../server/services/workspace-service.js')
+    updateWorkspaceFields(wsId, { workflowPolicy: automatic })
+  })
+
+  function patch(body: Record<string, unknown>) {
+    return app.request(`/api/workspaces/${wsId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  }
+
+  it.each(['running', 'stopping'] as const)('rejects a policy change while the controller is %s', async (status) => {
+    const orch = await import('../server/services/agent/orchestrator.js')
+    const { getWorkspace } = await import('../server/services/workspace-service.js')
+    vi.mocked(orch.hasController).mockReturnValue(true)
+    vi.mocked(orch.getAgentStatus).mockReturnValue(status)
+
+    const response = await patch({ workflowPolicy: { push: 'manual' }, name: 'Must not persist' })
+
+    expect(response.status).toBe(409)
+    expect(await response.json()).toMatchObject({ code: 'workspace-busy', error: expect.stringContaining('Stop') })
+    expect(getWorkspace(wsId)).toMatchObject({ workflowPolicy: automatic, name: 'w' })
+  })
+
+  it('rejects a policy change while a lifecycle operation owns the workspace', async () => {
+    const { getWorkspace } = await import('../server/services/workspace-service.js')
+    const reservation = reserveWorkspaceLifecycle(wsId, 'restore')
+    try {
+      const response = await patch({ workflowPolicy: { push: 'manual' } })
+      expect(response.status).toBe(409)
+      expect(getWorkspace(wsId)?.workflowPolicy).toEqual(automatic)
+    } finally {
+      reservation.release()
+    }
+  })
+
+  it('persists a partial policy change after controller ownership has ended', async () => {
+    const orch = await import('../server/services/agent/orchestrator.js')
+    const { getWorkspace } = await import('../server/services/workspace-service.js')
+    vi.mocked(orch.hasController).mockReturnValue(false)
+
+    const response = await patch({ workflowPolicy: { push: 'manual' } })
+
+    expect(response.status).toBe(200)
+    expect(getWorkspace(wsId)?.workflowPolicy).toEqual({ ...automatic, push: 'manual' })
+  })
+
+  it.each([{ push: 'automatic' }, {}])(
+    'accepts a policy no-op during an active session: %j',
+    async (workflowPolicy) => {
+      const orch = await import('../server/services/agent/orchestrator.js')
+      const { getWorkspace } = await import('../server/services/workspace-service.js')
+      vi.mocked(orch.hasController).mockReturnValue(true)
+
+      const response = await patch({ workflowPolicy, name: 'Renamed' })
+
+      expect(response.status).toBe(200)
+      expect(getWorkspace(wsId)).toMatchObject({ workflowPolicy: automatic, name: 'Renamed' })
+    },
+  )
 })
 
 describe('GET /api/workspaces/:id/auto-loop', () => {

@@ -7,10 +7,14 @@ Reference for Kōbō configuration and external integrations. The tables cover t
 - [Storage layout](#storage-layout)
 - [Environment variables](#environment-variables)
 - [Settings UI](#settings-ui)
+  - [Settings navigation](#settings-navigation)
+  - [Fresh defaults and Git preferences](#first-run-defaults-and-git-workflow-preferences)
+  - [Managed MCPs in agent sessions](#managed-integration-mcps-in-agent-sessions)
 - [Progressive Web App](#progressive-web-app)
 - [Custom change-source-branch script](#custom-change-source-branch-script)
 - [Lifecycle hooks](#lifecycle-hooks)
 - [Unanswered question reminder](#unanswered-question-reminder)
+- [Imported notification sounds](#imported-notification-sounds)
 - [Comparing two engines on one task](#comparing-two-engines-on-one-task)
 - [Workspace templates and duplication](#workspace-templates-and-duplication)
 - [Auto-purge worktree on PR merged](#auto-purge-worktree-on-pr-merged)
@@ -66,6 +70,8 @@ $KOBO_HOME/
 ├── kobo.db.backup-<ISO>-<seq>  # Daily WAL-safe backup (seven most recent kept).
 ├── kobo.db.premigration-*    # Separate snapshot before schema changes (five kept).
 ├── settings.json            # Global and per-project settings.
+├── integrations.json        # Private MCP configuration (0600); excluded from settings exports.
+├── sounds/                  # Imported notification sounds plus their sounds.json manifest.
 ├── templates.json           # Prompt templates.
 ├── workspace-templates.json # Saved presets for the create form.
 ├── skills.json              # Cached Claude slash-command catalogue; suite settings live in settings.json.
@@ -117,12 +123,20 @@ Settings are managed live from the **Settings** page in the UI and persisted to 
 }
 ```
 
+The current [navigation map](#settings-navigation) explains where each group lives.
+Workflow and integration drafts survive tab changes; leaving with unsaved changes
+asks for confirmation. Ordinary settings use the main Save action. Direct connection
+credentials use their separate **Replace connection** action and are excluded from
+settings exports.
+
 ### Global settings
 
 | Key | Type | Purpose |
 |---|---|---|
 | `defaultModel` | `string` | Fallback model when no engine-specific default is set. |
-| `defaultModelByEngine` | `Record<engine, string>` | Per-engine default model (`claude-code` / `codex`). Seeded to `claude-sonnet-5` / `gpt-5.6-terra` (settings migration v57 moves an entry still on `auto` there; an explicit choice is kept). `auto` means "let the CLI pick". |
+| `defaultModelByEngine` | `Record<engine, string>` | Per-engine default model (`claude-code` / `codex`). Fresh installs use `auto` for both engines: the runtime chooses its default model. Historical migrations and existing user choices are preserved. The actual model is reported by the engine when the session starts; an Auto configuration label is not a model name. |
+| `workflowPolicy` | `{ commit, push, publish }` | Independent `manual` / `automatic` preferences, snapshotted at workspace creation. Fresh defaults are manual. See [Git preferences](#first-run-defaults-and-git-workflow-preferences). |
+| `skillSuite` | `string` | Standard, an external suite/combination, or custom instructions. Fresh default `standard`; see [Skill suites](#skill-suites). |
 | `defaultPermissionModeByEngine` | `Record<engine, mode>` | Default permission mode per engine. See [Permission modes](#permission-modes). |
 | `dangerouslySkipPermissions` | `boolean` | Disable all approval prompts. **Use with care.** |
 | `prPromptTemplate` | `string` | Template rendered by the `/open-pr` endpoint. Supports `{{pr_number}}`, `{{pr_url}}`, `{{branch_name}}`, `{{diff_stats}}`, `{{commits}}`, etc. |
@@ -130,11 +144,11 @@ Settings are managed live from the **Settings** page in the UI and persisted to 
 | `notionInitialPromptTemplate` | `string` | Template injected as the first user message when a workspace is created from a Notion page. |
 | `sentryInitialPromptTemplate` | `string` | Template injected as the first user message when a workspace is created from a Sentry issue. |
 | `gitConventions` | `string` | Markdown block written to `.ai/.git-conventions.md` inside every workspace. |
-| `setupScript` | `string` | Shell script run in a worktree after it is created, before the agent starts. Empty uses the built-in mandatory final verification. |
+| `setupScript` | `string` | Shell script run in a worktree after it is created, before the agent starts. Empty disables the setup script. |
 | `cleanupScript` | `string` | Shell script run after a session ends. Empty disables. See `cleanupScriptMode`. |
 | `cleanupScriptMode` | `'idle' \| 'no-tasks'` | When the cleanup script fires: after every session (`idle`) or only when no Kōbō task remains (`no-tasks`). In auto-loop it runs only once every task is done. |
 | `cleanupScriptOnlyOnChanges` | `boolean` | Run the cleanup script only when the worktree has uncommitted changes (modified / added / deleted / untracked files). |
-| `archiveScript` | `string` | Shell script run server-side when a workspace is archived. Empty uses the built-in mandatory final verification. |
+| `archiveScript` | `string` | Shell script run server-side when a workspace is archived. Empty disables the archive script. |
 | `changeSourceBranchScript` | `string` | Shell script that **replaces** the built-in change-source-branch logic. The global default is Kōbō's bundled script; clearing the effective script hides the UI action. The backend retains a built-in fallback. See [Custom change-source-branch script](#custom-change-source-branch-script). |
 | `editorCommand` | `string` | Command used by the "Open in editor" action (e.g. `code`, `phpstorm`, `cursor`). The worktree path is appended as the last argument. |
 | `browserNotifications` | `boolean` | Trigger Web Notifications when an agent finishes a turn. |
@@ -214,7 +228,7 @@ Projects override a subset of global settings. Anything you set here takes prece
 | `setupScript`, `cleanupScript`, `archiveScript` | `string` | Per-project versions of the global lifecycle scripts. Empty inherits the global value. |
 | `changeSourceBranchScript` | `string` | Per-project version of the custom change-source-branch script. Empty inherits the global value. See [Custom change-source-branch script](#custom-change-source-branch-script). |
 | `cleanupScriptMode` | `'' \| 'idle' \| 'no-tasks'` | Per-project override of the cleanup trigger mode. Empty inherits the global mode. |
-| `taskPromptTemplate` | `string` | Prompt auto-injected into the task-description textarea on the creation page when this project is selected. Empty uses the built-in mandatory final verification. |
+| `taskPromptTemplate` | `string` | Prompt used to prefill the mission description when this project is selected. Empty leaves the description without a project-provided prompt. |
 | `forge` | `'auto' \| 'github' \| 'gitlab' \| 'bitbucket-community' \| 'none'` | Which forge provides PR/MR features. `auto` detects from the git remote URL. See [Forge integration](#forge-integration). |
 | `devServer.startCommand` / `stopCommand` | `string` | Per-workspace dev server commands. Docker, npm, or any shell-startable process. See [Dev server](#dev-server) for the status/URL contract. |
 | `e2e.framework` | `'cypress' \| 'playwright' \| 'jest' \| 'vitest' \| 'other' \| ''` | E2E framework auto-loop grooming should target. |
@@ -427,13 +441,44 @@ matters to you.
 Identical to the other scripts: the hook can do anything your user can. Kōbō is
 a local single-user dev tool and the script is your own code.
 
+## Imported notification sounds
+
+Kōbō ships two original tones, `neutral.wav` and `ready.wav`. **Settings →
+Notifications → Imported sounds** adds your own: pick a file, and it becomes
+selectable in every sound selector on that page, including the seven PR events.
+
+- Formats: `.wav`, `.mp3`, `.ogg`, `.webm` — what every targeted browser decodes.
+  The extension decides, because browsers label audio MIME types inconsistently.
+- Limits: 2 MiB per file, 20 files. A notification is short; the bundled sounds
+  removed in the public-readiness pass ranged from 1.7 KB to 207 KB.
+- Storage: `<KOBO_HOME>/sounds/`. Each file is saved as `<id><extension>` with a
+  server-generated id; the uploaded filename is kept only as a display label and
+  never becomes a path. The `sounds.json` manifest holds
+  `{ id, name, extension, size, createdAt }` per entry.
+- Settings store the reference `custom:<id>`. Deleting a sound that a setting
+  still points at never fails: playback falls back to `neutral.wav`, exactly as
+  it does for any unknown identifier.
+- The catalogue is loaded when the app starts, so a sound plays for a notification
+  that arrives before you ever open Settings. Playback goes through a local blob
+  URL, which is what makes an imported sound audible over network access and
+  behind a reverse proxy.
+- The files live in the Kōbō home, not in the published package, so they survive
+  an upgrade and are reachable from a phone over network access. They are not
+  part of a settings export — back up `<KOBO_HOME>/sounds/` with the rest of the
+  data directory.
+
+HTTP: `GET /api/sounds` lists the catalogue, `POST /api/sounds` takes one
+multipart `sound` field, `DELETE /api/sounds/:id` removes one, and
+`GET /api/sounds/:id/file` serves the audio. All four sit behind the same
+Host/Origin and network-token gates as the rest of the API.
+
 ## Unanswered question reminder
 
 A workspace that asks you something sits in `awaiting-user` until you answer.
 The badge in the drawer says so, but only if you are looking at Kōbō. This
 reminds you.
 
-**Settings → Worktrees → Unanswered question reminder**, in minutes.
+**Settings → Notifications → Unanswered question reminder**, in minutes.
 **`0` is the default and means off** — it is your attention being spent.
 
 With a value of `10`, a workspace that has been waiting ten minutes triggers a
@@ -724,12 +769,9 @@ cannot be recovered, and the server logs how many each prune removed.
 
 ## Concurrent agents
 
-`maxConcurrentAgents` (global, default `0` = no limit) caps how many agent
-sessions may run at once.
+`maxConcurrentAgents` (global, fresh-install default `2`; `0` = no limit) controls admission of unattended agent sessions. Existing installations retain their configured value.
 
-The limit applies to auto-loop iterations, including quota retries through that
-path. Manual starts, chat resumes, cron and one-shot wakeups are not capped by
-this setting. It is not a hard global process limit.
+The limit applies to auto-loop iterations, cron, one-shot wakeups and quota retries. Every owned agent controller counts, including starting, manual and closing sessions. Manual starts and chat resumes are exempt from admission; this is not a hard global process limit.
 
 An auto-loop workspace that finds no free slot stays enabled and waits. Confirmed
 capacity release and lifecycle-guard release reconsider waiting workspaces.
@@ -792,7 +834,7 @@ The setting controls the backend, not the separate development server:
 
 ### Enabling network access
 
-1. Open **Settings → Global → Network access**.
+1. Open **Settings → General → Network access**.
 2. Toggle **Enable network access** on.
 3. A banner appears: **"Kōbō must be restarted to apply this change."** Restart
    Kōbō; the server cannot re-bind a live port without restarting. The banner
@@ -809,7 +851,7 @@ non-loopback WebSocket connection must supply a shared token.
 
 - **Auto-generated**: Kōbō generates a random token the first time you enable
   the feature. You never have to type one in.
-- **Where to find it**: Settings → Global → Network access → **Token** field
+- **Where to find it**: Settings → General → Network access → **Token** field
   (always masked; use the copy button).
 - **Regenerate**: the **Regenerate** button creates a new random token and
   invalidates any device already using the old one. Useful when a device is
@@ -956,7 +998,7 @@ shared network; every request Kōbō sees originates from the proxy, and dependi
 path it can be indistinguishable from a genuine loopback request. Without this setting, anyone who
 can reach the proxy publicly gets unauthenticated access to Kōbō, silently.
 
-**Enable it**: Settings → Global → Network access → **Behind a reverse proxy** (only visible once
+**Enable it**: Settings → General → Network access → **Behind a reverse proxy** (only visible once
 Network access itself is enabled). No restart needed — unlike the main Network access toggle, this
 one only changes the per-request auth decision, not the listening address.
 
@@ -1189,16 +1231,16 @@ The selector reads [`src/shared/codex-models.ts`](./src/shared/codex-models.ts).
 
 ### Permission modes
 
-Each engine maps Kōbō's four modes onto its own sandbox + approval flags. The mapping is fixed in code, but knowing it helps you pick a sensible default.
+Claude Code uses SDK permission modes; Codex uses sandbox and approval flags. These controls differ by engine. A Git worktree itself is not a security boundary.
 
 **Claude Code** (controlled via SDK options):
 
 | Kōbō mode | Effect |
 |---|---|
-| `plan` | Read-only sandbox; the agent plans without writing. |
-| `bypass` | Full autonomy in the worktree. |
-| `strict` | Writes allowed; approval prompted on sensitive commands. |
-| `interactive` | Approval prompted on every untrusted action. |
+| `plan` | SDK `plan` permission mode for planning without edits; not an OS sandbox. |
+| `bypass` | SDK `bypassPermissions`: approvals bypassed, without an OS boundary at the worktree. |
+| `strict` | SDK `acceptEdits`: file edits accepted; other tools follow approval rules. |
+| `interactive` | SDK `default`: unapproved operations can request user permission. |
 
 **OpenAI Codex** (controlled via `sandbox` + `approvalPolicy` + `collaborationMode`):
 
@@ -1210,7 +1252,7 @@ Each engine maps Kōbō's four modes onto its own sandbox + approval flags. The 
 | `interactive` | `workspace-write` | `unless-trusted` | `default` |
 
 Interactive Q&A (`request_user_input`) is only available in `plan` for Codex, a constraint of Codex itself. In `bypass`, `strict`, and `interactive`, Codex can still ask questions as normal chat text and you can respond in the chat, but it cannot open Kōbō's structured question panel.
-Full access in `bypass` is required for linked-worktree Git metadata under the repository's shared `.git` directory.
+Linked-worktree Git operations may need access to the repository's shared `.git` directory outside the worktree. Depending on the engine and sandbox, this can require approval or a permission change explicitly chosen by the user. Kōbō does not automatically promote Plan to Bypass.
 
 When an approval panel appears, **Allow this turn** permits the same tool for
 the rest of the current session. **Allow this operation** stores a rule for the
@@ -1485,14 +1527,17 @@ Resolved in this order:
 
 1. `NOTION_API_TOKEN` env var
 2. `NOTION_TOKEN` env var
-3. `~/.claude.json` → `mcpServers.notion.env.NOTION_TOKEN` (or `NOTION_API_TOKEN`)
+3. The direct Notion connection saved in Settings (`NOTION_TOKEN` or `NOTION_API_TOKEN`)
+4. If no direct connection exists, `~/.claude.json` → `mcpServers.notion.env.NOTION_TOKEN` (or `NOTION_API_TOKEN`)
 
 The default config entry is named exactly `notion` and must be enabled.
 `notionMcpKey` selects another exact key. An existing `OPENAPI_MCP_HEADERS` value
 from the environment or selected entry is preserved; otherwise Kōbō constructs
 the authorization headers from the resolved token.
 
-The recommended path is **(3)**: one token shared between Claude Code and Kōbō:
+For a direct connection, enter command `npx`, arguments `["-y", "@notionhq/notion-mcp-server"]` and an environment object containing your `NOTION_TOKEN`. No Claude installation is required.
+
+The legacy shared-Claude configuration remains supported:
 
 ```bash
 claude mcp add notion -s user -e NOTION_TOKEN=ntn_your_token -- npx -y @notionhq/notion-mcp-server
@@ -1501,7 +1546,7 @@ claude mcp add notion -s user -e NOTION_TOKEN=ntn_your_token -- npx -y @notionhq
 ### Overriding the MCP command
 
 The command and arguments come from `NOTION_MCP_COMMAND` / `NOTION_MCP_ARGS`,
-then the selected Claude MCP entry, then the bundled `npx -y
+then the direct saved connection or selected Claude MCP entry, then the bundled `npx -y
 @notionhq/notion-mcp-server` defaults. Pin a version or use a fork:
 
 ```bash
@@ -1544,11 +1589,11 @@ actionable configuration error.
 
    For self-hosted Sentry, set `SENTRY_HOST` to your hostname (e.g. `sentry.mycompany.com`).
 
-Kōbō does not store the token. It reads the MCP entry from `~/.claude.json` and follows your Claude Code config automatically.
+Alternatively, save command `npx`, arguments `["-y", "@sentry/mcp-server"]` and the appropriate environment variables in **Settings → Sentry → Direct connection**. This works without a Claude installation. Direct credentials live in the private `KOBO_HOME/integrations.json` file (mode `0600`) and are excluded from settings exports. Saving replaces the complete connection; only configured/unconfigured status is returned to the browser. Clearing the direct connection restores legacy lookup.
 
 ### How Kōbō picks the entry
 
-Reads `~/.claude.json` and uses the first entry under `mcpServers` whose key contains `sentry` (case-insensitive) **and is not disabled**. To force a specific entry, set the global `sentryMcpKey` setting to its exact key.
+Uses the direct saved connection when present. Otherwise reads `~/.claude.json` and uses the first entry under `mcpServers` whose key contains `sentry` (case-insensitive) **and is not disabled**. To force a specific entry, set the global `sentryMcpKey` setting to its exact key.
 
 ### Usage
 
@@ -1644,20 +1689,30 @@ The Voice panel shows the runtime status for whisper-cli and ffmpeg so misconfig
 
 ## Skill suites
 
-Kōbō's auto-generated prompts (review template, auto-loop grooming intro, QA template, brainstorming instruction) reference skills by name. The **Settings → Skills → Skill suite** selector picks which ecosystem those prompts target. Four options are supported:
+Kōbō's generated instructions cover reviews, auto-loop grooming, QA and brainstorming. Standard uses neutral instructions; external suites reference their skills by name. The **Settings → Skills → Skill suite** selector picks which ecosystem those prompts target. Seven options are supported:
 
 | Suite | Auto-prompts cite | Best for |
 |---|---|---|
-| `superpowers` (default) | `superpowers:*` skills (brainstorming, writing-plans, executing-plans, TDD, debugging, requesting-code-review, …) | Plugin-driven workflow inside Claude Code |
+| `standard` (fresh-install default) | Neutral, engine-independent instructions without named external skills | First use and repositories with their own conventions |
+| `superpowers` | `superpowers:*` skills (brainstorming, writing-plans, executing-plans, TDD, debugging, requesting-code-review, …) | Plugin-driven workflow inside Claude Code |
 | `gstack` | gstack slash commands (`/review`, `/ship`, `/qa`, `/browse`, `/design-review`, `/investigate`, `/codex`, …) | Concrete CLI-driven workflows, browser-based QA, opinionated ship/deploy loop |
 | `superpowers+gstack` | Both, specialised by intent (e.g. `/review` for tactical bug-hunting, `superpowers:requesting-code-review` for principles-level critique) | Users who install both suites and want each used for what it does best |
+| `ecc` | ECC review, testing, debugging and verification skills referenced by the bundled prompts | Users with ECC skills available to their engine |
+| `superpowers+gstack+ecc` | Combined instructions for the three installed suites | Users who already maintain all three ecosystems |
 | `custom` | Whatever you write in the `custom*` fields (Settings → Skills → Custom prompts) | Air-gapped, suite-agnostic, or non-standard setups |
 
 Switching the selector only changes the prompt text Kōbō emits; it does **not** install or remove anything. Pick whichever matches the skills you have available in your Claude Code / Codex environment.
 
+### standard
+
+The fresh-install default. No external skill package is required. Agents receive
+neutral instructions and can still follow repository conventions and explicit user
+requests. Standard does not remove skills already available in the agent runtime.
+Use the dedicated Skills step in the Settings guided tour for an in-app explanation.
+
 ### superpowers
 
-The default. Open-source Claude Code plugin covering brainstorming, writing-plans, executing-plans, TDD, systematic-debugging, requesting / receiving-code-review, dispatching-parallel-agents, etc. Kōbō also surfaces specs from `docs/superpowers/specs/` and plans from `docs/superpowers/plans/` in the right-drawer Documents browser.
+An optional open-source Claude Code plugin covering brainstorming, writing-plans, executing-plans, TDD, systematic-debugging, requesting / receiving-code-review, dispatching-parallel-agents, etc. Kōbō also surfaces specs from `docs/superpowers/specs/` and plans from `docs/superpowers/plans/` in the right-drawer Documents browser.
 
 Install inside Claude Code:
 
@@ -1680,13 +1735,21 @@ Install by following the instructions in the [gstack repo](https://github.com/ga
 
 When both suites are installed, set the selector to `superpowers+gstack`. Kōbō's prompts then cite each suite for what it does best: superpowers for the discipline (TDD loop, plan execution, parallel subagents), gstack for the tactical surface (real-browser QA, design audits, ship pipeline, codex second-opinion).
 
+### ECC and combined suites
+
+Choose `ecc` when the ECC skills referenced by Kōbō are already available to the
+selected engine. Choose `superpowers+gstack+ecc` only when all three suites are
+available. Kōbō adapts its instructions but does not install, update or verify the
+availability of external suites. Suite selection never overrides workflow
+preferences, engine permissions or narrower instructions from the user.
+
 ### custom
 
 Lets you bypass the bundled prompts entirely and write your own. The five `custom*` fields under **Settings → Skills → Custom prompts** are seeded with neutral, suite-free defaults (the *AGNOSTIC* prompt strings in `src/shared/skill-suite-prompts.ts`) so you have a starting point. Useful for air-gapped setups, internal forks, or compliance environments where a third-party plugin is off-limits.
 
 ## gbrain (companion MCP)
 
-[`gbrain`](https://github.com/garrytan/gbrain) is a separate companion tool: a per-project knowledge graph and semantic search index, with an MCP server interface. It's **not** a Kōbō skill suite (it doesn't change the auto-generated prompts) but it plugs into Kōbō workspaces transparently via the standard Claude Code MCP config: any MCP server registered in `~/.claude.json` is inherited by Kōbō agents at session start.
+[`gbrain`](https://github.com/garrytan/gbrain) is a separate companion tool: a per-project knowledge graph and semantic search index, with an MCP server interface. It's **not** a Kōbō skill suite (it doesn't change the auto-generated prompts) but it plugs into Kōbō workspaces transparently via the standard Claude Code MCP config: Claude Code sessions can inherit MCP servers registered in `~/.claude.json`. Codex uses its own native MCP configuration; Kōbō does not copy arbitrary Claude MCP entries into Codex. The managed Notion/Sentry connections described above are supplied explicitly to both engines.
 
 When gbrain is configured, the agent gets access to tools like:
 
@@ -1710,7 +1773,7 @@ gbrain init
 claude mcp add gbrain -s user -- gbrain mcp
 ```
 
-Once registered, Kōbō workspaces opened on this project will see the `gbrain__*` tools automatically. The `/sync-gbrain` gstack skill keeps the index fresh after large refactors. Repo: <https://github.com/garrytan/gbrain>.
+Once registered for the chosen engine, Kōbō workspaces opened on this project can see the `gbrain__*` tools automatically. The `/sync-gbrain` gstack skill keeps the index fresh after large refactors. Repo: <https://github.com/garrytan/gbrain>.
 
 Pairing notes:
 
@@ -1846,3 +1909,60 @@ Quota waits survive restarts and respect known reset dates, even several days aw
 Messages sent while auto-loop is enabled are stored for the next iteration, including during grooming. That iteration integrates the instructions into the task list before implementation continues. The panel lists pending messages and lets you cancel them before dispatch. If a crash or interrupted session makes delivery uncertain, the mission pauses: inspect its history, then explicitly acknowledge the instruction as handled or request a retry. A retry can repeat work; it never happens automatically for an uncertain delivery.
 
 HTTP clients can use `POST /api/workspaces/:id/auto-loop/messages` with `{content, clientMessageId}`, `GET` on the same path to inspect the queue, and `PATCH .../messages/:messageId` with `{action: "cancel" | "acknowledge" | "retry"}`. Keep the same `clientMessageId` when retrying an uncertain HTTP request. Existing immediate message delivery retains its explicit manual semantics.
+
+## First-run defaults and Git workflow preferences
+
+New installations select Standard, Plan, automatic provider model selection, two unattended slots, silent audio and disabled Notion/Sentry. Existing installations skip first-run setup and preserve their own choices. Known shipped prompt text is updated only on exact match; customized text and deleted templates remain unchanged. Retired sound identifiers map to the original neutral tone while preserving volume and enablement.
+
+`workflowPolicy` contains independent `commit`, `push` and `publish` values (`manual` or `automatic`). Global settings provide defaults; project settings may override individual values; workspace creation snapshots the resolved result into the workspace. Later global/project changes affect future workspaces, not existing snapshots. A workspace policy can be updated through its validated PATCH API. The workspace toolbar's **Configure** menu exposes the three preferences beside the
+model, effort and permission selectors; they are disabled while an agent is running,
+for the same reason the API refuses the change. A change returns HTTP 409 while an agent controller is still present (including shutdown) or a workspace lifecycle operation is in progress: stop the agent, wait for the operation to finish, then update the policy. The next session start or resume receives the updated preferences. A PATCH that leaves the effective policy unchanged remains accepted, subject to the existing lifecycle restrictions.
+
+Fresh defaults are manual. Existing settings/workspaces migrate to the previous automatic behavior for compatibility. Manual requires an explicit user request for that action; automatic supplies the workflow preference for the mission. Narrower user instructions always win. Publish means PR/MR creation, description updates and comments; merging needs separate authorization. Explicit Git-panel actions remain available. These preferences are agent instructions, not a shell-command filter or an OS sandbox.
+
+Plan is never promoted to Bypass by auto-loop preparation, an agent tool event, or loop enablement. Preparation can run in Plan; execution/finalization blocks with an actionable message until an execution mode is explicitly selected.
+
+Notion token environment overrides are applied consistently to both token variables passed to the child process. Explicit `OPENAPI_MCP_HEADERS` remain authoritative for compatibility and are not replaced by the resolved token. Direct integration configuration and legacy fallback are only read when an integration is used; opening Settings does not start a Notion users lookup. Connection tests and users refresh are explicit actions.
+
+
+### Managed integration MCPs in agent sessions
+
+**Test connection** uses the saved direct configuration when present, otherwise the
+selected Claude entry, with the documented provider environment overrides. It does
+not test unsaved form values. Notion checks authentication with a users lookup;
+it does not write a page. A successful connection test is separate from an agent
+actually calling a tool.
+
+Enabled, configured Notion and Sentry connections are supplied to both Claude Code
+and Codex at every agent launch or resume. Resolution is shared with connection
+tests and imports: direct configuration takes priority over selected Claude MCP
+entries; the documented Notion environment overrides still apply. Optional,
+unconfigured integrations are omitted and do not prevent ordinary sessions.
+
+Managed server names begin with `kobo-notion-` or `kobo-sentry-` and carry a fresh
+launch suffix. The session prompt identifies the current namespaces and asks the
+agent to use them for the corresponding integration. This prevents Codex's native
+configuration merge from retaining stale credentials or transport fields under a
+reused server name. Only connection-specific environment overrides are supplied;
+the complete backend environment is not serialized into the agent configuration.
+
+Saving settings does not replace connections in an already-running engine. Stop
+that engine and resume, or start a fresh session, to apply changes. Disabling an
+integration removes its Kōbō-managed connection from subsequent launches; it does
+not remove independent MCP servers configured in Claude or Codex. Integration
+credentials do not authorize the agent to modify remote data.
+
+
+### Settings navigation
+
+**Git** contains commit/push/publication preferences, Git conventions, branch
+prefixes. **Prompts** contains instructions sent after opening a PR/MR, as well
+as review, CI-fix and finalization instructions. **Prompt templates** contains reusable chat text;
+it is distinct from model selection under **Agents** and workspace presets under
+**Workspace templates**. Per-project Git overrides remain under **Projects → Git**.
+
+Automatic retry limits are under **Agents**; awaiting-user reminders are under
+**Notifications**. **Worktrees** contains paths, purge and retention. **Forge**
+contains Bitbucket credentials; GitHub/GitLab reuse authenticated local CLIs and
+the provider is selected per project. These moves do not change stored settings
+or inheritance. The main save action and unsaved-edit protection still apply.

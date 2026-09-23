@@ -12,10 +12,11 @@ vi.mock('../server/services/cleanup-script-service.js', () => ({
 }))
 vi.mock('../server/services/forge/resolve.js', () => ({ resolveForge: () => 'none' }))
 vi.mock('../server/services/usage/poller.js', () => ({ refreshNow: vi.fn().mockResolvedValue(null) }))
+const admissionConfig = vi.hoisted(() => ({ maxConcurrentAgents: 0 }))
 vi.mock('../server/services/settings-service.js', () => ({
   getGlobalSettings: () => ({
     autoLoopMaxRetries: 5,
-    maxConcurrentAgents: 0,
+    maxConcurrentAgents: admissionConfig.maxConcurrentAgents,
     skillSuite: 'superpowers',
     worktreesPath: '',
     worktreesPrefixByProject: false,
@@ -42,6 +43,7 @@ let db: ReturnType<typeof import('../server/db/index.js')['getDb']>
 let starts: Mock<AgentEngine['start']>
 let emitter: (event: AgentEvent) => void
 beforeEach(async () => {
+  admissionConfig.maxConcurrentAgents = 0
   vi.resetModules()
   vi.useFakeTimers()
   vi.setSystemTime(new Date('2026-09-17T10:00:00Z'))
@@ -458,5 +460,75 @@ describe('auto-loop recovery integration', () => {
     await flush()
     expect(loop.getStatus(id).auto_loop).toBe(true)
     expect(quota.getPending(id)).not.toBeNull()
+  })
+})
+
+describe('shared scheduler admission visibility', () => {
+  it('keeps a capacity-deferred wakeup across a ten-minute shutdown until the slot actually closes', async () => {
+    admissionConfig.maxConcurrentAgents = 1
+    const { createWorkspace } = await import('../server/services/workspace-service.js')
+    db.prepare('UPDATE workspaces SET auto_loop=0 WHERE id=?').run(id)
+    const waiting = createWorkspace({
+      name: 'waiting',
+      projectPath: '/tmp',
+      sourceBranch: 'main',
+      workingBranch: 'waiting',
+      worktreePath: '/tmp',
+    }).id
+    let close!: () => void
+    const closed = new Promise<void>((resolve) => {
+      close = resolve
+    })
+    starts.mockImplementationOnce(async (_options, onEvent) => {
+      emitter = onEvent
+      return {
+        pid: undefined,
+        engineSessionId: 'held',
+        closed,
+        isAlive: () => true,
+        sendMessage() {},
+        interrupt() {},
+        async stop() {},
+        resolvePendingUserInput: () => false,
+      }
+    })
+    orch.startAgent(id, '/tmp', 'manual start')
+    await flush()
+    const cron = await import('../server/services/cron-service.js')
+    const wakeup = await import('../server/services/wakeup-service.js')
+    cron.arm(waiting, { expression: '* * * * *', prompt: 'cron', oneShot: true })
+    wakeup.schedule(waiting, 60, 'wakeup', undefined)
+    const deadlines = {
+      cron: cron.listForWorkspace(waiting)[0]!.nextFireAt,
+      wakeup: wakeup.getPending(waiting)!.targetAt,
+    }
+    expect(loop.getAutomaticAdmissionStatus(waiting)).toMatchObject({
+      allowed: false,
+      reason: 'capacity',
+      limit: 1,
+      running: 1,
+    })
+    emitter({ kind: 'session:ended', reason: 'completed', exitCode: null })
+    await flush()
+    expect(loop.getAutomaticAdmissionStatus(id).reason).toBe('active-session')
+    await vi.advanceTimersByTimeAsync(61_000)
+    expect(cron.listForWorkspace(waiting)[0]?.nextFireAt).toBe(deadlines.cron)
+    expect(wakeup.getPending(waiting)?.targetAt).toBe(deadlines.wakeup)
+    expect(starts).toHaveBeenCalledTimes(1)
+    cron.suspendForShutdown()
+    wakeup.suspendForShutdown()
+    await vi.advanceTimersByTimeAsync(10 * 60_000)
+    wakeup.rehydrate()
+    expect(wakeup.getPending(waiting)?.targetAt).toBe(deadlines.wakeup)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(starts).toHaveBeenCalledTimes(1)
+    expect(wakeup.getPending(waiting)?.targetAt).toBe(deadlines.wakeup)
+    close()
+    await flush()
+    expect(loop.getAutomaticAdmissionStatus(waiting)).toMatchObject({ allowed: true, reason: null, running: 0 })
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(starts).toHaveBeenCalledTimes(2)
+    expect(wakeup.getPending(waiting)).toBeNull()
+    wakeup.suspendForShutdown()
   })
 })

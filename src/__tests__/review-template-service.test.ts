@@ -8,6 +8,7 @@ import type { Workspace } from '../server/services/workspace-service.js'
 
 function makeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
   return {
+    workflowPolicy: { commit: 'manual', push: 'manual', publish: 'manual' },
     id: 'ws-1',
     name: 'Demo workspace',
     projectPath: '/home/user/projects/demo',

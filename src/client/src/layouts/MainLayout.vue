@@ -140,6 +140,7 @@
 
     <q-page-container class="bg-dark">
       <PwaStatusBanner />
+      <FirstRunSetup v-if="!isWorkspacePane" />
       <q-banner v-if="availableVersion" dense class="kobo-update-banner">
         <template #avatar>
           <q-icon name="system_update_alt" size="20px" />
@@ -164,6 +165,7 @@
 import { useQuasar } from 'quasar'
 import AcceptancePanel from 'src/components/AcceptancePanel.vue'
 import AgentTodosPanel from 'src/components/AgentTodosPanel.vue'
+import FirstRunSetup from 'src/components/FirstRunSetup.vue'
 import PwaStatusBanner from 'src/components/PwaStatusBanner.vue'
 import SessionTimelinePanel from 'src/components/SessionTimelinePanel.vue'
 import SubagentsPanel from 'src/components/SubagentsPanel.vue'
@@ -174,6 +176,7 @@ import WorkspaceList from 'src/components/WorkspaceList.vue'
 import { useTours } from 'src/composables/use-tours'
 import { useWhatsNew } from 'src/composables/use-whats-new'
 import { supportsSubagents } from 'src/constants/engineFeatures'
+import { useCustomSoundsStore } from 'src/stores/custom-sounds'
 import { useDocumentsStore } from 'src/stores/documents'
 import { useLayoutStore } from 'src/stores/layout'
 import { useWorkspaceStore } from 'src/stores/workspace'
@@ -204,6 +207,10 @@ onMounted(() => {
     migrateLegacyFlag()
     void checkForUpdate()
   }
+  // Loaded here, not from the Settings tab that manages them: a notification can
+  // arrive before Settings is ever opened, and the settings form would otherwise
+  // read an empty catalogue and normalise every imported-sound selection away.
+  void useCustomSoundsStore().fetchSounds()
 })
 
 const DRAWER_TAB_KEY = 'kobo:rightTab'

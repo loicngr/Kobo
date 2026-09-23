@@ -225,7 +225,8 @@ Two emit flavors in `websocket-service.ts`:
 
 1. `NOTION_API_TOKEN` env var
 2. `NOTION_TOKEN` env var
-3. `~/.claude.json` → `mcpServers.notion.env.NOTION_TOKEN` / `NOTION_API_TOKEN` (Claude Code's MCP config: the recommended path, the same token shared with Claude Code)
+3. Direct Notion configuration in `KOBO_HOME/integrations.json`, when saved in Settings
+4. Otherwise `~/.claude.json` → `mcpServers.notion.env.NOTION_TOKEN` / `NOTION_API_TOKEN` (legacy shared Claude MCP config)
 
 The selected Claude config entry defaults to the enabled key named exactly `notion`; `global.notionMcpKey` selects another exact key. Its command/args are reused unless `NOTION_MCP_COMMAND` / `NOTION_MCP_ARGS` override them; otherwise the fallback is `npx -y @notionhq/notion-mcp-server`. Existing `OPENAPI_MCP_HEADERS` are preserved; when absent, the resolved token is used to construct them.
 
@@ -513,7 +514,7 @@ These rules are the source of truth and are also written to `.ai/.git-convention
 - Subject: imperative mood, lowercase, no trailing period, max 72 chars
 - Body: wrap at 72 chars, explain *why* not *what*
 - Reference issues with `Refs #123` or `Closes #123`
-- **NEVER add a `Co-Authored-By:` trailer**, regardless of whether the commit was assisted by an AI agent. Commits on this repository must have a single human author.
+- Add a `Co-Authored-By:` trailer for an LLM only when it materially contributed to the code included in that commit. Do not add one automatically when the LLM did not contribute to the code.
 
 **Branches**
 - Feature: `feature/<short-kebab-case>`
@@ -574,3 +575,17 @@ deviate from the documented system without explicit user approval.
 - Conversation loading indicators follow outstanding session/history/sync requests only while no content is available. Background refreshes must preserve the displayed conversation, component state and reading position, including feeds containing only user messages.
 - PR diagnosis fingerprints are asynchronous and include binary staged/unstaged diffs and untracked file contents (symlink targets, not their destinations). Untracked nested Git repositories are fingerprinted recursively, including HEAD and index changes; ignored files and Git internals are excluded. Await them at every callsite. Workspace matching always includes normalized project identity.
 - Daily DB backups are checked at startup and hourly, with the existing 24-hour minimum age and retention. Stop the scheduler and await its active backup before closing SQLite.
+
+## Public-use defaults and release checks
+
+Fresh installs use the `standard` skill suite, model `auto`, Plan permissions, manual commit/push/publish workflow preferences, two unattended slots, and disabled optional integrations/audio. Do not rewrite custom settings while updating shipped defaults. Historical migrations must keep their original semantic defaults; shipped prompt constants needed by old migrations are frozen in `legacy-public-prompts.ts`.
+
+Settings migration v59 updates only exact known shipped prompts, v60 marks existing installs onboarded, v61 maps retired sounds to the original neutral asset, and v62 preserves the legacy workflow policy. SQLite v48 snapshots workspace policies; v49 separates wakeup `retry_at` from the original `target_at`. Never mutate a wakeup deadline just to wait for capacity. Admission status shares the existing gate; manual starts remain exempt while their controllers count against unattended capacity.
+
+Workflow preferences do not replace engine permissions. Never promote Plan to Bypass because of grooming, auto-loop or an `ExitPlanMode` tool event. Global/project policy edits apply to future workspace snapshots. Explicit narrower user constraints always prevail.
+
+Notion/Sentry direct configurations live in `KOBO_HOME/integrations.json`, atomically written with mode 0600, separate from settings exports. Legacy Claude configuration remains a fallback. Read APIs return configured status only; never include raw MCP errors, command arguments or stderr in public responses/logs. Do not execute provider connection checks at UI mount.
+
+Users import their own notification sounds through `custom-sound-service.ts` into `<KOBO_HOME>/sounds/`, referenced in settings as `custom:<id>`. Identifiers are generated server-side; an uploaded filename is a display label and never a path. `normalizePublicNotificationSound` keeps a well-formed reference on its shape alone, because settings migrations run before the catalogue is readable. A reference whose file is gone must fall back to `neutral.wav` rather than fail, so deletion never needs to inspect the eleven sound settings.
+
+`npm run test:package` after build installs the actual tarball in a disposable home and checks native dependencies, real PWA assets and HTTP/stdio MCP. `npm run security:scan` requires Gitleaks 8.30.1 and scans all local refs plus current nonignored source with redacted output. Public docs use a narrow `.gitignore` allowlist; internal plans and captures remain excluded. Read `docs/release/public-opening-checklist.md` before releasing; CI configuration alone is not platform validation evidence.

@@ -1,5 +1,6 @@
 import { type ChildProcess, spawn as nodeSpawn } from 'node:child_process'
 import { createRequire } from 'node:module'
+import path from 'node:path'
 
 const requireFn = createRequire(import.meta.url)
 
@@ -11,8 +12,7 @@ export function resolveCodexBinary(): string {
     }
     const binRel = typeof pkg.bin === 'string' ? pkg.bin : pkg.bin?.codex
     if (binRel) {
-      const url = new URL(binRel, `file://${pkgPath}`)
-      return url.pathname
+      return path.resolve(path.dirname(pkgPath), binRel)
     }
   } catch {
     // fall through to default

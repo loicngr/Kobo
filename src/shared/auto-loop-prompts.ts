@@ -64,7 +64,9 @@ export function buildAutoLoopGroomingSteps(e2e: E2eSettings, finalization: Final
   let nextNum = 4
 
   if (e2e.framework) {
-    const skillHint = e2e.skill ? `Use the \`${e2e.skill}\` skill for this task. ` : ''
+    const skillHint = e2e.skill
+      ? `Use the \`${e2e.skill}\` skill for this task if available; otherwise use the existing project test tools directly. `
+      : ''
     const promptHint = e2e.prompt ? `Additional guidance: ${e2e.prompt}` : ''
     steps.push(
       `${nextNum}. **E2E review**: walk the task list and identify which tasks produce user-visible behavior (UI flows, form submissions, page renders, etc.). For each one that warrants regression coverage, INSERT a follow-up sub-task with title prefixed \`[E2E] \` describing the test to write. Use \`after_task_id\` to insert it directly after the parent task; \`list_tasks\` exposes \`sort_order\` so you can verify ordering. Skip tasks that don't produce user-visible behavior (refactors, infra, internal services) and briefly justify your choices in chat. The project uses \`${e2e.framework}\`. ${skillHint}${promptHint}`.trim(),
@@ -116,7 +118,9 @@ Read kobo__list_tasks again. If any work or criterion remains open, or any requi
 
 export function buildE2eIterationBlock(e2e: E2eSettings): string {
   if (!e2e.framework) return ''
-  const skillLine = e2e.skill ? `Use the \`${e2e.skill}\` skill for this task.\n` : ''
+  const skillLine = e2e.skill
+    ? `Use the \`${e2e.skill}\` skill for this task if available; otherwise use the existing project test tools directly.\n`
+    : ''
   const promptLine = e2e.prompt ? `Additional guidance: ${e2e.prompt}\n` : ''
   return `
 This is an **E2E regression test** task.

@@ -374,24 +374,6 @@ export function dispatchAgentEvent(
     // Don't return — tool:call may need other side-effects in the future.
   }
 
-  // `ExitPlanMode` is the native Claude CLI tool signalling the agent is
-  // leaving plan-read-only mode to start implementation. Kōbō mirrors that
-  // transition into `workspace.agentPermissionMode` so the next turn no longer
-  // spawns the SDK with `permissionMode: plan` (and the UI badge flips from
-  // "Plan" to "Bypass" in real time).
-  if (event.kind === 'tool:call' && event.name === 'ExitPlanMode') {
-    const cur = workspaceStore.workspaces.find((w) => w.id === workspaceId)
-    if (cur?.agentPermissionMode === 'plan') {
-      // Optimistic local update so the badge flips immediately.
-      workspaceStore.updateWorkspaceFromEvent(workspaceId, { agentPermissionMode: 'bypass' })
-      // Persist to DB — best-effort. If it fails the local state will be
-      // corrected on the next fetchWorkspaces / workspace refresh.
-      void workspaceStore.updateAgentPermissionMode(workspaceId, 'bypass').catch((err) => {
-        console.error('[websocket] failed to persist ExitPlanMode flip:', err)
-      })
-    }
-  }
-
   // session:started — handled separately in _handleSessionStarted (which also
   // has access to the sessionId for auto-loop session switching). Nothing else
   // to do here for this kind.

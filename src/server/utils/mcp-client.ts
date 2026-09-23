@@ -1,5 +1,6 @@
 import { type ChildProcess, spawn } from 'node:child_process'
 import { readFileSync } from 'node:fs'
+import { stopMcpProcess } from './mcp-process.js'
 import { getPackageVersion } from './paths.js'
 
 /** JSON-RPC response envelope from an MCP server. */
@@ -79,7 +80,7 @@ const nextRpcId = (() => {
 /**
  * Spawn an MCP server process given explicit command, args, and env.
  * The caller is responsible for constructing the full env (including auth headers).
- * stderr is consumed silently; set DEBUG_MCP_STDERR=1 to print it.
+ * stderr content is never logged: integrations may print credentials. Debug mode reports byte counts only.
  */
 export function spawnMcpProcess(command: string, args: string[], env: Record<string, string>): ChildProcess {
   const mcpProcess = spawn(command, args, {
@@ -95,13 +96,13 @@ export function spawnMcpProcess(command: string, args: string[], env: Record<str
   // without any listener crashes the whole Node process (Unhandled 'error').
   // Callers may attach their own listener for typed handling — listeners are
   // additive on EventEmitter so this default never blocks them.
-  mcpProcess.on('error', (err) => {
-    console.error(`[mcp] spawn '${command}' failed: ${err.message}`)
+  mcpProcess.on('error', () => {
+    console.error('[mcp] Failed to start configured server; check executable and connection settings')
   })
 
   mcpProcess.stderr?.on('data', (data: Buffer) => {
     if (process.env.DEBUG_MCP_STDERR) {
-      console.error('[mcp stderr]', data.toString())
+      console.error('[mcp] stderr received (content withheld)', data.length)
     }
   })
 
@@ -135,7 +136,7 @@ export async function initializeMcp(mcpProcess: ChildProcess): Promise<void> {
     const initTimeoutMs = Number(process.env.KOBO_MCP_INIT_TIMEOUT_MS) || 30_000
     const timeout = setTimeout(() => {
       mcpProcess.stdout?.removeListener('data', onData)
-      mcpProcess.kill()
+      stopMcpProcess(mcpProcess)
       reject(new Error(`initializeMcp timed out after ${initTimeoutMs}ms`))
     }, initTimeoutMs)
 
@@ -153,6 +154,10 @@ export async function initializeMcp(mcpProcess: ChildProcess): Promise<void> {
             clearTimeout(timeout)
             mcpProcess.stdout?.removeListener('data', onData)
 
+            if (parsed.error) {
+              reject(new Error('MCP initialization failed; check integration configuration'))
+              return
+            }
             const initialized = JSON.stringify({
               jsonrpc: '2.0',
               method: 'notifications/initialized',
@@ -167,10 +172,10 @@ export async function initializeMcp(mcpProcess: ChildProcess): Promise<void> {
       }
     }
 
-    const onError = (err: Error) => {
+    const onError = () => {
       clearTimeout(timeout)
       mcpProcess.stdout?.removeListener('data', onData)
-      reject(err)
+      reject(new Error('MCP transport failed'))
     }
 
     mcpProcess.stdout.on('data', onData)
@@ -201,7 +206,7 @@ export async function callMcpTool(mcpProcess: ChildProcess, toolName: string, ar
     const timeout = setTimeout(() => {
       mcpProcess.stdout?.removeListener('data', onData)
       mcpProcess.stdout?.removeListener('error', onError)
-      mcpProcess.kill()
+      stopMcpProcess(mcpProcess)
       reject(new Error(`callMcpTool('${toolName}') timed out after 30s`))
     }, 30_000)
 
@@ -223,9 +228,20 @@ export async function callMcpTool(mcpProcess: ChildProcess, toolName: string, ar
             mcpProcess.stdout?.removeListener('error', onError)
 
             if (parsed.error) {
-              reject(new Error(`MCP tool '${toolName}' error: ${parsed.error.message} (code: ${parsed.error.code})`))
+              reject(
+                new Error(
+                  `MCP tool failed (code: ${Number.isInteger(parsed.error.code) ? parsed.error.code : 'unknown'})`,
+                ),
+              )
             } else {
-              resolve(parsed.result)
+              if (
+                parsed.result &&
+                typeof parsed.result === 'object' &&
+                'isError' in parsed.result &&
+                parsed.result.isError === true
+              ) {
+                reject(new Error('MCP tool reported a failure; check integration credentials and access'))
+              } else resolve(parsed.result)
             }
           }
         } catch {
@@ -234,10 +250,10 @@ export async function callMcpTool(mcpProcess: ChildProcess, toolName: string, ar
       }
     }
 
-    const onError = (err: Error) => {
+    const onError = () => {
       clearTimeout(timeout)
       mcpProcess.stdout?.removeListener('data', onData)
-      reject(err)
+      reject(new Error('MCP transport failed'))
     }
 
     mcpProcess.stdout.on('data', onData)
@@ -255,6 +271,7 @@ export async function callMcpTool(mcpProcess: ChildProcess, toolName: string, ar
 export function unwrapMcpResult(result: unknown): unknown {
   if (result && typeof result === 'object') {
     const obj = result as Record<string, unknown>
+    if (obj.isError === true) throw new Error('MCP tool reported a failure; check integration credentials and access')
     if (Array.isArray(obj.content)) {
       const first = obj.content[0] as { type?: string; text?: string } | undefined
       if (first?.type === 'text' && first.text) {

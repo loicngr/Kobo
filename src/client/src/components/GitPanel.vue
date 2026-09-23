@@ -757,6 +757,7 @@ import ActionAvailability from 'src/components/ActionAvailability.vue'
 import { getActionBlocker } from 'src/utils/action-blocker'
 import { defineAsyncComponent } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useWorkingTreeFiles } from '../composables/use-working-tree-files'
 
 const DiffViewer = defineAsyncComponent(() => import('./DiffViewer.vue'))
 
@@ -889,38 +890,6 @@ async function toggleCommits() {
   await fetchCommits()
 }
 
-interface WorkingTreeFile {
-  path: string
-  staged: boolean
-  modified: boolean
-  untracked: boolean
-}
-const showWorkingTreeFiles = ref(false)
-const loadingWorkingTreeFiles = ref(false)
-const workingTreeFiles = ref<WorkingTreeFile[]>([])
-
-async function fetchWorkingTreeFiles() {
-  if (!props.workspace) return
-  loadingWorkingTreeFiles.value = true
-  try {
-    const res = await fetch(`/api/workspaces/${props.workspace.id}/working-tree-files`, { cache: 'no-store' })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    const body = (await res.json()) as { files: WorkingTreeFile[] }
-    workingTreeFiles.value = body.files
-  } catch (err) {
-    console.error('[GitPanel] fetchWorkingTreeFiles failed:', err)
-    workingTreeFiles.value = []
-  } finally {
-    loadingWorkingTreeFiles.value = false
-  }
-}
-
-function toggleWorkingTreeFiles() {
-  showWorkingTreeFiles.value = !showWorkingTreeFiles.value
-  if (!showWorkingTreeFiles.value) return
-  void fetchWorkingTreeFiles()
-}
-
 function appendCommitToChat(sha: string) {
   // Reuse the existing `chatDraft` mechanism — ChatInput.vue watches it and
   // appends to the textarea (preserving existing content). Reset happens there.
@@ -1021,6 +990,10 @@ function onSendToChat(text: string) {
   }
 }
 const gitStats = ref<GitStats | null>(null)
+const { showWorkingTreeFiles, loadingWorkingTreeFiles, workingTreeFiles, toggleWorkingTreeFiles } = useWorkingTreeFiles(
+  () => props.workspace?.id,
+  () => gitStats.value?.workingTree,
+)
 const loadingStats = ref(false)
 const statsError = ref<string | null>(null)
 
@@ -1272,9 +1245,6 @@ watch(
       statsError.value = null
       commits.value = []
       showCommits.value = false
-      showWorkingTreeFiles.value = false
-      workingTreeFiles.value = []
-      loadingWorkingTreeFiles.value = false
     }
     if (newId) {
       loadGitStats({ freshFetch: true })

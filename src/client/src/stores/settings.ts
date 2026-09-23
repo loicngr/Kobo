@@ -5,6 +5,7 @@ import type { ProjectColor } from 'src/utils/project-color'
 import { DEFAULT_WHIP_SHORTCUT } from 'src/utils/whip-shortcut'
 import { WORKTREES_PATH } from '../../../shared/consts'
 import type { SkillSuite } from '../../../shared/skill-suite-prompts'
+import { MANUAL_WORKFLOW_POLICY, type WorkflowPolicy } from '../../../shared/workflow-policy'
 
 interface DevServerConfig {
   startCommand: string
@@ -22,6 +23,7 @@ interface FinalizationSettings {
 }
 
 interface ProjectSettings {
+  workflowPolicy?: Partial<WorkflowPolicy>
   path: string
   displayName: string
   defaultSourceBranch: string
@@ -63,6 +65,8 @@ interface ProjectSettings {
 }
 
 interface GlobalSettings {
+  workflowPolicy: WorkflowPolicy
+  onboardingComplete: boolean
   /**
    * Default model id per engine. Keys are engine ids (e.g. `'claude-code'`,
    * `'codex'`), values are model ids from that engine's catalogue (or `'auto'`).
@@ -235,6 +239,8 @@ export type { DevServerConfig, E2eSettings, GlobalSettings, ProjectSettings }
 export const useSettingsStore = defineStore('settings', {
   state: () => ({
     global: {
+      workflowPolicy: { ...MANUAL_WORKFLOW_POLICY },
+      onboardingComplete: false,
       defaultModelByEngine: { 'claude-code': 'auto', codex: 'auto' } as Record<string, string>,
       dangerouslySkipPermissions: true,
       prPromptTemplate: '',
@@ -254,11 +260,11 @@ export const useSettingsStore = defineStore('settings', {
       wsEventsRetentionDays: 0,
       wsEventsKeepPerWorkspace: 0,
       browserNotifications: true,
-      audioNotifications: true,
+      audioNotifications: false,
       audioQuestionNotifications: false,
       audioWorkspaceCreatedNotifications: false,
       audioAgentErrorNotifications: false,
-      audioNotificationSound: 'hey.mp3',
+      audioNotificationSound: 'neutral.wav',
       audioQuestionSound: 'inherit',
       audioWorkspaceCreatedSound: 'inherit',
       audioAgentErrorSound: 'inherit',
@@ -276,8 +282,8 @@ export const useSettingsStore = defineStore('settings', {
       sentryMcpKey: '',
       bitbucketToken: '',
       bitbucketUsername: '',
-      notionEnabled: true,
-      sentryEnabled: true,
+      notionEnabled: false,
+      sentryEnabled: false,
       showThinkingBlocks: true,
       whipEnabled: false,
       whipShortcut: DEFAULT_WHIP_SHORTCUT,
@@ -306,7 +312,7 @@ export const useSettingsStore = defineStore('settings', {
       voiceTranslateToEnglish: false,
       voiceSuppressNonSpeechTokens: true,
       flattenWorkspaceList: false,
-      skillSuite: 'superpowers' as SkillSuite,
+      skillSuite: 'standard' as SkillSuite,
       customReviewTemplate: '',
       customAutoLoopReviewGate: '',
       customAutoLoopGroomingIntro: '',

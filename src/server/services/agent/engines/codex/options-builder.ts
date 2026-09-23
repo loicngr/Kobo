@@ -89,6 +89,7 @@ export function buildCodexOptions(input: BuildCodexOptionsInput): BuildCodexOpti
   // without it Codex blocks every MCP tool call with "user cancelled".
   if (input.mcpServers && input.mcpServers.length > 0) {
     type McpServerEntry = {
+      enabled: boolean
       command: string
       args: string[]
       env: Record<string, string>
@@ -97,6 +98,7 @@ export function buildCodexOptions(input: BuildCodexOptionsInput): BuildCodexOpti
     const mcpServersConfig: Record<string, McpServerEntry> = {}
     for (const srv of input.mcpServers) {
       mcpServersConfig[srv.name] = {
+        enabled: true,
         command: srv.command,
         args: srv.args,
         env: srv.env,

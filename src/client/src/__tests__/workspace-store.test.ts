@@ -58,6 +58,19 @@ describe('workspace store', () => {
     setActivePinia(createPinia())
   })
 
+  it('enabling auto-loop does not change the permission mode', async () => {
+    const store = useWorkspaceStore()
+    store.workspaces = [makeWorkspace({ agentPermissionMode: 'plan' })]
+    const changeMode = vi.spyOn(store, 'updateAgentPermissionMode')
+    vi.spyOn(store, 'fetchAutoLoopStates').mockResolvedValue(undefined)
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true })
+    vi.stubGlobal('fetch', fetchMock)
+    await store.enableAutoLoop('w1')
+    expect(changeMode).not.toHaveBeenCalled()
+    expect(store.workspaces[0]?.agentPermissionMode).toBe('plan')
+    expect(fetchMock).toHaveBeenCalledWith('/api/workspaces/w1/auto-loop', { method: 'POST' })
+  })
+
   it('sends creation attachments together with metadata and keeps files reusable after failure', async () => {
     const store = useWorkspaceStore()
     const file = new File(['pixels'], 'screen.png', { type: 'image/png' })
@@ -2799,5 +2812,50 @@ describe('pending input snapshot identity', () => {
     } finally {
       vi.unstubAllGlobals()
     }
+  })
+})
+
+describe('updateWorkflowPolicy()', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.restoreAllMocks()
+  })
+
+  it('merges the change into the stored workspace', async () => {
+    const store = useWorkspaceStore()
+    store.workspaces = [makeWorkspace({ workflowPolicy: { commit: 'manual', push: 'manual', publish: 'manual' } })]
+    const updated = makeWorkspace({ workflowPolicy: { commit: 'automatic', push: 'manual', publish: 'manual' } })
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => updated })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await store.updateWorkflowPolicy('w1', { commit: 'automatic' })
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/workspaces/w1')
+    expect(init.method).toBe('PATCH')
+    expect(JSON.parse(init.body as string)).toEqual({ workflowPolicy: { commit: 'automatic' } })
+    expect(store.workspaces[0]!.workflowPolicy).toEqual({ commit: 'automatic', push: 'manual', publish: 'manual' })
+    vi.unstubAllGlobals()
+  })
+
+  // The backend refuses while a controller is still around: the running agent
+  // already received its policy in a prompt that cannot be revoked.
+  it('surfaces the busy refusal with its code and leaves the workspace untouched', async () => {
+    const store = useWorkspaceStore()
+    store.workspaces = [makeWorkspace({ workflowPolicy: { commit: 'manual', push: 'manual', publish: 'manual' } })]
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 409,
+        json: async () => ({ error: 'Stop the agent first', code: 'workspace-busy' }),
+      }),
+    )
+
+    await expect(store.updateWorkflowPolicy('w1', { commit: 'automatic' })).rejects.toMatchObject({
+      code: 'workspace-busy',
+    })
+    expect(store.workspaces[0]!.workflowPolicy).toEqual({ commit: 'manual', push: 'manual', publish: 'manual' })
+    vi.unstubAllGlobals()
   })
 })
