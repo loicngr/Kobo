@@ -78,9 +78,40 @@
     </q-markup-table>
 
     <q-card dark flat bordered class="q-mt-lg" data-tour="dash-reliability">
-      <q-card-section>
-        <div class="text-subtitle2">{{ $t('reliability.title') }}</div>
-        <div class="text-caption text-kobo-3">{{ $t('reliability.subtitle') }}</div>
+      <q-card-section class="row items-start no-wrap">
+        <div class="col">
+          <div class="text-subtitle2">{{ $t('reliability.title') }}</div>
+          <div class="row items-center text-caption text-kobo-3">
+            <span>{{ $t('reliability.subtitle') }}</span>
+            <template v-if="reliabilityResetAt">
+              <span class="q-ml-xs">{{ $t('reliability.since', { date: formatResetAt(reliabilityResetAt) }) }}</span>
+              <q-btn
+                flat
+                dense
+                no-caps
+                size="sm"
+                color="kobo-2"
+                class="q-ml-xs"
+                :label="$t('reliability.showAll')"
+                :disable="reliabilityBusy"
+                @click="clearReliabilityReset"
+              />
+            </template>
+          </div>
+        </div>
+        <q-btn
+          flat
+          round
+          dense
+          icon="restart_alt"
+          size="sm"
+          color="kobo-2"
+          :aria-label="$t('reliability.reset')"
+          :disable="reliabilityBusy"
+          @click="resetReliability"
+        >
+          <q-tooltip>{{ $t('reliability.reset') }}</q-tooltip>
+        </q-btn>
       </q-card-section>
       <q-card-section v-if="reliabilityError" class="q-pt-none text-caption text-kobo-warning">
         {{ $t('reliability.loadFailed') }}
@@ -138,7 +169,7 @@ const router = useRouter()
 const store = useWorkspaceStore()
 const { workspaces, prSnapshots, gitStatsCache } = storeToRefs(store)
 const { timeAgo } = useTimeAgo()
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const { scheduleAutoRun } = useTours()
 
 /** Reuses the labels the workspace cards already show, rather than a second wording. */
@@ -208,6 +239,9 @@ interface ReliabilityRow {
 const reliability = ref<ReliabilityRow[]>([])
 /** A failed fetch is not "no session ended yet" — say which one it is. */
 const reliabilityError = ref(false)
+/** Sessions ended before this instant are left out; null counts the whole history. */
+const reliabilityResetAt = ref<string | null>(null)
+const reliabilityBusy = ref(false)
 
 /**
  * A ratio computed from a couple of sessions says nothing, so it stays grey
@@ -233,19 +267,54 @@ function formatMedian(ms: number | null): string {
   return t('reliability.durationHours', { h: Math.floor(minutes / 60), m: minutes % 60 })
 }
 
-async function loadReliability(): Promise<void> {
+function formatResetAt(iso: string): string {
+  const date = new Date(iso)
+  return Number.isNaN(date.getTime())
+    ? iso
+    : date.toLocaleString(locale.value, { dateStyle: 'medium', timeStyle: 'short' })
+}
+
+/**
+ * Loads, resets or clears the reset: every call answers with the recomputed
+ * rows and the reset instant, so the three share one code path.
+ */
+async function requestReliability(url: string, init?: RequestInit): Promise<void> {
   try {
-    const res = await fetch('/api/usage/reliability')
+    const res = await fetch(url, init)
     if (!res.ok) {
       reliabilityError.value = true
       return
     }
-    const body = (await res.json()) as { engines?: ReliabilityRow[] }
+    const body = (await res.json()) as { engines?: ReliabilityRow[]; resetAt?: string | null }
     reliability.value = body.engines ?? []
+    reliabilityResetAt.value = body.resetAt ?? null
     reliabilityError.value = false
   } catch {
-    // Read-only extra panel: a failure here must not blank the workspace table.
+    // Extra panel: a failure here must not blank the workspace table.
     reliabilityError.value = true
+  }
+}
+
+function loadReliability(): Promise<void> {
+  return requestReliability('/api/usage/reliability')
+}
+
+// No confirmation: the reset only hides older sessions and "Show all" undoes it.
+async function resetReliability(): Promise<void> {
+  reliabilityBusy.value = true
+  try {
+    await requestReliability('/api/usage/reliability/reset', { method: 'POST' })
+  } finally {
+    reliabilityBusy.value = false
+  }
+}
+
+async function clearReliabilityReset(): Promise<void> {
+  reliabilityBusy.value = true
+  try {
+    await requestReliability('/api/usage/reliability/reset', { method: 'DELETE' })
+  } finally {
+    reliabilityBusy.value = false
   }
 }
 

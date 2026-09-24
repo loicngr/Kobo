@@ -1,7 +1,12 @@
 import Database from 'better-sqlite3'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { runMigrations } from '../server/db/migrations.js'
-import { computeEngineReliability } from '../server/services/usage/reliability.js'
+import {
+  clearReliabilityReset,
+  computeEngineReliability,
+  getReliabilityResetAt,
+  resetReliability,
+} from '../server/services/usage/reliability.js'
 
 let db: Database.Database
 
@@ -130,5 +135,72 @@ describe('computeEngineReliability', () => {
     })
 
     expect(computeEngineReliability(db)[0]).toMatchObject({ engine: 'unknown', model: 'unknown', total: 1 })
+  })
+})
+
+describe('reliability reset', () => {
+  const base = { endReason: 'completed', startedAt: '2026-01-01T09:00:00.000Z' }
+
+  it('has no reset by default, so every ended session counts', () => {
+    insertSession({ ...base, id: 's1', endedAt: '2026-01-01T10:00:00.000Z' })
+    insertSession({ ...base, id: 's2', endedAt: '2026-01-02T10:00:00.000Z' })
+
+    expect(getReliabilityResetAt(db)).toBeNull()
+    expect(computeEngineReliability(db)[0].total).toBe(2)
+  })
+
+  it('records the reset instant and returns it', () => {
+    const resetAt = resetReliability(db, new Date('2026-01-01T12:00:00.000Z'))
+
+    expect(resetAt).toBe('2026-01-01T12:00:00.000Z')
+    expect(getReliabilityResetAt(db)).toBe('2026-01-01T12:00:00.000Z')
+  })
+
+  it('replaces an earlier reset rather than adding a row', () => {
+    resetReliability(db, new Date('2026-01-01T12:00:00.000Z'))
+    resetReliability(db, new Date('2026-01-03T12:00:00.000Z'))
+
+    expect(getReliabilityResetAt(db)).toBe('2026-01-03T12:00:00.000Z')
+    expect(db.prepare('SELECT COUNT(*) AS c FROM reliability_reset').get()).toEqual({ c: 1 })
+  })
+
+  it('excludes sessions that ended before the reset and keeps those ended after it', () => {
+    insertSession({ ...base, id: 'before', endedAt: '2026-01-01T11:59:59.000Z' })
+    insertSession({ ...base, id: 'after', model: 'sonnet', endedAt: '2026-01-01T12:00:01.000Z' })
+    resetReliability(db, new Date('2026-01-01T12:00:00.000Z'))
+
+    const rows = computeEngineReliability(db)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ model: 'sonnet', total: 1 })
+  })
+
+  it('counts a session running during the reset once it ends after it', () => {
+    insertSession({ ...base, id: 'running', startedAt: '2026-01-01T11:00:00.000Z', endedAt: null })
+    resetReliability(db, new Date('2026-01-01T12:00:00.000Z'))
+    expect(computeEngineReliability(db)).toEqual([])
+
+    db.prepare('UPDATE agent_sessions SET ended_at = ? WHERE id = ?').run('2026-01-01T13:00:00.000Z', 'running')
+
+    expect(computeEngineReliability(db)[0].total).toBe(1)
+  })
+
+  it('compares parsed instants, not strings', () => {
+    // 12:30Z written with an offset: string order would put it before the reset.
+    insertSession({ ...base, id: 'offset', endedAt: '2026-01-01T11:30:00.000-01:00' })
+    resetReliability(db, new Date('2026-01-01T12:00:00.000Z'))
+
+    expect(computeEngineReliability(db)[0].total).toBe(1)
+  })
+
+  it('restores the full history when the reset is cleared, without touching sessions', () => {
+    insertSession({ ...base, id: 's1', endedAt: '2026-01-01T10:00:00.000Z' })
+    resetReliability(db, new Date('2026-01-01T12:00:00.000Z'))
+    expect(computeEngineReliability(db)).toEqual([])
+
+    clearReliabilityReset(db)
+
+    expect(getReliabilityResetAt(db)).toBeNull()
+    expect(computeEngineReliability(db)[0].total).toBe(1)
+    expect(db.prepare('SELECT COUNT(*) AS c FROM agent_sessions').get()).toEqual({ c: 1 })
   })
 })

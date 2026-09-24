@@ -809,6 +809,16 @@ export const migrations: Migration[] = [
         db.exec('ALTER TABLE pending_wakeups ADD COLUMN retry_at TEXT')
     },
   },
+  {
+    version: 50,
+    name: 'reliability-reset',
+    migrate(db) {
+      // Single row: the dashboard reliability table ignores sessions ended before it.
+      db.exec(
+        'CREATE TABLE IF NOT EXISTS reliability_reset (id INTEGER PRIMARY KEY CHECK (id = 1), reset_at TEXT NOT NULL)',
+      )
+    },
+  },
 ]
 
 /** Current schema version — always equals the highest migration version. */

@@ -60,6 +60,11 @@ export const COMPACTION_STALL_TIMEOUT_MS = 10 * 60_000
 // `inputStream.close()`/the result-drain watchdog forever. Generous window:
 // legitimate subagents can run for several minutes.
 export const SUBAGENT_STALL_TIMEOUT_MS = 10 * 60_000
+/** After the last background subagent completes, the CLI normally resumes the
+ *  parent on its own. Closing the input before that continuation starts makes
+ *  every permission request of it fail with "Stream closed", so wait this long
+ *  for a parent message before draining a stream that did not continue. */
+export const BACKGROUND_CONTINUATION_GRACE_MS = 60_000
 const MAX_PENDING_USER_MESSAGES = 20
 
 function toMcpServersMap(specs: StartOptions['mcpServers']): Options['mcpServers'] | undefined {
@@ -457,6 +462,32 @@ export function createClaudeCodeEngine(): AgentEngine {
         resultDrainTimer = undefined
       }
 
+      // Drain for a stream whose last background subagent completed without
+      // a parent continuation. Any parent message cancels it: that
+      // continuation's own `result` then closes the input.
+      let continuationGraceTimer: ReturnType<typeof setTimeout> | undefined
+      const clearContinuationGrace = (): void => {
+        if (!continuationGraceTimer) return
+        clearTimeout(continuationGraceTimer)
+        continuationGraceTimer = undefined
+      }
+      const armContinuationGrace = (): void => {
+        clearContinuationGrace()
+        continuationGraceTimer = setTimeout(() => {
+          continuationGraceTimer = undefined
+          if (
+            activeSubagentTaskIds.size > 0 ||
+            pendingResolvers.size > 0 ||
+            pendingToolCallIds.size > 0 ||
+            inputStream.hasUnansweredInput(completedResponses)
+          )
+            return
+          inputStream.close()
+          armResultDrainWatchdog()
+        }, BACKGROUND_CONTINUATION_GRACE_MS)
+        continuationGraceTimer.unref?.()
+      }
+
       // Safety net for the "waiting on a background subagent" branch below:
       // if `activeSubagentToolCallIds` never empties (a missed/unrecognised
       // terminal notification), the workspace would otherwise stay `executing`
@@ -498,6 +529,7 @@ export function createClaudeCodeEngine(): AgentEngine {
             // progress notifications alone do not end the between-turn wait.
             if (msg.type === 'assistant' || msg.type === 'user' || msg.type === 'stream_event') {
               waitingForBackground = false
+              clearContinuationGrace()
             }
             // This SDK message proves that any drain condition armed by a
             // *previous* message is no longer current. A drain armed while
@@ -554,16 +586,17 @@ export function createClaudeCodeEngine(): AgentEngine {
               if (ev.kind === 'tool:call') pendingToolCallIds.add(ev.toolCallId)
               else if (ev.kind === 'tool:result') pendingToolCallIds.delete(ev.toolCallId)
             }
-            // After a settled result, the last background completion can
-            // drain the stream without waiting for another result.
+            // After a settled result, the last background completion drains
+            // the stream only if the parent does not continue (see
+            // BACKGROUND_CONTINUATION_GRACE_MS): its continuation still needs
+            // the input for permission requests.
             if (
               subagentStallTimer &&
               activeSubagentTaskIds.size === 0 &&
               !inputStream.hasUnansweredInput(completedResponses)
             ) {
               clearSubagentStallWatchdog()
-              inputStream.close()
-              armResultDrainWatchdog()
+              armContinuationGrace()
             }
             for (const ev of events) {
               if (ev.kind === 'session:started') discoveredSessionId = ev.engineSessionId
@@ -583,6 +616,7 @@ export function createClaudeCodeEngine(): AgentEngine {
             reevaluateLivenessPause()
             if ((msg as { type?: string }).type === 'result') {
               waitingForBackground = false
+              clearContinuationGrace()
               pendingToolCallIds.clear()
               completedResponses++
               emitTurnCompletedIfSettled()
@@ -634,6 +668,7 @@ export function createClaudeCodeEngine(): AgentEngine {
           // iterator has exited — clear it so a healthy run never triggers a
           // stray abort after it already ended.
           clearResultDrainWatchdog()
+          clearContinuationGrace()
           turnLiveness.stop()
           clearSubagentStallWatchdog()
           clearCompactionStallTimer()

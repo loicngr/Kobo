@@ -57,8 +57,8 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 49', () => {
-    expect(SCHEMA_VERSION).toBe(49)
+  it('exporte SCHEMA_VERSION = 50', () => {
+    expect(SCHEMA_VERSION).toBe(50)
   })
 
   it('migration v33 records and backfills the engine on agent sessions', () => {
@@ -2524,5 +2524,48 @@ describe('wakeup retry migration v49', () => {
     expect(columns(old)).toEqual(columns(fresh))
     old.close()
     fresh.close()
+  })
+})
+
+describe('reliability reset migration v50', () => {
+  it('upgrades v49 without touching sessions, is repeatable, and converges with a fresh install', () => {
+    const old = new Database(':memory:')
+    runMigrations(old)
+    old.exec(`DROP TABLE IF EXISTS reliability_reset;
+      DELETE FROM schema_migrations WHERE version > 49;
+      INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
+        VALUES ('mission', 'Keep me', '/tmp', 'main', 'work', 'now', 'now');
+      INSERT INTO agent_sessions (id, workspace_id, status, started_at, ended_at, end_reason)
+        VALUES ('s1', 'mission', 'completed', '2026-09-17T09:00:00Z', '2026-09-17T09:05:00Z', 'completed');`)
+    runMigrations(old)
+    migrations.find((entry) => entry.version === 50)!.migrate(old)
+
+    expect(old.prepare("SELECT name FROM workspaces WHERE id = 'mission'").get()).toEqual({ name: 'Keep me' })
+    expect(old.prepare("SELECT ended_at, end_reason FROM agent_sessions WHERE id = 's1'").get()).toEqual({
+      ended_at: '2026-09-17T09:05:00Z',
+      end_reason: 'completed',
+    })
+    // The upgrade records no reset: the full history keeps counting.
+    expect(old.prepare('SELECT COUNT(*) AS c FROM reliability_reset').get()).toEqual({ c: 0 })
+    expect(getMigrationHistory(old).at(-1)?.version).toBe(SCHEMA_VERSION)
+
+    const fresh = new Database(':memory:')
+    initSchema(fresh)
+    const shape = (db: Database.Database) =>
+      db.prepare("SELECT sql FROM sqlite_master WHERE tbl_name = 'reliability_reset' ORDER BY name").all()
+    expect(shape(fresh).length).toBeGreaterThan(0)
+    expect(shape(old)).toEqual(shape(fresh))
+    old.close()
+    fresh.close()
+  })
+
+  it('keeps at most one reset row', () => {
+    const db = new Database(':memory:')
+    initSchema(db)
+    db.prepare('INSERT INTO reliability_reset (id, reset_at) VALUES (1, ?)').run('2026-09-24T10:00:00.000Z')
+    expect(() =>
+      db.prepare('INSERT INTO reliability_reset (id, reset_at) VALUES (2, ?)').run('2026-09-24T11:00:00.000Z'),
+    ).toThrow()
+    db.close()
   })
 })

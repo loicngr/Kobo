@@ -1,7 +1,12 @@
 import { Hono } from 'hono'
 import { getDb } from '../db/index.js'
 import { refreshNow } from '../services/usage/poller.js'
-import { computeEngineReliability } from '../services/usage/reliability.js'
+import {
+  clearReliabilityReset,
+  computeEngineReliability,
+  getReliabilityResetAt,
+  resetReliability,
+} from '../services/usage/reliability.js'
 import type { ProviderId } from '../services/usage/types.js'
 
 const app = new Hono()
@@ -9,7 +14,33 @@ const app = new Hono()
 // GET /api/usage/reliability — how each engine and model actually behaved.
 app.get('/reliability', (c) => {
   try {
-    return c.json({ engines: computeEngineReliability(getDb()) })
+    const db = getDb()
+    return c.json({ engines: computeEngineReliability(db), resetAt: getReliabilityResetAt(db) })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// POST /api/usage/reliability/reset - count again from now. Sessions are kept.
+// Declared before `/:providerId/refresh` so the static path is never captured.
+app.post('/reliability/reset', (c) => {
+  try {
+    const db = getDb()
+    const resetAt = resetReliability(db)
+    return c.json({ engines: computeEngineReliability(db), resetAt })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// DELETE /api/usage/reliability/reset - count the whole history again.
+app.delete('/reliability/reset', (c) => {
+  try {
+    const db = getDb()
+    clearReliabilityReset(db)
+    return c.json({ engines: computeEngineReliability(db), resetAt: null })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)

@@ -10,11 +10,19 @@ vi.mock('../server/db/index.js', () => ({
 
 vi.mock('../server/services/usage/reliability.js', () => ({
   computeEngineReliability: vi.fn(),
+  getReliabilityResetAt: vi.fn(),
+  resetReliability: vi.fn(),
+  clearReliabilityReset: vi.fn(),
 }))
 
 import app from '../server/routes/usage.js'
 import { refreshNow } from '../server/services/usage/poller.js'
-import { computeEngineReliability } from '../server/services/usage/reliability.js'
+import {
+  clearReliabilityReset,
+  computeEngineReliability,
+  getReliabilityResetAt,
+  resetReliability,
+} from '../server/services/usage/reliability.js'
 
 const baseUrl = 'http://localhost'
 
@@ -91,6 +99,21 @@ describe('GET /api/usage/reliability', () => {
     expect(body.engines[0].model).toBe('opus')
   })
 
+  it('returns the reset instant alongside the rows', async () => {
+    vi.mocked(computeEngineReliability).mockReturnValueOnce([])
+    vi.mocked(getReliabilityResetAt).mockReturnValueOnce('2026-09-24T10:00:00.000Z')
+    const res = await app.request(`${baseUrl}/reliability`)
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ engines: [], resetAt: '2026-09-24T10:00:00.000Z' })
+  })
+
+  it('returns resetAt null when the whole history counts', async () => {
+    vi.mocked(computeEngineReliability).mockReturnValueOnce([])
+    vi.mocked(getReliabilityResetAt).mockReturnValueOnce(null)
+    const res = await app.request(`${baseUrl}/reliability`)
+    expect(await res.json()).toEqual({ engines: [], resetAt: null })
+  })
+
   it('is not captured by the :providerId route', async () => {
     // `/reliability` is a single segment and `/:providerId/refresh` two, but the
     // ordering invariant is cheap to lock and expensive to rediscover.
@@ -108,5 +131,65 @@ describe('GET /api/usage/reliability', () => {
     expect(res.status).toBe(500)
     const body = (await res.json()) as { error: string }
     expect(body.error).toBe('database is locked')
+  })
+})
+
+describe('POST /api/usage/reliability/reset', () => {
+  beforeEach(() => vi.clearAllMocks())
+  afterEach(() => vi.restoreAllMocks())
+
+  it('records the reset and returns the recomputed payload', async () => {
+    vi.mocked(resetReliability).mockReturnValueOnce('2026-09-24T10:00:00.000Z')
+    vi.mocked(computeEngineReliability).mockReturnValueOnce([])
+    const res = await app.request(`${baseUrl}/reliability/reset`, { method: 'POST' })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ engines: [], resetAt: '2026-09-24T10:00:00.000Z' })
+    expect(resetReliability).toHaveBeenCalledTimes(1)
+    // Recomputed after the reset, not before.
+    expect(vi.mocked(resetReliability).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(computeEngineReliability).mock.invocationCallOrder[0],
+    )
+  })
+
+  it('is not captured by the :providerId/refresh route', async () => {
+    vi.mocked(resetReliability).mockReturnValueOnce('2026-09-24T10:00:00.000Z')
+    vi.mocked(computeEngineReliability).mockReturnValueOnce([])
+    const res = await app.request(`${baseUrl}/reliability/reset`, { method: 'POST' })
+    expect(res.status).toBe(200)
+    expect(refreshNow).not.toHaveBeenCalled()
+  })
+
+  it('maps a failure to 500', async () => {
+    vi.mocked(resetReliability).mockImplementationOnce(() => {
+      throw new Error('database is locked')
+    })
+    const res = await app.request(`${baseUrl}/reliability/reset`, { method: 'POST' })
+    expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({ error: 'database is locked' })
+  })
+})
+
+describe('DELETE /api/usage/reliability/reset', () => {
+  beforeEach(() => vi.clearAllMocks())
+  afterEach(() => vi.restoreAllMocks())
+
+  it('clears the reset and returns the full history', async () => {
+    vi.mocked(computeEngineReliability).mockReturnValueOnce([])
+    const res = await app.request(`${baseUrl}/reliability/reset`, { method: 'DELETE' })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ engines: [], resetAt: null })
+    expect(clearReliabilityReset).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(clearReliabilityReset).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(computeEngineReliability).mock.invocationCallOrder[0],
+    )
+  })
+
+  it('maps a failure to 500', async () => {
+    vi.mocked(clearReliabilityReset).mockImplementationOnce(() => {
+      throw new Error('database is locked')
+    })
+    const res = await app.request(`${baseUrl}/reliability/reset`, { method: 'DELETE' })
+    expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({ error: 'database is locked' })
   })
 })

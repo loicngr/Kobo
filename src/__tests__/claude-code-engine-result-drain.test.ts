@@ -73,7 +73,10 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   }),
 }))
 
-import { createClaudeCodeEngine } from '../server/services/agent/engines/claude-code/engine.js'
+import {
+  BACKGROUND_CONTINUATION_GRACE_MS,
+  createClaudeCodeEngine,
+} from '../server/services/agent/engines/claude-code/engine.js'
 import type { AgentEvent, StartOptions } from '../server/services/agent/engines/types.js'
 
 const BASE_OPTIONS: StartOptions = {
@@ -240,7 +243,7 @@ describe('claude-code engine — result drain watchdog', () => {
     }
   })
 
-  it('closes promptly once a subagent reports its terminal status with no further result message', async () => {
+  it('closes after the continuation grace once a subagent reports its terminal status with no further message', async () => {
     vi.useFakeTimers()
     try {
       emitSubagentStarted = true
@@ -252,9 +255,10 @@ describe('claude-code engine — result drain watchdog', () => {
       await vi.advanceTimersByTimeAsync(1_000)
       completeSubagent?.()
       // No second 'result' ever arrives on this stream — the per-event
-      // bookkeeping (not the 'result' branch) must react as soon as the
-      // subagent set empties instead of waiting out the 10-minute stall.
-      await vi.advanceTimersByTimeAsync(20_000)
+      // bookkeeping (not the 'result' branch) must react once the subagent
+      // set empties and the parent stays silent, instead of waiting out the
+      // 10-minute stall.
+      await vi.advanceTimersByTimeAsync(BACKGROUND_CONTINUATION_GRACE_MS + 20_000)
 
       expect(events).toContainEqual({ kind: 'session:ended', reason: 'watchdog', exitCode: null })
       expect(abortSignal?.aborted).toBe(true)
@@ -288,6 +292,38 @@ describe('claude-code engine — result drain watchdog', () => {
 
       expect(events).not.toContainEqual({ kind: 'session:ended', reason: 'watchdog', exitCode: null })
       expect(abortSignal?.aborted).toBe(false)
+    } finally {
+      completeSubagent?.()
+      await vi.advanceTimersByTimeAsync(0)
+      releaseStream?.()
+      resetControls()
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps the SDK input open while the parent continues after its final background subagent', async () => {
+    // Regression: closing stdin on the subagent's terminal notification broke
+    // every permission request of the automatic parent continuation with
+    // "Tool permission request failed: AbortError: Stream closed".
+    vi.useFakeTimers()
+    try {
+      emitSubagentStarted = true
+      skipSecondResult = true
+      emitActivityAfterSubagentCompletion = true
+      const engine = createClaudeCodeEngine()
+      await engine.start(BASE_OPTIONS, () => {})
+      const input = sdkInput[Symbol.asyncIterator]()
+      await input.next() // Initial prompt.
+      let inputEnded = false
+      void input.next().then((next) => {
+        inputEnded = next.done === true
+      })
+
+      await vi.advanceTimersByTimeAsync(1_000)
+      completeSubagent?.()
+      await vi.advanceTimersByTimeAsync(BACKGROUND_CONTINUATION_GRACE_MS + 1_000)
+
+      expect(inputEnded).toBe(false)
     } finally {
       completeSubagent?.()
       await vi.advanceTimersByTimeAsync(0)

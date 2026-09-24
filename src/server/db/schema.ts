@@ -211,6 +211,8 @@ export function initSchema(db: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_workspace_activity_created ON workspace_activity(created_at);
 
+    CREATE TABLE IF NOT EXISTS reliability_reset (id INTEGER PRIMARY KEY CHECK (id = 1), reset_at TEXT NOT NULL);
+
     CREATE INDEX IF NOT EXISTS idx_tasks_workspace_id ON tasks(workspace_id);
     CREATE INDEX IF NOT EXISTS idx_agent_sessions_workspace_id ON agent_sessions(workspace_id);
     CREATE INDEX IF NOT EXISTS idx_ws_events_workspace_id ON ws_events(workspace_id);

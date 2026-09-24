@@ -25,6 +25,32 @@ interface SessionRow {
   ended_at: string | null
 }
 
+/**
+ * Instant from which the reliability table counts again, or null to count the
+ * whole history. Sessions are never deleted: a reset only hides older ones.
+ */
+export function getReliabilityResetAt(db: Database.Database): string | null {
+  const row = db.prepare('SELECT reset_at FROM reliability_reset WHERE id = 1').get() as
+    | { reset_at: string }
+    | undefined
+  return row?.reset_at ?? null
+}
+
+/** Start counting again from `now`. Replaces any earlier reset. */
+export function resetReliability(db: Database.Database, now: Date = new Date()): string {
+  const resetAt = now.toISOString()
+  db.prepare(
+    `INSERT INTO reliability_reset (id, reset_at) VALUES (1, ?)
+     ON CONFLICT(id) DO UPDATE SET reset_at = excluded.reset_at`,
+  ).run(resetAt)
+  return resetAt
+}
+
+/** Count the whole history again. */
+export function clearReliabilityReset(db: Database.Database): void {
+  db.prepare('DELETE FROM reliability_reset WHERE id = 1').run()
+}
+
 function median(values: number[]): number | null {
   if (values.length === 0) return null
   const sorted = [...values].sort((a, b) => a - b)
@@ -51,8 +77,13 @@ export function computeEngineReliability(db: Database.Database): EngineReliabili
     )
     .all() as SessionRow[]
 
+  // Compared as parsed instants: string order breaks on offsets and formats.
+  const resetAt = getReliabilityResetAt(db)
+  const since = resetAt ? Date.parse(resetAt) : Number.NaN
+
   const groups = new Map<string, { row: EngineReliabilityRow; durations: number[] }>()
   for (const session of rows) {
+    if (!Number.isNaN(since) && !(Date.parse(session.ended_at ?? '') >= since)) continue
     const engine = session.engine ?? 'unknown'
     const model = session.model ?? 'unknown'
     const key = `${engine}\u0000${model}`
