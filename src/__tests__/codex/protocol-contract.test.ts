@@ -1,9 +1,9 @@
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import ts from 'typescript'
 import { expect, it } from 'vitest'
 import { resolveCodexBinary } from '../../server/services/agent/engines/codex/spawn.js'
 
@@ -40,18 +40,27 @@ it('keeps consumed turn requests and responses compatible with the installed Cod
     }
     const contract = join(directory, 'contract.ts')
     writeFileSync(contract, source.join('\n'))
-    const program = ts.createProgram([contract], {
-      strict: true,
-      noEmit: true,
-      skipLibCheck: true,
-      target: ts.ScriptTarget.ES2022,
-      module: ts.ModuleKind.ESNext,
-      moduleResolution: ts.ModuleResolutionKind.Bundler,
-      allowImportingTsExtensions: true,
-      types: [],
-    })
-    const diagnostics = ts.getPreEmitDiagnostics(program)
-    expect(diagnostics.map((d) => ts.flattenDiagnosticMessageText(d.messageText, '\n'))).toEqual([])
+    // TypeScript 7 no longer ships the in-process compiler API: run its CLI.
+    writeFileSync(
+      join(directory, 'tsconfig.json'),
+      JSON.stringify({
+        compilerOptions: {
+          strict: true,
+          noEmit: true,
+          skipLibCheck: true,
+          target: 'ES2022',
+          module: 'ESNext',
+          moduleResolution: 'Bundler',
+          allowImportingTsExtensions: true,
+          types: [],
+        },
+        files: [contract],
+      }),
+    )
+    const tsc = join(dirname(createRequire(import.meta.url).resolve('typescript/package.json')), 'bin', 'tsc')
+    const result = spawnSync(process.execPath, [tsc, '-p', directory], { encoding: 'utf8', timeout: 30_000 })
+    expect(`${result.stdout}${result.stderr}`.trim()).toBe('')
+    expect(result.status).toBe(0)
   } finally {
     rmSync(directory, { recursive: true, force: true })
   }

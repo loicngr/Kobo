@@ -109,6 +109,7 @@ export function createCodexEngine(): AgentEngine {
         model: options.model,
         effort: options.effort,
         agentPermissionMode: options.agentPermissionMode ?? 'bypass',
+        readOnly: options.readOnly,
         resumeFromEngineSessionId: options.resumeFromEngineSessionId,
         workingDir: options.workingDir,
         mcpServers: options.mcpServers,

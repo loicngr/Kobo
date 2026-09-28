@@ -1584,6 +1584,8 @@ export default {
   'review.returnToSession': 'Volver a la sesión actual después de la revisión',
   'review.returnToSessionHint':
     'Reanuda esta sesión con el resumen final del revisor. Si se desactiva, la conversación continúa en la sesión de revisión.',
+  'review.readOnlyForced':
+    'Una review que vuelve a esta sesión se ejecuta en solo lectura (Plan): no puede modificar archivos ni hacer preguntas.',
   'review.returnUnavailable': 'La sesión actual debe haberse iniciado para poder reanudarla.',
   'review.start': 'Iniciar revisión',
   'review.cancel': 'Cancelar',
@@ -1786,6 +1788,10 @@ export default {
   'workspace.favorite': 'Marcar como favorito',
   'workspace.unfavorite': 'Quitar de favoritos',
   'workspace.showFavoritesOnly': 'Mostrar solo favoritos',
+  'workspace.tagFilter': 'Filtrar por tags',
+  'workspace.tagFilterActive': 'Filtrar por tags ({count} seleccionados)',
+  'workspace.tagFilterClear': 'Borrar',
+  'workspace.tagFilterEmpty': 'Aún no hay tags. Añádelos desde el menú de un workspace.',
   'workspace.searchArchivedToggle': 'Buscar también en workspaces archivados',
   'workspace.descriptionPlaceholder': 'Añadir una breve descripción',
   'workspace.descriptionDialogHint': 'Texto sin formato, máximo 200 caracteres. Dejar vacío para borrar.',

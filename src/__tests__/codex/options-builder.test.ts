@@ -16,6 +16,21 @@ describe('buildCodexOptions — permission mode mapping', () => {
     expect(threadParams.approvalPolicy).toBe('never')
   })
 
+  it('readOnly review → read-only sandbox, no approvals and no plan-mode questions whatever the mode', () => {
+    // Codex plan mode unlocks request_user_input: a question would keep the
+    // review session from ending and handing its report back.
+    for (const agentPermissionMode of ['plan', 'bypass'] as const) {
+      const { threadParams, collaborationMode } = buildCodexOptions({
+        ...BASE_INPUT,
+        agentPermissionMode,
+        readOnly: true,
+      })
+      expect(threadParams.sandbox).toBe('read-only')
+      expect(threadParams.approvalPolicy).toBe('never')
+      expect(collaborationMode.mode).toBe('default')
+    }
+  })
+
   it('bypass → sandbox: danger-full-access, approvalPolicy: never', () => {
     const { threadParams } = buildCodexOptions({ ...BASE_INPUT, agentPermissionMode: 'bypass' })
     expect(threadParams.sandbox).toBe('danger-full-access')

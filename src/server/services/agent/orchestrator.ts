@@ -1643,6 +1643,10 @@ export function startAgent(
 
   const settings = ws ? readEffectiveSettingsSafe(ws.projectPath) : readEffectiveSettingsSafe(workingDir)
 
+  // A review whose report returns to the original session must end by itself:
+  // enforce read-only plan mode here, not only through its prompt.
+  const readOnly = getReviewReturn(workspaceId, agentSessionId) !== null
+
   const unavailableIntegrations: Array<'notion' | 'sentry'> = []
   const integrationServers = buildIntegrationMcpServers(getGlobalSettings(), (name) =>
     unavailableIntegrations.push(name),
@@ -1657,7 +1661,8 @@ export function startAgent(
     model,
     effort: reasoningEffort,
     // Cascade: explicit caller override → workspace setting → 'bypass'.
-    agentPermissionMode: agentPermissionMode ?? ws?.agentPermissionMode ?? 'bypass',
+    agentPermissionMode: readOnly ? 'plan' : (agentPermissionMode ?? ws?.agentPermissionMode ?? 'bypass'),
+    readOnly,
     resumeFromEngineSessionId,
     backendUrl: `http://127.0.0.1:${backendPort}`,
     koboHome: (() => {

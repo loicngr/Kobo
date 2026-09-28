@@ -8,6 +8,8 @@ export interface BuildCodexOptionsInput {
   effort?: string
   /** Unified SDK-aligned permission mode (plan | bypass | strict | interactive). */
   agentPermissionMode: AgentPermissionMode
+  /** Review session with an automatic return: read-only sandbox, never waits on the user. */
+  readOnly?: boolean
   /**
    * Used only as a boolean signal: when set, the Kōbō MCP brief is NOT prepended
    * (resume sessions already have context). The value itself is not echoed in the result;
@@ -72,6 +74,10 @@ export function buildCodexOptions(input: BuildCodexOptionsInput): BuildCodexOpti
       threadParams.approvalPolicy = 'unless-trusted'
       break
   }
+  if (input.readOnly) {
+    threadParams.sandbox = 'read-only'
+    threadParams.approvalPolicy = 'never'
+  }
 
   // Model: omit when undefined or 'auto', let Codex use its default
   if (input.model && input.model !== 'auto') {
@@ -116,7 +122,8 @@ export function buildCodexOptions(input: BuildCodexOptionsInput): BuildCodexOpti
   // model/effort because collaborationMode takes precedence over them. Automatic
   // model selection is filled from thread/start or thread/resume by the engine.
   const collaborationMode: BuildCodexOptionsResult['collaborationMode'] = {
-    mode: input.agentPermissionMode === 'plan' ? 'plan' : 'default',
+    // A read-only review must not stop on a plan-mode question (see readOnly).
+    mode: input.agentPermissionMode === 'plan' && !input.readOnly ? 'plan' : 'default',
     settings: {
       ...(threadParams.model ? { model: threadParams.model } : {}),
       reasoning_effort: (threadParams.modelReasoningEffort as ModelReasoningEffort | undefined) ?? null,

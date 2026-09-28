@@ -53,7 +53,8 @@ function resolveConfiguration(workspace: ReviewConfiguration, body: StartReviewR
     engine: engineId,
     model: body.model ?? (changedEngine ? 'auto' : workspace.model),
     reasoningEffort: body.reasoningEffort ?? (changedEngine ? 'auto' : workspace.reasoningEffort),
-    agentPermissionMode: body.agentPermissionMode ?? workspace.agentPermissionMode,
+    // A review that hands its report back must end by itself: always read-only.
+    agentPermissionMode: body.returnToSession ? 'plan' : (body.agentPermissionMode ?? workspace.agentPermissionMode),
   }
   // Preserve an existing custom model when unchanged; reject incompatible selections.
   if (
@@ -144,8 +145,11 @@ export async function startWorkspaceReview(id: string, input: unknown) {
       baseCommit,
       additionalInstructions: (body.additionalInstructions ?? '').trim(),
     })
+    // The return fires only when the review session ends by itself: a reviewer
+    // that starts fixing, or waits on a question, never hands back.
     if (body.returnToSession)
       rendered +=
+        '\n\nThis is a read-only review session; these rules override any template instruction or skill that suggests fixing issues. Do not modify, create or delete files, and do not commit or push: the original agent session applies the fixes. Running read-only checks such as tests or linters is fine. Do not ask the user questions or wait for input: note any decision that needs the user in your summary instead.' +
         '\n\nFinish with a standalone summary of your review findings, including severity, file/line references, recommended fixes and any remaining uncertainty. This final message will be handed back to the original agent session. Do not rely on earlier messages to explain your findings.'
 
     assertWorkspaceLifecycleAvailable(id)

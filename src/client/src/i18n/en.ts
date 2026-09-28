@@ -1566,6 +1566,8 @@ export default {
   'review.returnToSession': 'Return to the current session after the review',
   'review.returnToSessionHint':
     'Resume this session with the reviewer’s final summary. If disabled, continue in the review session.',
+  'review.readOnlyForced':
+    'A review that returns to this session runs read-only (Plan): it cannot modify files or ask questions.',
   'review.returnUnavailable': 'The current session must have started before it can be resumed.',
   'review.start': 'Start Review',
   'review.cancel': 'Cancel',
@@ -1764,6 +1766,10 @@ export default {
   'workspace.favorite': 'Mark as favorite',
   'workspace.unfavorite': 'Remove from favorites',
   'workspace.showFavoritesOnly': 'Show favorites only',
+  'workspace.tagFilter': 'Filter by tags',
+  'workspace.tagFilterActive': 'Filter by tags ({count} selected)',
+  'workspace.tagFilterClear': 'Clear',
+  'workspace.tagFilterEmpty': 'No tags yet. Add some from a workspace menu.',
   'workspace.searchArchivedToggle': 'Also search archived workspaces',
   'workspace.descriptionPlaceholder': 'Add a short description',
   'workspace.descriptionDialogHint': 'Plain text, 200 characters max. Leave empty to clear.',

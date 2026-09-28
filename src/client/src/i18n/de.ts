@@ -1595,6 +1595,8 @@ export default {
   'review.returnToSession': 'Nach dem Review zur aktuellen Sitzung zurückkehren',
   'review.returnToSessionHint':
     'Setzt diese Sitzung mit der abschließenden Zusammenfassung des Reviewers fort. Andernfalls geht die Unterhaltung in der Review-Sitzung weiter.',
+  'review.readOnlyForced':
+    'Ein Review, das zu dieser Session zurückkehrt, läuft schreibgeschützt (Plan): Es kann keine Dateien ändern und keine Fragen stellen.',
   'review.returnUnavailable': 'Die aktuelle Sitzung muss gestartet worden sein, bevor sie fortgesetzt werden kann.',
   'review.start': 'Review starten',
   'review.cancel': 'Abbrechen',
@@ -1799,6 +1801,10 @@ export default {
   'workspace.favorite': 'Als Favorit markieren',
   'workspace.unfavorite': 'Aus Favoriten entfernen',
   'workspace.showFavoritesOnly': 'Nur Favoriten anzeigen',
+  'workspace.tagFilter': 'Nach Tags filtern',
+  'workspace.tagFilterActive': 'Nach Tags filtern ({count} ausgewählt)',
+  'workspace.tagFilterClear': 'Zurücksetzen',
+  'workspace.tagFilterEmpty': 'Noch keine Tags. Füge sie über das Menü eines Workspace hinzu.',
   'workspace.searchArchivedToggle': 'Auch in archivierten Workspaces suchen',
   'workspace.descriptionPlaceholder': 'Kurze Beschreibung hinzufügen',
   'workspace.descriptionDialogHint': 'Klartext, max. 200 Zeichen. Leer lassen, um zu löschen.',

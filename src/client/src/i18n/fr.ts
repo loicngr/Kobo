@@ -1593,6 +1593,8 @@ export default {
   'review.returnToSession': 'Revenir à la session actuelle après la review',
   'review.returnToSessionHint':
     'Reprend cette session avec le résumé final du reviewer. Sinon, la conversation continue dans la session de review.',
+  'review.readOnlyForced':
+    'Une review qui revient à cette session tourne en lecture seule (Plan) : elle ne peut ni modifier de fichiers ni poser de questions.',
   'review.returnUnavailable': 'La session actuelle doit avoir démarré pour pouvoir être reprise.',
   'review.start': 'Lancer la review',
   'review.cancel': 'Annuler',
@@ -1795,6 +1797,10 @@ export default {
   'workspace.favorite': 'Ajouter aux favoris',
   'workspace.unfavorite': 'Retirer des favoris',
   'workspace.showFavoritesOnly': 'Afficher uniquement les favoris',
+  'workspace.tagFilter': 'Filtrer par tags',
+  'workspace.tagFilterActive': 'Filtrer par tags ({count} sélectionné(s))',
+  'workspace.tagFilterClear': 'Effacer',
+  'workspace.tagFilterEmpty': "Aucun tag pour l'instant. Ajoutez-en depuis le menu d'un workspace.",
   'workspace.searchArchivedToggle': 'Inclure les workspaces archivés dans la recherche',
   'workspace.descriptionPlaceholder': 'Ajouter une courte description',
   'workspace.descriptionDialogHint': 'Texte brut, 200 caractères maximum. Laisser vide pour effacer.',

@@ -76,6 +76,7 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
 import {
   BACKGROUND_CONTINUATION_GRACE_MS,
   createClaudeCodeEngine,
+  RESULT_CONTINUATION_GRACE_MS,
 } from '../server/services/agent/engines/claude-code/engine.js'
 import type { AgentEvent, StartOptions } from '../server/services/agent/engines/types.js'
 
@@ -166,15 +167,18 @@ describe('claude-code engine — result drain watchdog', () => {
     }
   })
 
-  it('emits a turn-completed signal as soon as a result has no background work', async () => {
+  it('emits a turn-completed signal once a result without background work is not followed up', async () => {
     vi.useFakeTimers()
     try {
       const events: AgentEvent[] = []
       const engine = createClaudeCodeEngine()
       await engine.start(BASE_OPTIONS, (event) => events.push(event))
 
+      // The CLI may still continue right after a result (resumed turn).
       await vi.advanceTimersByTimeAsync(0)
+      expect(events).not.toContainEqual({ kind: 'turn:completed' })
 
+      await vi.advanceTimersByTimeAsync(RESULT_CONTINUATION_GRACE_MS)
       expect(events).toContainEqual({ kind: 'turn:completed' })
     } finally {
       releaseStream?.()
@@ -191,7 +195,8 @@ describe('claude-code engine — result drain watchdog', () => {
       const engine = createClaudeCodeEngine()
       await engine.start(BASE_OPTIONS, (event) => events.push(event))
 
-      await vi.advanceTimersByTimeAsync(15_000)
+      // The input closes after the post-result grace, then the drain runs.
+      await vi.advanceTimersByTimeAsync(RESULT_CONTINUATION_GRACE_MS + 15_000)
 
       expect(events).toContainEqual({ kind: 'session:ended', reason: 'watchdog', exitCode: null })
       expect(events).toContainEqual(
@@ -224,7 +229,7 @@ describe('claude-code engine — result drain watchdog', () => {
       expect(abortSignal?.aborted).toBe(false)
 
       completeSubagent?.()
-      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(RESULT_CONTINUATION_GRACE_MS)
 
       expect(events).toContainEqual({ kind: 'turn:completed' })
       expect(events).not.toContainEqual({ kind: 'session:ended', reason: 'completed', exitCode: 0 })

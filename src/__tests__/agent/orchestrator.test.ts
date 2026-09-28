@@ -113,6 +113,42 @@ describe('Orchestrator — startAgent', () => {
     },
   )
 
+  it('launches a review session with an automatic return read-only in plan mode, whatever mode is requested', async () => {
+    const { createWorkspace, createIdleSession } = await import('../../server/services/workspace-service.js')
+    const ws = createWorkspace({ name: 'Review', projectPath: '/tmp', sourceBranch: 'main', workingBranch: 'review' })
+    const original = createIdleSession(ws.id)
+    const review = createIdleSession(ws.id)
+    const { registerReviewReturn } = await import('../../server/services/review-return-service.js')
+    const configuration = {
+      engine: 'claude-code',
+      model: 'auto',
+      reasoningEffort: 'auto',
+      agentPermissionMode: 'bypass',
+    }
+    registerReviewReturn({
+      workspaceId: ws.id,
+      reviewSessionId: review.id,
+      originalSessionId: original.id,
+      original: configuration,
+      review: configuration,
+    } as never)
+    const { startAgent } = await import('../../server/services/agent/orchestrator.js')
+    startOptions.mockClear()
+    startAgent(ws.id, '/tmp', 'Review the branch', undefined, false, 'bypass', review.id)
+    await flushControllerStart()
+    expect(startOptions.mock.calls[0][0]).toMatchObject({ readOnly: true, agentPermissionMode: 'plan' })
+  })
+
+  it('does not restrict an ordinary launch', async () => {
+    const { createWorkspace } = await import('../../server/services/workspace-service.js')
+    const ws = createWorkspace({ name: 'Plain', projectPath: '/tmp', sourceBranch: 'main', workingBranch: 'plain' })
+    const { startAgent } = await import('../../server/services/agent/orchestrator.js')
+    startOptions.mockClear()
+    startAgent(ws.id, '/tmp', 'Work', undefined, false, 'bypass')
+    await flushControllerStart()
+    expect(startOptions.mock.calls[0][0]).toMatchObject({ readOnly: false, agentPermissionMode: 'bypass' })
+  })
+
   it('injects the workspace policy before the user prompt without altering its constraints', async () => {
     const { createWorkspace } = await import('../../server/services/workspace-service.js')
     const workspace = createWorkspace({

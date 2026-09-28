@@ -81,6 +81,11 @@ export interface StartOptions {
    *   - 'interactive' → SDK 'default' + Kōbō PreToolUse defer hook.
    */
   agentPermissionMode?: 'plan' | 'bypass' | 'strict' | 'interactive'
+  /**
+   * Review session with an automatic return: never modify the worktree and
+   * never wait on the user, so the session ends and hands its report back.
+   */
+  readOnly?: boolean
   resumeFromEngineSessionId?: string
   backendUrl: string
   koboHome: string

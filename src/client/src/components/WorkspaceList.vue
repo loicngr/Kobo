@@ -119,6 +119,7 @@
         </template>
       </q-input>
       <WorkspaceSortMenu v-model="workspaceSort" />
+      <WorkspaceTagFilterMenu v-model="tagFilter" :tags="availableTags" />
       <q-btn
         :icon="favoritesOnly ? 'star' : 'star_outline'"
         :color="favoritesOnly ? 'amber-7' : 'kobo-3'"
@@ -700,6 +701,7 @@ import HelpMenu from 'src/components/HelpMenu.vue'
 import ManageTagsDialog from 'src/components/ManageTagsDialog.vue'
 import WorkspaceCard from 'src/components/WorkspaceCard.vue'
 import WorkspaceSortMenu from 'src/components/WorkspaceSortMenu.vue'
+import WorkspaceTagFilterMenu from 'src/components/WorkspaceTagFilterMenu.vue'
 import { useIsMobile } from 'src/composables/use-is-mobile'
 import { useWorktreeRestore } from 'src/composables/use-worktree-restore'
 import { useDevServerStore } from 'src/stores/dev-server'
@@ -715,6 +717,7 @@ import { isWorkspacePane } from 'src/utils/split-workspace'
 import { getAttentionReasons } from 'src/utils/workspace-attention'
 import { parseWorkspaceSort, sortWorkspaces, WORKSPACE_SORT_KEY } from 'src/utils/workspace-sort'
 import { isBusyStatus } from 'src/utils/workspace-status'
+import { collectTags, matchesTags, parseTagFilter } from 'src/utils/workspace-tag-filter'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
@@ -777,6 +780,33 @@ watch(searchQuery, (v) => localStorage.setItem(SEARCH_QUERY_KEY, v))
 const favoritesOnly = ref<boolean>(localStorage.getItem('kobo:favorites-filter') === '1')
 watch(favoritesOnly, (v) => localStorage.setItem('kobo:favorites-filter', v ? '1' : '0'))
 
+// Tag filter (OR), remembered like the favourites filter. Tags nobody carries
+// any more are dropped so a stale selection never empties the drawer.
+const TAG_FILTER_KEY = 'kobo:tag-filter'
+const tagFilter = ref<string[]>(parseTagFilter(localStorage.getItem(TAG_FILTER_KEY)))
+watch(tagFilter, (tags) => {
+  try {
+    localStorage.setItem(TAG_FILTER_KEY, JSON.stringify(tags))
+  } catch {
+    // Filtering still works for this session when storage is unavailable.
+  }
+})
+const availableTags = computed(() => collectTags([...store.workspaces, ...store.archived]))
+watch(
+  availableTags,
+  (tags) => {
+    // Live then archived workspaces load on mount: until both are there, a
+    // tag may just not be loaded yet, so keep the remembered selection.
+    if (!store.archivedLoaded) return
+    const known = new Set(tags.map((entry) => entry.tag))
+    if (tagFilter.value.some((tag) => !known.has(tag)))
+      tagFilter.value = tagFilter.value.filter((tag) => known.has(tag))
+  },
+  { immediate: true },
+)
+const passesFilters = (w: Workspace) =>
+  (!favoritesOnly.value || w.favoritedAt !== null) && matchesTags(w, tagFilter.value)
+
 // When ON and a search query is active, the archived section is filtered by
 // the same substring match as the live groups and auto-expands to surface
 // matches. When OFF (default), archived is hidden behind its collapsed
@@ -822,15 +852,11 @@ function groupByProject(workspaces: Workspace[]): ProjectGroup[] {
 // branche, description, étiquettes, projet — et plus seulement sur le nom en
 // sous-chaîne exacte. Le tri choisi est appliqué après le filtrage, puis
 // conservé à l’intérieur de chaque groupe de projets.
-const filteredNeedsAttention = computed(() =>
-  sorted(store.needsAttention.filter((w) => !favoritesOnly.value || w.favoritedAt !== null)),
-)
+const filteredNeedsAttention = computed(() => sorted(store.needsAttention.filter(passesFilters)))
 
-const filteredRunning = computed(() =>
-  sorted(store.running.filter((w) => !favoritesOnly.value || w.favoritedAt !== null)),
-)
+const filteredRunning = computed(() => sorted(store.running.filter(passesFilters)))
 
-const filteredIdle = computed(() => sorted(store.idle.filter((w) => !favoritesOnly.value || w.favoritedAt !== null)))
+const filteredIdle = computed(() => sorted(store.idle.filter(passesFilters)))
 
 const groupedNeedsAttention = computed(() => groupByProject(filteredNeedsAttention.value))
 const groupedRunning = computed(() => groupByProject(filteredRunning.value))
@@ -852,10 +878,7 @@ const filteredArchived = computed(() => {
   // `searchArchived` OFF ⇒ la requête n'affecte pas cette section (comportement
   // d'origine). ON ⇒ même moteur approximatif que les sections actives.
   const base = store.archived
-  return sorted(
-    base.filter((w) => !favoritesOnly.value || w.favoritedAt !== null),
-    searchArchived.value ? searchQuery.value : '',
-  )
+  return sorted(base.filter(passesFilters), searchArchived.value ? searchQuery.value : '')
 })
 
 // Auto-expand the archived section when the user toggles `searchArchived`

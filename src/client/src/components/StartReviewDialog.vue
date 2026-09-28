@@ -20,7 +20,19 @@
             <q-select v-model="reasoningEffort" :options="effortOptions" :label="$t('engine.effort')" :disable="loading" emit-value map-options outlined dark dense />
           </div>
           <div class="col-12 col-sm-6">
-            <q-select v-model="agentPermissionMode" :options="permissionOptions" :label="$t('agentPermissionMode.label')" :disable="loading" emit-value map-options outlined dark dense />
+            <q-select
+              :model-value="effectivePermissionMode"
+              :options="permissionOptions"
+              :label="$t('agentPermissionMode.label')"
+              :disable="loading || returnToSession"
+              emit-value
+              map-options
+              outlined
+              dark
+              dense
+              @update:model-value="agentPermissionMode = $event"
+            />
+            <div v-if="returnToSession" class="text-caption text-kobo-3 q-mt-xs">{{ $t('review.readOnlyForced') }}</div>
           </div>
         </div>
         <q-input
@@ -89,11 +101,16 @@ const engine = ref('claude-code')
 const model = ref('auto')
 const reasoningEffort = ref('auto')
 const agentPermissionMode = ref<ReviewConfiguration['agentPermissionMode']>('bypass')
+// A review that returns to the original session always runs read-only (the
+// server enforces it too); the user's choice is kept for when the return is off.
+const effectivePermissionMode = computed<ReviewConfiguration['agentPermissionMode']>(() =>
+  returnToSession.value ? 'plan' : agentPermissionMode.value,
+)
 const configuration = computed<ReviewConfiguration>(() => ({
   engine: engine.value,
   model: model.value,
   reasoningEffort: reasoningEffort.value,
-  agentPermissionMode: agentPermissionMode.value,
+  agentPermissionMode: effectivePermissionMode.value,
 }))
 const forceNewSession = computed(() => {
   const current = props.currentSession

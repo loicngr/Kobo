@@ -11,18 +11,23 @@ import { useWorkspaceStore } from '../stores/workspace'
 
 const i18n = createI18n({ legacy: false, locale: 'en', messages: { en } })
 
+// Content height reported by the stub; a test can make it grow after each
+// scroll, as QVirtualScroll does once it measures the real item heights.
+let stubScrollSize = 1000
+let onStubScroll: (() => void) | null = null
+
 const QScrollAreaStub = defineComponent({
   name: 'QScrollArea',
   emits: ['scroll'],
   setup(_props, { slots, emit, expose }) {
     const api = {
       getScroll: () => ({
-        verticalSize: 1000,
+        verticalSize: stubScrollSize,
         verticalPosition: 0,
         verticalContainerSize: 400,
       }),
       getScrollTarget: () => document.createElement('div'),
-      setScrollPosition: vi.fn(),
+      setScrollPosition: vi.fn(() => onStubScroll?.()),
       emitScroll: (info: { verticalPosition: number; verticalSize: number; verticalContainerSize: number }) =>
         emit('scroll', info),
     }
@@ -67,6 +72,88 @@ describe('ActivityFeed.vue', () => {
   afterEach(() => {
     vi.useRealTimers()
     vi.unstubAllGlobals()
+    stubScrollSize = 1000
+    onStubScroll = null
+  })
+
+  it('does not start an animated scroll when switching to a workspace with more messages', async () => {
+    // Per-workspace counters "grow" on a switch; treating that as a new send
+    // started a 180ms animation towards the previous feed's height that
+    // Quasar cannot cancel, leaving the new conversation mid-way.
+    const store = useWorkspaceStore()
+    for (const id of ['u1', 'u2', 'u3']) {
+      store.addActivityItem('w-many', {
+        id,
+        type: 'text',
+        content: id,
+        timestamp: '2026-01-01T00:00:00Z',
+        meta: { sender: 'user' },
+      })
+    }
+    const wrapper = mount(ActivityFeed, {
+      props: { workspaceId: 'w-few' },
+      global: { plugins: [i18n], stubs: globalStubs },
+    })
+    await vi.advanceTimersByTimeAsync(100)
+    const setScrollPosition = wrapper.findComponent(QScrollAreaStub).vm.$.exposed?.setScrollPosition as ReturnType<
+      typeof vi.fn
+    >
+    setScrollPosition.mockClear()
+    await wrapper.setProps({ workspaceId: 'w-many' })
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(setScrollPosition.mock.calls.filter(([, , duration]) => duration !== 0)).toEqual([])
+    wrapper.unmount()
+  })
+
+  it('stops re-anchoring as soon as the user scrolls during the initial settling', async () => {
+    onStubScroll = () => {
+      stubScrollSize += 500 // Never stabilises on its own.
+    }
+    useAgentStreamStore().reset(
+      'w-user',
+      [{ kind: 'message:text', messageId: 'm1', text: 'hello', streaming: false }],
+      ['2026-01-01T00:00:00Z'],
+      { sessionIds: [null] },
+    )
+    const wrapper = mount(ActivityFeed, {
+      props: { workspaceId: 'w-user' },
+      global: { plugins: [i18n], stubs: globalStubs },
+    })
+    await vi.advanceTimersByTimeAsync(50)
+    const area = wrapper.findComponent(QScrollAreaStub)
+    const setScrollPosition = area.vm.$.exposed?.setScrollPosition as ReturnType<typeof vi.fn>
+    await area.trigger('wheel')
+    const callsAtWheel = setScrollPosition.mock.calls.length
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(setScrollPosition.mock.calls.length).toBeLessThanOrEqual(callsAtWheel + 1)
+    wrapper.unmount()
+  })
+
+  it('keeps anchoring to the bottom while the opened conversation grows after the first jump', async () => {
+    // Virtual scroll estimates unrendered turns at 160px: jumping to the end
+    // renders the last turns, their real height grows the content, and a
+    // single retry left the feed in the middle of the conversation.
+    const sizes = [2500, 4000]
+    onStubScroll = () => {
+      const next = sizes.shift()
+      if (next !== undefined) stubScrollSize = next
+    }
+    useAgentStreamStore().reset(
+      'w-grow',
+      [{ kind: 'message:text', messageId: 'm1', text: 'hello', streaming: false }],
+      ['2026-01-01T00:00:00Z'],
+      { sessionIds: [null] },
+    )
+    const wrapper = mount(ActivityFeed, {
+      props: { workspaceId: 'w-grow' },
+      global: { plugins: [i18n], stubs: globalStubs },
+    })
+    await vi.advanceTimersByTimeAsync(2_000)
+    const setScrollPosition = wrapper.findComponent(QScrollAreaStub).vm.$.exposed?.setScrollPosition as ReturnType<
+      typeof vi.fn
+    >
+    expect(setScrollPosition).toHaveBeenLastCalledWith('vertical', 4000, 0)
+    wrapper.unmount()
   })
 
   it('shows an idle empty conversation immediately without a grace-period timer', async () => {

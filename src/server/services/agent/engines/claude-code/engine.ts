@@ -65,6 +65,11 @@ export const SUBAGENT_STALL_TIMEOUT_MS = 10 * 60_000
  *  every permission request of it fail with "Stream closed", so wait this long
  *  for a parent message before draining a stream that did not continue. */
 export const BACKGROUND_CONTINUATION_GRACE_MS = 60_000
+/** A `result` does not always end the stream: resuming a session killed
+ *  mid-turn first settles the interrupted turn with an empty result, then
+ *  runs the new prompt right away. Wait this long for a follow-up before
+ *  closing the input it still needs for permission requests. */
+export const RESULT_CONTINUATION_GRACE_MS = 3_000
 const MAX_PENDING_USER_MESSAGES = 20
 
 function toMcpServersMap(specs: StartOptions['mcpServers']): Options['mcpServers'] | undefined {
@@ -171,6 +176,18 @@ export function createClaudeCodeEngine(): AgentEngine {
       const canUseTool: CanUseTool = (toolName, input, ctx) => {
         const toolCallId =
           typeof ctx.toolUseID === 'string' && ctx.toolUseID.length > 0 ? ctx.toolUseID : `tu_${nanoid()}`
+
+        // Plan mode alone is not read-only here: the non-interactive allow below
+        // would approve ExitPlanMode and then every edit. Anything that needs a
+        // permission, a question included, is refused outright instead.
+        if (options.readOnly) {
+          return Promise.resolve<PermissionResult>({
+            behavior: 'deny',
+            message:
+              'This is a read-only review session: do not modify anything or ask the user. Put the finding in your final report instead.',
+            interrupt: false,
+          })
+        }
 
         // Non-interactive modes: the SDK has already applied its permissionMode
         // rules before reaching us, so allow through unchanged. AskUserQuestion
@@ -462,16 +479,16 @@ export function createClaudeCodeEngine(): AgentEngine {
         resultDrainTimer = undefined
       }
 
-      // Drain for a stream whose last background subagent completed without
-      // a parent continuation. Any parent message cancels it: that
-      // continuation's own `result` then closes the input.
+      // Drain for a stream that may still continue: after a result, or after
+      // the last background subagent completed. Any new init or parent
+      // message cancels it, and that continuation's own `result` re-arms it.
       let continuationGraceTimer: ReturnType<typeof setTimeout> | undefined
       const clearContinuationGrace = (): void => {
         if (!continuationGraceTimer) return
         clearTimeout(continuationGraceTimer)
         continuationGraceTimer = undefined
       }
-      const armContinuationGrace = (): void => {
+      const armContinuationGrace = (delayMs: number): void => {
         clearContinuationGrace()
         continuationGraceTimer = setTimeout(() => {
           continuationGraceTimer = undefined
@@ -482,9 +499,12 @@ export function createClaudeCodeEngine(): AgentEngine {
             inputStream.hasUnansweredInput(completedResponses)
           )
             return
+          // Settled only now: a result the CLI follows up on (e.g. a resumed
+          // turn's empty result) must not hide the busy banner meanwhile.
+          emitTurnCompletedIfSettled()
           inputStream.close()
           armResultDrainWatchdog()
-        }, BACKGROUND_CONTINUATION_GRACE_MS)
+        }, delayMs)
         continuationGraceTimer.unref?.()
       }
 
@@ -529,6 +549,9 @@ export function createClaudeCodeEngine(): AgentEngine {
             // progress notifications alone do not end the between-turn wait.
             if (msg.type === 'assistant' || msg.type === 'user' || msg.type === 'stream_event') {
               waitingForBackground = false
+              clearContinuationGrace()
+            } else if (msg.type === 'system' && (msg as { subtype?: string }).subtype === 'init') {
+              // A new run starts on this stream (e.g. after a resumed turn's empty result).
               clearContinuationGrace()
             }
             // This SDK message proves that any drain condition armed by a
@@ -596,7 +619,7 @@ export function createClaudeCodeEngine(): AgentEngine {
               !inputStream.hasUnansweredInput(completedResponses)
             ) {
               clearSubagentStallWatchdog()
-              armContinuationGrace()
+              armContinuationGrace(BACKGROUND_CONTINUATION_GRACE_MS)
             }
             for (const ev of events) {
               if (ev.kind === 'session:started') discoveredSessionId = ev.engineSessionId
@@ -619,13 +642,11 @@ export function createClaudeCodeEngine(): AgentEngine {
               clearContinuationGrace()
               pendingToolCallIds.clear()
               completedResponses++
-              emitTurnCompletedIfSettled()
               // A queued forced message starts the next response on this same SDK stream.
               if (!inputStream.hasUnansweredInput(completedResponses)) {
                 if (activeSubagentTaskIds.size === 0) {
                   clearSubagentStallWatchdog()
-                  inputStream.close()
-                  armResultDrainWatchdog()
+                  armContinuationGrace(RESULT_CONTINUATION_GRACE_MS)
                 } else {
                   waitingForBackground = true
                   armSubagentStallWatchdog()

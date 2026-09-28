@@ -25,7 +25,14 @@
         <span class="text-caption text-kobo-2">{{ $t('activity.compacting') }}</span>
       </div>
     </transition>
-    <q-scroll-area ref="scrollRef" class="activity-feed-scroll" @scroll="onScroll">
+    <q-scroll-area
+      ref="scrollRef"
+      class="activity-feed-scroll"
+      @scroll="onScroll"
+      @wheel.passive="cancelInitialSettle"
+      @touchstart.passive="cancelInitialSettle"
+      @keydown="cancelInitialSettle"
+    >
       <div v-if="loadingOlder" class="text-center q-py-sm text-caption text-kobo-3">
         <q-spinner size="sm" /> {{ $t('activity.loading_older') }}
       </div>
@@ -650,15 +657,41 @@ async function goToPreviousUserMessage(): Promise<void> {
   }
 }
 
+// QVirtualScroll estimates unrendered turns at virtual-scroll-item-size; the
+// last turns measure taller once rendered, so the content keeps growing for a
+// few frames after the jump. Re-anchor until the height is stable.
+const SETTLE_STABLE_FRAMES = 3
+const SETTLE_MAX_FRAMES = 60
+let settleToken = 0
+
+function nextFrame(): Promise<void> {
+  return new Promise((resolve) => requestAnimationFrame(() => resolve()))
+}
+
 async function armInitialScroll() {
   initialScrollDone = false
-  // Run through a few paint cycles so the feed's items are laid out before
-  // we try to measure/scroll. sync:response may arrive AFTER onMounted, so
-  // we rely on the watcher below to re-arm whenever turns populate.
+  const token = ++settleToken
+  // sync:response may arrive AFTER onMounted, so we rely on the watchers
+  // below to re-arm whenever turns populate; a newer arm supersedes this one.
   await nextTick()
-  await scrollToBottom(0)
-  await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
-  await scrollToBottom(0)
+  let lastSize = -1
+  let stableFrames = 0
+  for (let frame = 0; frame < SETTLE_MAX_FRAMES && stableFrames < SETTLE_STABLE_FRAMES; frame++) {
+    if (token !== settleToken) return
+    await scrollToBottom(0)
+    await nextFrame()
+    const size = scrollRef.value?.getScroll().verticalSize ?? 0
+    stableFrames = size === lastSize ? stableFrames + 1 : 0
+    lastSize = size
+  }
+  if (token === settleToken) initialScrollDone = true
+}
+
+// The user taking over (wheel, touch, keyboard) ends the settling instead of
+// fighting their reading position.
+function cancelInitialSettle() {
+  if (initialScrollDone) return
+  settleToken++
   initialScrollDone = true
 }
 
@@ -730,7 +763,13 @@ watch(eventCount, async (newLen) => {
   }
 })
 const liveAppendCount = computed(() => stream.liveAppendCountFor(props.workspaceId, sessionMatches))
-watch(liveAppendCount, (next, previous) => {
+// Both counters are per workspace/session: a switch changes them without any
+// new message. Only follow growth within the same view (the switch anchors
+// through armInitialScroll instead), or an uncancellable animation towards the
+// previous feed's height leaves the new one mid-way.
+const feedView = () => `${props.workspaceId}\u0000${workspaceStore.selectedSessionId ?? ''}`
+watch([liveAppendCount, feedView], ([next, view], [previous, previousView]) => {
+  if (view !== previousView) return
   if (next > previous && stickToBottom.value && !loadingOlder.value) requestStreamScrollToBottom()
 })
 
@@ -841,8 +880,8 @@ async function fetchSessionIfMissing(): Promise<void> {
 // they were reading earlier history. Detect by counting non-system-prompt
 // user messages — increments exactly once per user send.
 const userSendCount = computed(() => userMessages.value.filter((m) => m.sender !== 'system-prompt').length)
-watch(userSendCount, async (newLen, oldLen) => {
-  if (newLen > oldLen) {
+watch([userSendCount, feedView], async ([newLen, view], [oldLen, oldView]) => {
+  if (view === oldView && newLen > oldLen) {
     stickToBottom.value = true
     await scrollToBottom(180)
   }

@@ -824,7 +824,8 @@ describe('review return option', () => {
         originalSessionId: 'sess-1',
         reviewSessionId: 'review-session',
         original: expect.objectContaining({ engine: fakeWorkspace.engine, model: fakeWorkspace.model }),
-        review: expect.objectContaining({ engine: 'codex', model: 'gpt-5.4' }),
+        // A returning review always runs read-only, whatever the dialog sent.
+        review: expect.objectContaining({ engine: 'codex', model: 'gpt-5.4', agentPermissionMode: 'plan' }),
       }),
     )
     expect(vi.mocked(reviewReturns.registerReviewReturn).mock.invocationCallOrder[0]).toBeLessThan(
@@ -836,11 +837,32 @@ describe('review return option', () => {
       expect.stringContaining('standalone summary'),
       'gpt-5.4',
       false,
-      'bypass',
+      'plan',
       'review-session',
       'auto',
     )
     expect(wsService.emit).toHaveBeenCalledWith('ws-1', 'user:message', expect.anything(), 'review-session')
+  })
+  it('keeps a returning reviewer read-only and unblocked so its session ends and returns', async () => {
+    // A reviewer that fixes code itself, or stops on a question, never ends
+    // naturally: the automatic return to the original session never fires.
+    vi.mocked(workspaceService.getActiveSession).mockReturnValue({
+      ...fakeSession,
+      engineSessionId: 'original-native',
+      engine: fakeWorkspace.engine,
+    } as never)
+    vi.mocked(workspaceService.createIdleSession).mockReturnValue({ id: 'review-session' } as never)
+    vi.mocked(agentManager.startAgent).mockReturnValue({ agentSessionId: 'review-session' } as never)
+    const response = await app.request('/api/workspaces/ws-1/start-review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ returnToSession: true }),
+    })
+    expect(response.status).toBe(200)
+    const prompt = vi.mocked(agentManager.startAgent).mock.calls[0]![2]
+    expect(prompt).toContain('Do not modify, create or delete files')
+    expect(prompt).toContain('Do not ask the user questions')
+    expect(prompt).toContain('override')
   })
   it('refuses a return to a session without native conversation before stopping anything', async () => {
     const response = await app.request('/api/workspaces/ws-1/start-review', {

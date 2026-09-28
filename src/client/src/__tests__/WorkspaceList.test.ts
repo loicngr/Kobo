@@ -69,7 +69,30 @@ beforeEach(() => {
 afterEach(() => {
   wrapper?.unmount()
   vi.restoreAllMocks()
+  localStorage.removeItem('kobo:tag-filter')
 })
+
+function mountList() {
+  return shallowMount(WorkspaceList, {
+    global: {
+      plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })],
+      renderStubDefaultSlot: true,
+      stubs: {
+        'q-badge': { name: 'QBadge', template: '<div><slot /></div>' },
+        'q-btn': { name: 'QBtn', template: '<div><slot /></div>' },
+        'q-card': { name: 'QCard', template: '<div><slot /></div>' },
+        'q-card-actions': { name: 'QCardActions', template: '<div><slot /></div>' },
+        'q-card-section': { name: 'QCardSection', template: '<div><slot /></div>' },
+        'q-checkbox': { name: 'QCheckbox', template: '<div><slot /></div>' },
+        'q-dialog': { name: 'QDialog', template: '<div><slot /></div>' },
+        'q-icon': { name: 'QIcon', template: '<div><slot /></div>' },
+        'q-input': { name: 'QInput', template: '<div><slot /></div>' },
+        'q-separator': { name: 'QSeparator', template: '<div><slot /></div>' },
+        'q-tooltip': { name: 'QTooltip', template: '<div><slot /></div>' },
+      },
+    },
+  })
+}
 
 it.each(['enter', 'click'])(
   'requires the working branch to delete via %s, accepts paste whitespace, and resets for another workspace',
@@ -78,25 +101,7 @@ it.each(['enter', 'click'])(
     const workspace = makeWorkspace({ name: 'Long workspace title with curly apostrophe ’ and trailing space ' })
     store.workspaces = [workspace]
     const remove = vi.spyOn(store, 'deleteWorkspace').mockResolvedValue({ warnings: [] })
-    wrapper = shallowMount(WorkspaceList, {
-      global: {
-        plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })],
-        renderStubDefaultSlot: true,
-        stubs: {
-          'q-badge': { name: 'QBadge', template: '<div><slot /></div>' },
-          'q-btn': { name: 'QBtn', template: '<div><slot /></div>' },
-          'q-card': { name: 'QCard', template: '<div><slot /></div>' },
-          'q-card-actions': { name: 'QCardActions', template: '<div><slot /></div>' },
-          'q-card-section': { name: 'QCardSection', template: '<div><slot /></div>' },
-          'q-checkbox': { name: 'QCheckbox', template: '<div><slot /></div>' },
-          'q-dialog': { name: 'QDialog', template: '<div><slot /></div>' },
-          'q-icon': { name: 'QIcon', template: '<div><slot /></div>' },
-          'q-input': { name: 'QInput', template: '<div><slot /></div>' },
-          'q-separator': { name: 'QSeparator', template: '<div><slot /></div>' },
-          'q-tooltip': { name: 'QTooltip', template: '<div><slot /></div>' },
-        },
-      },
-    })
+    wrapper = mountList()
     await flushPromises()
     const card = wrapper.findComponent({ name: 'WorkspaceCard' })
     card.vm.$emit('delete', workspace, new Event('click'))
@@ -126,3 +131,50 @@ it.each(['enter', 'click'])(
     expect(button.attributes('disable')).toBe('true')
   },
 )
+
+it('filters live workspaces by the stored tag selection (OR)', async () => {
+  localStorage.setItem('kobo:tag-filter', JSON.stringify(['docs', 'back']))
+  const store = useWorkspaceStore()
+  store.workspaces = [
+    makeWorkspace({ id: 'docs', tags: ['docs'] }),
+    makeWorkspace({ id: 'back', tags: ['back'] }),
+    makeWorkspace({ id: 'none', tags: [] }),
+  ]
+  wrapper = mountList()
+  await flushPromises()
+  const shown = wrapper.findAllComponents({ name: 'WorkspaceCard' }).map((c) => c.props('workspace').id)
+  expect(shown).toEqual(expect.arrayContaining(['docs', 'back']))
+  expect(shown).not.toContain('none')
+  const menu = wrapper.findComponent({ name: 'WorkspaceTagFilterMenu' })
+  expect(menu.props('tags')).toEqual(expect.arrayContaining([{ tag: 'docs', count: 1 }]))
+})
+
+it('ignores a stored tag that no workspace carries any more', async () => {
+  localStorage.setItem('kobo:tag-filter', JSON.stringify(['ghost']))
+  const store = useWorkspaceStore()
+  store.workspaces = [makeWorkspace({ id: 'a', tags: [] }), makeWorkspace({ id: 'b', tags: ['docs'] })]
+  store.archivedLoaded = true
+  wrapper = mountList()
+  await flushPromises()
+  const shown = wrapper.findAllComponents({ name: 'WorkspaceCard' }).map((c) => c.props('workspace').id)
+  expect(shown).toEqual(expect.arrayContaining(['a', 'b']))
+  expect(localStorage.getItem('kobo:tag-filter')).toBe('[]')
+})
+
+it('keeps a tag only carried by archived workspaces until they are loaded', async () => {
+  // Live workspaces load first, archived ones right after: pruning in between
+  // dropped archived-only tags from the remembered selection.
+  localStorage.setItem('kobo:tag-filter', JSON.stringify(['legacy']))
+  const store = useWorkspaceStore()
+  store.workspaces = [makeWorkspace({ id: 'live', tags: [] })]
+  wrapper = mountList()
+  await flushPromises()
+  expect(localStorage.getItem('kobo:tag-filter')).toBe('["legacy"]')
+})
+
+it('keeps the remembered selection while no workspace is loaded yet', async () => {
+  localStorage.setItem('kobo:tag-filter', JSON.stringify(['docs']))
+  wrapper = mountList()
+  await flushPromises()
+  expect(localStorage.getItem('kobo:tag-filter')).toBe('["docs"]')
+})

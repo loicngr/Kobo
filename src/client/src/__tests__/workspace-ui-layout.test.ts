@@ -33,8 +33,9 @@ describe('workspace UI layout', () => {
       source.indexOf('// Count of events'),
     )
 
-    expect(initialScroll).toContain(
-      'await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))',
-    )
+    // Re-anchors frame by frame until the measured height stops changing:
+    // virtual scroll only knows real turn heights once they have painted.
+    expect(initialScroll).toContain('await nextFrame()')
+    expect(initialScroll).toContain('stableFrames < SETTLE_STABLE_FRAMES')
   })
 })

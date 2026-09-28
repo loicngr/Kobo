@@ -119,7 +119,8 @@ it('preserves review settings and instructions when polling refreshes the same w
 
   await view.setProps({ workspace: { ...workspace } })
 
-  expect(selects.map((s) => s.props('modelValue'))).toEqual(['codex', 'gpt-6-astra', 'high', 'strict'])
+  // The return toggle is on, so the review runs read-only in plan mode.
+  expect(selects.map((s) => s.props('modelValue'))).toEqual(['codex', 'gpt-6-astra', 'high', 'plan'])
   expect(view.findComponent({ name: 'QInput' }).props('modelValue')).toBe('Check session handling')
   expect(view.findAllComponents({ name: 'QToggle' })[1]!.props('modelValue')).toBe(true)
   await view.findAllComponents({ name: 'QBtn' }).at(-1)!.trigger('click')
@@ -127,7 +128,7 @@ it('preserves review settings and instructions when polling refreshes the same w
     engine: 'codex',
     model: 'gpt-6-astra',
     reasoningEffort: 'high',
-    agentPermissionMode: 'strict',
+    agentPermissionMode: 'plan',
     additionalInstructions: 'Check session handling',
     newSession: true,
     returnToSession: true,
@@ -144,5 +145,27 @@ it('preserves a manually requested new session during polling but resets for ano
   await view.setProps({ workspace: { ...workspace, id: 'ws-2', model: 'claude-sonnet-4-6' } })
   expect(view.findAllComponents({ name: 'QSelect' })[1]!.props('modelValue')).toBe('claude-sonnet-4-6')
   expect(view.findAllComponents({ name: 'QToggle' })[0]!.props('modelValue')).toBe(false)
+  view.unmount()
+})
+
+it('locks a returning review to read-only plan mode and restores the choice when the return is disabled', async () => {
+  const view = mountDialog()
+  const permission = () => view.findAllComponents({ name: 'QSelect' })[3]!
+  const returnToggle = () => view.findAllComponents({ name: 'QToggle' })[1]!
+  expect(permission().props()).toMatchObject({ modelValue: 'bypass', disable: false })
+
+  // The return option only appears once a new session is requested.
+  view.findAllComponents({ name: 'QToggle' })[0]!.vm.$emit('update:modelValue', true)
+  await view.vm.$nextTick()
+  returnToggle().vm.$emit('update:modelValue', true)
+  await view.vm.$nextTick()
+  expect(permission().props()).toMatchObject({ modelValue: 'plan', disable: true })
+  expect(view.text()).toContain(en['review.readOnlyForced'])
+  await view.findAllComponents({ name: 'QBtn' }).at(-1)!.trigger('click')
+  expect(view.emitted('submit')?.[0]?.[0]).toMatchObject({ agentPermissionMode: 'plan', returnToSession: true })
+
+  returnToggle().vm.$emit('update:modelValue', false)
+  await view.vm.$nextTick()
+  expect(permission().props()).toMatchObject({ modelValue: 'bypass', disable: false })
   view.unmount()
 })
