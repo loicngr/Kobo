@@ -528,6 +528,68 @@ describe('createCodexEngine — background subagents', () => {
     expect(_child.kill).toHaveBeenCalledWith('SIGTERM')
   })
 
+  it('keeps the spawnAgent card owning the thread when a wait times out, and closes both cards', async () => {
+    resetChild()
+    vi.useFakeTimers()
+    try {
+      const events: AgentEvent[] = []
+      await startBackgroundTurn(events, false)
+      const collab = (id: string, tool: string, status: string, agentsStates: Record<string, unknown>) => ({
+        threadId: 'thr_parent',
+        turnId: 'turn_parent',
+        item: {
+          id,
+          type: 'collabAgentToolCall',
+          tool,
+          status,
+          senderThreadId: 'thr_parent',
+          receiverThreadIds: ['thr_child'],
+          prompt: null,
+          model: null,
+          agentsStates,
+        },
+      })
+      pushNotification('item/started', collab('wait_1', 'wait', 'inProgress', {}))
+      // wait returns on timeout: the child is still running.
+      pushNotification(
+        'item/completed',
+        collab('wait_1', 'wait', 'completed', { thr_child: { status: 'running', message: null } }),
+      )
+      await vi.advanceTimersByTimeAsync(1)
+
+      const progressEvents = () =>
+        events.filter(
+          (event): event is Extract<AgentEvent, { kind: 'subagent:progress' }> => event.kind === 'subagent:progress',
+        )
+      const progress = progressEvents()
+      const spawnId = progress.find((event) => event.taskType === 'spawnAgent')?.toolCallId
+      const waitId = progress.find((event) => event.taskType === 'wait')?.toolCallId
+      expect(spawnId).toBeDefined()
+      expect(waitId).toBeDefined()
+      const lastStatus = (id: string | undefined) =>
+        progressEvents()
+          .filter((event) => event.toolCallId === id)
+          .at(-1)?.status
+
+      // The wait card is closed by its own completion; the spawn card keeps running.
+      expect(lastStatus(waitId)).toBe('done')
+      expect(lastStatus(spawnId)).toBe('running')
+
+      pushNotification('turn/completed', { threadId: 'thr_parent', turn: { id: 'turn_parent', status: 'completed' } })
+      pushNotification('thread/status/changed', { threadId: 'thr_child', status: { type: 'idle' } })
+      await vi.advanceTimersByTimeAsync(1)
+
+      expect(lastStatus(spawnId)).toBe('done')
+      expect(lastStatus(waitId)).toBe('done')
+      for (const id of new Set(progressEvents().map((event) => event.toolCallId))) expect(lastStatus(id)).toBe('done')
+      expect(events).toContainEqual({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
+    } finally {
+      _child.kill('SIGTERM')
+      await vi.advanceTimersByTimeAsync(1)
+      vi.useRealTimers()
+    }
+  })
+
   it('force-ends the session if a spawned subagent thread never reports a terminal status', async () => {
     resetChild()
     vi.useFakeTimers()

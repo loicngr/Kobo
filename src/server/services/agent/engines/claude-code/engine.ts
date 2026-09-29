@@ -161,9 +161,49 @@ export function createClaudeCodeEngine(): AgentEngine {
     async start(options: StartOptions, onEvent): Promise<EngineProcess> {
       const abortController = new AbortController()
       const mapperState = createMapperState()
-      // UI/tool ids can differ from the SDK task id. Key by the stable UI id
-      // so a terminal notification that omits task_id still clears the task.
-      const activeSubagentTaskIds = new Map<string, string>()
+      // Active sub-agents keyed by their canonical id (SDK task id when known,
+      // else the tool call id), which is also the id passed to `q.stopTask`.
+      // One task can surface under both ids (relaunch, kill/restart), so
+      // running and terminal events must resolve to the same entry.
+      const activeSubagentTaskIds = new Set<string>()
+      // tool call id -> SDK task id, learned from events carrying both.
+      const subagentTaskIdByToolCallId = new Map<string, string>()
+      // Ambient tasks (SDK `ambient`, e.g. Monitor watchers) are not activity:
+      // they never enter `activeSubagentTaskIds`, so they never block
+      // turn:completed, keep the input open or arm the stall watchdog. They are
+      // tracked apart only so a user interrupt still stops them.
+      const ambientSubagentTaskIds = new Set<string>()
+      // Canonical ids whose last lifecycle event was terminal: a late
+      // `progress` for them is ignored, only a `started` relaunch revives them.
+      const terminalSubagentTaskIds = new Set<string>()
+      const trackSubagentProgress = (ev: Extract<AgentEvent, { kind: 'subagent:progress' }>): void => {
+        if (ev.taskId) {
+          subagentTaskIdByToolCallId.set(ev.toolCallId, ev.taskId)
+          // Merge an entry first tracked under its tool call id alone.
+          if (ev.toolCallId !== ev.taskId) {
+            activeSubagentTaskIds.delete(ev.toolCallId)
+            ambientSubagentTaskIds.delete(ev.toolCallId)
+            if (terminalSubagentTaskIds.delete(ev.toolCallId)) terminalSubagentTaskIds.add(ev.taskId)
+          }
+        }
+        const taskId = ev.taskId ?? subagentTaskIdByToolCallId.get(ev.toolCallId)
+        const key = taskId ?? ev.toolCallId
+        if (ev.status !== 'running') {
+          activeSubagentTaskIds.delete(key)
+          ambientSubagentTaskIds.delete(key)
+          terminalSubagentTaskIds.add(key)
+          return
+        }
+        if (ev.phase === 'progress' && terminalSubagentTaskIds.has(key)) return
+        terminalSubagentTaskIds.delete(key)
+        if (ev.ambient) {
+          activeSubagentTaskIds.delete(key)
+          ambientSubagentTaskIds.add(key)
+        } else {
+          ambientSubagentTaskIds.delete(key)
+          activeSubagentTaskIds.add(key)
+        }
+      }
       // Foreground tool calls currently awaiting their tool_result. Cleared on
       // every `result` message: a turn cannot end with a tool still in flight.
       const pendingToolCallIds = new Set<string>()
@@ -312,6 +352,16 @@ export function createClaudeCodeEngine(): AgentEngine {
 
       const inputStream = new ClaudeInputStream(effectivePrompt)
       const q = query({ prompt: inputStream, options: sdkOptions })
+      // Best-effort SDK stop of one background task; failures are ignored.
+      const requestStopTask = (taskId: string): void => {
+        try {
+          void q.stopTask(taskId).catch(() => {
+            /* best-effort */
+          })
+        } catch {
+          /* best-effort */
+        }
+      }
 
       let resolveReady!: () => void
       let rejectReady!: (error: Error) => void
@@ -561,15 +611,15 @@ export function createClaudeCodeEngine(): AgentEngine {
             clearResultDrainWatchdog()
             const events = mapSdkMessage(msg, mapperState)
             for (const ev of events) {
-              if (ev.kind !== 'subagent:progress') continue
-              if (ev.status === 'running') activeSubagentTaskIds.set(ev.toolCallId, ev.taskId ?? ev.toolCallId)
-              else activeSubagentTaskIds.delete(ev.toolCallId)
+              if (ev.kind === 'subagent:progress') trackSubagentProgress(ev)
             }
             if (
               activeSubagentTaskIds.size > 0 &&
               (events.some(
                 (ev) =>
-                  ev.kind === 'subagent:progress' ||
+                  // An ambient watcher's progress is not proof that a real
+                  // sub-agent advanced: it must not reset the stall bound.
+                  (ev.kind === 'subagent:progress' && !ev.ambient) ||
                   ev.kind === 'message:text' ||
                   ev.kind === 'message:thinking' ||
                   ev.kind === 'tool:call' ||
@@ -746,6 +796,25 @@ export function createClaudeCodeEngine(): AgentEngine {
           armSubagentStallWatchdog()
           return true
         },
+        stopSubagents(ids?: string[]): number {
+          const isRunning = (taskId: string): boolean =>
+            activeSubagentTaskIds.has(taskId) || ambientSubagentTaskIds.has(taskId)
+          const targets = new Set<string>()
+          if (ids === undefined) {
+            for (const taskId of [...activeSubagentTaskIds, ...ambientSubagentTaskIds]) targets.add(taskId)
+          } else {
+            for (const id of ids) {
+              // A card id is the SDK task id, or the tool call id when the
+              // task id was not known yet: resolve both to the tracked entry.
+              const taskId = isRunning(id) ? id : subagentTaskIdByToolCallId.get(id)
+              if (taskId && isRunning(taskId)) targets.add(taskId)
+            }
+          }
+          // The main turn keeps running: only the targeted tasks are stopped.
+          // Their terminal notification clears the tracking as usual.
+          for (const taskId of targets) requestStopTask(taskId)
+          return targets.size
+        },
         interrupt() {
           userInterrupted = true
           // The SDK ends an interrupted run by emitting a `result` with
@@ -756,15 +825,7 @@ export function createClaudeCodeEngine(): AgentEngine {
           // background subagent task keeps running unless told to stop via
           // its own API, which would otherwise leave the Stop button
           // appearing to do nothing for up to SUBAGENT_STALL_TIMEOUT_MS.
-          for (const taskId of activeSubagentTaskIds.values()) {
-            try {
-              void q.stopTask(taskId).catch(() => {
-                /* best-effort */
-              })
-            } catch {
-              /* best-effort */
-            }
-          }
+          for (const taskId of [...activeSubagentTaskIds, ...ambientSubagentTaskIds]) requestStopTask(taskId)
           const qq = q as unknown as { interrupt?: () => unknown }
           if (typeof qq.interrupt === 'function') {
             try {

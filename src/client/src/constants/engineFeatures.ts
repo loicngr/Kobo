@@ -46,3 +46,17 @@ export function supportsLiveSteering(engineId: string | undefined): boolean {
   if (!engineId) return false
   return SUPPORTS_LIVE_STEERING_BY_ENGINE[engineId] ?? false
 }
+
+/**
+ * Engines that can stop one running sub-agent without interrupting the main
+ * turn (backend `EngineProcess.stopSubagents`). Codex has no such API.
+ */
+export const SUPPORTS_SUBAGENT_STOP_BY_ENGINE: Record<string, boolean> = {
+  'claude-code': true,
+  codex: false,
+}
+
+export function supportsSubagentStop(engineId: string | undefined): boolean {
+  if (!engineId) return false
+  return SUPPORTS_SUBAGENT_STOP_BY_ENGINE[engineId] ?? false
+}

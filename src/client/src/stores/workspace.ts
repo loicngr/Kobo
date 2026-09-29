@@ -166,11 +166,33 @@ export interface OpenPrResult {
   warning?: string
 }
 
+export type SubagentStatus = 'running' | 'done' | 'failed' | 'stopped'
+
+/** Lifecycle edge of a running sub-agent event (see `subagent:progress.phase`). */
+export type SubagentPhase = 'started' | 'progress'
+
 export interface Subagent {
   toolUseId: string
+  /**
+   * SDK task id, when known. A task can be reported under its tool_use_id or
+   * only its task_id (relaunch, kill/restart); the card is keyed by
+   * `taskId ?? toolUseId` so both forms reach the same card.
+   */
+  taskId?: string
   description: string
   taskType?: string
-  status: 'running' | 'done'
+  /** Every non-running status is terminal. */
+  status: SubagentStatus
+  /**
+   * SDK ambient task (e.g. a Monitor watcher): listed in the panel but never
+   * counted as agent activity.
+   */
+  ambient?: boolean
+  /**
+   * Agent session hosting the sub-agent, when the event carried one. Lets a
+   * `session:ended` finalize only that session's cards.
+   */
+  sessionId?: string
   lastToolName?: string
   lastDescription?: string
   totalTokens?: number
@@ -540,6 +562,14 @@ export const useWorkspaceStore = defineStore('workspace', {
       if (!state.selectedWorkspaceId) return []
       const map = state.subagents[state.selectedWorkspaceId] ?? {}
       return Object.values(map).sort((a, b) => a.startedAt.localeCompare(b.startedAt))
+    },
+
+    /**
+     * Sub-agents of the selected workspace that mean "agent busy": running
+     * and not ambient. Ambient watchers stay visible in the panel only.
+     */
+    currentBusySubagentCount(): number {
+      return this.currentSubagents.filter((s) => s.status === 'running' && !s.ambient).length
     },
 
     activityFeed: (state) => {
@@ -1009,6 +1039,35 @@ export const useWorkspaceStore = defineStore('workspace', {
         }
       } catch (err) {
         console.error('[workspace store] interruptAgent failed:', err)
+        throw err
+      }
+    },
+
+    /**
+     * Stop one running sub-agent (`subagentId`: its card id, task id or tool
+     * call id) or, without id, every running sub-agent. The main turn keeps
+     * running; cards update through the `subagent:progress` stopped events.
+     */
+    async stopSubagents(id: string, subagentId?: string): Promise<number> {
+      try {
+        const res = await fetch(`/api/workspaces/${id}/subagents/stop`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(subagentId === undefined ? {} : { id: subagentId }),
+        })
+        const body: unknown = await res.json().catch(() => undefined)
+        const record =
+          typeof body === 'object' && body !== null && !Array.isArray(body)
+            ? (body as Record<string, unknown>)
+            : undefined
+        if (!res.ok) {
+          const message = typeof record?.error === 'string' ? record.error : `HTTP ${res.status}`
+          const code = typeof record?.code === 'string' ? record.code : undefined
+          throw new WorkspaceActionError(message, code)
+        }
+        return typeof record?.stopped === 'number' ? record.stopped : 0
+      } catch (err) {
+        console.error('[workspace store] stopSubagents failed:', err)
         throw err
       }
     },
@@ -2357,36 +2416,77 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
 
     /**
-     * Mark every subagent still in `running` state as `done`. Called on
+     * Mark every subagent still in `running` state as `done` (failed and
+     * stopped cards keep their terminal status). Called on
      * `session:ended` — the session is the unit that hosts subagents, so when
      * it ends, any subagent still reported as running is orphaned and must
      * not keep AgentBusyBanner visible. Preserves all other fields; only
      * flips status. No-op if the workspace has no subagents.
+     *
+     * With `sessionId`, only that session's cards (and cards with no known
+     * session) are finalized, so a newer running session keeps its cards.
      */
-    finalizeRunningSubagents(workspaceId: string) {
+    finalizeRunningSubagents(workspaceId: string, sessionId?: string | null) {
       const map = this.subagents[workspaceId]
       if (!map) return
       const now = new Date().toISOString()
       for (const toolUseId of Object.keys(map)) {
         const sub = map[toolUseId]
+        if (sessionId && sub.sessionId && sub.sessionId !== sessionId) continue
         if (sub.status === 'running') {
           map[toolUseId] = { ...sub, status: 'done', updatedAt: now }
         }
       }
     },
 
-    upsertSubagent(workspaceId: string, data: Partial<Subagent> & { toolUseId: string }) {
+    upsertSubagent(
+      workspaceId: string,
+      data: Omit<Partial<Subagent>, 'sessionId'> & {
+        toolUseId: string
+        phase?: SubagentPhase
+        sessionId?: string | null
+      },
+    ) {
       if (!this.subagents[workspaceId]) this.subagents[workspaceId] = {}
-      const existing = this.subagents[workspaceId][data.toolUseId]
+      const map = this.subagents[workspaceId]
+      // A card matches when any of its ids (tool_use_id or task id) matches
+      // any id of the event: running and terminal events for one task may
+      // carry different ids. Several matches happen when two cards were
+      // opened before the ids were linked; they are merged into one.
+      const eventIds = new Set([data.toolUseId, ...(data.taskId ? [data.taskId] : [])])
+      const matches = Object.entries(map)
+        .filter(
+          ([key, sub]) =>
+            eventIds.has(key) || eventIds.has(sub.toolUseId) || (!!sub.taskId && eventIds.has(sub.taskId)),
+        )
+        .sort(([, a], [, b]) => a.startedAt.localeCompare(b.startedAt))
+      const existing = matches[0]?.[1]
+      const existingTerminal = !!existing && existing.status !== 'running'
+      // A late task_progress arriving after the terminal event must not revive
+      // the card; only a `started` edge (relaunch) reopens it. Events without
+      // a phase (older history, Codex) keep reopening, as before.
+      if (existingTerminal && data.status === 'running' && data.phase === 'progress') return
+      for (const [key] of matches) delete map[key]
+      const taskId = data.taskId ?? matches.map(([, sub]) => sub.taskId).find((id) => !!id)
+      // Keep a real tool_use_id over the task-id fallback the mapper uses
+      // when an event carries only the task id.
+      const toolUseId = existing && data.toolUseId === taskId ? existing.toolUseId : data.toolUseId
       const now = new Date().toISOString()
-      // Once a subagent is 'done', never regress to 'running' — guards against
-      // out-of-order events (e.g. a late task_progress after task_notification).
-      const nextStatus = existing?.status === 'done' ? 'done' : (data.status ?? existing?.status ?? 'running')
-      this.subagents[workspaceId][data.toolUseId] = {
-        toolUseId: data.toolUseId,
+      // A running event for a terminal card is a relaunch of the same task:
+      // the card runs again instead of a second card being opened.
+      const nextStatus = data.status ?? existing?.status ?? 'running'
+      // A relaunch defines the classification afresh; other events inherit it
+      // (the SDK flags ambient on task_started/task_notification only).
+      const ambient = data.phase === 'started' ? data.ambient === true : (data.ambient ?? existing?.ambient)
+      const sessionId = data.sessionId || existing?.sessionId
+      map[taskId ?? toolUseId] = {
+        toolUseId,
+        ...(taskId ? { taskId } : {}),
         description: data.description ?? existing?.description ?? '',
         taskType: data.taskType ?? existing?.taskType,
         status: nextStatus,
+        ...(ambient ? { ambient: true } : {}),
+        ...(sessionId ? { sessionId } : {}),
         lastToolName: data.lastToolName ?? existing?.lastToolName,
         lastDescription: data.lastDescription ?? existing?.lastDescription,
         totalTokens: data.totalTokens ?? existing?.totalTokens,

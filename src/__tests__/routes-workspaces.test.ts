@@ -25,7 +25,7 @@ import { withWorkspaceLifecycleGuard } from '../server/utils/workspace-lifecycle
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
 
-const { MockInterruptAgentError } = vi.hoisted(() => ({
+const { MockInterruptAgentError, MockStopSubagentsError } = vi.hoisted(() => ({
   MockInterruptAgentError: class extends Error {
     constructor(
       message: string,
@@ -33,6 +33,15 @@ const { MockInterruptAgentError } = vi.hoisted(() => ({
     ) {
       super(message)
       this.name = 'InterruptAgentError'
+    }
+  },
+  MockStopSubagentsError: class extends Error {
+    constructor(
+      message: string,
+      readonly code: 'no_agent_running' | 'unsupported' | 'subagent_not_running',
+    ) {
+      super(message)
+      this.name = 'StopSubagentsError'
     }
   },
 }))
@@ -90,6 +99,8 @@ vi.mock('../server/services/worktree-service.js', async (importOriginal) => ({
 
 vi.mock('../server/services/agent/orchestrator.js', () => ({
   InterruptAgentError: MockInterruptAgentError,
+  StopSubagentsError: MockStopSubagentsError,
+  stopSubagents: vi.fn(() => 0),
   startAgent: vi.fn().mockReturnValue({ agentSessionId: 'mock-agent-session-id' }),
   stopAgent: vi.fn(),
   stopAgentAndWait: vi.fn().mockResolvedValue('not-running'),
@@ -3437,6 +3448,85 @@ describe('POST /api/workspaces/:id/interrupt', () => {
 
     expect(res.status).toBe(500)
     expect(await res.json()).toEqual({ error: 'unexpected interruption failure' })
+  })
+})
+
+describe('POST /api/workspaces/:id/subagents/stop', () => {
+  it('stops one sub-agent by id and returns the count', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(agentManager.stopSubagents).mockReturnValueOnce(1)
+    const res = await app.request('/api/workspaces/ws-1/subagents/stop', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: 'toolu_a' }),
+    })
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ stopped: 1 })
+    expect(agentManager.stopSubagents).toHaveBeenCalledWith('ws-1', 'toolu_a')
+  })
+
+  it('stops every sub-agent without a body', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(agentManager.stopSubagents).mockReturnValueOnce(2)
+    const res = await app.request('/api/workspaces/ws-1/subagents/stop', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ stopped: 2 })
+    expect(agentManager.stopSubagents).toHaveBeenCalledWith('ws-1', undefined)
+  })
+
+  it('returns 404 for an unknown workspace', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null)
+    const res = await app.request('/api/workspaces/nope/subagents/stop', { method: 'POST' })
+
+    expect(res.status).toBe(404)
+    expect(agentManager.stopSubagents).not.toHaveBeenCalled()
+  })
+
+  it.each([[{ id: 42 }], [{ id: '' }], [{ id: '   ' }]])('rejects a malformed id: %j', async (body) => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    const res = await app.request('/api/workspaces/ws-1/subagents/stop', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+
+    expect(res.status).toBe(400)
+    expect(((await res.json()) as { error: string }).error).toContain('id')
+    expect(agentManager.stopSubagents).not.toHaveBeenCalled()
+  })
+
+  it.each(['{"id":', 'null', '[]', '"toolu_a"'])('rejects a non-object JSON body: %s', async (rawBody) => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    const res = await app.request('/api/workspaces/ws-1/subagents/stop', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: rawBody,
+    })
+
+    expect(res.status).toBe(400)
+    expect(agentManager.stopSubagents).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['no_agent_running', 409],
+    ['unsupported', 409],
+    ['subagent_not_running', 404],
+  ] as const)('serializes %s failures with status %i', async (code, status) => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(agentManager.stopSubagents).mockImplementationOnce(() => {
+      throw new MockStopSubagentsError(`stop failed: ${code}`, code)
+    })
+
+    const res = await app.request('/api/workspaces/ws-1/subagents/stop', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: 'toolu_a' }),
+    })
+
+    expect(res.status).toBe(status)
+    expect(await res.json()).toEqual({ error: `stop failed: ${code}`, code })
   })
 })
 

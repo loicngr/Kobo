@@ -146,6 +146,7 @@ describe('event-mapper', () => {
           taskId: 'task-1',
           toolCallId: 'tool-1',
           status: 'running',
+          phase: 'started',
           description: 'doing the thing',
           taskType: 'general',
           lastToolName: undefined,
@@ -174,6 +175,7 @@ describe('event-mapper', () => {
           kind: 'subagent:progress',
           toolCallId: 'tool-1',
           status: 'running',
+          phase: 'progress',
           description: 'progressing',
           taskType: undefined,
           lastToolName: 'Read',
@@ -227,6 +229,141 @@ describe('event-mapper', () => {
         createMapperState(),
       )
       expect(events).toMatchObject([{ kind: 'subagent:progress', taskId: 'task-1', toolCallId: 'task-1' }])
+    })
+
+    it('reuses the tool_use_id learned for a task when later task events carry only task_id', () => {
+      // Real LFB sequence: a relaunched/killed task keeps emitting events with
+      // only task_id. Without the learned mapping the task would be tracked
+      // under a second identity and never settle.
+      const state = createMapperState()
+      mapSdkMessage(
+        asMsg({
+          type: 'system',
+          subtype: 'task_started',
+          session_id: 's',
+          task_id: 'a3120df306c4d4dff',
+          tool_use_id: 'toolu_01Uq',
+        }),
+        state,
+      )
+      const progress = mapSdkMessage(
+        asMsg({ type: 'system', subtype: 'task_progress', session_id: 's', task_id: 'a3120df306c4d4dff' }),
+        state,
+      )
+      const done = mapSdkMessage(
+        asMsg({
+          type: 'system',
+          subtype: 'task_notification',
+          session_id: 's',
+          task_id: 'a3120df306c4d4dff',
+          status: 'completed',
+        }),
+        state,
+      )
+      expect(progress).toMatchObject([
+        { kind: 'subagent:progress', toolCallId: 'toolu_01Uq', taskId: 'a3120df306c4d4dff', status: 'running' },
+      ])
+      expect(done).toMatchObject([
+        { kind: 'subagent:progress', toolCallId: 'toolu_01Uq', taskId: 'a3120df306c4d4dff', status: 'done' },
+      ])
+    })
+
+    it('maps task_notification failed and stopped to distinct terminal statuses', () => {
+      const note = (status: string) =>
+        mapSdkMessage(
+          asMsg({ type: 'system', subtype: 'task_notification', session_id: 's', task_id: 't1', status }),
+          createMapperState(),
+        )
+      expect(note('failed')[0]).toMatchObject({ kind: 'subagent:progress', status: 'failed' })
+      expect(note('stopped')[0]).toMatchObject({ kind: 'subagent:progress', status: 'stopped' })
+      expect(note('completed')[0]).toMatchObject({ kind: 'subagent:progress', status: 'done' })
+    })
+
+    it('tags running events with their phase: started for task_started, progress for task_progress', () => {
+      const state = createMapperState()
+      const started = mapSdkMessage(
+        asMsg({ type: 'system', subtype: 'task_started', session_id: 's', task_id: 't1', tool_use_id: 'tool-1' }),
+        state,
+      )
+      const progress = mapSdkMessage(
+        asMsg({ type: 'system', subtype: 'task_progress', session_id: 's', task_id: 't1' }),
+        state,
+      )
+      const done = mapSdkMessage(
+        asMsg({ type: 'system', subtype: 'task_notification', session_id: 's', task_id: 't1', status: 'completed' }),
+        state,
+      )
+      expect(started[0]).toMatchObject({ status: 'running', phase: 'started' })
+      expect(progress[0]).toMatchObject({ status: 'running', phase: 'progress' })
+      expect(done[0]).not.toHaveProperty('phase')
+    })
+
+    it('maps task_updated terminal patch statuses and ignores non-terminal patches', () => {
+      const state = createMapperState()
+      mapSdkMessage(
+        asMsg({ type: 'system', subtype: 'task_started', session_id: 's', task_id: 't1', tool_use_id: 'tool-1' }),
+        state,
+      )
+      const update = (patch: Record<string, unknown>) =>
+        mapSdkMessage(asMsg({ type: 'system', subtype: 'task_updated', session_id: 's', task_id: 't1', patch }), state)
+      expect(update({ status: 'killed' })).toMatchObject([
+        { kind: 'subagent:progress', toolCallId: 'tool-1', taskId: 't1', status: 'stopped' },
+      ])
+      expect(update({ status: 'failed', error: 'boom' })).toMatchObject([
+        { kind: 'subagent:progress', toolCallId: 'tool-1', taskId: 't1', status: 'failed' },
+      ])
+      expect(update({ status: 'completed' })).toMatchObject([
+        { kind: 'subagent:progress', toolCallId: 'tool-1', taskId: 't1', status: 'done' },
+      ])
+      expect(update({ status: 'running' })).toEqual([])
+      expect(update({ status: 'paused' })).toEqual([])
+      expect(update({ is_backgrounded: true })).toEqual([])
+      expect(update({})).toEqual([])
+    })
+
+    it('carries ambient and skip_transcript from task_started onto every later event of the task', () => {
+      const state = createMapperState()
+      const started = mapSdkMessage(
+        asMsg({
+          type: 'system',
+          subtype: 'task_started',
+          session_id: 's',
+          task_id: 'mon-1',
+          tool_use_id: 'tool-mon',
+          description: 'Wait for the new CI/CD Pipeline run',
+          task_type: 'monitor',
+          ambient: true,
+          skip_transcript: true,
+        }),
+        state,
+      )
+      // task_progress carries no ambient field in the SDK types.
+      const progress = mapSdkMessage(
+        asMsg({ type: 'system', subtype: 'task_progress', session_id: 's', task_id: 'mon-1' }),
+        state,
+      )
+      const updated = mapSdkMessage(
+        asMsg({
+          type: 'system',
+          subtype: 'task_updated',
+          session_id: 's',
+          task_id: 'mon-1',
+          patch: { status: 'killed' },
+        }),
+        state,
+      )
+      expect(started[0]).toMatchObject({ ambient: true, skipTranscript: true, status: 'running' })
+      expect(progress[0]).toMatchObject({ ambient: true, skipTranscript: true, status: 'running' })
+      expect(updated[0]).toMatchObject({ ambient: true, skipTranscript: true, status: 'stopped' })
+    })
+
+    it('omits ambient for ordinary tasks', () => {
+      const events = mapSdkMessage(
+        asMsg({ type: 'system', subtype: 'task_started', session_id: 's', task_id: 't1', tool_use_id: 'tool-1' }),
+        createMapperState(),
+      )
+      expect(events[0]).not.toHaveProperty('ambient')
+      expect(events[0]).not.toHaveProperty('skipTranscript')
     })
   })
 

@@ -1502,6 +1502,15 @@ export default {
   'subagents.empty': 'Nessuna attività dei sub-agenti ancora',
   'subagents.tools': '{count} strumenti',
   'subagents.running': 'In esecuzione: ',
+  'subagents.status.running': 'In esecuzione',
+  'subagents.status.done': 'Completato',
+  'subagents.status.failed': 'Non riuscito',
+  'subagents.status.stopped': 'Interrotto',
+  'subagents.ambient': 'Monitoraggio in background',
+  'subagents.ambientTooltip': "Monitoraggio in background (es. Monitor): non conteggiato come attività dell'agente",
+  'subagents.stop': 'Arresta questo sub-agente',
+  'subagents.stopAll': 'Arresta tutti',
+  'subagents.stopFailed': 'Impossibile arrestare il sub-agente: {error}',
 
   // Rate-limit usage labels (shared by QuotaFooter)
   'stats.resetsAt': 'Reset {value}',

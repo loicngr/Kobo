@@ -1512,6 +1512,15 @@ export default {
   'subagents.empty': 'Aucune activité de sub-agent',
   'subagents.tools': '{count} outils',
   'subagents.running': 'En cours : ',
+  'subagents.status.running': 'En cours',
+  'subagents.status.done': 'Terminé',
+  'subagents.status.failed': 'Échec',
+  'subagents.status.stopped': 'Arrêté',
+  'subagents.ambient': 'Surveillance en arrière-plan',
+  'subagents.ambientTooltip': "Surveillance en arrière-plan (ex. Monitor) : non comptée comme activité de l'agent",
+  'subagents.stop': 'Arrêter ce sub-agent',
+  'subagents.stopAll': 'Tout arrêter',
+  'subagents.stopFailed': "Impossible d'arrêter le sub-agent : {error}",
 
   // Rate-limit usage labels (shared by QuotaFooter)
   'stats.resetsAt': 'Reset {value}',

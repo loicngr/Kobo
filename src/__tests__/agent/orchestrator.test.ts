@@ -1327,6 +1327,103 @@ describe('Orchestrator — interruptAgent', () => {
   })
 })
 
+describe('Orchestrator - stopSubagents', () => {
+  beforeEach(async () => {
+    vi.resetModules()
+    await resetDb()
+  })
+
+  async function startWithProcess(extra: Record<string, unknown>) {
+    const { createWorkspace } = await import('../../server/services/workspace-service.js')
+    const ws = createWorkspace({ name: 'W', projectPath: '/tmp', sourceBranch: 'd', workingBranch: 'b' })
+    let interruptCalls = 0
+    const { _registerEngineForTest } = await import('../../server/services/agent/engines/registry.js')
+    _registerEngineForTest({
+      id: 'claude-code',
+      displayName: 'Claude Code',
+      capabilities: {
+        models: [],
+        permissionModes: ['bypass'],
+        supportsResume: true,
+        supportsMcp: true,
+        supportsSkills: true,
+        supportsSubagents: true,
+        supportsQuotaStatus: false,
+      },
+      async start(_opts, _onEvent) {
+        return {
+          pid: 1234,
+          engineSessionId: 'sid',
+          sendMessage() {},
+          interrupt() {
+            interruptCalls++
+          },
+          async stop() {},
+          resolvePendingUserInput: () => false,
+          ...extra,
+        }
+      },
+    })
+    const orchestrator = await import('../../server/services/agent/orchestrator.js')
+    orchestrator.startAgent(ws.id, '/tmp', 'hi')
+    await flushControllerStart()
+    return { ws, orchestrator, interruptCalls: () => interruptCalls }
+  }
+
+  it('throws no_agent_running when no agent is running', async () => {
+    const { stopSubagents, StopSubagentsError } = await import('../../server/services/agent/orchestrator.js')
+    let thrown: unknown
+    try {
+      stopSubagents('nope')
+    } catch (err) {
+      thrown = err
+    }
+    expect(thrown).toBeInstanceOf(StopSubagentsError)
+    expect(thrown).toMatchObject({ code: 'no_agent_running' })
+  })
+
+  it('throws unsupported when the engine cannot stop a single sub-agent', async () => {
+    const { ws, orchestrator } = await startWithProcess({})
+    let thrown: unknown
+    try {
+      orchestrator.stopSubagents(ws.id)
+    } catch (err) {
+      thrown = err
+    }
+    expect(thrown).toBeInstanceOf(orchestrator.StopSubagentsError)
+    expect(thrown).toMatchObject({ code: 'unsupported' })
+  })
+
+  it('passes the id to the engine and returns the count, without interrupting the turn', async () => {
+    const stopSubagentsMock = vi.fn((_ids?: string[]) => 1)
+    const { ws, orchestrator, interruptCalls } = await startWithProcess({ stopSubagents: stopSubagentsMock })
+
+    expect(orchestrator.stopSubagents(ws.id, 'toolu_a')).toBe(1)
+    expect(stopSubagentsMock).toHaveBeenCalledWith(['toolu_a'])
+    expect(interruptCalls()).toBe(0)
+  })
+
+  it('stops every sub-agent when no id is given, even when none is running', async () => {
+    const stopSubagentsMock = vi.fn((_ids?: string[]) => 0)
+    const { ws, orchestrator } = await startWithProcess({ stopSubagents: stopSubagentsMock })
+
+    expect(orchestrator.stopSubagents(ws.id)).toBe(0)
+    expect(stopSubagentsMock).toHaveBeenCalledWith(undefined)
+  })
+
+  it('throws subagent_not_running when the targeted sub-agent is not running', async () => {
+    const { ws, orchestrator } = await startWithProcess({ stopSubagents: () => 0 })
+    let thrown: unknown
+    try {
+      orchestrator.stopSubagents(ws.id, 'gone')
+    } catch (err) {
+      thrown = err
+    }
+    expect(thrown).toBeInstanceOf(orchestrator.StopSubagentsError)
+    expect(thrown).toMatchObject({ code: 'subagent_not_running' })
+  })
+})
+
 describe('isAgentUnavailableError', () => {
   it('recognises every shape that means "resume instead of rejecting"', async () => {
     const { isAgentUnavailableError } = await import('../../server/services/agent/orchestrator.js')

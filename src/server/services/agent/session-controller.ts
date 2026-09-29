@@ -127,6 +127,17 @@ export class SessionController {
     this._engineProcess.interrupt()
   }
 
+  /**
+   * Stop running sub-agents without interrupting the main turn. Returns the
+   * number of sub-agents a stop was requested for, or `undefined` when the
+   * engine cannot stop a single sub-agent.
+   */
+  stopSubagents(ids?: string[]): number | undefined {
+    if (!this._engineProcess) throw new Error('SessionController not started')
+    if (typeof this._engineProcess.stopSubagents !== 'function') return undefined
+    return this._engineProcess.stopSubagents(ids)
+  }
+
   stop(): Promise<void> {
     if (!this._stopPromise) {
       this._stopPromise = this.stopEngine().catch((err) => {

@@ -116,6 +116,35 @@ export interface MapperState {
    * handler recognise that subtype as a clean stop instead of a failure.
    */
   userInterrupted: boolean
+  /**
+   * SDK task_id -> tool_use_id, learned from any task message carrying both.
+   * Relaunched or killed tasks can later emit messages with only `task_id`;
+   * reusing the learned tool_use_id keeps one identity per sub-agent.
+   */
+  taskToolUseIds: Map<string, string>
+  /**
+   * SDK task_id -> ambient / skip_transcript flags. The SDK sets them only on
+   * task_started and task_notification; remembering them stamps every event
+   * of the task (task_progress, task_updated) with the same classification.
+   */
+  taskFlags: Map<string, { ambient?: boolean; skipTranscript?: boolean }>
+}
+
+/** SDKTaskNotificationMessage.status -> subagent:progress terminal status. */
+const TASK_NOTIFICATION_STATUS: Record<string, 'done' | 'failed' | 'stopped'> = {
+  completed: 'done',
+  failed: 'failed',
+  stopped: 'stopped',
+}
+
+/**
+ * SDKTaskUpdatedMessage.patch.status values that end a task. `pending`,
+ * `running` and `paused` are not lifecycle edges and are ignored.
+ */
+const TASK_UPDATED_TERMINAL_STATUS: Record<string, 'done' | 'failed' | 'stopped'> = {
+  completed: 'done',
+  failed: 'failed',
+  killed: 'stopped',
 }
 
 export function createMapperState(): MapperState {
@@ -125,6 +154,8 @@ export function createMapperState(): MapperState {
     sawErrorResult: false,
     quotaErrorEmitted: false,
     userInterrupted: false,
+    taskToolUseIds: new Map(),
+    taskFlags: new Map(),
   }
 }
 
@@ -235,30 +266,76 @@ export function mapSdkMessage(msg: SDKMessage, state: MapperState): AgentEvent[]
       events.push({ kind: 'session:compacting', active: sdkStatus === 'compacting' })
       return events
     }
-    if (subtype === 'task_started' || subtype === 'task_progress' || subtype === 'task_notification') {
+    if (
+      subtype === 'task_started' ||
+      subtype === 'task_progress' ||
+      subtype === 'task_notification' ||
+      subtype === 'task_updated'
+    ) {
       const taskId = typeof parsed.task_id === 'string' ? (parsed.task_id as string) : undefined
-      const toolCallId = typeof parsed.tool_use_id === 'string' ? (parsed.tool_use_id as string) : taskId
-      if (toolCallId) {
-        const usage = parsed.usage as Record<string, unknown> | undefined
-        // Unlike task_started/task_progress (in-flight signals), task_notification
-        // is only ever emitted once a task settles — its `status` value is a
-        // reason, not a liveness signal. Treat every task_notification as
-        // terminal instead of matching against a status whitelist, so an SDK
-        // status value added later doesn't leave the subagent stuck 'running'.
-        const isDone = subtype === 'task_notification'
-        events.push({
-          kind: 'subagent:progress',
-          toolCallId,
-          ...(taskId ? { taskId } : {}),
-          status: isDone ? 'done' : 'running',
-          description: typeof parsed.description === 'string' ? (parsed.description as string) : undefined,
-          taskType: typeof parsed.task_type === 'string' ? (parsed.task_type as string) : undefined,
-          lastToolName: typeof parsed.last_tool_name === 'string' ? (parsed.last_tool_name as string) : undefined,
-          totalTokens: typeof usage?.total_tokens === 'number' ? (usage.total_tokens as number) : undefined,
-          toolUses: typeof usage?.tool_uses === 'number' ? (usage.tool_uses as number) : undefined,
-          durationMs: typeof usage?.duration_ms === 'number' ? (usage.duration_ms as number) : undefined,
-        })
+      const toolUseId = typeof parsed.tool_use_id === 'string' ? (parsed.tool_use_id as string) : undefined
+      if (taskId && toolUseId) state.taskToolUseIds.set(taskId, toolUseId)
+      const toolCallId = toolUseId ?? (taskId ? (state.taskToolUseIds.get(taskId) ?? taskId) : undefined)
+      if (!toolCallId) return events
+      let status: 'running' | 'done' | 'failed' | 'stopped'
+      let phase: 'started' | 'progress' | undefined
+      if (subtype === 'task_updated') {
+        // Only a terminal patch status is a lifecycle signal; other patches
+        // (pending/running/paused, description, is_backgrounded...) are ignored.
+        const patch = parsed.patch as Record<string, unknown> | undefined
+        const patchStatus = TASK_UPDATED_TERMINAL_STATUS[String(patch?.status)]
+        if (!patchStatus) return events
+        status = patchStatus
+      } else if (subtype === 'task_notification') {
+        // task_notification is only ever emitted once a task settles: an
+        // unknown status value is still terminal (`done`), so a future SDK
+        // value never leaves the sub-agent stuck 'running'.
+        status = TASK_NOTIFICATION_STATUS[String(parsed.status)] ?? 'done'
+      } else {
+        status = 'running'
+        phase = subtype === 'task_started' ? 'started' : 'progress'
       }
+      if (taskId) {
+        const hasAmbient = typeof parsed.ambient === 'boolean'
+        const hasSkip = typeof parsed.skip_transcript === 'boolean'
+        if (subtype === 'task_started') {
+          // A (re)launch defines the task's classification afresh.
+          state.taskFlags.set(taskId, {
+            ...(hasAmbient ? { ambient: parsed.ambient as boolean } : {}),
+            ...(hasSkip ? { skipTranscript: parsed.skip_transcript as boolean } : {}),
+          })
+        } else if (hasAmbient || hasSkip) {
+          state.taskFlags.set(taskId, {
+            ...state.taskFlags.get(taskId),
+            ...(hasAmbient ? { ambient: parsed.ambient as boolean } : {}),
+            ...(hasSkip ? { skipTranscript: parsed.skip_transcript as boolean } : {}),
+          })
+        }
+      }
+      const flags = taskId ? state.taskFlags.get(taskId) : undefined
+      const usage = parsed.usage as Record<string, unknown> | undefined
+      const description =
+        typeof parsed.description === 'string'
+          ? (parsed.description as string)
+          : subtype === 'task_updated' &&
+              typeof (parsed.patch as Record<string, unknown> | undefined)?.description === 'string'
+            ? ((parsed.patch as Record<string, unknown>).description as string)
+            : undefined
+      events.push({
+        kind: 'subagent:progress',
+        toolCallId,
+        ...(taskId ? { taskId } : {}),
+        status,
+        ...(phase ? { phase } : {}),
+        ...(flags?.ambient ? { ambient: true } : {}),
+        ...(flags?.skipTranscript ? { skipTranscript: true } : {}),
+        description,
+        taskType: typeof parsed.task_type === 'string' ? (parsed.task_type as string) : undefined,
+        lastToolName: typeof parsed.last_tool_name === 'string' ? (parsed.last_tool_name as string) : undefined,
+        totalTokens: typeof usage?.total_tokens === 'number' ? (usage.total_tokens as number) : undefined,
+        toolUses: typeof usage?.tool_uses === 'number' ? (usage.tool_uses as number) : undefined,
+        durationMs: typeof usage?.duration_ms === 'number' ? (usage.duration_ms as number) : undefined,
+      })
       return events
     }
     if (subtype === 'init') {

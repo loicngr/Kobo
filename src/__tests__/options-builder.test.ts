@@ -63,6 +63,13 @@ describe('buildClaudeOptions', () => {
     expect(options.allowDangerouslySkipPermissions).toBeUndefined()
   })
 
+  it('tells a fresh run that only one agent edits the worktree at a time', () => {
+    // Parallel background subagents editing the same files made the agent
+    // chase phantom "concurrent agent" changes and contended on test fixtures.
+    const { effectivePrompt } = buildClaudeOptions({ prompt: 'p', agentPermissionMode: 'bypass', workingDir: '/x' })
+    expect(effectivePrompt).toContain('Only one agent edits the worktree at a time')
+  })
+
   it('does not prepend MCP brief on resume', () => {
     const { effectivePrompt, options } = buildClaudeOptions({
       prompt: 'continue',

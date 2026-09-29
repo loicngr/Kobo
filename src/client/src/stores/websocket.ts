@@ -322,7 +322,11 @@ export function dispatchAgentEvent(
   if (event.kind === 'subagent:progress') {
     workspaceStore.upsertSubagent(workspaceId, {
       toolUseId: event.toolCallId,
+      taskId: event.taskId,
+      sessionId,
       status: event.status,
+      phase: event.phase,
+      ambient: event.ambient,
       description: event.description,
       taskType: event.taskType,
       lastToolName: event.lastToolName,
@@ -408,6 +412,9 @@ export function dispatchAgentEvent(
       if (!getWorkspaceQueueHost(workspaceStore)) workspaceStore.cancelQueuedMessage(workspaceId, sessionId)
       if (sessionId) {
         workspaceStore.clearActiveAgentSession(workspaceId, sessionId)
+        // The ended session's own sub-agents are orphaned; the replacement
+        // session keeps its running cards.
+        workspaceStore.finalizeRunningSubagents(workspaceId, sessionId)
       }
       return
     }
@@ -1088,8 +1095,13 @@ export const useWebSocketStore = defineStore('websocket', {
                       store.clearPendingForSession(workspaceId, evSessionId)
                       if (!getWorkspaceQueueHost(store)) store.cancelQueuedMessage(workspaceId, evSessionId)
                       store.clearActiveAgentSession(workspaceId, evSessionId)
+                      // Mirrors the live path: the ended session's sub-agents
+                      // are orphaned. Scoped to that session so a newer running
+                      // session keeps its cards after a reload.
+                      store.finalizeRunningSubagents(workspaceId, evSessionId)
                     } else if (ev.superseded !== true) {
                       store.clearActiveAgentSessionOwner(workspaceId)
+                      store.finalizeRunningSubagents(workspaceId)
                     }
                     continue
                   }
@@ -1102,7 +1114,11 @@ export const useWebSocketStore = defineStore('websocket', {
                     const workspaceStore = useWorkspaceStore()
                     workspaceStore.upsertSubagent(workspaceId, {
                       toolUseId: ev.toolCallId,
+                      taskId: ev.taskId,
+                      sessionId: evSessionId,
                       status: ev.status,
+                      phase: ev.phase,
+                      ambient: ev.ambient,
                       description: ev.description,
                       taskType: ev.taskType,
                       lastToolName: ev.lastToolName,

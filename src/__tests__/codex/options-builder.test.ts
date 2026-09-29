@@ -145,6 +145,11 @@ describe('buildCodexOptions — brief prepend', () => {
     expect(text.indexOf('[Kōbō MCP]')).toBeLessThan(text.indexOf('My prompt'))
   })
 
+  it('tells a fresh run that only one agent edits the worktree at a time', () => {
+    const { input } = buildCodexOptions({ ...BASE_INPUT, prompt: 'My prompt' })
+    expect((input[0] as { type: 'text'; text: string }).text).toContain('Only one agent edits the worktree at a time')
+  })
+
   it('does NOT prepend the brief when resumeFromEngineSessionId is set', () => {
     const { input } = buildCodexOptions({
       ...BASE_INPUT,

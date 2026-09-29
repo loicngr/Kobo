@@ -28,7 +28,8 @@ const { t } = useI18n()
 const store = useWorkspaceStore()
 const openDrawerTab = inject<(tab: string) => void>('openDrawerTab')
 
-const runningSubagentCount = computed(() => store.currentSubagents.filter((s) => s.status === 'running').length)
+// Ambient watchers (e.g. a Monitor waiting on CI) are not activity: excluded.
+const runningSubagentCount = computed(() => store.currentBusySubagentCount)
 
 // Only show the banner when the workspace itself is busy. Orphaned sub-agents
 // (status=running on a workspace that has already completed) shouldn't keep

@@ -55,7 +55,22 @@ export type AgentEvent =
       toolCallId: string
       /** Claude SDK task id, used by stopTask; Codex has no equivalent. */
       taskId?: string
-      status: 'running' | 'done'
+      /** Every non-running status is terminal. */
+      status: 'running' | 'done' | 'failed' | 'stopped'
+      /**
+       * Lifecycle edge of a running event: `started` (task_started, a launch or
+       * relaunch) or `progress` (task_progress). Only `started` may reopen a
+       * terminal task; a late `progress` after a terminal event is ignored.
+       * Absent on older persisted events and on Codex: treated as a relaunch.
+       */
+      phase?: 'started' | 'progress'
+      /**
+       * Claude SDK ambient task (e.g. Monitor watchers): shown in the panel but
+       * excluded from every "agent busy" indicator and from turn completion.
+       */
+      ambient?: boolean
+      /** Claude SDK housekeeping task that the inline transcript should hide. */
+      skipTranscript?: boolean
       description?: string
       taskType?: string
       lastToolName?: string

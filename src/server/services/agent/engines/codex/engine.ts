@@ -379,15 +379,34 @@ export function createCodexEngine(): AgentEngine {
             const n = params as ItemCompletedNotification
             if (n.item.type === 'fileChange') fileChanges.set(itemKey(n.threadId, n.turnId, n.item.id), n.item)
             const events = mapTurnEvents(n, (state) => handleItemCompleted(n.item, state))
+            const collabItem = n.item.type === 'collabAgentToolCall' ? n.item : undefined
+            const isActiveAgent = (status: string): boolean => status === 'pendingInit' || status === 'running'
+            const progressIndex = events.findIndex((event) => event.kind === 'subagent:progress')
+            if (collabItem && progressIndex >= 0) {
+              // The card that first tracked a thread (normally its spawnAgent)
+              // owns it until it finishes. A later wait/sendInput/resumeAgent
+              // on an already-owned thread (e.g. a wait that timed out) must
+              // not steal it, or the owner card is orphaned in `running`; such
+              // a card is done as soon as its own call completes.
+              const progress = events[progressIndex] as Extract<AgentEvent, { kind: 'subagent:progress' }>
+              const ownsActiveThread = Object.entries(collabItem.agentsStates).some(([threadId, agentState]) => {
+                if (!isActiveAgent(agentState.status)) return false
+                const owner = activeSubagentThreads.get(threadId)
+                return !owner || owner.toolCallId === progress.toolCallId
+              })
+              if (progress.status === 'running' && !ownsActiveThread) {
+                events[progressIndex] = { ...progress, status: 'done' }
+              }
+            }
             for (const ev of events) safeEmit(ev)
-            if (n.item.type === 'collabAgentToolCall') {
-              const progress = events.find(
-                (event): event is Extract<AgentEvent, { kind: 'subagent:progress' }> =>
-                  event.kind === 'subagent:progress',
-              )
-              for (const [threadId, agentState] of Object.entries(n.item.agentsStates)) {
-                if (agentState.status === 'pendingInit' || agentState.status === 'running') {
-                  if (progress) {
+            if (collabItem) {
+              const progress =
+                progressIndex >= 0
+                  ? (events[progressIndex] as Extract<AgentEvent, { kind: 'subagent:progress' }>)
+                  : undefined
+              for (const [threadId, agentState] of Object.entries(collabItem.agentsStates)) {
+                if (isActiveAgent(agentState.status)) {
+                  if (progress && !activeSubagentThreads.has(threadId)) {
                     activeSubagentThreads.set(threadId, {
                       toolCallId: progress.toolCallId,
                       description: progress.description,

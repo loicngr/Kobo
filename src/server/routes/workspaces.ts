@@ -5153,4 +5153,44 @@ app.post('/:id/interrupt', migrationGuard, async (c) => {
   }
 })
 
+// POST /api/workspaces/:id/subagents/stop - stop one running sub-agent (body
+// `{ id }`, its canonical card id) or all of them, without interrupting the turn
+app.post('/:id/subagents/stop', migrationGuard, async (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+
+    const rawBody = await c.req.text()
+    let body: Record<string, unknown> = {}
+    if (rawBody.trim().length > 0) {
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(rawBody)
+      } catch {
+        return c.json({ error: 'Request body must be valid JSON' }, 400)
+      }
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return c.json({ error: 'Request body must be a JSON object' }, 400)
+      }
+      body = parsed as Record<string, unknown>
+    }
+    if (body.id !== undefined && (typeof body.id !== 'string' || body.id.trim().length === 0)) {
+      return c.json({ error: 'id must be a non-empty string when provided' }, 400)
+    }
+
+    const stopped = agentManager.stopSubagents(id, body.id as string | undefined)
+    return c.json({ stopped })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (err instanceof agentManager.StopSubagentsError) {
+      const status = err.code === 'subagent_not_running' ? 404 : 409
+      return c.json({ error: message, code: err.code }, status)
+    }
+    return c.json({ error: message }, workspaceErrorStatus(err))
+  }
+})
+
 export default app

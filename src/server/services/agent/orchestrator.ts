@@ -73,6 +73,18 @@ export class InterruptAgentError extends Error {
   }
 }
 
+export type StopSubagentsErrorCode = 'no_agent_running' | 'unsupported' | 'subagent_not_running'
+
+export class StopSubagentsError extends Error {
+  constructor(
+    message: string,
+    readonly code: StopSubagentsErrorCode,
+  ) {
+    super(message)
+    this.name = 'StopSubagentsError'
+  }
+}
+
 // ── State ──────────────────────────────────────────────────────────────────────
 
 /** Actual bound port of the running backend — set at startup via setBackendPort() */
@@ -1768,6 +1780,39 @@ export function interruptAgent(workspaceId: string, options: InterruptAgentOptio
   if (options.disableAutoLoop && autoLoopService.getStatus(workspaceId).auto_loop) {
     autoLoopService.disable(workspaceId, 'user-action')
   }
+}
+
+/**
+ * Stop one running sub-agent (by its canonical id: task id or tool call id)
+ * or, without id, every running sub-agent. The main turn keeps running.
+ * Returns the number of sub-agents a stop was requested for.
+ */
+export function stopSubagents(workspaceId: string, id?: string): number {
+  const ctrl = controllers.get(workspaceId)
+  if (!ctrl) {
+    throw new StopSubagentsError(`No agent running for workspace '${workspaceId}'`, 'no_agent_running')
+  }
+  let stopped: number | undefined
+  try {
+    stopped = ctrl.stopSubagents(id === undefined ? undefined : [id])
+  } catch (err) {
+    // A controller whose engine has not started yet has nothing to stop.
+    const message = err instanceof Error ? err.message : String(err)
+    throw new StopSubagentsError(`No agent running for workspace '${workspaceId}': ${message}`, 'no_agent_running')
+  }
+  if (stopped === undefined) {
+    throw new StopSubagentsError(
+      `The agent engine of workspace '${workspaceId}' cannot stop a single sub-agent`,
+      'unsupported',
+    )
+  }
+  if (id !== undefined && stopped === 0) {
+    throw new StopSubagentsError(
+      `Sub-agent '${id}' is not running for workspace '${workspaceId}'`,
+      'subagent_not_running',
+    )
+  }
+  return stopped
 }
 
 /** Bound the caller's wait, retaining ownership until actual engine shutdown. */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { supportsLiveSteering } from '../constants/engineFeatures'
+import { supportsLiveSteering, supportsSubagentStop } from '../constants/engineFeatures'
 
 describe('supportsLiveSteering', () => {
   it('allows forcing a queued message for both live engines', () => {
@@ -9,5 +9,17 @@ describe('supportsLiveSteering', () => {
 
   it('does not enable steering for an unknown engine', () => {
     expect(supportsLiveSteering('unknown-engine')).toBe(false)
+  })
+})
+
+describe('supportsSubagentStop', () => {
+  it('is only supported by Claude Code', () => {
+    expect(supportsSubagentStop('claude-code')).toBe(true)
+    expect(supportsSubagentStop('codex')).toBe(false)
+  })
+
+  it('is not offered for an unknown or missing engine', () => {
+    expect(supportsSubagentStop('unknown-engine')).toBe(false)
+    expect(supportsSubagentStop(undefined)).toBe(false)
   })
 })

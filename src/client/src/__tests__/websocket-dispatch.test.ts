@@ -224,6 +224,58 @@ describe('websocket dispatch — AgentEvent side-effects to workspace store', ()
     )
   })
 
+  it('keeps a single subagent card for a task reported under its tool_use_id and its task_id', async () => {
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const ws = useWorkspaceStore()
+    const { dispatchAgentEvent } = await import('../stores/websocket.js')
+    dispatchAgentEvent('w1', {
+      kind: 'subagent:progress',
+      toolCallId: 'toolu_01Uq',
+      taskId: 'a3120',
+      status: 'running',
+    })
+    dispatchAgentEvent('w1', { kind: 'subagent:progress', toolCallId: 'toolu_01Uq', taskId: 'a3120', status: 'done' })
+    dispatchAgentEvent('w1', { kind: 'subagent:progress', toolCallId: 'a3120', taskId: 'a3120', status: 'running' })
+    expect(Object.values(ws.subagents.w1 ?? {}).map((s) => s.status)).toEqual(['running'])
+
+    dispatchAgentEvent('w1', { kind: 'subagent:progress', toolCallId: 'toolu_01Uq', taskId: 'a3120', status: 'done' })
+    expect(Object.values(ws.subagents.w1 ?? {}).map((s) => s.status)).toEqual(['done'])
+  })
+
+  it('ignores a late progress after a terminal event but reopens the card on a started relaunch', async () => {
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const ws = useWorkspaceStore()
+    const { dispatchAgentEvent } = await import('../stores/websocket.js')
+    const statuses = () => Object.values(ws.subagents.w1 ?? {}).map((s) => s.status)
+    dispatchAgentEvent('w1', {
+      kind: 'subagent:progress',
+      toolCallId: 'toolu_1',
+      taskId: 't1',
+      status: 'running',
+      phase: 'started',
+      ambient: true,
+    })
+    dispatchAgentEvent('w1', { kind: 'subagent:progress', toolCallId: 'toolu_1', taskId: 't1', status: 'failed' })
+    dispatchAgentEvent('w1', {
+      kind: 'subagent:progress',
+      toolCallId: 'toolu_1',
+      taskId: 't1',
+      status: 'running',
+      phase: 'progress',
+    })
+    expect(statuses()).toEqual(['failed'])
+    expect(Object.values(ws.subagents.w1 ?? {})[0]?.ambient).toBe(true)
+
+    dispatchAgentEvent('w1', {
+      kind: 'subagent:progress',
+      toolCallId: 'toolu_1',
+      taskId: 't1',
+      status: 'running',
+      phase: 'started',
+    })
+    expect(statuses()).toEqual(['running'])
+  })
+
   it('sets the transient compacting flag on session:compacting and clears it on session:compacted', async () => {
     const { useAgentStreamStore } = await import('../stores/agent-stream.js')
     const stream = useAgentStreamStore()
@@ -326,7 +378,9 @@ describe('websocket dispatch — AgentEvent side-effects to workspace store', ()
     expect(stream.isCompacting('w1')).toBe(true)
     expect(ws.subagents.w1?.['subagent-B']?.status).toBe('running')
     expect(fetchWorkspaces).not.toHaveBeenCalled()
-    expect(finalizeRunningSubagents).not.toHaveBeenCalled()
+    // Only the ended session's own cards are finalized.
+    expect(finalizeRunningSubagents).toHaveBeenCalledTimes(1)
+    expect(finalizeRunningSubagents).toHaveBeenCalledWith('w1', 'session-A')
     expect(flushQueuedMessage).not.toHaveBeenCalled()
     expect(notify).not.toHaveBeenCalled()
 
@@ -345,9 +399,47 @@ describe('websocket dispatch — AgentEvent side-effects to workspace store', ()
     expect(stream.isCompacting('w1')).toBe(false)
     expect(ws.subagents.w1?.['subagent-B']?.status).toBe('done')
     expect(fetchWorkspaces).toHaveBeenCalledTimes(1)
-    expect(finalizeRunningSubagents).toHaveBeenCalledTimes(1)
+    expect(finalizeRunningSubagents).toHaveBeenCalledTimes(2)
+    expect(finalizeRunningSubagents).toHaveBeenLastCalledWith('w1')
     expect(flushQueuedMessage).toHaveBeenCalledWith('w1', 'session-B')
     expect(notify).toHaveBeenCalledTimes(1)
+  })
+
+  it('finalizes only the superseded session cards when it ends after its replacement started', async () => {
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const ws = useWorkspaceStore()
+    ws.workspaces = [workspaceFixture()]
+    vi.spyOn(ws, 'fetchWorkspaces').mockResolvedValue()
+    const { dispatchAgentEvent } = await import('../stores/websocket.js')
+
+    dispatchAgentEvent('w1', { kind: 'session:started', engineSessionId: 'e-A' }, undefined, undefined, 'session-A')
+    dispatchAgentEvent(
+      'w1',
+      { kind: 'subagent:progress', toolCallId: 'card-A', status: 'running' },
+      undefined,
+      undefined,
+      'session-A',
+    )
+    dispatchAgentEvent('w1', { kind: 'session:started', engineSessionId: 'e-B' }, undefined, undefined, 'session-B')
+    dispatchAgentEvent(
+      'w1',
+      { kind: 'subagent:progress', toolCallId: 'card-B', status: 'running' },
+      undefined,
+      undefined,
+      'session-B',
+    )
+
+    dispatchAgentEvent(
+      'w1',
+      { kind: 'session:ended', reason: 'completed', exitCode: 0 },
+      undefined,
+      undefined,
+      'session-A',
+    )
+
+    expect(ws.activeAgentSessionIds.w1).toBe('session-B')
+    expect(ws.subagents.w1?.['card-A']?.status).toBe('done')
+    expect(ws.subagents.w1?.['card-B']?.status).toBe('running')
   })
 
   it('keeps the historical termination path when no active session identity is known', async () => {
@@ -396,7 +488,7 @@ describe('websocket dispatch — AgentEvent side-effects to workspace store', ()
     })
     ws.queueMessage('w1', 'queued for A', 'session-A')
     ws.queueMessage('w1', 'queued for B', 'session-B')
-    ws.upsertSubagent('w1', { toolUseId: 'subagent-B', status: 'running' })
+    ws.upsertSubagent('w1', { toolUseId: 'subagent-B', status: 'running', sessionId: 'session-B' })
     const fetchWorkspaces = vi.spyOn(ws, 'fetchWorkspaces').mockResolvedValue()
     const finalizeRunningSubagents = vi.spyOn(ws, 'finalizeRunningSubagents')
     const flushQueuedMessage = vi.spyOn(ws, 'flushQueuedMessage')
@@ -426,7 +518,9 @@ describe('websocket dispatch — AgentEvent side-effects to workspace store', ()
     expect(stream.isCompacting('w1')).toBe(true)
     expect(ws.subagents.w1?.['subagent-B']?.status).toBe('running')
     expect(fetchWorkspaces).not.toHaveBeenCalled()
-    expect(finalizeRunningSubagents).not.toHaveBeenCalled()
+    // Only the ended session's own cards are finalized.
+    expect(finalizeRunningSubagents).toHaveBeenCalledTimes(1)
+    expect(finalizeRunningSubagents).toHaveBeenCalledWith('w1', 'session-A')
     expect(flushQueuedMessage).not.toHaveBeenCalled()
     expect(notify).not.toHaveBeenCalled()
 
@@ -443,7 +537,8 @@ describe('websocket dispatch — AgentEvent side-effects to workspace store', ()
     expect(stream.isCompacting('w1')).toBe(false)
     expect(ws.subagents.w1?.['subagent-B']?.status).toBe('done')
     expect(fetchWorkspaces).toHaveBeenCalledTimes(1)
-    expect(finalizeRunningSubagents).toHaveBeenCalledTimes(1)
+    expect(finalizeRunningSubagents).toHaveBeenCalledTimes(2)
+    expect(finalizeRunningSubagents).toHaveBeenLastCalledWith('w1')
     expect(flushQueuedMessage).toHaveBeenCalledWith('w1', 'session-B')
     expect(notify).toHaveBeenCalledTimes(1)
   })
@@ -1189,6 +1284,70 @@ describe('websocket dispatch — AgentEvent side-effects to workspace store', ()
     })
 
     expect(ws.activeAgentSessionIds.w1).toBeUndefined()
+  })
+
+  it('finalizes only the ended session running sub-agents while replaying persisted events', async () => {
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const ws = useWorkspaceStore()
+    const { useWebSocketStore } = await import('../stores/websocket.js')
+    const event = (id: string, sessionId: string, payload: Record<string, unknown>): Record<string, unknown> => ({
+      id,
+      workspaceId: 'w1',
+      type: 'agent:event',
+      payload,
+      createdAt: `2026-01-01T00:00:0${id}.000Z`,
+      sessionId,
+    })
+
+    useWebSocketStore()._routeMessage({
+      type: 'sync:response',
+      payload: {
+        events: [
+          event('1', 'session-A', { kind: 'session:started', engineSessionId: 'engine-A' }),
+          event('2', 'session-A', { kind: 'subagent:progress', toolCallId: 'sub-A', status: 'running' }),
+          event('3', 'session-A', { kind: 'subagent:progress', toolCallId: 'sub-A-failed', status: 'failed' }),
+          event('4', 'session-A', { kind: 'session:ended', reason: 'killed', exitCode: null }),
+          event('5', 'session-B', { kind: 'session:started', engineSessionId: 'engine-B' }),
+          event('6', 'session-B', { kind: 'subagent:progress', toolCallId: 'sub-B', status: 'running' }),
+        ],
+      },
+    })
+
+    expect(ws.subagents.w1?.['sub-A']?.status).toBe('done')
+    expect(ws.subagents.w1?.['sub-A-failed']?.status).toBe('failed')
+    expect(ws.subagents.w1?.['sub-B']?.status).toBe('running')
+    expect(ws.activeAgentSessionIds.w1).toBe('session-B')
+  })
+
+  it('keeps a newer session running sub-agents when an older session end is replayed after them', async () => {
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const ws = useWorkspaceStore()
+    const { useWebSocketStore } = await import('../stores/websocket.js')
+    const event = (id: string, sessionId: string, payload: Record<string, unknown>): Record<string, unknown> => ({
+      id,
+      workspaceId: 'w1',
+      type: 'agent:event',
+      payload,
+      createdAt: `2026-01-01T00:00:0${id}.000Z`,
+      sessionId,
+    })
+
+    useWebSocketStore()._routeMessage({
+      type: 'sync:response',
+      payload: {
+        events: [
+          event('1', 'session-A', { kind: 'session:started', engineSessionId: 'engine-A' }),
+          event('2', 'session-A', { kind: 'subagent:progress', toolCallId: 'sub-A', status: 'running' }),
+          event('3', 'session-B', { kind: 'session:started', engineSessionId: 'engine-B' }),
+          event('4', 'session-B', { kind: 'subagent:progress', toolCallId: 'sub-B', status: 'running' }),
+          event('5', 'session-A', { kind: 'session:ended', reason: 'killed', exitCode: null, superseded: true }),
+        ],
+      },
+    })
+
+    expect(ws.subagents.w1?.['sub-A']?.status).toBe('done')
+    expect(ws.subagents.w1?.['sub-B']?.status).toBe('running')
+    expect(ws.subagents.w1?.['sub-B']?.sessionId).toBe('session-B')
   })
 })
 

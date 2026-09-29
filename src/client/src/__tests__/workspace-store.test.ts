@@ -506,14 +506,127 @@ describe('workspace store', () => {
       expect(subagent?.totalTokens).toBe(1000)
     })
 
-    it('never regresses status from done to running', () => {
+    it('reopens the same card when a done task is relaunched', () => {
       const store = useWorkspaceStore()
       store.upsertSubagent('ws-1', { toolUseId: 'tool-1', status: 'running' })
       store.upsertSubagent('ws-1', { toolUseId: 'tool-1', status: 'done' })
-      // Late task_progress arrives with status: running — should stay done
+      // The SDK relaunches the same task: its card runs again, no second card.
       store.upsertSubagent('ws-1', { toolUseId: 'tool-1', status: 'running' })
 
-      expect(store.subagents['ws-1']?.['tool-1']?.status).toBe('done')
+      expect(Object.values(store.subagents['ws-1'] ?? {})).toHaveLength(1)
+      expect(store.subagents['ws-1']?.['tool-1']?.status).toBe('running')
+    })
+
+    describe('terminal statuses and relaunch vs late progress', () => {
+      const card = (store: ReturnType<typeof useWorkspaceStore>) => Object.values(store.subagents['ws-1'] ?? {})[0]
+
+      it('ignores a late progress event after the terminal notification', () => {
+        const store = useWorkspaceStore()
+        store.upsertSubagent('ws-1', { toolUseId: 'tool-1', taskId: 't1', status: 'running', phase: 'started' })
+        store.upsertSubagent('ws-1', { toolUseId: 'tool-1', taskId: 't1', status: 'done' })
+        store.upsertSubagent('ws-1', { toolUseId: 'tool-1', taskId: 't1', status: 'running', phase: 'progress' })
+
+        expect(card(store)?.status).toBe('done')
+      })
+
+      it('reopens a terminal card on a started (relaunch) event', () => {
+        const store = useWorkspaceStore()
+        store.upsertSubagent('ws-1', { toolUseId: 'tool-1', taskId: 't1', status: 'running', phase: 'started' })
+        store.upsertSubagent('ws-1', { toolUseId: 'tool-1', taskId: 't1', status: 'stopped' })
+        store.upsertSubagent('ws-1', { toolUseId: 't1', taskId: 't1', status: 'running', phase: 'started' })
+
+        expect(Object.values(store.subagents['ws-1'] ?? {})).toHaveLength(1)
+        expect(card(store)?.status).toBe('running')
+      })
+
+      it.each(['failed', 'stopped'] as const)('keeps a %s card terminal against late progress', (terminal) => {
+        const store = useWorkspaceStore()
+        store.upsertSubagent('ws-1', { toolUseId: 'tool-1', taskId: 't1', status: 'running', phase: 'started' })
+        store.upsertSubagent('ws-1', { toolUseId: 'tool-1', taskId: 't1', status: terminal })
+        store.upsertSubagent('ws-1', { toolUseId: 't1', taskId: 't1', status: 'running', phase: 'progress' })
+
+        expect(card(store)?.status).toBe(terminal)
+      })
+
+      it('finalizeRunningSubagents closes running cards but keeps failed and stopped statuses', () => {
+        const store = useWorkspaceStore()
+        store.upsertSubagent('ws-1', { toolUseId: 'a', status: 'running' })
+        store.upsertSubagent('ws-1', { toolUseId: 'b', status: 'failed' })
+        store.upsertSubagent('ws-1', { toolUseId: 'c', status: 'stopped' })
+        store.finalizeRunningSubagents('ws-1')
+
+        expect(store.subagents['ws-1']?.a?.status).toBe('done')
+        expect(store.subagents['ws-1']?.b?.status).toBe('failed')
+        expect(store.subagents['ws-1']?.c?.status).toBe('stopped')
+      })
+    })
+
+    describe('ambient tasks', () => {
+      it('keeps the ambient flag across events that omit it', () => {
+        const store = useWorkspaceStore()
+        store.upsertSubagent('ws-1', { toolUseId: 'mon', status: 'running', phase: 'started', ambient: true })
+        store.upsertSubagent('ws-1', { toolUseId: 'mon', status: 'running', lastToolName: 'Bash' })
+
+        expect(store.subagents['ws-1']?.mon?.ambient).toBe(true)
+      })
+
+      it('excludes ambient and terminal cards from currentBusySubagentCount', () => {
+        const store = useWorkspaceStore()
+        store.selectedWorkspaceId = 'ws-1'
+        store.upsertSubagent('ws-1', { toolUseId: 'mon', status: 'running', ambient: true })
+        expect(store.currentBusySubagentCount).toBe(0)
+
+        store.upsertSubagent('ws-1', { toolUseId: 'real', status: 'running' })
+        store.upsertSubagent('ws-1', { toolUseId: 'gone', status: 'failed' })
+        store.upsertSubagent('ws-1', { toolUseId: 'halted', status: 'stopped' })
+        expect(store.currentBusySubagentCount).toBe(1)
+        // The panel still lists every card, ambient included.
+        expect(store.currentSubagents).toHaveLength(4)
+      })
+    })
+
+    describe('one task reported under a tool_use_id and a task_id', () => {
+      const cards = (store: ReturnType<typeof useWorkspaceStore>) => Object.values(store.subagents['ws-1'] ?? {})
+
+      it('keeps one card when a relaunched task reports only its task_id (LFB)', () => {
+        const store = useWorkspaceStore()
+        store.upsertSubagent('ws-1', {
+          toolUseId: 'toolu_01Uq',
+          taskId: 'a3120',
+          status: 'running',
+          description: 'Review',
+        })
+        store.upsertSubagent('ws-1', { toolUseId: 'toolu_01Uq', taskId: 'a3120', status: 'done' })
+        // Relaunch: events carry only the task id (toolCallId falls back to it).
+        store.upsertSubagent('ws-1', { toolUseId: 'a3120', taskId: 'a3120', status: 'running' })
+
+        expect(cards(store)).toHaveLength(1)
+        expect(cards(store)[0]).toMatchObject({ toolUseId: 'toolu_01Uq', status: 'running', description: 'Review' })
+
+        // The final completion comes back under the tool_use_id.
+        store.upsertSubagent('ws-1', { toolUseId: 'toolu_01Uq', taskId: 'a3120', status: 'done' })
+        expect(cards(store)).toHaveLength(1)
+        expect(cards(store)[0]?.status).toBe('done')
+      })
+
+      it('closes the card when the terminal event carries only the task id', () => {
+        const store = useWorkspaceStore()
+        store.upsertSubagent('ws-1', { toolUseId: 'toolu_018', taskId: 'a2e25', status: 'running' })
+        store.upsertSubagent('ws-1', { toolUseId: 'a2e25', taskId: 'a2e25', status: 'done' })
+
+        expect(cards(store)).toHaveLength(1)
+        expect(cards(store)[0]).toMatchObject({ toolUseId: 'toolu_018', status: 'done' })
+      })
+
+      it('merges a card first tracked under its tool_use_id alone once the task id is learned', () => {
+        const store = useWorkspaceStore()
+        store.upsertSubagent('ws-1', { toolUseId: 'a2e25', taskId: 'a2e25', status: 'running' })
+        store.upsertSubagent('ws-1', { toolUseId: 'toolu_018', status: 'running' })
+        store.upsertSubagent('ws-1', { toolUseId: 'toolu_018', taskId: 'a2e25', status: 'done' })
+
+        expect(cards(store)).toHaveLength(1)
+        expect(cards(store)[0]?.status).toBe('done')
+      })
     })
 
     it('preserves startedAt across updates', () => {
@@ -990,6 +1103,56 @@ describe('workspace store', () => {
       } as Response)
 
       await expect(store.disableAutoLoop('ws-1')).rejects.toThrow('stop failed')
+    })
+  })
+
+  describe('stopSubagents', () => {
+    it('posts the sub-agent id and returns the stopped count', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ stopped: 1 }) } as Response)
+      vi.stubGlobal('fetch', fetchMock)
+      const store = useWorkspaceStore()
+
+      await expect(store.stopSubagents('ws-1', 'toolu_a')).resolves.toBe(1)
+      expect(fetchMock).toHaveBeenCalledWith('/api/workspaces/ws-1/subagents/stop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: 'toolu_a' }),
+      })
+    })
+
+    it('posts an empty object to stop every sub-agent', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ stopped: 2 }) } as Response)
+      vi.stubGlobal('fetch', fetchMock)
+      const store = useWorkspaceStore()
+
+      await expect(store.stopSubagents('ws-1')).resolves.toBe(2)
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/workspaces/ws-1/subagents/stop',
+        expect.objectContaining({ body: JSON.stringify({}) }),
+      )
+    })
+
+    it('rejects with the server error message and code', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: false,
+          status: 404,
+          json: async () => ({ error: 'not running', code: 'subagent_not_running' }),
+        } as Response),
+      )
+      const store = useWorkspaceStore()
+
+      const rejection = store.stopSubagents('ws-1', 'gone')
+      await expect(rejection).rejects.toBeInstanceOf(WorkspaceActionError)
+      await expect(rejection).rejects.toMatchObject({ message: 'not running', code: 'subagent_not_running' })
+    })
+
+    it('falls back to the HTTP status when the error body is unusable', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 409, json: async () => null } as Response))
+      const store = useWorkspaceStore()
+
+      await expect(store.stopSubagents('ws-1')).rejects.toMatchObject({ message: 'HTTP 409', code: undefined })
     })
   })
 

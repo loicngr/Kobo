@@ -44,6 +44,7 @@ const CODEX_KOBO_MCP_BRIEF = [
   '• `mcp__kobo-tasks__set_workspace_status` when the mission is done or irrecoverably blocked. Never set `idle` while this session is active; ask the user or end the turn instead.',
   '• `mcp__kobo-tasks__schedule_wakeup` / `mcp__kobo-tasks__cancel_wakeup` to schedule (or cancel) a follow-up session.',
   'Each tool carries its own "WHEN to use" guidance in its description — follow it.',
+  'Only one agent edits the worktree at a time: do not run background subagents that modify files while you or another subagent modify files too. Parallel read-only subagents (search, analysis, review) are fine. Wait for a file-editing subagent to finish before editing or running tests yourself, and remember that changes appearing in the worktree may come from your own subagents.',
 ].join('\n')
 
 export function buildCodexOptions(input: BuildCodexOptionsInput): BuildCodexOptionsResult {
