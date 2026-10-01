@@ -213,7 +213,7 @@ it('plays an imported sound from a preloaded blob URL', async () => {
   })
   setup()
   await flushPromises()
-  expect(globalThis.fetch).toHaveBeenCalledWith('/api/sounds/abcdef123456/file')
+  expect(globalThis.fetch).toHaveBeenCalledWith('/api/sounds/abcdef123456/file', { signal: expect.any(AbortSignal) })
   expect(soundUrl(SOUND.reference)).toBe('blob:kobo/test')
 })
 

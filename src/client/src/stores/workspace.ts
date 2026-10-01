@@ -2,7 +2,8 @@ import { defineStore } from 'pinia'
 import { is } from 'quasar'
 import { disposeTerminalEntry } from 'src/services/terminal-registry'
 import { getWorkspaceQueueHost } from 'src/services/workspace-queue-bridge'
-import { apiFetch } from 'src/utils/api'
+import { apiFetch, apiFetchOk, apiFetchResponse, apiFetchResponseForStatus, apiResponseError } from 'src/utils/api'
+import { isAbortError } from 'src/utils/latest-request'
 import type { AutoLoopRuntime, QueuedAutoLoopMessage } from '../../../shared/auto-loop-types'
 import type { WorkflowPolicy } from '../../../shared/workflow-policy'
 import type { ProviderId, UsageSnapshot } from '../types/usage'
@@ -401,6 +402,15 @@ let _prSnapshotsRequestToken = 0
 const _workspaceEventVersions = new Map<string, number>()
 const _prSnapshotVersions = new Map<string, number>()
 const _sessionsRequestVersions = new Map<string, number>()
+const _sessionReads = new WeakMap<object, Map<string, AbortController>>()
+function sessionReads(store: object): Map<string, AbortController> {
+  let reads = _sessionReads.get(store)
+  if (!reads) {
+    reads = new Map()
+    _sessionReads.set(store, reads)
+  }
+  return reads
+}
 const _workspaceDetailsRequestVersions = new Map<string, number>()
 const _pendingInputVersions = new Map<string, number>()
 const _worktreeRestorations = new WeakMap<object, Map<string, Promise<Workspace>>>()
@@ -451,6 +461,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     agentTodos: {} as Record<string, AgentTodo[]>,
     sessions: [] as AgentSession[],
     loadingSessions: {} as Record<string, boolean>,
+    sessionsErrors: {} as Record<string, string>,
     selectedSessionId: null as string | null,
     archivedWorkspaces: [] as Workspace[],
     archivedLoaded: false,
@@ -639,6 +650,10 @@ export const useWorkspaceStore = defineStore('workspace', {
       _workspaceEventVersions.delete(id)
       _prSnapshotVersions.delete(id)
       _sessionsRequestVersions.delete(id)
+      sessionReads(this).get(id)?.abort()
+      sessionReads(this).delete(id)
+      delete this.loadingSessions[id]
+      delete this.sessionsErrors[id]
       _workspaceDetailsRequestVersions.delete(id)
       useAgentStreamStore().clear(id)
       localStorage.removeItem(`kobo:session:${id}`)
@@ -664,10 +679,10 @@ export const useWorkspaceStore = defineStore('workspace', {
       const optimistic = nextFavorited ? new Date().toISOString() : null
       this.workspaces = this.workspaces.map((w) => (w.id === id ? { ...w, favoritedAt: optimistic } : w))
       try {
-        const res = await fetch(`/api/workspaces/${id}/favorite`, {
+        const res = await apiFetchResponse(`/api/workspaces/${id}/favorite`, {
           method: nextFavorited ? 'POST' : 'DELETE',
         })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        if (!res.ok) throw await apiResponseError(res)
         const updated = (await res.json()) as Workspace
         this.workspaces = this.workspaces.map((w) => (w.id === id ? updated : w))
       } catch (err) {
@@ -683,10 +698,10 @@ export const useWorkspaceStore = defineStore('workspace', {
       const optimistic = disabling ? new Date().toISOString() : null
       this.workspaces = this.workspaces.map((w) => (w.id === id ? { ...w, prWatchDisabledAt: optimistic } : w))
       try {
-        const res = await fetch(`/api/workspaces/${id}/pr-watch-disabled`, {
+        const res = await apiFetchResponse(`/api/workspaces/${id}/pr-watch-disabled`, {
           method: disabling ? 'POST' : 'DELETE',
         })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        if (!res.ok) throw await apiResponseError(res)
         if (disabling) {
           const updated = (await res.json()) as Workspace
           this.workspaces = this.workspaces.map((w) => (w.id === id ? updated : w))
@@ -717,12 +732,12 @@ export const useWorkspaceStore = defineStore('workspace', {
       const optimistic = [...tags]
       this.workspaces = this.workspaces.map((w) => (w.id === id ? { ...w, tags: optimistic } : w))
       try {
-        const res = await fetch(`/api/workspaces/${id}/tags`, {
+        const res = await apiFetchResponse(`/api/workspaces/${id}/tags`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ tags }),
         })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        if (!res.ok) throw await apiResponseError(res)
         const updated = (await res.json()) as Workspace
         this.workspaces = this.workspaces.map((w) => (w.id === id ? updated : w))
       } catch (err) {
@@ -904,7 +919,7 @@ export const useWorkspaceStore = defineStore('workspace', {
         // X-Kobo-Branch-Adjusted / X-Kobo-Source-Fallback response headers,
         // which apiFetch deliberately does not expose. The error path below
         // already reads the server message, so F43 does not apply here.
-        const res = await fetch('/api/workspaces', {
+        const res = await apiFetchResponse('/api/workspaces', {
           method: 'POST',
           ...(typeof body === 'string' ? { headers: { 'Content-Type': 'application/json' } } : {}),
           body,
@@ -968,7 +983,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
 
     async previewEngineHandoff(id: string, engine: string): Promise<string> {
-      const res = await fetch(`/api/workspaces/${id}/engine-handoff-preview`, {
+      const res = await apiFetchResponse(`/api/workspaces/${id}/engine-handoff-preview`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ engine }),
@@ -988,7 +1003,7 @@ export const useWorkspaceStore = defineStore('workspace', {
         handoff: string
       },
     ): Promise<{ sessionId: string }> {
-      const res = await fetch(`/api/workspaces/${id}/switch-engine`, {
+      const res = await apiFetchResponse(`/api/workspaces/${id}/switch-engine`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(input),
@@ -1004,10 +1019,9 @@ export const useWorkspaceStore = defineStore('workspace', {
 
     async stopWorkspace(id: string) {
       try {
-        const res = await fetch(`/api/workspaces/${id}/stop`, {
+        await apiFetchOk(`/api/workspaces/${id}/stop`, {
           method: 'POST',
         })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
         await this.fetchWorkspaces()
       } catch (err) {
         console.error('[workspace store] stopWorkspace failed:', err)
@@ -1017,7 +1031,7 @@ export const useWorkspaceStore = defineStore('workspace', {
 
     async interruptAgent(id: string, options: { expectedSessionId?: string; disableAutoLoop?: boolean } = {}) {
       try {
-        const res = await fetch(`/api/workspaces/${id}/interrupt`, {
+        const res = await apiFetchResponseForStatus(`/api/workspaces/${id}/interrupt`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(options),
@@ -1050,7 +1064,7 @@ export const useWorkspaceStore = defineStore('workspace', {
      */
     async stopSubagents(id: string, subagentId?: string): Promise<number> {
       try {
-        const res = await fetch(`/api/workspaces/${id}/subagents/stop`, {
+        const res = await apiFetchResponse(`/api/workspaces/${id}/subagents/stop`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(subagentId === undefined ? {} : { id: subagentId }),
@@ -1077,12 +1091,12 @@ export const useWorkspaceStore = defineStore('workspace', {
       options?: { deleteLocalBranch?: boolean; deleteRemoteBranch?: boolean },
     ): Promise<{ warnings: string[] }> {
       try {
-        const res = await fetch(`/api/workspaces/${id}`, {
+        const res = await apiFetchResponse(`/api/workspaces/${id}`, {
           method: 'DELETE',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(options ?? {}),
         })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        if (!res.ok) throw await apiResponseError(res)
 
         // Status 204 = clean. Status 200 = delete succeeded but with warnings
         // (e.g. worktree dir couldn't be removed due to Docker-owned files).
@@ -1122,12 +1136,12 @@ export const useWorkspaceStore = defineStore('workspace', {
         // Capture ids before the request so we can clean per-workspace state
         // once the backend confirms the bulk delete.
         const ids = this.archivedWorkspaces.map((w) => w.id)
-        const res = await fetch('/api/workspaces/archived', {
+        const res = await apiFetchResponse('/api/workspaces/archived', {
           method: 'DELETE',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(options ?? {}),
         })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        if (!res.ok) throw await apiResponseError(res)
 
         const body = (await res.json().catch(() => ({}))) as {
           deleted?: number
@@ -1155,12 +1169,12 @@ export const useWorkspaceStore = defineStore('workspace', {
 
     async updateModel(id: string, model: string) {
       try {
-        const res = await fetch(`/api/workspaces/${id}`, {
+        const res = await apiFetchResponse(`/api/workspaces/${id}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ model }),
         })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        if (!res.ok) throw await apiResponseError(res)
         const updated = (await res.json()) as Workspace
         const idx = this.workspaces.findIndex((w) => w.id === id)
         if (idx >= 0) this.workspaces[idx] = updated
@@ -1177,7 +1191,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       // Optimistic update.
       this.workspaces[idx] = { ...this.workspaces[idx], description }
       try {
-        const res = await fetch(`/api/workspaces/${id}`, {
+        const res = await apiFetchResponse(`/api/workspaces/${id}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ description }),
@@ -1202,12 +1216,12 @@ export const useWorkspaceStore = defineStore('workspace', {
 
     async updateReasoningEffort(id: string, reasoningEffort: string) {
       try {
-        const res = await fetch(`/api/workspaces/${id}`, {
+        const res = await apiFetchResponse(`/api/workspaces/${id}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ reasoningEffort }),
         })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        if (!res.ok) throw await apiResponseError(res)
         const updated = (await res.json()) as Workspace
         const idx = this.workspaces.findIndex((w) => w.id === id)
         if (idx >= 0) this.workspaces[idx] = updated
@@ -1224,7 +1238,7 @@ export const useWorkspaceStore = defineStore('workspace', {
      * name is already in use locally or on origin).
      */
     async renameWorkspaceBranch(id: string, newName: string): Promise<Workspace> {
-      const res = await fetch(`/api/workspaces/${id}/rename-branch`, {
+      const res = await apiFetchResponse(`/api/workspaces/${id}/rename-branch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ newName }),
@@ -1245,8 +1259,8 @@ export const useWorkspaceStore = defineStore('workspace', {
      * branch from within the chat (e.g. `git branch -m …`).
      */
     async resyncWorkspaceBranch(id: string): Promise<{ changed: boolean; workingBranch: string }> {
-      const res = await fetch(`/api/workspaces/${id}/resync-branch`, { method: 'POST' })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const res = await apiFetchResponse(`/api/workspaces/${id}/resync-branch`, { method: 'POST' })
+      if (!res.ok) throw await apiResponseError(res)
       const body = (await res.json()) as { changed: boolean; workingBranch: string }
       if (body.changed) {
         const idx = this.workspaces.findIndex((w) => w.id === id)
@@ -1257,12 +1271,12 @@ export const useWorkspaceStore = defineStore('workspace', {
 
     async updateAgentPermissionMode(id: string, agentPermissionMode: 'plan' | 'bypass' | 'strict' | 'interactive') {
       try {
-        const res = await fetch(`/api/workspaces/${id}`, {
+        const res = await apiFetchResponse(`/api/workspaces/${id}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ agentPermissionMode }),
         })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        if (!res.ok) throw await apiResponseError(res)
         const updated = (await res.json()) as Workspace
         const idx = this.workspaces.findIndex((w) => w.id === id)
         if (idx >= 0) this.workspaces[idx] = updated
@@ -1279,7 +1293,7 @@ export const useWorkspaceStore = defineStore('workspace', {
      * its preferences in a prompt that cannot be taken back.
      */
     async updateWorkflowPolicy(id: string, workflowPolicy: Partial<WorkflowPolicy>): Promise<void> {
-      const res = await fetch(`/api/workspaces/${id}`, {
+      const res = await apiFetchResponse(`/api/workspaces/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ workflowPolicy }),
@@ -1294,7 +1308,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
 
     async pushBranch(id: string, options: { force?: boolean } = {}): Promise<PushResult> {
-      const res = await fetch(`/api/workspaces/${id}/push`, {
+      const res = await apiFetchResponse(`/api/workspaces/${id}/push`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ force: options.force === true }),
@@ -1308,7 +1322,7 @@ export const useWorkspaceStore = defineStore('workspace', {
 
     /** `POST /force-push`: the `--force-with-lease` path offered after a source-branch change. */
     async forcePushBranch(id: string): Promise<PushResult> {
-      const res = await fetch(`/api/workspaces/${id}/force-push`, { method: 'POST' })
+      const res = await apiFetchResponse(`/api/workspaces/${id}/force-push`, { method: 'POST' })
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: 'Push failed' }))
         throw new WorkspaceActionError(err.error ?? 'Push failed', err.code, err.operation)
@@ -1329,8 +1343,8 @@ export const useWorkspaceStore = defineStore('workspace', {
     ): Promise<{ ahead: BranchCommit[]; behind: Commit[]; sourceBranch: string; workingBranch: string }> {
       const limit = opts.limit ?? 50
       const url = `/api/workspaces/${id}/branch-divergence?limit=${limit}`
-      const res = await fetch(url, { signal: opts.signal })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const res = await apiFetchResponse(url, { signal: opts.signal })
+      if (!res.ok) throw await apiResponseError(res)
       return (await res.json()) as {
         ahead: BranchCommit[]
         behind: Commit[]
@@ -1340,7 +1354,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
 
     async openPullRequest(id: string): Promise<OpenPrResult> {
-      const res = await fetch(`/api/workspaces/${id}/open-pr`, { method: 'POST' })
+      const res = await apiFetchResponse(`/api/workspaces/${id}/open-pr`, { method: 'POST' })
       const data = await res.json().catch(() => null)
       if (!res.ok) {
         throw new WorkspaceActionError(data?.error ?? 'Open PR failed', data?.code)
@@ -1350,8 +1364,8 @@ export const useWorkspaceStore = defineStore('workspace', {
 
     async archiveWorkspace(id: string) {
       try {
-        const res = await fetch(`/api/workspaces/${id}/archive`, { method: 'POST' })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const res = await apiFetchResponse(`/api/workspaces/${id}/archive`, { method: 'POST' })
+        if (!res.ok) throw await apiResponseError(res)
         const updated = (await res.json()) as Workspace
         // Optimistic: move from active → archived locally.
         // activityFeeds[id] is intentionally preserved (archive is reversible).
@@ -1395,7 +1409,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.restoringWorktreeIds.push(id)
       const request = (async () => {
         try {
-          const res = await fetch(`/api/workspaces/${id}/restore-worktree`, { method: 'POST' })
+          const res = await apiFetchResponse(`/api/workspaces/${id}/restore-worktree`, { method: 'POST' })
           if (!res.ok) {
             const body = (await res.json().catch(() => ({}))) as { code?: string; error?: string }
             throw new WorkspaceActionError(body.error ?? `HTTP ${res.status}`, body.code)
@@ -1418,7 +1432,7 @@ export const useWorkspaceStore = defineStore('workspace', {
 
     async unarchiveWorkspace(id: string) {
       try {
-        const res = await fetch(`/api/workspaces/${id}/unarchive`, { method: 'POST' })
+        const res = await apiFetchResponse(`/api/workspaces/${id}/unarchive`, { method: 'POST' })
         if (!res.ok) {
           if (res.status === 409) {
             const body = (await res.json().catch(() => ({}))) as { error?: string }
@@ -1426,7 +1440,7 @@ export const useWorkspaceStore = defineStore('workspace', {
             err.code = 'worktree-purged'
             throw err
           }
-          throw new Error(`HTTP ${res.status}`)
+          throw await apiResponseError(res)
         }
         const updated = (await res.json()) as Workspace
         this.archivedWorkspaces = this.archivedWorkspaces.filter((w) => w.id !== id)
@@ -1440,12 +1454,11 @@ export const useWorkspaceStore = defineStore('workspace', {
 
     async createTask(workspaceId: string, title: string, isAcceptanceCriterion: boolean) {
       try {
-        const res = await fetch(`/api/workspaces/${workspaceId}/tasks`, {
+        await apiFetchOk(`/api/workspaces/${workspaceId}/tasks`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ title, isAcceptanceCriterion }),
         })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
         await this.fetchWorkspaceDetails(workspaceId)
       } catch (err) {
         console.error('[workspace store] createTask failed:', err)
@@ -1455,12 +1468,11 @@ export const useWorkspaceStore = defineStore('workspace', {
 
     async updateTaskTitle(workspaceId: string, taskId: string, title: string) {
       try {
-        const res = await fetch(`/api/workspaces/${workspaceId}/tasks/${taskId}`, {
+        await apiFetchOk(`/api/workspaces/${workspaceId}/tasks/${taskId}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ title }),
         })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
         await this.fetchWorkspaceDetails(workspaceId)
       } catch (err) {
         console.error('[workspace store] updateTaskTitle failed:', err)
@@ -1470,10 +1482,9 @@ export const useWorkspaceStore = defineStore('workspace', {
 
     async deleteTask(workspaceId: string, taskId: string) {
       try {
-        const res = await fetch(`/api/workspaces/${workspaceId}/tasks/${taskId}`, {
+        await apiFetchOk(`/api/workspaces/${workspaceId}/tasks/${taskId}`, {
           method: 'DELETE',
         })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
         await this.fetchWorkspaceDetails(workspaceId)
       } catch (err) {
         console.error('[workspace store] deleteTask failed:', err)
@@ -1481,7 +1492,17 @@ export const useWorkspaceStore = defineStore('workspace', {
       }
     },
 
+    cancelSessionReads(id?: string) {
+      for (const [workspaceId, controller] of sessionReads(this)) {
+        if (id && id !== workspaceId) continue
+        controller.abort()
+        sessionReads(this).delete(workspaceId)
+        delete this.loadingSessions[workspaceId]
+      }
+    },
+
     selectWorkspace(id: string) {
+      this.cancelSessionReads()
       this.selectedWorkspaceId = id
       this.selectedSessionId = null
       this.sessions = []
@@ -1506,12 +1527,17 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
 
     async fetchSessions(workspaceId: string, forceSelectId?: string | null) {
+      const reads = sessionReads(this)
+      reads.get(workspaceId)?.abort()
+      const controller = new AbortController()
+      reads.set(workspaceId, controller)
       const requestVersion = (_sessionsRequestVersions.get(workspaceId) ?? 0) + 1
       _sessionsRequestVersions.set(workspaceId, requestVersion)
       this.loadingSessions[workspaceId] = true
+      delete this.sessionsErrors[workspaceId]
       try {
-        const res = await fetch(`/api/workspaces/${workspaceId}/sessions`)
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const res = await apiFetchResponse(`/api/workspaces/${workspaceId}/sessions`, { signal: controller.signal })
+        if (!res.ok) throw await apiResponseError(res)
 
         // Guard against stale response: user may have switched workspace while
         // this request was in flight.
@@ -1542,8 +1568,12 @@ export const useWorkspaceStore = defineStore('workspace', {
           this.selectSession(found?.id ?? selectable[0]?.id ?? null)
         }
       } catch (err) {
+        if (isAbortError(err) || controller.signal.aborted) return
+        if (_sessionsRequestVersions.get(workspaceId) === requestVersion)
+          this.sessionsErrors[workspaceId] = err instanceof Error ? err.message : String(err)
         console.error('[workspace store] fetchSessions failed:', err)
       } finally {
+        if (reads.get(workspaceId) === controller) reads.delete(workspaceId)
         if (_sessionsRequestVersions.get(workspaceId) === requestVersion) delete this.loadingSessions[workspaceId]
       }
     },
@@ -1558,10 +1588,10 @@ export const useWorkspaceStore = defineStore('workspace', {
       const oldestId = feed[0].id
       this.loadingOlderEvents = true
       try {
-        const res = await fetch(
+        const res = await apiFetchResponse(
           `/api/workspaces/${workspaceId}/events?before=${encodeURIComponent(oldestId)}&limit=100`,
         )
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        if (!res.ok) throw await apiResponseError(res)
         const data = (await res.json()) as {
           events: Array<{
             id: string
@@ -1603,7 +1633,7 @@ export const useWorkspaceStore = defineStore('workspace', {
 
     async createSession(workspaceId: string) {
       try {
-        const res = await fetch(`/api/workspaces/${workspaceId}/sessions`, { method: 'POST' })
+        const res = await apiFetchResponse(`/api/workspaces/${workspaceId}/sessions`, { method: 'POST' })
         if (!res.ok) {
           const body = await res.json().catch(() => ({}))
           throw new Error(body.error ?? `HTTP ${res.status}`)
@@ -1621,7 +1651,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
 
     async renameWorkspace(workspaceId: string, name: string) {
-      const res = await fetch(`/api/workspaces/${workspaceId}`, {
+      const res = await apiFetchResponse(`/api/workspaces/${workspaceId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name }),
@@ -1642,7 +1672,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
 
     async renameSession(workspaceId: string, sessionId: string, name: string) {
-      const res = await fetch(`/api/workspaces/${workspaceId}/sessions/${sessionId}`, {
+      const res = await apiFetchResponse(`/api/workspaces/${workspaceId}/sessions/${sessionId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name }),
@@ -1660,7 +1690,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
 
     async deleteSession(workspaceId: string, sessionId: string): Promise<void> {
-      const res = await fetch(`/api/workspaces/${workspaceId}/sessions/${sessionId}`, { method: 'DELETE' })
+      const res = await apiFetchResponse(`/api/workspaces/${workspaceId}/sessions/${sessionId}`, { method: 'DELETE' })
       const body = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`)
       const wasSelected = this.selectedSessionId === sessionId
@@ -1750,7 +1780,7 @@ export const useWorkspaceStore = defineStore('workspace', {
 
     async requestUsageRefresh(providerId: ProviderId): Promise<void> {
       try {
-        await fetch(`/api/usage/${providerId}/refresh`, { method: 'POST' })
+        await apiFetchOk(`/api/usage/${providerId}/refresh`, { method: 'POST' })
         // Server broadcasts the result via WS — nothing else to do.
       } catch (err) {
         console.error('[workspace store] requestUsageRefresh failed:', err)
@@ -1781,7 +1811,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       const requestToken = ++_prSnapshotsRequestToken
       const versionsAtStart = new Map(_prSnapshotVersions)
       try {
-        const res = await fetch('/api/workspaces/pr-states', { cache: 'no-store' })
+        const res = await apiFetchResponse('/api/workspaces/pr-states', { cache: 'no-store' })
         if (!res.ok) return
         const data = (await res.json()) as Record<string, PrSnapshot>
         if (requestToken !== _prSnapshotsRequestToken) return
@@ -1892,7 +1922,7 @@ export const useWorkspaceStore = defineStore('workspace', {
 
     async refreshPrSnapshot(workspaceId: string): Promise<PrSnapshot | null> {
       try {
-        const res = await fetch(`/api/workspaces/pr-snapshot/refresh/${workspaceId}`, { method: 'POST' })
+        const res = await apiFetchResponse(`/api/workspaces/pr-snapshot/refresh/${workspaceId}`, { method: 'POST' })
         if (res.status === 404) {
           const next = { ...this.prSnapshots }
           delete next[workspaceId]
@@ -1917,7 +1947,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     async fetchAutoLoopStates(): Promise<void> {
       const version = ++this.autoLoopSnapshotVersion
       try {
-        const res = await fetch('/api/workspaces/auto-loop-states', { cache: 'no-store' })
+        const res = await apiFetchResponse('/api/workspaces/auto-loop-states', { cache: 'no-store' })
         if (!res.ok) return
         const data = (await res.json()) as Record<string, AutoLoopStatus>
         if (version === this.autoLoopSnapshotVersion) this.autoLoopStates = data
@@ -1929,7 +1959,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     async fetchAutoLoopMessages(id: string): Promise<void> {
       const version = (this.autoLoopMessageVersions[id] ?? 0) + 1
       this.autoLoopMessageVersions[id] = version
-      const response = await fetch(`/api/workspaces/${id}/auto-loop/messages`, { cache: 'no-store' })
+      const response = await apiFetchResponse(`/api/workspaces/${id}/auto-loop/messages`, { cache: 'no-store' })
       if (response.ok) {
         const messages = await response.json()
         if (this.autoLoopMessageVersions[id] === version) this.autoLoopMessages[id] = messages
@@ -1943,7 +1973,7 @@ export const useWorkspaceStore = defineStore('workspace', {
         delivery = { content, id: key }
         this.autoLoopMessageKeys[id] = delivery
       }
-      const response = await fetch(`/api/workspaces/${id}/auto-loop/messages`, {
+      const response = await apiFetchResponseForStatus(`/api/workspaces/${id}/auto-loop/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content, clientMessageId: delivery.id }),
@@ -1962,7 +1992,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       messageId: number,
       action: 'cancel' | 'acknowledge' | 'retry',
     ): Promise<void> {
-      const response = await fetch(`/api/workspaces/${id}/auto-loop/messages/${messageId}`, {
+      const response = await apiFetchResponseForStatus(`/api/workspaces/${id}/auto-loop/messages/${messageId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action }),
@@ -1975,7 +2005,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
 
     async enableAutoLoop(id: string): Promise<void> {
-      const res = await fetch(`/api/workspaces/${id}/auto-loop`, { method: 'POST' })
+      const res = await apiFetchResponseForStatus(`/api/workspaces/${id}/auto-loop`, { method: 'POST' })
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
         throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`)
@@ -1984,7 +2014,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
 
     async disableAutoLoop(id: string): Promise<void> {
-      const res = await fetch(`/api/workspaces/${id}/auto-loop`, { method: 'DELETE' })
+      const res = await apiFetchResponseForStatus(`/api/workspaces/${id}/auto-loop`, { method: 'DELETE' })
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
         throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`)
@@ -1993,8 +2023,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
 
     async forceAutoLoopReady(id: string): Promise<void> {
-      const res = await fetch(`/api/workspaces/${id}/auto-loop-ready`, { method: 'POST' })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      await apiFetchOk(`/api/workspaces/${id}/auto-loop-ready`, { method: 'POST' })
       await this.fetchAutoLoopStates()
     },
 
@@ -2010,7 +2039,7 @@ export const useWorkspaceStore = defineStore('workspace', {
 
     async fetchCrons(workspaceId: string): Promise<void> {
       try {
-        const res = await fetch(`/api/workspaces/${workspaceId}/crons`)
+        const res = await apiFetchResponse(`/api/workspaces/${workspaceId}/crons`)
         if (!res.ok) return
         const body = (await res.json()) as { crons: PendingCron[] }
         this.crons[workspaceId] = body.crons
@@ -2023,8 +2052,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       const prev = this.crons[workspaceId] ?? []
       this.crons[workspaceId] = prev.filter((c) => c.id !== cronId)
       try {
-        const res = await fetch(`/api/workspaces/${workspaceId}/crons/${cronId}`, { method: 'DELETE' })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        await apiFetchOk(`/api/workspaces/${workspaceId}/crons/${cronId}`, { method: 'DELETE' })
       } catch (err) {
         this.crons[workspaceId] = prev
         throw err
@@ -2035,7 +2063,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       workspaceId: string,
       input: { expression: string; prompt: string; label?: string; mode: 'fresh' | 'resume'; oneShot: boolean },
     ): Promise<void> {
-      const res = await fetch(`/api/workspaces/${workspaceId}/crons`, {
+      const res = await apiFetchResponseForStatus(`/api/workspaces/${workspaceId}/crons`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(input),
@@ -2051,7 +2079,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       workspaceId: string,
       input: { delaySeconds: number; prompt: string; mode: 'fresh' | 'resume' },
     ): Promise<void> {
-      const res = await fetch(`/api/workspaces/${workspaceId}/pending-wakeup`, {
+      const res = await apiFetchResponse(`/api/workspaces/${workspaceId}/pending-wakeup`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(input),
@@ -2066,7 +2094,7 @@ export const useWorkspaceStore = defineStore('workspace', {
 
     async fetchPendingWakeup(workspaceId: string): Promise<void> {
       try {
-        const res = await fetch(`/api/workspaces/${workspaceId}/pending-wakeup`, { cache: 'no-store' })
+        const res = await apiFetchResponse(`/api/workspaces/${workspaceId}/pending-wakeup`, { cache: 'no-store' })
         if (!res.ok) return
         const data = (await res.json()) as PendingWakeup | null
         if (data) this.pendingWakeups[workspaceId] = data
@@ -2092,8 +2120,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       const hadPending = this.pendingWakeups[workspaceId] !== undefined
       delete this.pendingWakeups[workspaceId]
       try {
-        const res = await fetch(`/api/workspaces/${workspaceId}/pending-wakeup`, { method: 'DELETE' })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        await apiFetchOk(`/api/workspaces/${workspaceId}/pending-wakeup`, { method: 'DELETE' })
       } catch (err) {
         console.error('[workspace-store] cancelPendingWakeup failed:', err)
         if (hadPending) {
@@ -2106,7 +2133,7 @@ export const useWorkspaceStore = defineStore('workspace', {
 
     async fetchPendingQuotaBackoff(workspaceId: string): Promise<void> {
       try {
-        const res = await fetch(`/api/workspaces/${workspaceId}/quota-backoff`, { cache: 'no-store' })
+        const res = await apiFetchResponse(`/api/workspaces/${workspaceId}/quota-backoff`, { cache: 'no-store' })
         if (!res.ok) return
         const data = (await res.json()) as {
           targetAt: string
@@ -2142,8 +2169,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       const had = this.pendingQuotaBackoffs[workspaceId] !== undefined
       delete this.pendingQuotaBackoffs[workspaceId]
       try {
-        const res = await fetch(`/api/workspaces/${workspaceId}/quota-backoff`, { method: 'DELETE' })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        await apiFetchOk(`/api/workspaces/${workspaceId}/quota-backoff`, { method: 'DELETE' })
       } catch (err) {
         console.error('[workspace-store] cancelQuotaBackoff failed:', err)
         if (had) await this.fetchPendingQuotaBackoff(workspaceId)
@@ -2279,7 +2305,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       awaitingFreeForm?: boolean,
       response?: string,
     ): Promise<void> {
-      const res = await fetch(`/api/workspaces/${workspaceId}/deferred-tool-use/answer`, {
+      const res = await apiFetchResponseForStatus(`/api/workspaces/${workspaceId}/deferred-tool-use/answer`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ answers, toolCallId, awaitingFreeForm, response }),
@@ -2314,7 +2340,7 @@ export const useWorkspaceStore = defineStore('workspace', {
      * Does NOT stop the agent.
      */
     async cancelDeferredAnswer(workspaceId: string, reason?: string, toolCallId?: string): Promise<void> {
-      const res = await fetch(`/api/workspaces/${workspaceId}/deferred-tool-use/cancel`, {
+      const res = await apiFetchResponseForStatus(`/api/workspaces/${workspaceId}/deferred-tool-use/cancel`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ reason, toolCallId }),
@@ -2342,7 +2368,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       reason?: string,
       scope: 'once' | 'turn' | 'operation' | 'tool' = 'once',
     ): Promise<void> {
-      const res = await fetch(`/api/workspaces/${workspaceId}/deferred-permission/decision`, {
+      const res = await apiFetchResponseForStatus(`/api/workspaces/${workspaceId}/deferred-permission/decision`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ toolCallId, decision, reason, scope }),
@@ -2500,8 +2526,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     /** Mark a workspace as read by calling the backend and updating local state. */
     async markRead(workspaceId: string) {
       try {
-        const res = await fetch(`/api/workspaces/${workspaceId}/mark-read`, { method: 'POST' })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        await apiFetchOk(`/api/workspaces/${workspaceId}/mark-read`, { method: 'POST' })
         const idx = this.workspaces.findIndex((w) => w.id === workspaceId)
         if (idx >= 0) {
           this.workspaces[idx] = { ...this.workspaces[idx], hasUnread: false }
@@ -2516,7 +2541,7 @@ export const useWorkspaceStore = defineStore('workspace', {
      *  caller can toast them. */
     async purgeWorktree(workspaceId: string): Promise<{ ok: true; warnings: string[] } | { ok: false; error: string }> {
       try {
-        const res = await fetch(`/api/workspaces/${workspaceId}/purge-worktree`, { method: 'POST' })
+        const res = await apiFetchResponse(`/api/workspaces/${workspaceId}/purge-worktree`, { method: 'POST' })
         const data = await res.json()
         if (!res.ok) {
           return { ok: false, error: data.error ?? `HTTP ${res.status}` }
@@ -2551,12 +2576,11 @@ export const useWorkspaceStore = defineStore('workspace', {
       const snapshot = this.prSnapshots[workspaceId]
       if (!snapshot) return
       try {
-        const res = await fetch(`/api/workspaces/${workspaceId}/dismiss-pr-attention`, {
+        await apiFetchOk(`/api/workspaces/${workspaceId}/dismiss-pr-attention`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ kind, prUpdatedAt: snapshot.updatedAt }),
         })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
         // Optimistic store update — the WS event will arrive shortly but the
         // sidebar should flip immediately on click.
         const patch =
@@ -2571,12 +2595,11 @@ export const useWorkspaceStore = defineStore('workspace', {
 
     async restorePrAttention(workspaceId: string, kind: 'changes-requested' | 'ci-failed') {
       try {
-        const res = await fetch(`/api/workspaces/${workspaceId}/restore-pr-attention`, {
+        await apiFetchOk(`/api/workspaces/${workspaceId}/restore-pr-attention`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ kind }),
         })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
         // Optimistic store update — clear the dismissed-at so the badge
         // resurfaces immediately on click.
         const patch = kind === 'changes-requested' ? { prChangesDismissedAt: null } : { prCiFailureDismissedAt: null }

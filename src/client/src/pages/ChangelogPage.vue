@@ -54,6 +54,7 @@
 import DrawerToggleButton from 'src/components/DrawerToggleButton.vue'
 import TourReplayButton from 'src/components/TourReplayButton.vue'
 import { useTours } from 'src/composables/use-tours'
+import { apiFetchResponse, apiResponseError } from 'src/utils/api'
 import { renderChatMarkdown } from 'src/utils/render-chat-markdown'
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
@@ -78,8 +79,8 @@ async function load(): Promise<void> {
   loading.value = true
   error.value = null
   try {
-    const res = await fetch('/api/changelog')
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const res = await apiFetchResponse('/api/changelog')
+    if (!res.ok) throw await apiResponseError(res)
     const body = (await res.json()) as { currentVersion?: string; versions?: ChangelogEntry[] }
     currentVersion.value = body.currentVersion ?? ''
     versions.value = body.versions ?? []

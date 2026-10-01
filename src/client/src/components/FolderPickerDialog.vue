@@ -67,6 +67,7 @@
 </template>
 
 <script setup lang="ts">
+import { apiFetchResponse } from 'src/utils/api'
 import { ref, watch } from 'vue'
 
 const props = defineProps<{ modelValue: boolean; initialPath?: string }>()
@@ -92,7 +93,7 @@ async function navigate(target?: string) {
   error.value = ''
   try {
     const qs = target ? `?path=${encodeURIComponent(target)}` : ''
-    const res = await fetch(`/api/fs/list-dirs${qs}`)
+    const res = await apiFetchResponse(`/api/fs/list-dirs${qs}`)
     const body = (await res.json()) as {
       path?: string
       parent?: string | null

@@ -1,4 +1,4 @@
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent, h, nextTick } from 'vue'
@@ -63,6 +63,251 @@ const globalStubs = {
 }
 
 describe('ActivityFeed.vue', () => {
+  it('opens cached user-only conversations at the measured bottom, including after reselection', async () => {
+    const store = useWorkspaceStore()
+    for (const workspaceId of ['first-user', 'second-user']) {
+      store.addActivityItem(workspaceId, {
+        id: `${workspaceId}-message`,
+        type: 'text',
+        content: 'user message',
+        timestamp: '2026-01-01T00:00:00Z',
+        meta: { sender: 'user' },
+      })
+    }
+    stubScrollSize = 8500
+    const wrapper = mount(ActivityFeed, {
+      props: { workspaceId: 'first-user' },
+      global: { plugins: [i18n], stubs: globalStubs },
+    })
+    await vi.advanceTimersByTimeAsync(100)
+    const scroll = wrapper.findComponent(QScrollAreaStub).vm.$.exposed?.setScrollPosition as ReturnType<typeof vi.fn>
+    expect(scroll).toHaveBeenLastCalledWith('vertical', 8500, 0)
+    const virtual = wrapper.findComponent(QVirtualScrollStub).vm.$.exposed?.scrollTo as ReturnType<typeof vi.fn>
+    expect(virtual).toHaveBeenCalledWith(0, 'end-force')
+    scroll.mockClear()
+    await wrapper.setProps({ workspaceId: 'second-user' })
+    await vi.advanceTimersByTimeAsync(100)
+    expect(scroll).toHaveBeenLastCalledWith('vertical', 8500, 0)
+    scroll.mockClear()
+    await wrapper.setProps({ workspaceId: 'first-user' })
+    await vi.advanceTimersByTimeAsync(100)
+    expect(scroll).toHaveBeenLastCalledWith('vertical', 8500, 0)
+    wrapper.unmount()
+  })
+
+  it('anchors again when a late initial sync replaces an already populated cache', async () => {
+    const stream = useAgentStreamStore()
+    const websocket = useWebSocketStore()
+    stream.reset(
+      'late-cache',
+      [{ kind: 'message:text', messageId: 'old', text: 'cached', streaming: false }],
+      ['2026-01-01T00:00:00Z'],
+    )
+    websocket.pendingSyncRequests = [['late-cache']]
+    const wrapper = mount(ActivityFeed, {
+      props: { workspaceId: 'late-cache' },
+      global: { plugins: [i18n], stubs: globalStubs },
+    })
+    await vi.advanceTimersByTimeAsync(2000)
+    stubScrollSize = 12000
+    stream.reset(
+      'late-cache',
+      [{ kind: 'message:text', messageId: 'new', text: 'latest history', streaming: false }],
+      ['2026-01-01T00:00:01Z'],
+    )
+    websocket.pendingSyncRequests = []
+    await vi.advanceTimersByTimeAsync(100)
+    const scroll = wrapper.findComponent(QScrollAreaStub).vm.$.exposed?.setScrollPosition as ReturnType<typeof vi.fn>
+    expect(scroll).toHaveBeenLastCalledWith('vertical', 12000, 0)
+    wrapper.unmount()
+  })
+
+  it('follows delayed measured heights while pinned and preserves an active reading position', async () => {
+    useAgentStreamStore().reset(
+      'resize',
+      [{ kind: 'message:text', messageId: 'm', text: 'cached', streaming: false }],
+      ['2026-01-01T00:00:00Z'],
+    )
+    const wrapper = mount(ActivityFeed, {
+      props: { workspaceId: 'resize' },
+      global: { plugins: [i18n], stubs: globalStubs },
+    })
+    await vi.advanceTimersByTimeAsync(100)
+    const area = wrapper.findComponent(QScrollAreaStub)
+    const scroll = area.vm.$.exposed?.setScrollPosition as ReturnType<typeof vi.fn>
+    area.vm.$emit('scroll', { verticalPosition: 600, verticalSize: 1000, verticalContainerSize: 400 })
+    await nextTick()
+    stubScrollSize = 9000
+    area.vm.$emit('scroll', { verticalPosition: 600, verticalSize: 9000, verticalContainerSize: 400 })
+    await vi.advanceTimersByTimeAsync(100)
+    expect(scroll).toHaveBeenLastCalledWith('vertical', 9000, 0)
+    await area.trigger('wheel')
+    area.vm.$emit('scroll', { verticalPosition: 300, verticalSize: 9000, verticalContainerSize: 400 })
+    scroll.mockClear()
+    stubScrollSize = 10000
+    area.vm.$emit('scroll', { verticalPosition: 300, verticalSize: 10000, verticalContainerSize: 400 })
+    await vi.advanceTimersByTimeAsync(100)
+    expect(scroll).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('keeps a history search focused when the virtual list grows after navigation', async () => {
+    useAgentStreamStore().reset(
+      'search-grow',
+      [{ kind: 'message:text', messageId: 'm', text: 'cached', streaming: false }],
+      ['2026-01-01T00:00:00Z'],
+    )
+    vi.mocked(fetch).mockImplementation(() => new Promise(() => {}))
+    const wrapper = mount(ActivityFeed, {
+      props: { workspaceId: 'search-grow' },
+      global: { plugins: [i18n], stubs: globalStubs },
+    })
+    await vi.advanceTimersByTimeAsync(100)
+    const area = wrapper.findComponent(QScrollAreaStub)
+    const scroll = area.vm.$.exposed?.setScrollPosition as ReturnType<typeof vi.fn>
+    area.vm.$emit('scroll', { verticalPosition: 600, verticalSize: 1000, verticalContainerSize: 400 })
+    scroll.mockClear()
+    window.dispatchEvent(
+      new CustomEvent('kobo:focus-history-event', {
+        detail: { workspaceId: 'search-grow', eventId: 'older-hit' },
+      }),
+    )
+    stubScrollSize = 9000
+    area.vm.$emit('scroll', { verticalPosition: 3000, verticalSize: 9000, verticalContainerSize: 400 })
+    await vi.advanceTimersByTimeAsync(100)
+    expect(scroll).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('does not pull a reader back to the bottom when the initial history finally arrives', async () => {
+    const stream = useAgentStreamStore()
+    const websocket = useWebSocketStore()
+    stream.reset(
+      'reading-cache',
+      [{ kind: 'message:text', messageId: 'old', text: 'cached', streaming: false }],
+      ['2026-01-01T00:00:00Z'],
+    )
+    websocket.pendingSyncRequests = [['reading-cache']]
+    const wrapper = mount(ActivityFeed, {
+      props: { workspaceId: 'reading-cache' },
+      global: { plugins: [i18n], stubs: globalStubs },
+    })
+    await vi.advanceTimersByTimeAsync(100)
+    const area = wrapper.findComponent(QScrollAreaStub)
+    await area.trigger('wheel')
+    area.vm.$emit('scroll', { verticalPosition: 300, verticalSize: 1000, verticalContainerSize: 400 })
+    const scroll = area.vm.$.exposed?.setScrollPosition as ReturnType<typeof vi.fn>
+    scroll.mockClear()
+    stubScrollSize = 12000
+    useWorkspaceStore().addActivityItem('reading-cache', {
+      id: 'old-user-message',
+      type: 'text',
+      content: 'historical user message',
+      timestamp: '2026-01-01T00:00:00Z',
+      meta: { sender: 'user' },
+    })
+    stream.reset(
+      'reading-cache',
+      [{ kind: 'message:text', messageId: 'new', text: 'latest history', streaming: false }],
+      ['2026-01-01T00:00:01Z'],
+    )
+    websocket.pendingSyncRequests = []
+    await vi.advanceTimersByTimeAsync(100)
+    expect(scroll).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+  it('releases a stalled targeted session loader and shows a retryable error', async () => {
+    vi.useFakeTimers()
+    useWorkspaceStore().selectedSessionId = 'stalled'
+    vi.mocked(fetch).mockImplementation(() => new Promise(() => {}))
+    const wrapper = mount(ActivityFeed, {
+      props: { workspaceId: 'stalled-workspace' },
+      global: { plugins: [i18n], stubs: globalStubs },
+    })
+    await nextTick()
+    expect(wrapper.find('.activity-feed-switching').exists()).toBe(true)
+    await vi.advanceTimersByTimeAsync(30_001)
+    await nextTick()
+    expect(wrapper.find('.activity-feed-switching').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="history-load-error"]').text()).toContain('timed out')
+    expect(fetch).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+    vi.useRealTimers()
+  })
+
+  it('aborts targeted history reads on navigation and unmount', async () => {
+    useWorkspaceStore().selectedSessionId = 'selected'
+    vi.mocked(fetch).mockImplementation(() => new Promise(() => {}))
+    const wrapper = mount(ActivityFeed, {
+      props: { workspaceId: 'first' },
+      global: { plugins: [i18n], stubs: globalStubs },
+    })
+    await nextTick()
+    const firstSignal = vi.mocked(fetch).mock.calls[0]?.[1]?.signal
+    await wrapper.setProps({ workspaceId: 'second' })
+    expect(firstSignal?.aborted).toBe(true)
+    const secondSignal = vi.mocked(fetch).mock.calls[1]?.[1]?.signal
+    wrapper.unmount()
+    expect(secondSignal?.aborted).toBe(true)
+  })
+
+  it('keeps the latest targeted loader owned during rapid workspace reselection', async () => {
+    useWorkspaceStore().selectedSessionId = 'selected'
+    const finish: Array<(response: Response) => void> = []
+    vi.mocked(fetch).mockImplementation(
+      () =>
+        new Promise<Response>((resolve) => {
+          finish.push(resolve)
+        }),
+    )
+    const wrapper = mount(ActivityFeed, {
+      props: { workspaceId: 'first' },
+      global: { plugins: [i18n], stubs: globalStubs },
+    })
+    await nextTick()
+    await wrapper.setProps({ workspaceId: 'second' })
+    await wrapper.setProps({ workspaceId: 'first' })
+    await flushPromises()
+    expect(fetch).toHaveBeenCalledTimes(3)
+    expect(wrapper.find('.activity-feed-switching').exists()).toBe(true)
+    finish[0]({ ok: true, json: async () => ({ events: [], hasMore: false }) } as Response)
+    finish[1]({ ok: true, json: async () => ({ events: [], hasMore: false }) } as Response)
+    await flushPromises()
+    expect(wrapper.find('.activity-feed-switching').exists()).toBe(true)
+    finish[2]({ ok: true, json: async () => ({ events: [], hasMore: false }) } as Response)
+    await flushPromises()
+    expect(wrapper.find('.activity-feed-switching').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('follows a new local user send even when the reader had scrolled up', async () => {
+    const store = useWorkspaceStore()
+    useAgentStreamStore().reset(
+      'local-send',
+      [{ kind: 'message:text', messageId: 'm', text: 'cached', streaming: false }],
+      ['2026-01-01T00:00:00Z'],
+    )
+    const wrapper = mount(ActivityFeed, {
+      props: { workspaceId: 'local-send' },
+      global: { plugins: [i18n], stubs: globalStubs },
+    })
+    await vi.advanceTimersByTimeAsync(100)
+    const area = wrapper.findComponent(QScrollAreaStub)
+    await area.trigger('wheel')
+    area.vm.$emit('scroll', { verticalPosition: 300, verticalSize: 1000, verticalContainerSize: 400 })
+    const scroll = area.vm.$.exposed?.setScrollPosition as ReturnType<typeof vi.fn>
+    scroll.mockClear()
+    store.addActivityItem('local-send', {
+      id: 'new-user-message',
+      type: 'text',
+      content: 'new local message',
+      timestamp: '2026-01-01T00:00:01Z',
+      meta: { sender: 'user', pending: true },
+    })
+    await vi.advanceTimersByTimeAsync(100)
+    expect(scroll).toHaveBeenLastCalledWith('vertical', 1000, 180)
+    wrapper.unmount()
+  })
   beforeEach(() => {
     vi.useFakeTimers()
     vi.stubGlobal('fetch', vi.fn())
@@ -349,7 +594,8 @@ describe('ActivityFeed.vue', () => {
     await nextTick()
     expect(wrapper.find('.activity-feed-switching').exists()).toBe(true)
     resolve({ ok, json: async () => ({ events: [], hasMore: false }) } as Response)
-    for (let i = 0; i < 5; i++) await nextTick()
+    await flushPromises()
+    await nextTick()
     expect(wrapper.find('.activity-feed-switching').exists()).toBe(false)
     expect(fetch).toHaveBeenCalledTimes(1)
     wrapper.unmount()
@@ -372,10 +618,12 @@ describe('ActivityFeed.vue', () => {
     await wrapper.setProps({ workspaceId: 'second' })
     expect(fetch).toHaveBeenCalledTimes(2)
     resolve[0]({ ok: true, json: async () => ({ events: [], hasMore: false }) } as Response)
-    for (let i = 0; i < 5; i++) await nextTick()
+    await flushPromises()
+    await nextTick()
     expect(wrapper.find('.activity-feed-switching').exists()).toBe(true)
     resolve[1]({ ok: true, json: async () => ({ events: [], hasMore: false }) } as Response)
-    for (let i = 0; i < 5; i++) await nextTick()
+    await flushPromises()
+    await nextTick()
     expect(wrapper.find('.activity-feed-switching').exists()).toBe(false)
     wrapper.unmount()
   })
@@ -471,8 +719,11 @@ describe('ActivityFeed.vue', () => {
 
     await nextTick()
 
-    expect(fetch).toHaveBeenCalledWith('/api/workspaces/ws-1/events?before=cursor-1&limit=200&session=sess-1')
-    for (let i = 0; i < 8; i++) await nextTick()
+    expect(fetch).toHaveBeenCalledWith('/api/workspaces/ws-1/events?before=cursor-1&limit=200&session=sess-1', {
+      signal: expect.any(AbortSignal),
+    })
+    await flushPromises()
+    await nextTick()
     expect(wrapper.find('.q-spinner').exists()).toBe(false)
     wrapper.unmount()
   })
@@ -622,7 +873,9 @@ describe('ActivityFeed.vue', () => {
     await nextTick()
     await nextTick()
 
-    expect(fetch).toHaveBeenCalledWith('/api/workspaces/ws-1/events?session=sess-1&limit=500')
+    expect(fetch).toHaveBeenCalledWith('/api/workspaces/ws-1/events?session=sess-1&limit=500', {
+      signal: expect.any(AbortSignal),
+    })
     expect(workspaceStore.activityFeeds['ws-1']?.map((i) => [i.id, i.sessionId ?? null])).toContainEqual([
       'evt-ws-user',
       null,

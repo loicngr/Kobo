@@ -31,6 +31,7 @@
 <script setup lang="ts">
 import { useSearchIndexStatus } from 'src/composables/use-search-index-status'
 import { useWorkspaceStore } from 'src/stores/workspace'
+import { apiFetchResponse, apiResponseError } from 'src/utils/api'
 import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
@@ -70,11 +71,11 @@ async function runSearch(): Promise<void> {
   }
   controller = new AbortController()
   try {
-    const response = await fetch(
+    const response = await apiFetchResponse(
       `/api/workspaces/${props.workspaceId}/history-search?q=${encodeURIComponent(search)}`,
       { signal: controller.signal },
     )
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    if (!response.ok) throw await apiResponseError(response)
     const body = (await response.json()) as { results: SearchResult[] }
     if (token === requestToken) results.value = body.results
   } catch {

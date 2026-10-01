@@ -289,13 +289,20 @@ export async function checkPrStatuses(): Promise<void> {
           hasController(ws.id)
         )
           return
-        try {
-          destroyTerminal(ws.id)
-        } catch {
-          // Terminal may not exist — ignore
-        }
-
-        const archived = archiveWorkspace(ws.id)
+        const archived = await withWorkspaceLifecycleGuard(ws.id, async () => {
+          await destroyTerminal(ws.id)
+          const latest = getWorkspace(ws.id)
+          if (
+            !latest ||
+            check.invalidated ||
+            latest.archivedAt ||
+            hasController(ws.id) ||
+            ['extracting', 'brainstorming', 'executing', 'compacting'].includes(latest.status)
+          )
+            return null
+          return archiveWorkspace(ws.id)
+        })
+        if (!archived) return
         lastKnownPr.delete(ws.id)
         emitEphemeral(ws.id, 'workspace:archived', {
           reason: `PR ${pr.state.toLowerCase()}`,

@@ -160,7 +160,10 @@ describe('resetToDefault()', () => {
       json: async () => ({ template: reset }),
     } as Response)
     const out = await store.resetToDefault('review-quality')
-    expect(global.fetch).toHaveBeenCalledWith('/api/templates/review-quality/reset-default', { method: 'POST' })
+    expect(global.fetch).toHaveBeenCalledWith('/api/templates/review-quality/reset-default', {
+      method: 'POST',
+      signal: expect.any(AbortSignal),
+    })
     expect(out.content).toBe('DEFAULT')
     expect(store.templates[0].content).toBe('DEFAULT')
   })

@@ -1,5 +1,5 @@
 import { createPinia, setActivePinia } from 'pinia'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { computed, nextTick, ref, watch } from 'vue'
 import { useAgentStreamStore } from '../stores/agent-stream'
 import { useWebSocketStore } from '../stores/websocket'
@@ -68,7 +68,10 @@ describe('workspace store', () => {
     await store.enableAutoLoop('w1')
     expect(changeMode).not.toHaveBeenCalled()
     expect(store.workspaces[0]?.agentPermissionMode).toBe('plan')
-    expect(fetchMock).toHaveBeenCalledWith('/api/workspaces/w1/auto-loop', { method: 'POST' })
+    expect(fetchMock).toHaveBeenCalledWith('/api/workspaces/w1/auto-loop', {
+      method: 'POST',
+      signal: expect.any(AbortSignal),
+    })
   })
 
   it('sends creation attachments together with metadata and keeps files reusable after failure', async () => {
@@ -1117,6 +1120,7 @@ describe('workspace store', () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: 'toolu_a' }),
+        signal: expect.any(AbortSignal),
       })
     })
 
@@ -1171,6 +1175,7 @@ describe('workspace store', () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ expectedSessionId: 'session-running', disableAutoLoop: true }),
+        signal: expect.any(AbortSignal),
       })
     })
 
@@ -2236,7 +2241,7 @@ describe('workspace store', () => {
       expect(fetchMock).toHaveBeenNthCalledWith(
         1,
         '/api/workspaces/w1/crons',
-        expect.objectContaining({ method: 'POST' }),
+        expect.objectContaining({ method: 'POST', signal: expect.any(AbortSignal) }),
       )
       expect(ws.crons.w1).toEqual([{ id: 'c1' }])
       fetchMock.mockRestore()
@@ -2251,7 +2256,7 @@ describe('workspace store', () => {
       await ws.scheduleManualWakeup('w1', { delaySeconds: 900, prompt: 'check', mode: 'fresh' })
       expect(fetchMock).toHaveBeenCalledWith(
         '/api/workspaces/w1/pending-wakeup',
-        expect.objectContaining({ method: 'POST' }),
+        expect.objectContaining({ method: 'POST', signal: expect.any(AbortSignal) }),
       )
       expect(ws.pendingWakeups.w1).toEqual(pending)
       fetchMock.mockRestore()
@@ -2335,7 +2340,10 @@ describe('workspace store', () => {
       await store.refreshPrSnapshot('ws-1')
 
       expect(store.prSnapshots['ws-1']).toMatchObject({ number: 99, reviewDecision: 'APPROVED' })
-      expect(fetchMock).toHaveBeenCalledWith('/api/workspaces/pr-snapshot/refresh/ws-1', { method: 'POST' })
+      expect(fetchMock).toHaveBeenCalledWith('/api/workspaces/pr-snapshot/refresh/ws-1', {
+        method: 'POST',
+        signal: expect.any(AbortSignal),
+      })
     })
 
     it('fetchWorkspacesInfo populates workspaces, prSnapshots and gitStatsCache', async () => {
@@ -3020,5 +3028,69 @@ describe('updateWorkflowPolicy()', () => {
     })
     expect(store.workspaces[0]!.workflowPolicy).toEqual({ commit: 'manual', push: 'manual', publish: 'manual' })
     vi.unstubAllGlobals()
+  })
+})
+
+describe('push responses', () => {
+  beforeEach(() => setActivePinia(createPinia()))
+  afterEach(() => vi.unstubAllGlobals())
+
+  it.each([
+    ['pushBranch', '/api/workspaces/w1/push'],
+    ['forcePushBranch', '/api/workspaces/w1/force-push'],
+  ] as const)('%s reads the successful response body', async (method, url) => {
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ branch: 'feature', upToDate: true }))
+    vi.stubGlobal('fetch', fetchMock)
+    const store = useWorkspaceStore()
+    expect(await store[method]('w1')).toEqual({ ok: true, branch: 'feature', upToDate: true })
+    expect(fetchMock).toHaveBeenCalledWith(url, expect.objectContaining({ method: 'POST' }))
+  })
+})
+
+describe('bounded session reads', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.useFakeTimers()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+  })
+
+  it('releases the spinner and exposes a stalled session read without replaying it', async () => {
+    const store = useWorkspaceStore()
+    store.selectedWorkspaceId = 'w1'
+    const fetchMock = vi.fn(() => new Promise(() => {}))
+    vi.stubGlobal('fetch', fetchMock)
+    const request = store.fetchSessions('w1')
+    expect(store.loadingSessions.w1).toBe(true)
+    await vi.advanceTimersByTimeAsync(30_001)
+    await request
+    expect(store.loadingSessions.w1).toBeUndefined()
+    expect(store.sessionsErrors.w1).toContain('timed out')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('aborts the previous workspace read when selecting another workspace', async () => {
+    const store = useWorkspaceStore()
+    store.selectedWorkspaceId = 'w1'
+    const fetchMock = vi.fn((_path: string, _options?: RequestInit) => new Promise<Response>(() => {}))
+    vi.stubGlobal('fetch', fetchMock)
+    vi.spyOn(store, 'markRead').mockResolvedValue(undefined)
+    vi.spyOn(store, 'fetchWorkspaceDetails').mockResolvedValue(undefined)
+    vi.spyOn(store, 'fetchGitStats').mockResolvedValue({} as never)
+    vi.spyOn(store, 'fetchPendingQuotaBackoff').mockResolvedValue(undefined)
+    vi.spyOn(useWebSocketStore(), 'subscribe').mockImplementation(() => {})
+    const first = store.fetchSessions('w1')
+    const firstSignal = fetchMock.mock.calls[0]?.[1]?.signal
+    store.selectWorkspace('w2')
+    await first
+    expect(firstSignal?.aborted).toBe(true)
+    expect(store.loadingSessions.w1).toBeUndefined()
+    expect(store.sessionsErrors.w1).toBeUndefined()
+    expect(store.loadingSessions.w2).toBe(true)
+    await vi.advanceTimersByTimeAsync(30_001)
   })
 })

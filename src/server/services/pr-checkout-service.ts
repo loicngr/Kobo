@@ -1,7 +1,8 @@
-import { execFileSync } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import { promisify } from 'node:util'
 import * as gitOps from '../utils/git-ops.js'
 import { GitConflictError } from '../utils/git-ops.js'
 import { withGitRepoLock } from '../utils/git-repo-lock.js'
@@ -93,22 +94,47 @@ const EMPTY_CHANGES: LocalChanges = { present: false, modified: 0, staged: 0, un
 // anything else that could still stall (a slow filesystem, a stuck lock).
 const GIT_TIMEOUT_MS = 60_000
 
-function git(repoPath: string, args: string[]): string {
-  return execFileSync('git', args, {
+const execFileAsync = promisify(execFile)
+
+async function runGitAsync(repoPath: string, args: string[], timeout = GIT_TIMEOUT_MS): Promise<string> {
+  const { stdout } = await execFileAsync('git', args, {
     cwd: repoPath,
     encoding: 'utf-8',
-    stdio: ['pipe', 'pipe', 'pipe'],
-    timeout: GIT_TIMEOUT_MS,
-    env: { ...process.env, LC_ALL: 'C', LANG: 'C', GIT_TERMINAL_PROMPT: '0' },
-  }).trim()
+    timeout,
+    maxBuffer: 64 * 1024 * 1024,
+    env: gitOps.buildNonInteractiveGitEnv(),
+  })
+  return stdout.trim()
+}
+
+function readGitAsync(repoPath: string, args: string[]): Promise<string> {
+  return runGitAsync(repoPath, args, 15_000)
+}
+
+async function conflictedFilesAsync(repoPath: string): Promise<string[]> {
+  try {
+    return (await readGitAsync(repoPath, ['diff', '--name-only', '--diff-filter=U']))
+      .split('\n')
+      .map((file) => file.trim())
+      .filter(Boolean)
+  } catch {
+    return []
+  }
 }
 
 /** Compare the local branch against `origin/<branch>`. */
-function diagnoseBranch(projectPath: string, branch: string): BranchState {
-  if (!gitOps.localBranchExists(projectPath, branch)) return { state: 'absent' }
-  if (!gitOps.listRemoteBranches(projectPath).includes(`origin/${branch}`)) return { state: 'in-sync' }
-  const ahead = gitOps.getCommitCount(projectPath, branch, branch)
-  const behind = gitOps.getCommitsBehind(projectPath, branch, branch)
+async function diagnoseBranch(
+  projectPath: string,
+  branch: string,
+  localExists: boolean,
+  remoteExists: boolean,
+): Promise<BranchState> {
+  if (!localExists) return { state: 'absent' }
+  if (!remoteExists) return { state: 'in-sync' }
+  const [ahead, behind] = await Promise.all([
+    gitOps.getCommitCountAsync(projectPath, branch, branch),
+    gitOps.getCommitsBehindAsync(projectPath, branch, branch),
+  ])
   if (ahead > 0 && behind > 0) return { state: 'diverged', ahead, behind }
   // Note: `hasCommonAncestor` below is what produces the `no-common-ancestor`
   // blocker; a same-named branch with unrelated history reads as "diverged"
@@ -120,9 +146,9 @@ function diagnoseBranch(projectPath: string, branch: string): BranchState {
 
 /** False when the local branch and its remote share no history at all — a name
  *  collision, not a divergence. Every realignment strategy is wrong for it. */
-function hasCommonAncestor(repoPath: string, branch: string): boolean {
+async function hasCommonAncestor(repoPath: string, branch: string): Promise<boolean> {
   try {
-    git(repoPath, ['merge-base', branch, `origin/${branch}`])
+    await readGitAsync(repoPath, ['merge-base', branch, `origin/${branch}`])
     return true
   } catch {
     return false
@@ -164,8 +190,8 @@ async function diagnoseWorktree(
 }
 
 /** Count working-tree changes by category. */
-function diagnoseChanges(worktreePath: string): LocalChanges {
-  const status = gitOps.getWorkingTreeStatus(worktreePath)
+async function diagnoseChanges(worktreePath: string): Promise<LocalChanges> {
+  const status = await gitOps.getWorkingTreeStatusAsync(worktreePath)
   const modified = status.modified ?? 0
   const staged = status.staged ?? 0
   const untracked = status.untracked ?? 0
@@ -203,9 +229,9 @@ export function resolveWorkspaceState(
 }
 
 /** `git rev-parse <ref>`, or null when the ref does not resolve. */
-function safeRevParse(repoPath: string, ref: string): string | null {
+async function safeRevParse(repoPath: string, ref: string): Promise<string | null> {
   try {
-    return git(repoPath, ['rev-parse', ref])
+    return await readGitAsync(repoPath, ['rev-parse', ref])
   } catch {
     return null
   }
@@ -213,8 +239,10 @@ function safeRevParse(repoPath: string, ref: string): string | null {
 
 /** Hash the observed state so `/resolve` can refuse a plan built on stale facts. */
 export async function computeFingerprint(report: PrCheckoutReport): Promise<string> {
-  const localHead = safeRevParse(report.projectPath, report.headBranch)
-  const remoteHead = safeRevParse(report.projectPath, `origin/${report.headBranch}`)
+  const [localHead, remoteHead] = await Promise.all([
+    safeRevParse(report.projectPath, report.headBranch),
+    safeRevParse(report.projectPath, `origin/${report.headBranch}`),
+  ])
   const payload = JSON.stringify({
     contents:
       report.worktree.state === 'orphan' || report.worktree.state === 'attached'
@@ -248,14 +276,15 @@ export async function diagnoseLocalState(
   const targetWorktreePath = resolveWorkspaceWorktreePath(projectPath, headBranch, worktreesPath)
   const blockers: PrCheckoutBlocker[] = []
 
-  const lockPath = gitOps.getIndexLockPath(projectPath)
+  const [lockPath, localExists, remoteBranches] = await Promise.all([
+    gitOps.getIndexLockPathAsync(projectPath),
+    gitOps.localBranchExistsAsync(projectPath, headBranch),
+    gitOps.listRemoteBranchesAsync(projectPath),
+  ])
+  const remoteExists = remoteBranches.includes(`origin/${headBranch}`)
   if (lockPath) blockers.push({ kind: 'index-lock', lockPath })
 
-  if (
-    gitOps.localBranchExists(projectPath, headBranch) &&
-    gitOps.listRemoteBranches(projectPath).includes(`origin/${headBranch}`) &&
-    !hasCommonAncestor(projectPath, headBranch)
-  ) {
+  if (localExists && remoteExists && !(await hasCommonAncestor(projectPath, headBranch))) {
     blockers.push({ kind: 'no-common-ancestor', branch: headBranch })
   }
 
@@ -276,9 +305,9 @@ export async function diagnoseLocalState(
     blockers,
     workspace: resolveWorkspaceState(workspaces, headBranch, projectPath),
     worktree,
-    localChanges: inspectPath ? diagnoseChanges(inspectPath) : EMPTY_CHANGES,
-    ongoingOperation: inspectPath ? gitOps.getOngoingGitOperation(inspectPath) : null,
-    branch: diagnoseBranch(projectPath, headBranch),
+    localChanges: inspectPath ? await diagnoseChanges(inspectPath) : EMPTY_CHANGES,
+    ongoingOperation: inspectPath ? await gitOps.getOngoingGitOperationAsync(inspectPath) : null,
+    branch: await diagnoseBranch(projectPath, headBranch, localExists, remoteExists),
   }
 }
 
@@ -298,19 +327,23 @@ export interface BranchStrategyResult {
  * Operates on the repository's branch ref, so the caller must hold the repo lock
  * AND the branch must not be checked out anywhere (see the ordering note below).
  */
-export function applyBranchStrategy(repoPath: string, branch: string, strategy: BranchStrategy): BranchStrategyResult {
+export async function applyBranchStrategy(
+  repoPath: string,
+  branch: string,
+  strategy: BranchStrategy,
+): Promise<BranchStrategyResult> {
   const remoteRef = `origin/${branch}`
   if (strategy === 'keep') return { strategy, backupBranch: null }
 
   if (strategy === 'fast-forward') {
-    git(repoPath, ['branch', '--force', branch, remoteRef])
+    await runGitAsync(repoPath, ['branch', '--force', branch, remoteRef])
     return { strategy, backupBranch: null }
   }
 
   if (strategy === 'reset-hard') {
     const backupBranch = `kobo-backup/${branch}-${Date.now()}`
-    git(repoPath, ['branch', backupBranch, branch])
-    git(repoPath, ['branch', '--force', branch, remoteRef])
+    await runGitAsync(repoPath, ['branch', backupBranch, branch])
+    await runGitAsync(repoPath, ['branch', '--force', branch, remoteRef])
     return { strategy, backupBranch }
   }
 
@@ -321,14 +354,14 @@ export function applyBranchStrategy(repoPath: string, branch: string, strategy: 
   // can restore it once the rebase completes cleanly. If HEAD is detached,
   // `--abbrev-ref` returns the literal string "HEAD", which isn't a valid ref
   // to check back out — fall back to the SHA in that case.
-  const currentRef = git(repoPath, ['rev-parse', '--abbrev-ref', 'HEAD'])
-  const originalCheckout = currentRef === 'HEAD' ? git(repoPath, ['rev-parse', 'HEAD']) : currentRef
+  const currentRef = await readGitAsync(repoPath, ['rev-parse', '--abbrev-ref', 'HEAD'])
+  const originalCheckout = currentRef === 'HEAD' ? await readGitAsync(repoPath, ['rev-parse', 'HEAD']) : currentRef
 
   try {
-    git(repoPath, ['rebase', remoteRef, branch])
+    await runGitAsync(repoPath, ['rebase', remoteRef, branch])
   } catch (err) {
-    const conflicted = gitOps.getConflictedFiles(repoPath)
-    if (conflicted.length > 0 || gitOps.getOngoingGitOperation(repoPath) === 'rebase') {
+    const conflicted = await conflictedFilesAsync(repoPath)
+    if (conflicted.length > 0 || (await gitOps.getOngoingGitOperationAsync(repoPath)) === 'rebase') {
       // Leave the rebase in progress on `branch` so the caller can abort or
       // request agent-assisted resolution — do NOT restore the original checkout.
       throw new GitConflictError('rebase', conflicted)
@@ -338,7 +371,7 @@ export function applyBranchStrategy(repoPath: string, branch: string, strategy: 
   }
 
   // Clean rebase: restore the working copy to exactly what was checked out before.
-  git(repoPath, ['checkout', originalCheckout])
+  await runGitAsync(repoPath, ['checkout', originalCheckout])
   return { strategy, backupBranch: null }
 }
 
@@ -444,7 +477,7 @@ function resolvePrCheckoutLocked(
     const applied: AppliedAction[] = []
 
     // 1. Refresh, then refuse a plan built on facts that no longer hold.
-    gitOps.fetchSourceBranch(input.projectPath, input.headBranch)
+    await gitOps.fetchSourceBranchOrThrowAsync(input.projectPath, input.headBranch)
     applied.push({ kind: 'fetch', detail: `origin/${input.headBranch}` })
 
     const fresh = await diagnoseLocalState(
@@ -474,7 +507,7 @@ function resolvePrCheckoutLocked(
 
     // 2. Clear stale worktree metadata before anything needs the path.
     if (fresh.worktree.state === 'stale-metadata') {
-      git(input.projectPath, ['worktree', 'prune'])
+      await runGitAsync(input.projectPath, ['worktree', 'prune'])
       applied.push({ kind: 'prune-stale-worktree', detail: fresh.worktree.path })
     }
 
@@ -486,7 +519,7 @@ function resolvePrCheckoutLocked(
     // 3. In a reused worktree, settle the working tree before touching history.
     if (existingPath) {
       if (fresh.ongoingOperation && input.decisions.ongoingOperation === 'abort') {
-        gitOps.abortOngoingGitOperation(existingPath)
+        await runGitAsync(existingPath, [fresh.ongoingOperation, '--abort'])
         applied.push({ kind: 'abort-operation', detail: fresh.ongoingOperation })
       }
       if (fresh.ongoingOperation && input.decisions.ongoingOperation !== 'abort') {
@@ -497,14 +530,27 @@ function resolvePrCheckoutLocked(
       if (fresh.localChanges.present) {
         const choice = input.decisions.localChanges ?? 'keep'
         if (choice === 'stash') {
-          gitOps.stashPush(existingPath, `kobo-pr-checkout-${input.headBranch}`)
+          await runGitAsync(existingPath, [
+            'stash',
+            'push',
+            '--include-untracked',
+            '-m',
+            `kobo-pr-checkout-${input.headBranch}`,
+          ])
           applied.push({ kind: 'stash-changes' })
         } else if (choice === 'commit') {
-          gitOps.commitAllChanges(existingPath, `chore: save work before checking out ${input.headBranch}`)
+          await runGitAsync(existingPath, ['add', '-A'])
+          await runGitAsync(existingPath, ['commit', '-m', `chore: save work before checking out ${input.headBranch}`])
           applied.push({ kind: 'commit-changes' })
         } else if (choice === 'discard') {
           // Deliberately a labelled stash, not `checkout -- .`: recoverable.
-          gitOps.stashPush(existingPath, `kobo-pr-checkout-discard-${input.headBranch}`)
+          await runGitAsync(existingPath, [
+            'stash',
+            'push',
+            '--include-untracked',
+            '-m',
+            `kobo-pr-checkout-discard-${input.headBranch}`,
+          ])
           applied.push({ kind: 'discard-changes', detail: 'kept as a labelled stash' })
         }
       }
@@ -515,9 +561,9 @@ function resolvePrCheckoutLocked(
     const strategy = input.decisions.divergence ?? 'keep'
     if (strategy !== 'keep') {
       if (existingPath) {
-        alignInsideWorktree(input.projectPath, existingPath, input.headBranch, strategy, applied)
+        await alignInsideWorktree(input.projectPath, existingPath, input.headBranch, strategy, applied)
       } else {
-        const outcome = applyBranchStrategy(input.projectPath, input.headBranch, strategy)
+        const outcome = await applyBranchStrategy(input.projectPath, input.headBranch, strategy)
         applied.push({ kind: 'align-branch', detail: outcome.backupBranch ?? strategy })
       }
     }
@@ -532,7 +578,7 @@ function resolvePrCheckoutLocked(
       const explicitPath = input.decisions.pathCollision?.worktreePath ?? null
       if (explicitPath) assertSafeExplicitWorktreePath(explicitPath)
 
-      const baseRef = gitOps.localBranchExists(input.projectPath, input.headBranch)
+      const baseRef = (await gitOps.localBranchExistsAsync(input.projectPath, input.headBranch))
         ? input.headBranch
         : `origin/${input.headBranch}`
       const target = await createWorktreeUnlocked(
@@ -575,25 +621,25 @@ function resolvePrCheckoutLocked(
 }
 
 /** Realign a branch from inside its own worktree, where ref surgery is refused. */
-function alignInsideWorktree(
+async function alignInsideWorktree(
   repoPath: string,
   worktreePath: string,
   branch: string,
   strategy: BranchStrategy,
   applied: AppliedAction[],
-): void {
+): Promise<void> {
   const remoteRef = `origin/${branch}`
   if (strategy === 'fast-forward') {
-    git(worktreePath, ['merge', '--ff-only', remoteRef])
+    await runGitAsync(worktreePath, ['merge', '--ff-only', remoteRef])
     applied.push({ kind: 'align-branch', detail: 'fast-forward' })
     return
   }
   if (strategy === 'rebase') {
     try {
-      git(worktreePath, ['rebase', remoteRef])
+      await runGitAsync(worktreePath, ['rebase', remoteRef])
     } catch (err) {
-      const conflicted = gitOps.getConflictedFiles(worktreePath)
-      if (conflicted.length > 0 || gitOps.getOngoingGitOperation(worktreePath) === 'rebase') {
+      const conflicted = await conflictedFilesAsync(worktreePath)
+      if (conflicted.length > 0 || (await gitOps.getOngoingGitOperationAsync(worktreePath)) === 'rebase') {
         // Leave the rebase in progress so the caller can abort or request
         // agent-assisted resolution — mirrors applyBranchStrategy's own rebase
         // conflict handling and git-ops.ts's rebaseBranch.
@@ -607,7 +653,7 @@ function alignInsideWorktree(
   }
   // reset-hard
   const backupBranch = `kobo-backup/${branch}-${Date.now()}`
-  git(repoPath, ['branch', backupBranch, branch])
-  git(worktreePath, ['reset', '--hard', remoteRef])
+  await runGitAsync(repoPath, ['branch', backupBranch, branch])
+  await runGitAsync(worktreePath, ['reset', '--hard', remoteRef])
   applied.push({ kind: 'align-branch', detail: backupBranch })
 }

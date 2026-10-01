@@ -168,6 +168,7 @@
 import { useQuasar } from 'quasar'
 import { useSettingsStore } from 'src/stores/settings'
 import { useWorkspaceStore, type Workspace } from 'src/stores/workspace'
+import { apiFetchResponse, apiResponseError } from 'src/utils/api'
 import { DEFAULT_TOAST_TIMEOUT_MS } from 'src/utils/notification-timeout'
 import { isChangesRequestedBlocking, isCiFailed } from 'src/utils/pr-status'
 import { isWorkspacePane, splitWorkspaceQuery } from 'src/utils/split-workspace'
@@ -222,8 +223,8 @@ async function exportEvents() {
     group: false,
   })
   try {
-    const res = await fetch(`/api/workspaces/${props.workspace.id}/events.csv`)
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const res = await apiFetchResponse(`/api/workspaces/${props.workspace.id}/events.csv`)
+    if (!res.ok) throw await apiResponseError(res)
     const blob = await res.blob()
     const url = URL.createObjectURL(blob)
     const slug = props.workspace.name

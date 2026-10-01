@@ -4,7 +4,7 @@ import { getIntegrationConfig } from '../integration-config-service.js'
 import { buildNotionMcpConfig } from '../notion-service.js'
 import { readSentryMcpConfig } from '../sentry-service.js'
 import type { GlobalSettings } from '../settings-service.js'
-import type { McpServerSpec } from './engines/types.js'
+import type { EngineId, McpServerSpec } from './engines/types.js'
 
 type IntegrationSettings = Pick<GlobalSettings, 'notionEnabled' | 'sentryEnabled' | 'notionMcpKey' | 'sentryMcpKey'>
 
@@ -27,11 +27,13 @@ export function hasIntegrationMcpConfig(integration: 'notion' | 'sentry', select
 /** Resolve at every launch/resume; never write credentials into a project file. */
 export function buildIntegrationMcpServers(
   settings: IntegrationSettings,
+  engineId: EngineId,
   onUnavailable?: (integration: 'notion' | 'sentry') => void,
 ): McpServerSpec[] {
   const servers: McpServerSpec[] = []
-  // Fresh names avoid Codex recursively merging stale native config fields.
-  const launch = nanoid(12)
+  // Codex needs fresh names to avoid recursively merging stale native config.
+  // Claude needs stable tool names to preserve its prompt cache across resumes.
+  const launch = engineId === 'codex' ? nanoid(12) : 'managed'
   for (const integration of ['notion', 'sentry'] as const) {
     if (!settings[`${integration}Enabled`]) continue
     try {

@@ -726,7 +726,7 @@ describe('Orchestrator — stopping window suppresses revive side effects', () =
     const { createWorkspace } = await import('../../server/services/workspace-service.js')
     const wakeup = await import('../../server/services/wakeup-service.js')
     const websocket = await import('../../server/services/websocket-service.js')
-    const scheduleSpy = vi.spyOn(wakeup, 'schedule').mockImplementation(() => undefined)
+    const scheduleSpy = vi.spyOn(wakeup, 'schedule').mockReturnValue({ targetAt: '2026-10-01T12:00:00.000Z' })
     const ws = createWorkspace({
       name: 'W',
       projectPath: '/tmp',

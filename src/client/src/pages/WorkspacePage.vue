@@ -899,6 +899,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  store.cancelSessionReads()
   window.removeEventListener('keydown', onWorkspaceShortcut)
 })
 

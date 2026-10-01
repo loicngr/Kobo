@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { apiFetchResponse, apiFetchResponseForStatus, apiResponseError } from 'src/utils/api'
 
 export interface Template {
   slug: string
@@ -32,8 +33,8 @@ export const useTemplatesStore = defineStore('templates', {
       if (this.loading) return
       this.loading = true
       try {
-        const res = await fetch('/api/templates')
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const res = await apiFetchResponse('/api/templates')
+        if (!res.ok) throw await apiResponseError(res)
         const body = (await res.json()) as { templates: Template[]; defaultSlugs?: string[] }
         this.templates = body.templates
         this.defaultSlugs = body.defaultSlugs ?? []
@@ -46,7 +47,7 @@ export const useTemplatesStore = defineStore('templates', {
     },
 
     async createTemplate(input: { slug: string; description: string; content: string }): Promise<Template> {
-      const res = await fetch('/api/templates', {
+      const res = await apiFetchResponse('/api/templates', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(input),
@@ -61,7 +62,7 @@ export const useTemplatesStore = defineStore('templates', {
     },
 
     async updateTemplate(slug: string, updates: { description?: string; content?: string }): Promise<Template> {
-      const res = await fetch(`/api/templates/${encodeURIComponent(slug)}`, {
+      const res = await apiFetchResponse(`/api/templates/${encodeURIComponent(slug)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updates),
@@ -77,7 +78,7 @@ export const useTemplatesStore = defineStore('templates', {
     },
 
     async reloadDefaults(): Promise<{ added: string[]; kept: string[] }> {
-      const res = await fetch('/api/templates/reload-defaults', { method: 'POST' })
+      const res = await apiFetchResponse('/api/templates/reload-defaults', { method: 'POST' })
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
         throw new Error(body.error ?? `HTTP ${res.status}`)
@@ -90,7 +91,7 @@ export const useTemplatesStore = defineStore('templates', {
     },
 
     async deleteTemplate(slug: string): Promise<void> {
-      const res = await fetch(`/api/templates/${encodeURIComponent(slug)}`, { method: 'DELETE' })
+      const res = await apiFetchResponseForStatus(`/api/templates/${encodeURIComponent(slug)}`, { method: 'DELETE' })
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
         throw new Error(body.error ?? `HTTP ${res.status}`)
@@ -99,7 +100,7 @@ export const useTemplatesStore = defineStore('templates', {
     },
 
     async resetToDefault(slug: string): Promise<Template> {
-      const res = await fetch(`/api/templates/${encodeURIComponent(slug)}/reset-default`, { method: 'POST' })
+      const res = await apiFetchResponse(`/api/templates/${encodeURIComponent(slug)}/reset-default`, { method: 'POST' })
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: 'Reset failed' }))
         throw new Error(err.error ?? 'Reset failed')

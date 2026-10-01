@@ -1,13 +1,13 @@
 import { Hono } from 'hono'
 import { getDb } from '../db/index.js'
 import { listOrphanWorktrees } from '../services/worktree-service.js'
-import { listBranches, listRemoteBranches, listWorktreeFiles } from '../utils/git-ops.js'
+import { listBranchesAsync, listRemoteBranchesAsync, listWorktreeFilesAsync } from '../utils/git-ops.js'
 
 /** Hono sub-router for git-related endpoints (branch listing). */
 const app = new Hono()
 
 // GET /api/git/branches?path=<repoPath> — list branches for a repo
-app.get('/branches', (c) => {
+app.get('/branches', async (c) => {
   try {
     const repoPath = c.req.query('path')
 
@@ -15,8 +15,7 @@ app.get('/branches', (c) => {
       return c.json({ error: 'Missing required query parameter: path' }, 400)
     }
 
-    const local = listBranches(repoPath)
-    const remote = listRemoteBranches(repoPath)
+    const [local, remote] = await Promise.all([listBranchesAsync(repoPath), listRemoteBranchesAsync(repoPath)])
 
     return c.json({ local, remote })
   } catch (err) {
@@ -25,13 +24,13 @@ app.get('/branches', (c) => {
   }
 })
 
-/** Hard ceiling on the worktree listing. `listWorktreeFiles` already truncates
+/** Hard ceiling on the worktree listing. `listWorktreeFilesAsync` already truncates
  *  at this value; exposing it lets a caller ask for LESS, never for more. */
 const MAX_WORKTREE_FILES = 5000
 
 // GET /api/git/files?path=<worktreePath>&limit=<n> — list a worktree's files
 // (tracked + untracked-but-not-ignored) for the chat's `@file` autocomplete.
-app.get('/files', (c) => {
+app.get('/files', async (c) => {
   try {
     const repoPath = c.req.query('path')
     if (!repoPath) {
@@ -40,7 +39,7 @@ app.get('/files', (c) => {
     const requested = Number.parseInt(c.req.query('limit') ?? '', 10)
     const limit =
       Number.isFinite(requested) && requested > 0 ? Math.min(requested, MAX_WORKTREE_FILES) : MAX_WORKTREE_FILES
-    return c.json({ files: listWorktreeFiles(repoPath, limit) })
+    return c.json({ files: await listWorktreeFilesAsync(repoPath, limit) })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)

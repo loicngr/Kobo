@@ -185,6 +185,7 @@ function connectWs(wid: string, entry: TerminalEntry) {
   }
 
   ws.onclose = () => {
+    if (!entry.exited) entry.terminal.writeln(`\r\n${t('terminal.outputMayBeMissing')}\r\n`)
     entry.ws = null
     scheduleReconnect(wid, entry)
   }

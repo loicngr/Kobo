@@ -208,6 +208,16 @@ export default {
 
   // Models
   'model.auto': 'Auto',
+  'model.opus55': 'Opus 5.5',
+  'model.opus55Description': 'Für komplexe und alltägliche Aufgaben, 1M Kontext',
+  'model.sonnet55': 'Sonnet 5.5',
+  'model.sonnet55Description': 'Effizient für Routineaufgaben, 1M Kontext',
+  'model.gpt61sol': 'GPT-6.1 Sol',
+  'model.gpt61solDescription': 'Neuestes vielseitiges Modell für Programmierung und Alltag',
+  'model.gpt6sol': 'GPT-6 Sol',
+  'model.gpt6solDescription': 'Vielseitiges Modell der vorherigen Generation',
+  'model.gpt6luna': 'GPT-6 Luna',
+  'model.gpt6lunaDescription': 'Schnelles Modell für einfache Aufgaben',
   'model.fable51': 'Fable 5.1',
   'model.mythos5': 'Mythos 5 (Glasswing)',
   'model.fable51Description': 'Leistungsfähigstes Modell - ersetzt Fable 5, 1M Kontext, adaptive thinking',
@@ -448,6 +458,7 @@ export default {
   'terminal.error': 'Terminalfehler',
   'terminal.exited': 'Terminal beendet',
   'terminal.disconnected': 'Verbindung verloren',
+  'terminal.outputMayBeMissing': '[Verbindung unterbrochen. Ein Teil der Terminalausgabe kann fehlen.]',
   'terminal.reconnecting': 'Verbindungsaufbau… (Versuch {attempt} von {max})',
   'terminal.reconnect': 'Neu verbinden',
 
@@ -1960,6 +1971,11 @@ export default {
   'session.endedWatchdog': 'Sitzung nach einer Phase der Inaktivität zwangsweise geschlossen',
   'tool.running': 'Läuft...',
   'activity.raw_lines': 'Rohausgabezeilen ({n})',
+  'api.timeout': 'Die Anfrage hat das Zeitlimit von {seconds} Sekunden überschritten.',
+  'api.mutationTimeout':
+    'Die Anfrage hat das Zeitlimit von {seconds} Sekunden überschritten. Der Vorgang läuft möglicherweise noch. Aktualisieren Sie seinen Status, bevor Sie es erneut versuchen.',
+  'activity.sessionsError': 'Sitzungen konnten nicht geladen werden: {message}',
+  'activity.historyError': 'Der Gesprächsverlauf konnte nicht geladen werden: {message}',
   'activity.loading_older': 'Ältere Nachrichten werden geladen…',
   'activity.compacting': 'Kontext wird komprimiert…',
   'activity.prev_user_message': 'Vorherige Nachricht des Benutzers',

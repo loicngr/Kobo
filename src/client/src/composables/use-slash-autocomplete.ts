@@ -1,4 +1,5 @@
 import { useTemplatesStore } from 'src/stores/templates'
+import { apiFetchResponse } from 'src/utils/api'
 import { KOBO_COMMANDS } from 'src/utils/kobo-commands'
 import { computed, type Ref, ref, watch } from 'vue'
 
@@ -57,7 +58,7 @@ export function useSlashAutocomplete(
     if (now - lastFetch < 5000 && skills.value.length > 0) return
     lastFetch = now
     try {
-      const res = await fetch('/api/skills')
+      const res = await apiFetchResponse('/api/skills')
       if (res.ok) skills.value = await res.json()
     } catch {
       /* network errors are not fatal — popup just shows kobo + templates */

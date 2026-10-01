@@ -24,6 +24,7 @@
 <script setup lang="ts">
 import type { AgentSession } from 'src/stores/workspace'
 import { useWorkspaceStore } from 'src/stores/workspace'
+import { apiFetchResponse } from 'src/utils/api'
 import { computed, onUnmounted, ref, watch } from 'vue'
 
 const props = defineProps<{ workspaceId: string }>()
@@ -50,7 +51,7 @@ async function refreshMetrics(): Promise<void> {
   metricsRefreshTimer = null
   const requestId = ++metricsRequestId
   try {
-    const response = await fetch(`/api/workspaces/${props.workspaceId}/session-metrics`)
+    const response = await apiFetchResponse(`/api/workspaces/${props.workspaceId}/session-metrics`)
     if (!response.ok || requestId !== metricsRequestId) return
     const data = (await response.json()) as { metrics?: SessionMetric[] }
     if (requestId === metricsRequestId) metrics.value = data.metrics ?? []
@@ -83,7 +84,7 @@ function formatTokens(metric: SessionMetric | undefined): string {
   return total >= 1000 ? `${(total / 1000).toFixed(total >= 10_000 ? 0 : 1)}k` : String(total)
 }
 async function download() {
-  const response = await fetch(`/api/workspaces/${props.workspaceId}/diagnostic.json`)
+  const response = await apiFetchResponse(`/api/workspaces/${props.workspaceId}/diagnostic.json`)
   if (!response.ok) return
   const url = URL.createObjectURL(await response.blob())
   const link = document.createElement('a')

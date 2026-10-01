@@ -110,6 +110,21 @@ describe('Orchestrator — startAgent', () => {
         expect(server.command).toBe('node')
       }
       expect(options.prompt).not.toContain('synthetic-token')
+
+      const next = createWorkspace({
+        name: 'Managed MCP again',
+        projectPath: '/tmp',
+        sourceBranch: 'main',
+        workingBranch: 'managed-mcp-again',
+        engine: engineId,
+      })
+      startAgent(next.id, '/tmp', 'Read my ticket')
+      await flushControllerStart()
+      const nextServers = startOptions.mock.calls[1][0].mcpServers.slice(1)
+      const names = options.mcpServers.slice(1).map((server: { name: string }) => server.name)
+      const nextNames = nextServers.map((server: { name: string }) => server.name)
+      if (engineId === 'claude-code') expect(nextNames).toEqual(names)
+      else for (const name of nextNames) expect(names).not.toContain(name)
     },
   )
 

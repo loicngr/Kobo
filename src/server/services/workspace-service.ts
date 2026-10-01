@@ -1,4 +1,3 @@
-import type Database from 'better-sqlite3'
 import { nanoid } from 'nanoid'
 import { parseTaskVerification, type TaskRole, type TaskVerification } from '../../shared/task-verification.js'
 import {
@@ -15,6 +14,7 @@ import * as autoLoopService from './auto-loop-service.js'
 import * as cronService from './cron-service.js'
 import * as quotaBackoffService from './quota-backoff-service.js'
 import { SESSION_RECENCY_ORDER } from './session-activity-service.js'
+import { recomputeSessionMetricsOn } from './session-event-metrics.js'
 import { createTaskRecord, deleteTaskRecord, type UpdateTaskMutation, updateTaskRecord } from './task-mutations.js'
 import * as wakeupService from './wakeup-service.js'
 import { emitEphemeral } from './websocket-service.js'
@@ -381,7 +381,7 @@ export function createWorkspace(data: CreateWorkspaceInput): Workspace {
     data.prUrl ?? null,
     computedWorktreePath,
     owned ? 1 : 0,
-    data.model ?? 'claude-opus-4-8',
+    data.model ?? 'auto',
     data.brainstormModel ?? null,
     data.reasoningEffort ?? 'auto',
     legacyMode,
@@ -1291,51 +1291,7 @@ export function deleteSession(sessionId: string, workspaceId: string): boolean {
   return true
 }
 
-/**
- * Recompute one session's persisted metrics from the events that remain, on an
- * explicit database handle.
- *
- * Until v36 an `AFTER DELETE ... FOR EACH ROW` trigger did this per deleted
- * row, re-aggregating the whole session every time — 79.7 s for 20 000 events,
- * with the SQLite write lock held throughout. The trigger is gone; every code
- * path that deletes `agent:event` rows while KEEPING the session calls this
- * once, at the end of its transaction.
- */
-export function recomputeSessionMetricsOn(db: Database.Database, workspaceId: string, sessionId: string): void {
-  db.prepare('DELETE FROM session_event_metrics WHERE workspace_id = ? AND session_id = ?').run(workspaceId, sessionId)
-  db.prepare(
-    `INSERT INTO session_event_metrics (
-       workspace_id, session_id, tool_calls, errors, input_tokens, output_tokens
-     )
-     SELECT
-       e.workspace_id,
-       e.session_id,
-       SUM(CASE WHEN json_extract(e.payload, '$.kind') = 'tool:call' THEN 1 ELSE 0 END),
-       SUM(CASE
-         WHEN json_extract(e.payload, '$.kind') = 'error'
-           OR (json_extract(e.payload, '$.kind') = 'tool:result'
-             AND json_extract(e.payload, '$.isError') = 1)
-         THEN 1 ELSE 0
-       END),
-       MAX(CASE
-         WHEN json_extract(e.payload, '$.kind') = 'usage'
-           AND json_type(e.payload, '$.inputTokens') IN ('integer', 'real')
-         THEN CAST(json_extract(e.payload, '$.inputTokens') AS INTEGER) ELSE 0
-       END),
-       MAX(CASE
-         WHEN json_extract(e.payload, '$.kind') = 'usage'
-           AND json_type(e.payload, '$.outputTokens') IN ('integer', 'real')
-         THEN CAST(json_extract(e.payload, '$.outputTokens') AS INTEGER) ELSE 0
-       END)
-     FROM ws_events e
-     JOIN agent_sessions s ON s.id = e.session_id AND s.workspace_id = e.workspace_id
-     WHERE e.workspace_id = ?
-       AND e.session_id = ?
-       AND e.type = 'agent:event'
-       AND json_valid(e.payload)
-     GROUP BY e.workspace_id, e.session_id`,
-  ).run(workspaceId, sessionId)
-}
+export { recomputeSessionMetricsOn } from './session-event-metrics.js'
 
 /** Same, on the singleton connection. */
 export function recomputeSessionMetrics(workspaceId: string, sessionId: string): void {

@@ -1,6 +1,6 @@
-import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import path from 'node:path'
+import { createHash, randomUUID } from 'node:crypto'
+import { constants, copyFileSync, existsSync, readFileSync } from 'node:fs'
+import { writeJsonFileAtomically } from '../utils/atomic-json-file.js'
 import { getTemplatesPath } from '../utils/paths.js'
 
 /** A single user prompt template. Stored without the leading "/" in slug. */
@@ -32,39 +32,33 @@ const MAX_DESCRIPTION_LENGTH = 120
 
 /**
  * Read the templates list from disk. Seeds with defaults if the file does
- * not exist yet. Returns an empty array (with a logged error) on corruption.
+ * not exist yet. Refuses damaged data so ordinary mutations cannot erase it.
  */
 export function listTemplates(): Template[] {
   const filePath = getTemplatesPath()
   if (!existsSync(filePath)) {
     seedTemplates()
   }
-  try {
-    const raw = readFileSync(filePath, 'utf-8')
-    const parsed = JSON.parse(raw) as TemplatesFile
-    if (parsed.version !== CURRENT_FILE_VERSION) {
-      console.warn(
-        `[templates-service] templates.json has version ${parsed.version}, expected ${CURRENT_FILE_VERSION}. Reading best-effort.`,
-      )
-    }
-    const templates = Array.isArray(parsed.templates) ? parsed.templates : []
-    let changed = false
-    for (const template of templates) {
-      const previousHash = LEGACY_DEFAULT_CONTENT_HASHES[template.slug]
-      if (!previousHash || typeof template.content !== 'string') continue
-      if (createHash('sha256').update(template.content).digest('hex') !== previousHash) continue
-      const next = DEFAULT_TEMPLATES.find((value) => value.slug === template.slug)
-      if (!next || next.content === template.content) continue
-      template.content = next.content
-      template.updatedAt = new Date().toISOString()
-      changed = true
-    }
-    if (changed) writeTemplates(templates, parsed.seededDefaultSlugs)
-    return templates
-  } catch (err) {
-    console.error('[templates-service] Failed to read templates.json:', err)
-    return []
+  const parsed = readTemplatesFile()
+  if (parsed.version !== CURRENT_FILE_VERSION) {
+    console.warn(
+      `[templates-service] templates.json has version ${parsed.version}, expected ${CURRENT_FILE_VERSION}. Reading best-effort.`,
+    )
   }
+  const templates = parsed.templates
+  let changed = false
+  for (const template of templates) {
+    const previousHash = LEGACY_DEFAULT_CONTENT_HASHES[template.slug]
+    if (!previousHash) continue
+    if (createHash('sha256').update(template.content).digest('hex') !== previousHash) continue
+    const next = DEFAULT_TEMPLATES.find((value) => value.slug === template.slug)
+    if (!next || next.content === template.content) continue
+    template.content = next.content
+    template.updatedAt = new Date().toISOString()
+    changed = true
+  }
+  if (changed) writeTemplates(templates, parsed.seededDefaultSlugs)
+  return templates
 }
 
 /** Create a new template. Throws on invalid input or duplicate slug. */
@@ -162,31 +156,52 @@ function validateTemplateInput(input: { slug: string; description: string; conte
   }
 }
 
-function readSeededSlugs(): string[] | undefined {
-  const filePath = getTemplatesPath()
-  if (!existsSync(filePath)) return undefined
+function readTemplatesFile(): TemplatesFile {
   try {
-    const parsed = JSON.parse(readFileSync(filePath, 'utf-8')) as TemplatesFile
-    return Array.isArray(parsed.seededDefaultSlugs) ? parsed.seededDefaultSlugs : undefined
-  } catch {
-    return undefined
+    const parsed = JSON.parse(readFileSync(getTemplatesPath(), 'utf-8')) as TemplatesFile | null
+    if (!parsed || !Array.isArray(parsed.templates)) throw new Error('Expected a templates array')
+    if (
+      parsed.templates.some(
+        (template) =>
+          !template ||
+          typeof template.slug !== 'string' ||
+          typeof template.description !== 'string' ||
+          typeof template.content !== 'string' ||
+          typeof template.createdAt !== 'string' ||
+          typeof template.updatedAt !== 'string',
+      )
+    ) {
+      throw new Error('A template has missing or malformed fields')
+    }
+    if (
+      parsed.seededDefaultSlugs !== undefined &&
+      (!Array.isArray(parsed.seededDefaultSlugs) || parsed.seededDefaultSlugs.some((slug) => typeof slug !== 'string'))
+    ) {
+      throw new Error('Expected seededDefaultSlugs to be an array of strings')
+    }
+    return parsed
+  } catch (error) {
+    throw new Error(
+      'Failed to read templates.json. Existing data was preserved; restore a valid file or import templates.',
+      {
+        cause: error,
+      },
+    )
   }
 }
 
-function writeTemplates(templates: Template[], seededDefaultSlugs?: string[]): void {
-  const filePath = getTemplatesPath()
-  mkdirSync(path.dirname(filePath), { recursive: true })
-  const seeded = seededDefaultSlugs ?? readSeededSlugs() ?? [...LEGACY_DEFAULT_SLUGS]
-  const file: TemplatesFile = { version: CURRENT_FILE_VERSION, templates, seededDefaultSlugs: seeded }
-  writeFileSync(filePath, JSON.stringify(file, null, 2), 'utf-8')
+function readSeededSlugs(): string[] | undefined {
+  return existsSync(getTemplatesPath()) ? readTemplatesFile().seededDefaultSlugs : undefined
 }
 
-/**
- * Replace the entire templates list atomically. Validates each entry and
- * rejects the whole write on any invalid row — do not partially accept.
- * Used by config import.
- */
-export function replaceAllTemplates(templates: unknown[]): void {
+function writeTemplates(templates: Template[], seededDefaultSlugs?: string[]): void {
+  const seeded = seededDefaultSlugs ?? readSeededSlugs() ?? [...LEGACY_DEFAULT_SLUGS]
+  const file: TemplatesFile = { version: CURRENT_FILE_VERSION, templates, seededDefaultSlugs: seeded }
+  writeJsonFileAtomically(getTemplatesPath(), file)
+}
+
+/** Validate a whole import before any file in the configuration bundle changes. */
+export function validateTemplatesForReplacement(templates: unknown): Template[] {
   if (!Array.isArray(templates)) {
     throw new Error('Invalid templates payload: expected an array')
   }
@@ -210,7 +225,22 @@ export function replaceAllTemplates(templates: unknown[]): void {
     const updatedAt = typeof t.updatedAt === 'string' ? t.updatedAt : now
     validated.push({ slug, description, content, createdAt, updatedAt })
   }
-  writeTemplates(validated)
+  return validated
+}
+
+/** Replace the list atomically, preserving damaged existing data before recovery. */
+export function replaceAllTemplates(templates: unknown[]): void {
+  const validated = validateTemplatesForReplacement(templates)
+  let seededDefaultSlugs: string[] | undefined
+  try {
+    seededDefaultSlugs = readSeededSlugs()
+  } catch {
+    // Import is an explicit replacement. Retain damaged bytes for recovery,
+    // and abort the replacement if the backup cannot be written.
+    const filePath = getTemplatesPath()
+    copyFileSync(filePath, `${filePath}.recovery-${randomUUID()}.bak`, constants.COPYFILE_EXCL)
+  }
+  writeTemplates(validated, seededDefaultSlugs ?? [...LEGACY_DEFAULT_SLUGS])
 }
 
 export interface DefaultTemplate {

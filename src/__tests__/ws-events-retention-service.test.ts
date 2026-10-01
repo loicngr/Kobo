@@ -1,12 +1,14 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { Worker } from 'node:worker_threads'
 import Database from 'better-sqlite3'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { initSchema } from '../server/db/schema.js'
 import {
   countPrunableWsEvents,
   pruneWsEvents,
+  pruneWsEventsInBatches,
   resolveRetentionConfig,
 } from '../server/services/ws-events-retention-service.js'
 
@@ -85,6 +87,67 @@ describe('countPrunableWsEvents()', () => {
 })
 
 describe('pruneWsEvents()', () => {
+  it('stops between bounded batches and reconciles the metrics of the partially retained session', async () => {
+    seedEvents('old', 2_000, 90, 'tool:call')
+    const shouldStop = () => (db.prepare('SELECT COUNT(*) AS c FROM ws_events').get() as { c: number }).c < 2_000
+    const result = await pruneWsEventsInBatches(db, { retentionDays: 30, keepPerWorkspace: 10 }, NOW_MS, shouldStop)
+    const remaining = (db.prepare('SELECT COUNT(*) AS c FROM ws_events').get() as { c: number }).c
+    expect(result.deleted).toBeGreaterThan(0)
+    expect(result.deleted).toBeLessThan(2_000 - 10)
+    expect(result.sessionsRecomputed).toBe(1)
+    expect(
+      (db.prepare('SELECT tool_calls FROM session_event_metrics').get() as { tool_calls: number }).tool_calls,
+    ).toBe(remaining)
+    expect(result.vacuumed).toBe(false)
+  })
+
+  it('allows a concurrent event writer during metrics aggregation and includes that event', async () => {
+    seedEvents('old', 500, 90, 'tool:call')
+    seedEvents('recent', 500, 1, 'tool:call')
+    const shared = new Int32Array(new SharedArrayBuffer(4))
+    const writer = new Worker(
+      `const { workerData } = require('node:worker_threads')
+       const Database = require('better-sqlite3')
+       const state = new Int32Array(workerData.shared)
+       const connection = new Database(workerData.path)
+       connection.pragma('busy_timeout=100')
+       Atomics.wait(state, 0, 0)
+       try {
+         connection.prepare("INSERT INTO ws_events(id, workspace_id, type, payload, session_id, created_at) VALUES (?, 'ws-1', 'agent:event', ?, 's-1', ?)").run('concurrent-metrics', JSON.stringify({ kind: 'tool:call' }), workerData.now)
+         Atomics.store(state, 0, 2)
+       } catch {
+         Atomics.store(state, 0, -1)
+       } finally {
+         Atomics.notify(state, 0)
+         connection.close()
+       }`,
+      { eval: true, workerData: { shared: shared.buffer, path: db.name, now: daysAgo(0) } },
+    )
+    let coordinated = false
+    db.function('json_extract', (payload: string, field: string) => {
+      if (!coordinated) {
+        coordinated = true
+        Atomics.store(shared, 0, 1)
+        Atomics.notify(shared, 0)
+        Atomics.wait(shared, 0, 1, 1_500)
+      }
+      return (
+        ((JSON.parse(payload) as Record<string, unknown>)[field.slice(2)] as string | number | null | undefined) ?? null
+      )
+    })
+    try {
+      const result = await pruneWsEventsInBatches(db, { retentionDays: 30, keepPerWorkspace: 0 }, NOW_MS)
+      expect(coordinated).toBe(true)
+      expect(Atomics.load(shared, 0)).toBe(2)
+      expect(result.sessionsRecomputed).toBe(1)
+      expect(
+        (db.prepare('SELECT tool_calls FROM session_event_metrics').get() as { tool_calls: number }).tool_calls,
+      ).toBe(501)
+    } finally {
+      await writer.terminate()
+    }
+  })
+
   it('deletes events older than the window while keeping the recent tail', () => {
     seedEvents('old', 40, 90)
     seedEvents('recent', 5, 1)
@@ -127,6 +190,36 @@ describe('pruneWsEvents()', () => {
     expect(
       (db.prepare('SELECT tool_calls FROM session_event_metrics').get() as { tool_calls: number }).tool_calls,
     ).toBe(2)
+  })
+
+  it('recomputes error counts and token maxima after pruning usage events', () => {
+    const insert = db.prepare(
+      'INSERT INTO ws_events (id, workspace_id, type, payload, session_id, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+    )
+    insert.run('old-error', 'ws-1', 'agent:event', JSON.stringify({ kind: 'error' }), 's-1', daysAgo(90))
+    insert.run(
+      'old-usage',
+      'ws-1',
+      'agent:event',
+      JSON.stringify({ kind: 'usage', inputTokens: 900, outputTokens: 800 }),
+      's-1',
+      daysAgo(90),
+    )
+    insert.run('new-error', 'ws-1', 'agent:event', JSON.stringify({ kind: 'error' }), 's-1', daysAgo(1))
+    insert.run(
+      'new-usage',
+      'ws-1',
+      'agent:event',
+      JSON.stringify({ kind: 'usage', inputTokens: 200, outputTokens: 150 }),
+      's-1',
+      daysAgo(1),
+    )
+    pruneWsEvents(db, { retentionDays: 30, keepPerWorkspace: 0 }, NOW_MS)
+    expect(db.prepare('SELECT errors, input_tokens, output_tokens FROM session_event_metrics').get()).toEqual({
+      errors: 1,
+      input_tokens: 200,
+      output_tokens: 150,
+    })
   })
 
   it('reclaims free pages instead of leaving a 95 %-empty file behind', () => {

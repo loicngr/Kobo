@@ -2751,6 +2751,7 @@ import type { ProjectSettings } from 'src/stores/settings'
 import { useSettingsStore } from 'src/stores/settings'
 import { type Template, useTemplatesStore } from 'src/stores/templates'
 import { useWorkspaceTemplatesStore } from 'src/stores/workspace-templates'
+import { apiFetchResponse, apiFetchResponseForStatus, apiResponseError } from 'src/utils/api'
 import { formFieldsEqual } from 'src/utils/form-fields-equal'
 import { captureFormSnapshot } from 'src/utils/form-snapshot'
 import {
@@ -2901,8 +2902,8 @@ const networkDisplayUrls = computed(() => network.value.urls.map(toClientLanUrl)
 
 async function fetchNetwork() {
   try {
-    const res = await fetch('/api/settings/network')
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const res = await apiFetchResponse('/api/settings/network')
+    if (!res.ok) throw await apiResponseError(res)
     network.value = (await res.json()) as NetworkState
     await refreshQr()
   } catch {
@@ -2929,12 +2930,12 @@ async function refreshQr() {
 
 async function postNetwork(body: { enabled?: boolean; regenerate?: boolean; behindProxy?: boolean }) {
   try {
-    const res = await fetch('/api/settings/network', {
+    const res = await apiFetchResponse('/api/settings/network', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
     })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    if (!res.ok) throw await apiResponseError(res)
     const data = (await res.json()) as NetworkState & { restartRequired?: boolean }
     network.value = { enabled: data.enabled, token: data.token, behindProxy: data.behindProxy, urls: data.urls }
     if (data.restartRequired) networkRestartRequired.value = true
@@ -3046,7 +3047,7 @@ const integrationTestResult = ref<Partial<Record<IntegrationKey, IntegrationTest
 async function testIntegration(integration: IntegrationKey) {
   integrationTestLoading.value = integration
   try {
-    const response = await fetch(`/api/${integration}/test`, { method: 'POST' })
+    const response = await apiFetchResponse(`/api/${integration}/test`, { method: 'POST' })
     const body = (await response.json()) as IntegrationTestResult & { error?: string }
     integrationTestResult.value[integration] = response.ok
       ? body
@@ -3087,7 +3088,7 @@ async function loadNotionUsers(force = false) {
   loadingNotionUsers.value = true
   notionUsersError.value = ''
   try {
-    const res = await fetch('/api/notion/users')
+    const res = await apiFetchResponse('/api/notion/users')
     const body = (await res.json().catch(() => ({}))) as { users?: NotionUserOption[]; error?: string }
     if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`)
     notionUsers.value = Array.isArray(body.users) ? body.users : []
@@ -3237,7 +3238,7 @@ const importableSkillSuites = computed(() => [
 async function importCustomPrompt(field: CustomPromptField, suite: SkillSuite): Promise<void> {
   importingCustomPrompt.value = field
   try {
-    const res = await fetch(`/api/settings/skill-suite-prompts/${suite}`)
+    const res = await apiFetchResponse(`/api/settings/skill-suite-prompts/${suite}`)
     if (!res.ok) throw new Error(await res.text())
     const prompts = (await res.json()) as ImportedSuitePrompts
     const targets: Record<CustomPromptField, { value: string }> = {
@@ -3510,7 +3511,7 @@ const availableSkills = ref<string[]>([])
 const filteredSkills = ref<string[]>([])
 async function fetchAvailableSkills() {
   try {
-    const res = await fetch('/api/skills')
+    const res = await apiFetchResponse('/api/skills')
     if (res.ok) availableSkills.value = await res.json()
   } catch {
     /* non-fatal — autocomplete just stays empty */
@@ -4252,8 +4253,8 @@ async function fetchProjectBranches(path: string) {
   }
   loadingBranches.value = true
   try {
-    const res = await fetch(`/api/git/branches?path=${encodeURIComponent(path.trim())}`)
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const res = await apiFetchResponse(`/api/git/branches?path=${encodeURIComponent(path.trim())}`)
+    if (!res.ok) throw await apiResponseError(res)
     const data = await res.json()
     projectBranches.value = data.local ?? data.branches ?? []
   } catch {
@@ -4286,8 +4287,8 @@ const importFileInput = ref<HTMLInputElement | null>(null)
 
 async function exportConfig() {
   try {
-    const res = await fetch('/api/settings/export')
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const res = await apiFetchResponse('/api/settings/export')
+    if (!res.ok) throw await apiResponseError(res)
     const data = await res.json()
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
@@ -4321,7 +4322,7 @@ async function onImportFile(event: Event) {
       try {
         const text = await file.text()
         const bundle = JSON.parse(text)
-        const res = await fetch('/api/settings/import', {
+        const res = await apiFetchResponseForStatus('/api/settings/import', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(bundle),

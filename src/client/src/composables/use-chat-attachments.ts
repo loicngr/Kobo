@@ -1,3 +1,4 @@
+import { apiFetchOk, apiFetchResponse } from 'src/utils/api'
 import { computed, type Ref, ref } from 'vue'
 import { type AttachmentError, attachmentFormat, validateAttachments } from '../../../shared/attachments'
 
@@ -34,9 +35,9 @@ export function useChatAttachments(options: {
       file.kind === 'image'
         ? `images/${encodeURIComponent(file.uid)}`
         : `attachments/${encodeURIComponent(file.path.split('/').pop()!)}`
-    await fetch(`/api/workspaces/${encodeURIComponent(file.workspaceId)}/${endpoint}`, { method: 'DELETE' }).catch(
-      () => {},
-    )
+    await apiFetchOk(`/api/workspaces/${encodeURIComponent(file.workspaceId)}/${endpoint}`, {
+      method: 'DELETE',
+    }).catch(() => {})
   }
 
   async function upload(entry: PendingAttachment, file: File) {
@@ -44,7 +45,7 @@ export function useChatAttachments(options: {
     try {
       const body = new FormData()
       body.append('attachment', file)
-      const response = await fetch(`/api/workspaces/${encodeURIComponent(entry.workspaceId)}/attachments`, {
+      const response = await apiFetchResponse(`/api/workspaces/${encodeURIComponent(entry.workspaceId)}/attachments`, {
         method: 'POST',
         body,
       })

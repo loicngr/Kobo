@@ -710,6 +710,7 @@ import { useSettingsStore } from 'src/stores/settings'
 import { useWebSocketStore } from 'src/stores/websocket'
 import type { Workspace } from 'src/stores/workspace'
 import { useWorkspaceStore } from 'src/stores/workspace'
+import { apiFetchOk, apiFetchResponse, apiFetchResponseForStatus, apiResponseError } from 'src/utils/api'
 import { DEFAULT_TOAST_TIMEOUT_MS } from 'src/utils/notification-timeout'
 import type { ProjectColor } from 'src/utils/project-color'
 import { projectNameForPath } from 'src/utils/project-color'
@@ -1248,7 +1249,7 @@ function editDescription(ws: Workspace) {
 
 async function openInEditor(ws: Workspace) {
   try {
-    const res = await fetch(`/api/workspaces/${ws.id}/open-editor`, { method: 'POST' })
+    const res = await apiFetchResponseForStatus(`/api/workspaces/${ws.id}/open-editor`, { method: 'POST' })
     if (!res.ok) {
       const data = await res.json()
       console.error('[workspace-list] open-editor failed:', data.error)
@@ -1260,7 +1261,7 @@ async function openInEditor(ws: Workspace) {
 
 async function openInFileManager(ws: Workspace) {
   try {
-    const res = await fetch(`/api/workspaces/${ws.id}/open-file-manager`, { method: 'POST' })
+    const res = await apiFetchResponseForStatus(`/api/workspaces/${ws.id}/open-file-manager`, { method: 'POST' })
     if (!res.ok) {
       const data = await res.json().catch(() => ({}))
       $q.notify({
@@ -1301,7 +1302,7 @@ function runSetupScript(ws: Workspace) {
     dark: true,
   }).onOk(async () => {
     try {
-      await fetch(`/api/workspaces/${ws.id}/run-setup-script`, { method: 'POST' })
+      await apiFetchOk(`/api/workspaces/${ws.id}/run-setup-script`, { method: 'POST' })
     } catch (err) {
       console.error('[workspace-list] run-setup-script failed:', err)
     }

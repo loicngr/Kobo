@@ -280,7 +280,7 @@
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
 import { useWorkspaceStore } from 'src/stores/workspace'
-import { apiFetch } from 'src/utils/api'
+import { apiFetch, apiFetchOk, apiFetchResponse, apiResponseError } from 'src/utils/api'
 import { type CronUnit, cronDaysHasMonthBoundaryDrift, cronExpressionFromPicker } from 'src/utils/cron-expression'
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -366,8 +366,7 @@ function formatRelative(iso: string): string {
 
 async function cancelWakeup(): Promise<void> {
   try {
-    const res = await fetch(`/api/workspaces/${props.workspaceId}/pending-wakeup`, { method: 'DELETE' })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    await apiFetchOk(`/api/workspaces/${props.workspaceId}/pending-wakeup`, { method: 'DELETE' })
   } catch (err) {
     $q.notify({ type: 'negative', message: String(err), position: 'top', timeout: 4000 })
   }

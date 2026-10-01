@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ApiError, apiFetch } from 'src/utils/api'
+import { ApiError, apiFetch, apiFetchResponse, apiResponseError } from 'src/utils/api'
 import {
   customSoundApiUrl,
   isKnownSoundId,
@@ -24,8 +24,8 @@ function release(reference: string): void {
 async function preload(reference: string): Promise<void> {
   if (blobUrls.has(reference)) return
   try {
-    const response = await fetch(customSoundApiUrl(reference))
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    const response = await apiFetchResponse(customSoundApiUrl(reference))
+    if (!response.ok) throw await apiResponseError(response)
     const url = URL.createObjectURL(await response.blob())
     // The catalogue may have changed while the bytes were downloading: the
     // sound may have been deleted, or another preload may have won the race.
@@ -96,7 +96,7 @@ export const useCustomSoundsStore = defineStore('customSounds', {
       this.busy = true
       try {
         // No deadline: a 2 MiB upload over a slow LAN link must not be cut off.
-        const sound = await apiFetch<CustomSound>('/api/sounds', { method: 'POST', body, timeoutMs: 0 })
+        const sound = await apiFetch<CustomSound>('/api/sounds', { method: 'POST', body })
         this.apply([...this.sounds, sound])
         return sound
       } finally {

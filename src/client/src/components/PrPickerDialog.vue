@@ -92,6 +92,7 @@
 </template>
 
 <script setup lang="ts">
+import { apiFetchResponse } from 'src/utils/api'
 import { onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { PrCheckoutReport } from '../utils/pr-checkout-steps'
@@ -200,7 +201,7 @@ async function diagnoseOne(prNumber: number) {
   const controller = new AbortController()
   diagnoseControllers.set(prNumber, controller)
   try {
-    const res = await fetch('/api/pull-requests/diagnose', {
+    const res = await apiFetchResponse('/api/pull-requests/diagnose', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ projectPath: props.projectPath, prNumber }),
@@ -302,7 +303,7 @@ async function fetchPage(cursor: string | null) {
     })
     if (cursor) params.set('cursor', cursor)
 
-    const res = await fetch(`/api/pull-requests?${params.toString()}`, { signal: controller.signal })
+    const res = await apiFetchResponse(`/api/pull-requests?${params.toString()}`, { signal: controller.signal })
     const data = await res.json().catch(() => null)
     if (!res.ok) {
       throw new Error(data?.error ?? `HTTP ${res.status}`)

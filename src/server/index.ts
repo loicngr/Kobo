@@ -3,7 +3,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
-import WebSocket, { WebSocketServer } from 'ws'
+import type WebSocket from 'ws'
+import { WebSocketServer } from 'ws'
 import { closeDb, getDb } from './db/index.js'
 import { getPendingMigrations, runMigrations } from './db/migrations.js'
 import { hostCheckMiddleware } from './middleware/host-check-middleware.js'
@@ -74,14 +75,16 @@ import { startSearchIndex, stopSearchIndex } from './services/search-service.js'
 import { reconcileSessionHandoffs } from './services/session-handoff-service.js'
 import { getGlobalSettings, updateNetworkAccessSettings } from './services/settings-service.js'
 import { reloadDefaultTemplates } from './services/templates-service.js'
-import { createTerminal, destroyAllTerminals, getTerminal } from './services/terminal-service.js'
+import { destroyAllTerminals } from './services/terminal-service.js'
+import { handleTerminalConnection } from './services/terminal-websocket-service.js'
 import { startUpdateChecker, stopUpdateChecker } from './services/update-check-service.js'
 import { startUsagePoller, stopUsagePoller } from './services/usage/index.js'
 import * as wakeupService from './services/wakeup-service.js'
 import { handleConnection, setMessageHandler } from './services/websocket-service.js'
 import { deliverWorkspaceMessage } from './services/workspace-message-service.js'
 import { getWorkspace } from './services/workspace-service.js'
-import { pruneWsEvents, resolveRetentionConfig } from './services/ws-events-retention-service.js'
+import { resolveRetentionConfig } from './services/ws-events-retention-service.js'
+import { runWsEventsRetention, stopWsEventsRetention } from './services/ws-events-retention-worker-service.js'
 import {
   getChangelogPath,
   getClientSpaPath,
@@ -123,12 +126,12 @@ startSearchIndex()
 // conversation on the next upgrade, which is precisely why the UI shows a
 // count and asks first.
 // Best-effort — a failure must never block boot.
-function runRetentionPass(context: string): void {
+async function runRetentionPass(context: string): Promise<void> {
   try {
     const retentionConfig = resolveRetentionConfig(getGlobalSettings())
     if (retentionConfig.retentionDays <= 0) return
     const retentionStartedAt = Date.now()
-    const retention = pruneWsEvents(db, retentionConfig)
+    const retention = await runWsEventsRetention(retentionConfig)
     if (retention.deleted > 0 || retention.vacuumed) {
       console.log(
         `[kobo] Event retention ${context} (${retentionConfig.retentionDays} d, keeping ${retentionConfig.keepPerWorkspace}/workspace): ` +
@@ -143,13 +146,13 @@ function runRetentionPass(context: string): void {
   }
 }
 
-runRetentionPass('at boot')
+void runRetentionPass('at boot')
 
 // Kōbō is a daemon people leave running for weeks, and `emit` writes a row per
 // agent event. Running the pass only at boot meant a window the user enabled
 // was not applied again until the next restart.
 const RETENTION_INTERVAL_MS = 24 * 60 * 60 * 1000
-const retentionTimer = setInterval(() => runRetentionPass('daily'), RETENTION_INTERVAL_MS)
+const retentionTimer = setInterval(() => void runRetentionPass('daily'), RETENTION_INTERVAL_MS)
 retentionTimer.unref?.()
 
 // Check on boot and hourly so servers running longer than a day keep backing up.
@@ -338,94 +341,7 @@ wss.on('connection', (ws) => {
 
 // Wire terminal WebSocket connections
 terminalWss.on('connection', (ws: WebSocket, workspaceId: string) => {
-  let currentPty = getTerminal(workspaceId)
-  let dataDisposable: { dispose(): void } | null = null
-  let exitDisposable: { dispose(): void } | null = null
-
-  function attachListeners(ptyInstance: import('node-pty').IPty) {
-    // Dispose previous listeners to avoid stacking on reconnect
-    dataDisposable?.dispose()
-    exitDisposable?.dispose()
-
-    dataDisposable = ptyInstance.onData((output: string) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(Buffer.from(output), { binary: true })
-      }
-    })
-
-    exitDisposable = ptyInstance.onExit(({ exitCode }) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'exited', code: exitCode }))
-        ws.close()
-      }
-    })
-  }
-
-  ws.on('close', () => {
-    dataDisposable?.dispose()
-    exitDisposable?.dispose()
-    dataDisposable = null
-    exitDisposable = null
-  })
-
-  ws.on('error', (err) => {
-    console.error(`[terminal] WebSocket error for workspace ${workspaceId}:`, err)
-  })
-
-  ws.on('message', (data: WebSocket.RawData, isBinary: boolean) => {
-    if (isBinary) {
-      if (currentPty) {
-        currentPty.write(data.toString())
-      }
-      return
-    }
-
-    let msg: { type: string; cols?: number; rows?: number }
-    try {
-      msg = JSON.parse(data.toString())
-    } catch {
-      return // Invalid JSON — ignore
-    }
-
-    if (msg.type === 'create') {
-      if (!currentPty) {
-        const workspace = getWorkspace(workspaceId)
-        if (!workspace) {
-          ws.send(JSON.stringify({ type: 'error', message: 'Workspace not found' }))
-          return
-        }
-        if (workspace.archivedAt) {
-          ws.send(JSON.stringify({ type: 'error', message: 'Workspace is archived' }))
-          return
-        }
-        const cwd = workspace.worktreePath
-        try {
-          currentPty = createTerminal(workspaceId, cwd)
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err)
-          ws.send(JSON.stringify({ type: 'error', message }))
-          return
-        }
-      }
-
-      attachListeners(currentPty)
-      ws.send(JSON.stringify({ type: 'ready' }))
-      return
-    }
-
-    if (msg.type === 'resize' && msg.cols && msg.rows) {
-      if (currentPty) {
-        const cols = Math.max(1, Math.floor(msg.cols))
-        const rows = Math.max(1, Math.floor(msg.rows))
-        try {
-          currentPty.resize(cols, rows)
-        } catch (err) {
-          console.error(`[terminal] resize failed for workspace ${workspaceId}:`, err)
-        }
-      }
-      return
-    }
-  })
+  handleTerminalConnection(ws, workspaceId, () => isShuttingDown)
 })
 
 // Wire websocket-service message handler to the agent orchestrator
@@ -498,6 +414,10 @@ setMessageHandler(async (type, payload) => {
 
 // Handle WebSocket upgrade requests on /ws path
 server.on('upgrade', (request, socket, head) => {
+  if (isShuttingDown) {
+    socket.destroy()
+    return
+  }
   const { pathname } = new URL(request.url ?? '/', `http://localhost:${PORT}`)
 
   const wsGlobal = getGlobalSettings()
@@ -596,7 +516,7 @@ async function gracefulShutdown(signal: string, exitCode = 0): Promise<void> {
   for (const client of terminalWss.clients) client.close(1001, 'Server shutting down')
 
   try {
-    destroyAllTerminals()
+    await destroyAllTerminals()
     console.log('[kobo] Terminals killed')
   } catch {
     // Best-effort
@@ -648,8 +568,14 @@ async function gracefulShutdown(signal: string, exitCode = 0): Promise<void> {
     console.log('[kobo] HTTP and WebSocket servers closed')
   } finally {
     try {
-      await stopSearchIndex()
-      await dailyBackupScheduler.stop()
+      const stopped = await Promise.allSettled([
+        stopWsEventsRetention(),
+        stopSearchIndex(),
+        dailyBackupScheduler.stop(),
+      ])
+      for (const result of stopped) {
+        if (result.status === 'rejected') console.error('[kobo] Background service shutdown failed:', result.reason)
+      }
       closeDb()
       console.log('[kobo] Database closed')
     } catch {

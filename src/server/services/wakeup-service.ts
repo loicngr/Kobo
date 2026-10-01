@@ -81,33 +81,45 @@ export function schedule(
   prompt: string,
   reason: string | undefined,
   agentSessionId?: string,
-): void {
-  try {
-    const clampedSeconds = clamp(Math.floor(delaySeconds), MIN_DELAY_SECONDS, MAX_DELAY_SECONDS)
-    const effectivePrompt = prompt === AUTONOMOUS_LOOP_SENTINEL ? AUTONOMOUS_LOOP_FALLBACK_PROMPT : prompt
-    const targetAtIso = new Date(Date.now() + clampedSeconds * 1000).toISOString()
+): PendingWakeup {
+  const clampedSeconds = clamp(Math.floor(delaySeconds), MIN_DELAY_SECONDS, MAX_DELAY_SECONDS)
+  const effectivePrompt = prompt === AUTONOMOUS_LOOP_SENTINEL ? AUTONOMOUS_LOOP_FALLBACK_PROMPT : prompt
+  const targetAtIso = new Date(Date.now() + clampedSeconds * 1000).toISOString()
 
-    const existing = timers.get(workspaceId)
-    if (existing) clearTimeout(existing)
-
-    const db = getDb()
-    db.prepare(
+  // Commit before changing the live timer. A failed replacement must leave
+  // the original durable wakeup and its timer intact, and fail the MCP receipt.
+  const row = getDb()
+    .prepare(
       `INSERT OR REPLACE INTO pending_wakeups
-         (workspace_id, target_at, prompt, reason, created_at, agent_session_id)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-    ).run(workspaceId, targetAtIso, effectivePrompt, reason ?? null, new Date().toISOString(), agentSessionId ?? null)
-
-    timers.delete(workspaceId)
-    if (!suspended) {
-      const timeout = setTimeout(() => fire(workspaceId), clampedSeconds * 1000)
-      timeout.unref?.()
-      timers.set(workspaceId, timeout)
-    }
-
-    emitEphemeral(workspaceId, 'wakeup:scheduled', { targetAt: targetAtIso, reason })
-  } catch (err) {
-    console.error('[wakeup-service] schedule failed:', err)
+       (workspace_id, target_at, prompt, reason, created_at, agent_session_id)
+     VALUES (?, ?, ?, ?, ?, ?)
+     RETURNING target_at, reason`,
+    )
+    .get(
+      workspaceId,
+      targetAtIso,
+      effectivePrompt,
+      reason ?? null,
+      new Date().toISOString(),
+      agentSessionId ?? null,
+    ) as {
+    target_at: string
+    reason: string | null
   }
+  const pending: PendingWakeup = { targetAt: row.target_at, reason: row.reason ?? undefined }
+
+  const existing = timers.get(workspaceId)
+  if (existing) clearTimeout(existing)
+  timers.delete(workspaceId)
+  failedRetries.delete(workspaceId)
+  if (!suspended) {
+    const timeout = setTimeout(() => fire(workspaceId), clampedSeconds * 1000)
+    timeout.unref?.()
+    timers.set(workspaceId, timeout)
+  }
+
+  emitEphemeral(workspaceId, 'wakeup:scheduled', pending)
+  return pending
 }
 
 /** Move a source conversation's pending check only once its handoff succeeds. */

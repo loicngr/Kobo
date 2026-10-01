@@ -1,6 +1,7 @@
 import { useSettingsStore } from 'src/stores/settings'
 import type { useWebSocketStore } from 'src/stores/websocket'
 import type { useWorkspaceStore } from 'src/stores/workspace'
+import { apiFetchResponse } from 'src/utils/api'
 import { AUTO_LOOP_GROOMING_STEPS, AUTO_LOOP_HARD_RULES } from '../../../shared/auto-loop-prompts'
 import { getGroomingIntro } from '../../../shared/skill-suite-prompts'
 
@@ -70,7 +71,7 @@ export async function sendPrepAutoloop(
 ): Promise<void> {
   let prompt = buildPrepAutoloopPrompt()
   try {
-    const res = await fetch(`/api/workspaces/${workspaceId}/prep-autoloop-prompt`, { cache: 'no-store' })
+    const res = await apiFetchResponse(`/api/workspaces/${workspaceId}/prep-autoloop-prompt`, { cache: 'no-store' })
     if (res.ok) {
       const data = (await res.json()) as { prompt?: string }
       if (data.prompt) prompt = data.prompt

@@ -171,6 +171,7 @@
 </template>
 
 <script setup lang="ts">
+import { apiFetchResponse } from 'src/utils/api'
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
@@ -273,7 +274,7 @@ async function runDiagnose() {
   loading.value = true
   applyError.value = null
   try {
-    const res = await fetch('/api/pull-requests/diagnose', {
+    const res = await apiFetchResponse('/api/pull-requests/diagnose', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ projectPath: props.projectPath, prNumber: props.pr.number }),
@@ -422,7 +423,7 @@ async function apply() {
 
   applying.value = true
   try {
-    const res = await fetch('/api/pull-requests/resolve', {
+    const res = await apiFetchResponse('/api/pull-requests/resolve', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

@@ -1,5 +1,6 @@
 import { storeToRefs } from 'pinia'
 import { useUpdateStore } from 'src/stores/update'
+import { apiFetchResponse } from 'src/utils/api'
 import { compareVersions } from 'src/utils/compare-versions'
 import { ref } from 'vue'
 
@@ -23,7 +24,7 @@ export function useWhatsNew() {
 
   async function checkForUpdate(): Promise<void> {
     try {
-      const res = await fetch('/api/changelog')
+      const res = await apiFetchResponse('/api/changelog')
       if (!res.ok) return
       const body = (await res.json()) as {
         currentVersion?: string

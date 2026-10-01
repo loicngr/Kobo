@@ -126,6 +126,43 @@ describe('wakeup-service', () => {
     expect(second?.reason).toBe('r2')
   })
 
+  it('propagates failed persistence without emitting a successful scheduling receipt', async () => {
+    const { getDb } = await import('../server/db/index.js')
+    const service = await import('../server/services/wakeup-service.js')
+    const ws = await import('../server/services/websocket-service.js')
+    getDb().exec(`CREATE TRIGGER reject_wakeup BEFORE INSERT ON pending_wakeups
+      BEGIN SELECT RAISE(ABORT, 'wakeup write rejected'); END`)
+
+    expect(() => service.schedule(wsId, 60, 'resume', undefined)).toThrow('wakeup write rejected')
+    expect(service.getPending(wsId)).toBeNull()
+    expect(ws.emitEphemeral).not.toHaveBeenCalled()
+  })
+
+  it('preserves the old durable row and timer when replacing it fails', async () => {
+    const { getDb } = await import('../server/db/index.js')
+    const service = await import('../server/services/wakeup-service.js')
+    const orch = await import('../server/services/agent/orchestrator.js')
+    vi.mocked(orch.hasController).mockReturnValue(false)
+    service.schedule(wsId, 60, 'original prompt', 'original')
+    const original = service.getPending(wsId)
+    getDb().exec(`CREATE TRIGGER reject_wakeup BEFORE INSERT ON pending_wakeups
+      BEGIN SELECT RAISE(ABORT, 'wakeup write rejected'); END`)
+
+    expect(() => service.schedule(wsId, 120, 'replacement', 'new')).toThrow('wakeup write rejected')
+    expect(service.getPending(wsId)).toEqual(original)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(orch.startAgent).toHaveBeenCalled()
+    expect(vi.mocked(orch.startAgent).mock.calls[0]?.[2]).toBe('original prompt')
+  })
+
+  it('returns the committed wakeup deadline', async () => {
+    const service = await import('../server/services/wakeup-service.js')
+    expect(service.schedule(wsId, 60, 'resume', 'CI')).toEqual({
+      targetAt: new Date(Date.now() + 60_000).toISOString(),
+      reason: 'CI',
+    })
+  })
+
   it('schedule clamps delaySeconds below 60 to 60', async () => {
     const wakeupService = await import('../server/services/wakeup-service.js')
 

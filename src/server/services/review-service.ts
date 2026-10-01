@@ -117,7 +117,7 @@ export async function startWorkspaceReview(id: string, input: unknown) {
 
     const worktreePath = workspace.worktreePath
     try {
-      await execFileAsync('git', ['fetch', 'origin', workspace.sourceBranch], { cwd: worktreePath })
+      await gitOps.fetchSourceBranchOrThrowAsync(worktreePath, workspace.sourceBranch)
     } catch (err) {
       console.warn(`[start-review] git fetch failed: ${err instanceof Error ? err.message : String(err)}`)
     }
@@ -125,6 +125,8 @@ export async function startWorkspaceReview(id: string, input: unknown) {
     try {
       const { stdout } = await execFileAsync('git', ['rev-parse', `origin/${workspace.sourceBranch}`], {
         cwd: worktreePath,
+        timeout: 15_000,
+        env: gitOps.buildNonInteractiveGitEnv(),
       })
       baseCommit = stdout.trim()
     } catch (err) {
@@ -132,9 +134,11 @@ export async function startWorkspaceReview(id: string, input: unknown) {
         `Cannot resolve base commit for branch ${workspace.sourceBranch}: ${err instanceof Error ? err.message : String(err)}`,
       )
     }
-    const commits = gitOps.getCommitsBetween(worktreePath, workspace.sourceBranch, workspace.workingBranch)
-    const committedStats = gitOps.getDiffStatsBetween(worktreePath, workspace.sourceBranch, workspace.workingBranch)
-    const workingTreeStats = gitOps.getWorkingTreeDiffStats(worktreePath)
+    const [commits, committedStats, workingTreeStats] = await Promise.all([
+      gitOps.getCommitsBetweenAsync(worktreePath, workspace.sourceBranch, workspace.workingBranch),
+      gitOps.getDiffStatsBetweenAsync(worktreePath, workspace.sourceBranch, workspace.workingBranch),
+      gitOps.getWorkingTreeDiffStatsAsync(worktreePath),
+    ])
     const diffStats = workingTreeStats.trim()
       ? `${committedStats}\n\n— Working tree (uncommitted) —\n${workingTreeStats}`
       : committedStats

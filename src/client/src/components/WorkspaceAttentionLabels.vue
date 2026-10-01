@@ -72,6 +72,7 @@
 import { useQuasar } from 'quasar'
 import type { Workspace } from 'src/stores/workspace'
 import { useWorkspaceStore } from 'src/stores/workspace'
+import { apiFetchResponse } from 'src/utils/api'
 import { summarizeCiChecks } from 'src/utils/ci-summary'
 import { useTimeAgo } from 'src/utils/formatters'
 import type { AttentionKind } from 'src/utils/workspace-attention'
@@ -110,7 +111,7 @@ async function onFixCi() {
   if (fixingCi.value) return
   fixingCi.value = true
   try {
-    const res = await fetch(`/api/workspaces/${props.workspace.id}/start-ci-fix`, { method: 'POST' })
+    const res = await apiFetchResponse(`/api/workspaces/${props.workspace.id}/start-ci-fix`, { method: 'POST' })
     const data = await res.json().catch(() => ({}))
     if (!res.ok) {
       $q.notify({

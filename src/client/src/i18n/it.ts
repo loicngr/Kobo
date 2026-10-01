@@ -206,6 +206,16 @@ export default {
 
   // Models
   'model.auto': 'Auto',
+  'model.opus55': 'Opus 5.5',
+  'model.opus55Description': 'Per attività complesse e quotidiane, contesto 1M',
+  'model.sonnet55': 'Sonnet 5.5',
+  'model.sonnet55Description': 'Efficiente per le attività di routine, contesto 1M',
+  'model.gpt61sol': 'GPT-6.1 Sol',
+  'model.gpt61solDescription': 'Ultimo modello versatile per il coding e il lavoro quotidiano',
+  'model.gpt6sol': 'GPT-6 Sol',
+  'model.gpt6solDescription': 'Modello versatile della generazione precedente',
+  'model.gpt6luna': 'GPT-6 Luna',
+  'model.gpt6lunaDescription': 'Modello rapido per attività semplici',
   'model.fable51': 'Fable 5.1',
   'model.mythos5': 'Mythos 5 (Glasswing)',
   'model.fable51Description': 'Modello più capace - sostituisce Fable 5, contesto 1M, adaptive thinking',
@@ -448,6 +458,7 @@ export default {
   'terminal.error': 'Errore del terminale',
   'terminal.exited': 'Terminale chiuso',
   'terminal.disconnected': 'Connessione persa',
+  'terminal.outputMayBeMissing': '[Connessione interrotta. Parte dell’output del terminale potrebbe mancare.]',
   'terminal.reconnecting': 'Riconnessione… (tentativo {attempt} di {max})',
   'terminal.reconnect': 'Riconnetti',
 
@@ -1943,6 +1954,11 @@ export default {
   'session.endedWatchdog': 'Sessione chiusa forzatamente dopo un periodo di inattività',
   'tool.running': 'In corso...',
   'activity.raw_lines': 'Righe di output grezze ({n})',
+  'api.timeout': 'La richiesta ha superato il limite di {seconds} secondi.',
+  'api.mutationTimeout':
+    'La richiesta ha superato il limite di {seconds} secondi. L’operazione potrebbe essere ancora in corso. Aggiorna il suo stato prima di riprovare.',
+  'activity.sessionsError': 'Impossibile caricare le sessioni: {message}',
+  'activity.historyError': 'Impossibile caricare la cronologia: {message}',
   'activity.loading_older': 'Caricamento messaggi precedenti…',
   'activity.compacting': 'Compattazione del contesto…',
   'activity.prev_user_message': 'Messaggio utente precedente',

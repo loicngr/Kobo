@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { apiFetchResponse } from 'src/utils/api'
 import { ref } from 'vue'
 
 // Mirror of the backend `ContentMigrationStatus` discriminated union
@@ -31,7 +32,7 @@ export const useMigrationStore = defineStore('migration', () => {
 
   async function fetchInitial(): Promise<void> {
     try {
-      const res = await fetch('/api/migration/status')
+      const res = await apiFetchResponse('/api/migration/status')
       if (!res.ok) return
       status.value = (await res.json()) as MigrationStatus
     } catch {

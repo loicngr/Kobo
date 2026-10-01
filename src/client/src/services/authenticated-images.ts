@@ -1,3 +1,4 @@
+import { apiFetchResponse, apiResponseError } from 'src/utils/api'
 /** Active previews and lightboxes share a fetch and retain the Blob until the last release. */
 export interface ImageLease {
   ready: Promise<string>
@@ -32,17 +33,14 @@ export function acquireAuthenticatedImage(path: string): ImageLease {
   if (!entry) {
     const controller = new AbortController()
     const current: Entry = { references: 0, controller, ready: Promise.resolve('') }
-    const timeout = setTimeout(() => controller.abort(), 30_000)
     // window.fetch is wrapped by network-auth: no token in the image URL.
-    current.ready = fetch(path, { signal: controller.signal })
-      .then(async (response) => {
-        if (!response.ok) throw new Error(`HTTP ${response.status}`)
-        const blob = await response.blob()
-        if (controller.signal.aborted) throw new DOMException('Aborted', 'AbortError')
-        current.blobUrl = URL.createObjectURL(blob)
-        return current.blobUrl
-      })
-      .finally(() => clearTimeout(timeout))
+    current.ready = apiFetchResponse(path, { signal: controller.signal }).then(async (response) => {
+      if (!response.ok) throw await apiResponseError(response)
+      const blob = await response.blob()
+      if (controller.signal.aborted) throw new DOMException('Aborted', 'AbortError')
+      current.blobUrl = URL.createObjectURL(blob)
+      return current.blobUrl
+    })
     entry = current
     entries.set(path, entry)
   }

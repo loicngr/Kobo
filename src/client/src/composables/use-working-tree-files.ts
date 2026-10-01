@@ -1,3 +1,4 @@
+import { apiFetchResponse, apiResponseError } from 'src/utils/api'
 import { onScopeDispose, ref, watch } from 'vue'
 
 interface WorkingTreeFile {
@@ -37,11 +38,11 @@ export function useWorkingTreeFiles(
     request = controller
     loadingWorkingTreeFiles.value = true
     try {
-      const response = await fetch(`/api/workspaces/${id}/working-tree-files`, {
+      const response = await apiFetchResponse(`/api/workspaces/${id}/working-tree-files`, {
         cache: 'no-store',
         signal: controller.signal,
       })
-      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      if (!response.ok) throw await apiResponseError(response)
       const body = (await response.json()) as { files: WorkingTreeFile[] }
       if (request !== controller || controller.signal.aborted || workspaceId() !== id) return
       workingTreeFiles.value = body.files

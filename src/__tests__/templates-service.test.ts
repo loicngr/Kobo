@@ -69,14 +69,11 @@ describe('templates-service', () => {
       expect(afterRead.templates).toEqual([])
     })
 
-    it('returns empty array on corrupted JSON', async () => {
+    it('refuses corrupted JSON and preserves it for recovery', async () => {
       fs.writeFileSync(tmpFile, 'not json at all', 'utf-8')
-      const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
       const { listTemplates } = await import('../server/services/templates-service.js')
-      const templates = listTemplates()
-      expect(templates).toEqual([])
-      expect(spy).toHaveBeenCalled()
-      spy.mockRestore()
+      expect(listTemplates).toThrow(/Failed to read templates.json/)
+      expect(fs.readFileSync(tmpFile, 'utf8')).toBe('not json at all')
     })
 
     it('warns on version mismatch but continues best-effort', async () => {

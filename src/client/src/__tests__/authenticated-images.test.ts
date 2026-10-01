@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { flushPromises } from '@vue/test-utils'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { effectScope, nextTick, ref } from 'vue'
 import { useAuthenticatedImages } from '../composables/use-authenticated-images'
@@ -51,7 +52,7 @@ describe('authenticated workspace images', () => {
     const source = ref(`<img src="${path}">`)
     const html = scope.run(() => useAuthenticatedImages(source, () => 'failed'))!
     expect(html.value).not.toContain('src=')
-    await Promise.resolve()
+    await flushPromises()
     source.value = '<p>Workspace B</p>'
     await nextTick()
     resolveBlob(new Blob(['old']))

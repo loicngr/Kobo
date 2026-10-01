@@ -341,17 +341,29 @@
 
           <div v-if="gitStats?.unpushedCount !== 0" class="col">
             <ActionAvailability :reason="pushBlocker">
-            <q-btn
-              dense no-caps size="sm" outline color="orange-5"
-              icon="upload"
-              :label="$t('git.push')"
-              class="full-width git-btn"
-              :loading="pushing"
-              :disable="!!pushBlocker"
-              @click="handlePush"
-            >
-              <q-tooltip anchor="bottom middle" self="top middle" :delay="400">{{ pushBlockedTooltip ?? $t('git.push') }}</q-tooltip>
-            </q-btn>
+              <div class="row no-wrap items-stretch">
+                <q-btn
+                  dense no-caps size="sm" outline color="orange-5"
+                  icon="upload"
+                  :label="$t('git.push')"
+                  class="col git-btn"
+                  :loading="pushing"
+                  :disable="!!pushBlocker"
+                  @click="handlePush"
+                >
+                  <q-tooltip anchor="bottom middle" self="top middle" :delay="400">{{ pushBlockedTooltip ?? $t('git.push') }}</q-tooltip>
+                </q-btn>
+                <q-btn
+                  dense size="sm" outline color="orange-6"
+                  icon="keyboard_double_arrow_up"
+                  class="col-auto git-btn q-ml-xs"
+                  :aria-label="$t('git.forcePush')"
+                  :disable="!!pushBlocker"
+                  @click="handleForcePush"
+                >
+                  <q-tooltip anchor="bottom middle" self="top middle" :delay="400">{{ pushBlockedTooltip ?? $t('git.forcePush') }}</q-tooltip>
+                </q-btn>
+              </div>
             </ActionAvailability>
           </div>
 
@@ -412,9 +424,10 @@
                     <q-item-section>{{ $t('git.changeSourceBranch') }}</q-item-section>
                   </q-item>
                   <q-item
+                    v-if="gitStats?.unpushedCount === 0"
                     clickable
                     v-close-popup
-                    :disable="!workspace || pushing || isArchived || operationInProgress"
+                    :disable="!!pushBlocker"
                     @click="handleForcePush"
                   >
                     <q-tooltip v-if="pushBlockedTooltip">{{ pushBlockedTooltip }}</q-tooltip>
@@ -755,6 +768,7 @@
 import { useQuasar } from 'quasar'
 import ActionAvailability from 'src/components/ActionAvailability.vue'
 import { getActionBlocker } from 'src/utils/action-blocker'
+import { apiFetchResponse, apiFetchResponseForStatus, apiResponseError } from 'src/utils/api'
 import { defineAsyncComponent } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useWorkingTreeFiles } from '../composables/use-working-tree-files'
@@ -865,10 +879,10 @@ async function fetchCommits() {
   if (!props.workspace) return
   loadingCommits.value = true
   try {
-    const res = await fetch(`/api/workspaces/${props.workspace.id}/commits?limit=50`, {
+    const res = await apiFetchResponse(`/api/workspaces/${props.workspace.id}/commits?limit=50`, {
       cache: 'no-store',
     })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    if (!res.ok) throw await apiResponseError(res)
     const body = (await res.json()) as { commits: BranchCommit[] }
     commits.value = body.commits
   } catch (err) {
@@ -919,7 +933,6 @@ const ongoingOperation = computed(() =>
     ? conflictOperation.value
     : (gitStats.value?.ongoingOperation ?? null),
 )
-const operationInProgress = computed(() => ongoingOperation.value !== null)
 const pushBlockedTooltip = computed(() =>
   ongoingOperation.value ? t('git.pushBlockedByOperation', { operation: ongoingOperation.value }) : null,
 )
@@ -956,7 +969,7 @@ async function abortSourceChange() {
   if (!props.workspace) return
   sourceChangeAborting.value = true
   try {
-    const res = await fetch(`/api/workspaces/${props.workspace.id}/git/abort`, { method: 'POST' })
+    const res = await apiFetchResponseForStatus(`/api/workspaces/${props.workspace.id}/git/abort`, { method: 'POST' })
     if (!res.ok) {
       const data = await res.json().catch(() => ({}))
       throw new Error(data.error ?? 'Abort failed')
@@ -1165,15 +1178,16 @@ const pushBlocker = computed(
     (openingPr.value || pulling.value || rebasing.value || pushing.value ? t('blockers.operation') : null),
 )
 
-// Overflow `⋯` surfaces rename + change-PR-base + change-source-branch;
-// Push is a first-class secondary button.
+// Keep force push in overflow when the Push row is hidden (already up to date).
 const canRenameBranch = computed<boolean>(() => props.workspace?.worktreeOwned !== false)
-const hasOverflowActions = computed(() => {
+const hasOverflowActions = computed<boolean>(() => {
   if (!props.workspace) return false
-  // Force push always has an entry here now (moved out of the old push
-  // dialog), so the overflow menu itself is never empty once a workspace is
-  // selected.
-  return true
+  return (
+    canRenameBranch.value ||
+    !!(gitStats.value?.prUrl && gitStats.value.prState === 'OPEN') ||
+    changeSourceBranchEnabled.value ||
+    gitStats.value?.unpushedCount === 0
+  )
 })
 
 // Branch divergence dialog state
@@ -1340,7 +1354,7 @@ async function runRebase(opts?: { autostash?: boolean }) {
   rebasing.value = true
   try {
     const qs = opts?.autostash ? '?autostash=1' : ''
-    const res = await fetch(`/api/workspaces/${props.workspace.id}/rebase${qs}`, { method: 'POST' })
+    const res = await apiFetchResponse(`/api/workspaces/${props.workspace.id}/rebase${qs}`, { method: 'POST' })
     if (res.status === 409) {
       const data = await res.json()
       if (data.code === 'dirty_worktree') {
@@ -1385,7 +1399,7 @@ async function runMerge(opts?: { autostash?: boolean }) {
   merging.value = true
   try {
     const qs = opts?.autostash ? '?autostash=1' : ''
-    const res = await fetch(`/api/workspaces/${props.workspace.id}/merge${qs}`, { method: 'POST' })
+    const res = await apiFetchResponse(`/api/workspaces/${props.workspace.id}/merge${qs}`, { method: 'POST' })
     if (res.status === 409) {
       const data = await res.json()
       if (data.code === 'dirty_worktree') {
@@ -1449,7 +1463,7 @@ async function commitChangesDirectly() {
   if (!props.workspace || !commitMessage.value.trim()) return
   committingDirect.value = true
   try {
-    const res = await fetch(`/api/workspaces/${props.workspace.id}/git/commit-all`, {
+    const res = await apiFetchResponseForStatus(`/api/workspaces/${props.workspace.id}/git/commit-all`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ message: commitMessage.value.trim() }),
@@ -1477,7 +1491,9 @@ async function commitWithAgent() {
   if (!props.workspace) return
   committingWithAgent.value = true
   try {
-    const res = await fetch(`/api/workspaces/${props.workspace.id}/git/commit-with-agent`, { method: 'POST' })
+    const res = await apiFetchResponseForStatus(`/api/workspaces/${props.workspace.id}/git/commit-with-agent`, {
+      method: 'POST',
+    })
     if (!res.ok) {
       const data = await res.json().catch(() => ({}))
       throw new Error(data.error ?? t('git.commitFailed'))
@@ -1513,7 +1529,7 @@ async function dirtyCommit() {
   if (!props.workspace || !dirtyCommitMessage.value.trim()) return
   dirtyBusy.value = true
   try {
-    const res = await fetch(`/api/workspaces/${props.workspace.id}/git/commit-all`, {
+    const res = await apiFetchResponseForStatus(`/api/workspaces/${props.workspace.id}/git/commit-all`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ message: dirtyCommitMessage.value.trim() }),
@@ -1542,7 +1558,9 @@ function dirtyDiscard() {
   }).onOk(async () => {
     dirtyBusy.value = true
     try {
-      const res = await fetch(`/api/workspaces/${props.workspace!.id}/git/discard`, { method: 'POST' })
+      const res = await apiFetchResponseForStatus(`/api/workspaces/${props.workspace!.id}/git/discard`, {
+        method: 'POST',
+      })
       if (!res.ok) {
         const data = await res.json()
         throw new Error(data.error ?? t('git.discardFailed'))
@@ -1586,10 +1604,11 @@ async function runAbortGitOperation() {
   if (!props.workspace) return
   conflictAborting.value = true
   try {
-    const res = await fetch(`/api/workspaces/${props.workspace.id}/git/abort`, { method: 'POST' })
+    const res = await apiFetchResponseForStatus(`/api/workspaces/${props.workspace.id}/git/abort`, { method: 'POST' })
     if (res.status === 409) {
       // The operation is already over (the agent finished it meanwhile):
       // nothing to abort, so drop the stale dialogue instead of blocking.
+      await res.text()
       settleFinishedOperation()
       return
     }
@@ -1613,8 +1632,11 @@ async function continueGitOperation() {
   if (!props.workspace) return
   conflictContinuing.value = true
   try {
-    const res = await fetch(`/api/workspaces/${props.workspace.id}/git/continue`, { method: 'POST' })
+    const res = await apiFetchResponseForStatus(`/api/workspaces/${props.workspace.id}/git/continue`, {
+      method: 'POST',
+    })
     if (res.status === 409) {
+      await res.text()
       settleFinishedOperation()
       return
     }
@@ -1638,7 +1660,7 @@ async function resolveWithAgent() {
   if (!props.workspace || !conflictOperation.value) return
   conflictResolving.value = true
   try {
-    const res = await fetch(`/api/workspaces/${props.workspace.id}/git/resolve-with-agent`, {
+    const res = await apiFetchResponseForStatus(`/api/workspaces/${props.workspace.id}/git/resolve-with-agent`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ operation: conflictOperation.value, files: conflictFiles.value }),
@@ -1733,7 +1755,7 @@ async function runPull(opts?: { autostash?: boolean }) {
   pulling.value = true
   try {
     const qs = opts?.autostash ? '?autostash=1' : ''
-    const res = await fetch(`/api/workspaces/${props.workspace.id}/pull${qs}`, { method: 'POST' })
+    const res = await apiFetchResponse(`/api/workspaces/${props.workspace.id}/pull${qs}`, { method: 'POST' })
     if (res.status === 409) {
       const data = await res.json()
       if (data.code === 'dirty_worktree') {
@@ -1778,7 +1800,7 @@ async function handleFetchAll() {
   if (!props.workspace) return
   fetching.value = true
   try {
-    const res = await fetch(`/api/workspaces/${props.workspace.id}/fetch`, { method: 'POST' })
+    const res = await apiFetchResponseForStatus(`/api/workspaces/${props.workspace.id}/fetch`, { method: 'POST' })
     if (!res.ok) {
       const data = await res.json()
       throw new Error(data.error ?? 'Failed')
@@ -1815,7 +1837,7 @@ function handleChangePrBase() {
     if (!newBase.trim() || !props.workspace) return
     changingBase.value = true
     try {
-      const res = await fetch(`/api/workspaces/${props.workspace.id}/change-pr-base`, {
+      const res = await apiFetchResponseForStatus(`/api/workspaces/${props.workspace.id}/change-pr-base`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ base: newBase.trim() }),
@@ -1855,7 +1877,7 @@ function handleMergeRequest() {
     if (!props.workspace) return
     mergingRequest.value = true
     try {
-      const res = await fetch(`/api/workspaces/${props.workspace.id}/merge-pr`, { method: 'POST' })
+      const res = await apiFetchResponse(`/api/workspaces/${props.workspace.id}/merge-pr`, { method: 'POST' })
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
         throw new Error(data.error ?? 'Failed')
@@ -1888,7 +1910,9 @@ async function deleteRemoteBranch(branch: string) {
   // son clic était parti.
   deletingRemoteBranch.value = true
   try {
-    const res = await fetch(`/api/workspaces/${props.workspace.id}/delete-remote-branch`, { method: 'POST' })
+    const res = await apiFetchResponseForStatus(`/api/workspaces/${props.workspace.id}/delete-remote-branch`, {
+      method: 'POST',
+    })
     if (!res.ok) {
       const data = await res.json().catch(() => ({}))
       throw new Error(data.error ?? 'Failed')
@@ -1951,7 +1975,7 @@ async function handleChangeSourceBranch() {
       timeout: DEFAULT_TOAST_TIMEOUT_MS,
     })
     try {
-      const res = await fetch(`/api/workspaces/${props.workspace.id}/change-source-branch`, {
+      const res = await apiFetchResponse(`/api/workspaces/${props.workspace.id}/change-source-branch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ newBase: newBase.trim() }),

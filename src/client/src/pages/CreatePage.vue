@@ -1001,7 +1001,7 @@ import { useTemplatesStore } from 'src/stores/templates'
 import { useWebSocketStore } from 'src/stores/websocket'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { useWorkspaceTemplatesStore } from 'src/stores/workspace-templates'
-import { ApiError } from 'src/utils/api'
+import { ApiError, apiFetchResponse, apiFetchStatus, apiResponseError } from 'src/utils/api'
 import { resolveCreateOverrides } from 'src/utils/create-overrides'
 import { loadCreatePagePrefs, saveCreatePagePrefs } from 'src/utils/create-page-prefs'
 import { buildTemplateVars, expandTemplate } from 'src/utils/expand-template'
@@ -1065,12 +1065,12 @@ const createVoiceTimeoutRef = ref<ReturnType<typeof setTimeout> | null>(null)
 const CREATE_VOICE_MAX_MS = 60_000
 const notionUrl = ref('')
 const useNotion = ref(false)
-const model = ref('claude-opus-4-8')
+const model = ref('auto')
 // Model used only for the initial brainstorming session when auto-loop is
 // on. Mirrors `model` at the moment auto-loop is switched on (see
 // toggleAutoLoop below); untouched afterwards unless the user picks a
 // different value in its own select.
-const brainstormModel = ref('claude-opus-4-8')
+const brainstormModel = ref('auto')
 const brainstormReasoningEffort = ref('auto')
 const reasoningEffort = ref('auto')
 const reasoningEffortByModel = ref<Record<string, string>>({})
@@ -1311,7 +1311,7 @@ async function stopCreateVoiceCapture() {
     const fd = new FormData()
     fd.append('audio', blob, 'voice.webm')
     fd.append('language', settingsStore.global.voiceLanguage || 'auto')
-    const res = await fetch('/api/voice/transcribe', { method: 'POST', body: fd })
+    const res = await apiFetchResponse('/api/voice/transcribe', { method: 'POST', body: fd })
     if (!res.ok) {
       const body = await res.json().catch(() => ({}))
       throw new Error(String(body.code ?? body.error ?? `HTTP_${res.status}`))
@@ -1789,8 +1789,8 @@ async function applyDuplicateFromQuery(): Promise<void> {
 
 async function loadDuplicateSource(workspaceId: string): Promise<void> {
   try {
-    const res = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/preset`)
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const res = await apiFetchResponse(`/api/workspaces/${encodeURIComponent(workspaceId)}/preset`)
+    if (!res.ok) throw await apiResponseError(res)
     const { preset } = (await res.json()) as { preset: WorkspacePreset }
     await applyPresetToForm(preset)
     const source =
@@ -1860,7 +1860,7 @@ async function checkPrImportCapability(path: string) {
     return
   }
   try {
-    const res = await fetch(`/api/pull-requests?projectPath=${encodeURIComponent(path.trim())}&perPage=1`)
+    const res = await apiFetchStatus(`/api/pull-requests?projectPath=${encodeURIComponent(path.trim())}&perPage=1`)
     // A 403 means the forge can't list PRs (or none is configured); any other
     // non-ok status or network failure also means "can't" — fail closed
     // rather than showing a button that will error when clicked.
@@ -2021,8 +2021,8 @@ async function fetchBranches(path: string) {
   }
   loadingBranches.value = true
   try {
-    const res = await fetch(`/api/git/branches?path=${encodeURIComponent(path.trim())}`)
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const res = await apiFetchResponse(`/api/git/branches?path=${encodeURIComponent(path.trim())}`)
+    if (!res.ok) throw await apiResponseError(res)
     const data = await res.json()
     branches.value = data.local ?? data.branches ?? []
     if (branches.value.length > 0 && !branch.value) {
@@ -2171,7 +2171,7 @@ onMounted(async () => {
 
   agentPermissionMode.value = deriveDefaultAgentPermissionMode(projectPath.value, selectedEngineId.value)
   try {
-    const res = await fetch('/api/engines')
+    const res = await apiFetchResponse('/api/engines')
     if (res.ok) {
       engines.value = (await res.json()) as EngineDto[]
     }

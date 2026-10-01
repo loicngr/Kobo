@@ -1,3 +1,4 @@
+import { apiFetchResponse } from 'src/utils/api'
 import { fuzzyRankTop } from 'src/utils/fuzzy-match'
 import { computed, type Ref, ref, watch } from 'vue'
 
@@ -35,7 +36,7 @@ export function useFileMention(
     lastFetchPath = wt
     lastFetch = now
     try {
-      const res = await fetch(`/api/git/files?path=${encodeURIComponent(wt)}`)
+      const res = await apiFetchResponse(`/api/git/files?path=${encodeURIComponent(wt)}`)
       if (res.ok) {
         const body = (await res.json()) as { files?: string[] }
         files.value = Array.isArray(body.files) ? body.files : []

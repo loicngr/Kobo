@@ -751,9 +751,17 @@ both global (the database is single):
 | Events always kept per workspace | `0` | The most recent events of each workspace survive whatever their age. Set it (5000 is a good starting point) at the same time you enable retention, so an old but still-open workspace keeps a readable history. |
 
 The prune runs **at server startup and every 24 hours** while the backend stays
-running. Each pass reads the current settings and deletes in batches of 5,000
-rows. When enough pages have been freed, a `VACUUM` returns the space to the
-filesystem.
+running. Each pass reads the current settings, calculates the protected workspace
+tails once, and deletes in batches of 500 rows on a dedicated worker. Preview
+counts also run on that worker, so maintenance does not block HTTP or agent
+event handling. Shutdown waits for the worker to finish its current batch and
+reconcile affected metrics before closing the database.
+
+Freed database pages are reused for new events. Live maintenance performs a
+non-blocking WAL checkpoint and deliberately does not run a full `VACUUM`, which
+would hold SQLite's writer lock and interrupt live agents. To return database
+file space to the filesystem immediately, stop Kōbō and perform an explicit
+offline SQLite `VACUUM` after making a backup.
 
 **What it deletes:** eligible rows of `ws_events` — the recorded agent output.
 Affected session metrics and the derived search index are reconciled with the

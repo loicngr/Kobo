@@ -90,6 +90,7 @@
 
 <script setup lang="ts">
 import { useWorkspaceStore, type Workspace } from 'src/stores/workspace'
+import { apiFetchResponse } from 'src/utils/api'
 import { buildComparisonCsv } from 'src/utils/comparison-csv'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -172,7 +173,7 @@ function engineLabel(id: string): string {
 
 async function loadEngineNames(): Promise<void> {
   try {
-    const res = await fetch('/api/engines')
+    const res = await apiFetchResponse('/api/engines')
     if (!res.ok) return
     const engines = (await res.json()) as Array<{ id: string; displayName: string }>
     engineNames.value = Object.fromEntries(engines.map((e) => [e.id, e.displayName]))
@@ -212,7 +213,7 @@ function exportCsv(): void {
 async function load(): Promise<void> {
   loading.value = true
   try {
-    const res = await fetch(`/api/workspaces/${props.workspaceId}/comparison`)
+    const res = await apiFetchResponse(`/api/workspaces/${props.workspaceId}/comparison`)
     if (!res.ok) {
       members.value = []
       return

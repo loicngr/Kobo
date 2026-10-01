@@ -204,6 +204,16 @@ export default {
 
   // Models
   'model.auto': 'Auto',
+  'model.opus55': 'Opus 5.5',
+  'model.opus55Description': 'For complex work and everyday tasks, 1M context',
+  'model.sonnet55': 'Sonnet 5.5',
+  'model.sonnet55Description': 'Efficient for routine tasks, 1M context',
+  'model.gpt61sol': 'GPT-6.1 Sol',
+  'model.gpt61solDescription': 'Latest workhorse model for coding and everyday work',
+  'model.gpt6sol': 'GPT-6 Sol',
+  'model.gpt6solDescription': 'Previous-generation workhorse model',
+  'model.gpt6luna': 'GPT-6 Luna',
+  'model.gpt6lunaDescription': 'Fast model for easier tasks',
   'model.fable51': 'Fable 5.1',
   'model.mythos5': 'Mythos 5 (Glasswing)',
   'model.fable51Description': 'Most capable model - replaces Fable 5, 1M context, adaptive thinking',
@@ -442,6 +452,7 @@ export default {
   'terminal.error': 'Terminal error',
   'terminal.exited': 'Terminal exited',
   'terminal.disconnected': 'Connection lost',
+  'terminal.outputMayBeMissing': '[Connection interrupted. Some terminal output may be missing.]',
   'terminal.reconnecting': 'Reconnecting… (attempt {attempt} of {max})',
   'terminal.reconnect': 'Reconnect',
 
@@ -1921,6 +1932,11 @@ export default {
   'session.endedWatchdog': 'Session force-closed after a period of inactivity',
   'tool.running': 'Running...',
   'activity.raw_lines': 'Raw output lines ({n})',
+  'api.timeout': 'The request timed out after {seconds} seconds.',
+  'api.mutationTimeout':
+    'The request timed out after {seconds} seconds. The operation may still be running. Refresh its status before trying again.',
+  'activity.sessionsError': 'Could not load sessions: {message}',
+  'activity.historyError': 'Could not load conversation history: {message}',
   'activity.loading_older': 'Loading older messages…',
   'activity.compacting': 'Compacting context…',
   'activity.prev_user_message': 'Previous user message',

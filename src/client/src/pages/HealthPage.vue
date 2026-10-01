@@ -351,6 +351,7 @@ import { useQuasar } from 'quasar'
 import DrawerToggleButton from 'src/components/DrawerToggleButton.vue'
 import TourReplayButton from 'src/components/TourReplayButton.vue'
 import { useTours } from 'src/composables/use-tours'
+import { apiFetchResponse, apiResponseError } from 'src/utils/api'
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
@@ -432,8 +433,8 @@ const loading = ref(false)
 async function refresh() {
   loading.value = true
   try {
-    const res = await fetch('/api/health/report')
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const res = await apiFetchResponse('/api/health/report')
+    if (!res.ok) throw await apiResponseError(res)
     report.value = (await res.json()) as HealthReport
   } catch (err) {
     $q.notify({ type: 'negative', message: String(err), position: 'top', timeout: 4000 })

@@ -4,6 +4,14 @@
     <q-spinner-dots size="40px" color="primary" />
   </div>
   <div v-else class="activity-feed-wrap" data-tour="ws-chat">
+    <div v-if="workspaceStore.sessionsErrors[props.workspaceId]" role="alert" class="q-pa-sm text-negative">
+      {{ $t('activity.sessionsError', { message: workspaceStore.sessionsErrors[props.workspaceId] }) }}
+      <q-btn flat dense :label="$t('common.retry')" @click="workspaceStore.fetchSessions(props.workspaceId)" />
+    </div>
+    <div v-if="historyError" data-testid="history-load-error" role="alert" class="q-pa-sm text-negative">
+      {{ $t('activity.historyError', { message: historyError }) }}
+      <q-btn flat dense :label="$t('common.retry')" @click="retryHistory" />
+    </div>
     <!-- Off-screen live region. Deliberately NOT wrapped around the feed:
          announcing the container would read out every streaming fragment. -->
     <div
@@ -120,6 +128,8 @@ import { useSettingsStore } from 'src/stores/settings'
 import { useWebSocketStore } from 'src/stores/websocket'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import type { AgentEvent } from 'src/types/agent-event'
+import { apiFetchResponse, apiResponseError } from 'src/utils/api'
+import { createLatestRequest, isAbortError } from 'src/utils/latest-request'
 import { waitForCondition } from 'src/utils/wait-for'
 import { isBusyStatus } from 'src/utils/workspace-status'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -295,11 +305,18 @@ const FETCH_MORE_THRESHOLD_PX = 200
 // as soon as they scroll up past STICKY_THRESHOLD_PX.
 const stickToBottom = ref(true)
 const loadingOlder = ref(false)
+const historyError = ref('')
+const olderRequest = createLatestRequest()
+const sessionRequest = createLatestRequest()
+const focusRequest = createLatestRequest()
 const highlightedEventId = ref<string | null>(null)
 let initialScrollDone = false
+let initialAnchorWanted = true
+let lastMeasuredScrollSize: number | null = null
 
 // Key pending requests by view so an old response cannot end the current loader.
 const pendingSessionFetches = ref(new Set<string>())
+const pendingSessionOwners = new Map<string, AbortSignal>()
 const switching = computed(() => {
   // Background refreshes must preserve the rendered conversation and its scroll
   // state, including a conversation containing only user messages.
@@ -313,6 +330,14 @@ const switching = computed(() => {
   )
 })
 const sessionHasMoreOlder = ref<Map<string, boolean>>(new Map())
+const hasRenderedContent = computed(() => turns.value.length > 0 || rawLines.value.length > 0)
+const initialHistoryPending = computed(
+  () =>
+    !!workspaceStore.loadingSessions[props.workspaceId] ||
+    websocketStore.isSyncPending(props.workspaceId) ||
+    (selectedSessionId.value !== null &&
+      pendingSessionFetches.value.has(sessionCacheKey(props.workspaceId, selectedSessionId.value))),
+)
 
 interface ScrollInfo {
   verticalPosition: number
@@ -321,12 +346,26 @@ interface ScrollInfo {
 }
 
 function onScroll(info: ScrollInfo) {
+  const previousSize = lastMeasuredScrollSize
+  lastMeasuredScrollSize = info.verticalSize
+  // Images and virtual cards finish measuring after the first paint. Keep
+  // a previously pinned feed pinned when its content grows; a user scroll
+  // with the same content size still turns follow off normally.
+  if (previousSize !== null && info.verticalSize > previousSize && stickToBottom.value && !loadingOlder.value) {
+    void scrollToBottom(0)
+    return
+  }
   const distanceFromBottom = info.verticalSize - info.verticalPosition - info.verticalContainerSize
   stickToBottom.value = distanceFromBottom <= STICKY_THRESHOLD_PX
 
   if (!initialScrollDone) return
 
-  if (info.verticalPosition <= FETCH_MORE_THRESHOLD_PX && !loadingOlder.value && currentHasMoreOlder()) {
+  if (
+    info.verticalPosition <= FETCH_MORE_THRESHOLD_PX &&
+    !loadingOlder.value &&
+    !historyError.value &&
+    currentHasMoreOlder()
+  ) {
     void loadOlderOnce()
   }
 }
@@ -373,17 +412,40 @@ let inFlightLoadOlder: Promise<void> | null = null
 
 function loadOlderOnce(): Promise<void> {
   if (inFlightLoadOlder) return inFlightLoadOlder
-  inFlightLoadOlder = loadOlder().finally(() => {
-    inFlightLoadOlder = null
+  const request = loadOlder().finally(() => {
+    if (inFlightLoadOlder === request) inFlightLoadOlder = null
   })
+  inFlightLoadOlder = request
   return inFlightLoadOlder
 }
+
+function cancelHistoryReads(): void {
+  olderRequest.abort()
+  sessionRequest.abort()
+  focusRequest.abort()
+  loadingOlder.value = false
+  inFlightLoadOlder = null
+  for (const key of pendingSessionFetches.value) sessionsFetched.delete(key)
+  pendingSessionOwners.clear()
+  pendingSessionFetches.value.clear()
+  historyError.value = ''
+}
+
+function retryHistory(): void {
+  historyError.value = ''
+  if (eventCount.value === 0 && selectedSessionId.value) void fetchSessionIfMissing()
+  else void loadOlderOnce()
+}
+
+watch(() => [props.workspaceId, selectedSessionId.value], cancelHistoryReads, { flush: 'sync' })
 
 async function loadOlder(): Promise<void> {
   const workspaceId = props.workspaceId
   const sessionId = selectedSessionId.value
   const before = oldestVisibleEventId(workspaceId)
   if (!before) return
+  const signal = olderRequest.begin()
+  historyError.value = ''
   loadingOlder.value = true
   try {
     const area = scrollRef.value
@@ -394,6 +456,7 @@ async function loadOlder(): Promise<void> {
     // user past the FETCH_MORE_THRESHOLD even though no content was actually
     // prepended — making the top of the feed unreachable.
     await nextTick()
+    if (!olderRequest.isCurrent(signal)) return
     const prevSize = area?.getScroll().verticalSize ?? 0
     const prevPos = area?.getScroll().verticalPosition ?? 0
 
@@ -402,14 +465,10 @@ async function loadOlder(): Promise<void> {
       limit: '200',
     })
     if (sessionId) params.set('session', sessionId)
-    const res = await fetch(`/api/workspaces/${workspaceId}/events?${params.toString()}`)
-
-    if (!res.ok) {
-      if (sessionId) setSessionHasMoreOlder(workspaceId, sessionId, false)
-      else stream.prepend(workspaceId, [], [], { oldestId: before, hasMoreOlder: false })
-      return
-    }
+    const res = await apiFetchResponse(`/api/workspaces/${workspaceId}/events?${params.toString()}`, { signal })
+    if (!res.ok) throw await apiResponseError(res)
     const body = (await res.json()) as { events: FetchedEvent[]; hasMore: boolean }
+    if (!olderRequest.isCurrent(signal)) return
     const fetched = body.events ?? []
 
     const agentEvents = fetched.filter((e) => e.type === 'agent:event' && e.workspaceId === workspaceId)
@@ -458,7 +517,7 @@ async function loadOlder(): Promise<void> {
     // Skipping is safe: `currentHasMoreOlder()` returns false after this
     // empty response, so onScroll won't re-trigger loadOlder on its own.
     await nextTick()
-    if (area) {
+    if (area && olderRequest.isCurrent(signal)) {
       const newSize = area.getScroll().verticalSize
       const delta = newSize - prevSize
       if (delta > 0) {
@@ -467,17 +526,21 @@ async function loadOlder(): Promise<void> {
       }
     }
   } catch (err) {
+    if (isAbortError(err) || !olderRequest.isCurrent(signal)) return
+    historyError.value = err instanceof Error ? err.message : String(err)
     console.error('[ActivityFeed] failed to load older events:', err)
     // Best-effort: stop trying if a transient network error hit — user
     // can refresh to retry. We still allow subsequent loads since we
     // don't mark hasMoreOlder=false here.
   } finally {
-    loadingOlder.value = false
+    if (olderRequest.isCurrent(signal)) loadingOlder.value = false
   }
 }
 
 async function scrollToBottom(duration = 0) {
+  const view = feedView()
   await nextTick()
+  if (view !== feedView()) return
   const area = scrollRef.value
   if (!area) return
   const scroll = area.getScroll()
@@ -494,8 +557,10 @@ function requestStreamScrollToBottom() {
   if (pendingScrollFrame != null) return
   const now = performance.now()
   const inBurst = now - lastScrollAt < SCROLL_BURST_WINDOW_MS
+  const view = feedView()
   pendingScrollFrame = requestAnimationFrame(() => {
     pendingScrollFrame = null
+    if (view !== feedView()) return
     lastScrollAt = performance.now()
     void scrollToBottom(inBurst ? 0 : 180)
   })
@@ -506,6 +571,8 @@ function requestStreamScrollToBottom() {
 // — TurnCard computes it locally via getBoundingClientRect so it doesn't
 // need access to the QScrollArea instance.
 function onTurnScrollTo(y: number) {
+  cancelInitialSettle()
+  stickToBottom.value = false
   const area = scrollRef.value
   if (!area) return
   area.setScrollPosition('vertical', Math.max(0, y), 250)
@@ -536,13 +603,18 @@ interface HistoryFocusDetail {
 async function focusHistoryEvent(event: Event): Promise<void> {
   const detail = (event as CustomEvent<HistoryFocusDetail>).detail
   if (detail?.workspaceId !== props.workspaceId || !detail.eventId) return
+  cancelInitialSettle()
+  stickToBottom.value = false
+  const signal = focusRequest.begin()
+  const workspaceId = props.workspaceId
 
   try {
     const params = new URLSearchParams({ around: detail.eventId, limit: '200' })
     if (detail.sessionId) params.set('session', detail.sessionId)
-    const response = await fetch(`/api/workspaces/${props.workspaceId}/events?${params}`)
-    if (!response.ok) return
+    const response = await apiFetchResponse(`/api/workspaces/${workspaceId}/events?${params}`, { signal })
+    if (!response.ok) throw await apiResponseError(response)
     const body = (await response.json()) as { events: FetchedEvent[]; hasMore?: boolean }
+    if (!focusRequest.isCurrent(signal)) return
     const fetched = body.events ?? []
     const agentEvents = fetched.filter((item) => item.type === 'agent:event' && item.workspaceId === props.workspaceId)
     const userEvents = fetched.filter((item) => item.type === 'user:message' && item.workspaceId === props.workspaceId)
@@ -582,6 +654,7 @@ async function focusHistoryEvent(event: Event): Promise<void> {
     await waitForCondition(switching, (isSwitching) => !isSwitching, 5000)
     await nextTick()
     await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
+    if (!focusRequest.isCurrent(signal)) return
     const turnIndex = turns.value.findIndex((turn) =>
       turn.items.some((item) => item.eventIds?.includes(detail.eventId!) ?? false),
     )
@@ -595,12 +668,16 @@ async function focusHistoryEvent(event: Event): Promise<void> {
       if (highlightedEventId.value === detail.eventId) highlightedEventId.value = null
     }, 1800)
   } catch (err) {
+    if (isAbortError(err) || !focusRequest.isCurrent(signal)) return
+    historyError.value = err instanceof Error ? err.message : String(err)
     console.error('[ActivityFeed] failed to focus history event:', err)
   }
 }
 
 // Handle on the virtual list, used to scroll by index instead of by pixel.
-const virtualScrollRef = ref<{ scrollTo(index: number, edge?: 'start' | 'center' | 'end'): void } | null>(null)
+const virtualScrollRef = ref<{ scrollTo(index: number, edge?: 'start' | 'center' | 'end' | 'end-force'): void } | null>(
+  null,
+)
 // The QScrollArea's inner scrollable element — QVirtualScroll needs an
 // explicit scroll target when it does not own its own scroller.
 const scrollTargetEl = ref<Element | null>(null)
@@ -619,6 +696,8 @@ const navigatingUp = ref(false)
 
 async function goToPreviousUserMessage(): Promise<void> {
   if (navigatingUp.value) return
+  cancelInitialSettle()
+  stickToBottom.value = false
   navigatingUp.value = true
   // The walk spans several awaits (history fetches). `props.workspaceId` is
   // reactive: if the user switches workspace mid-walk, every step after the
@@ -669,27 +748,41 @@ function nextFrame(): Promise<void> {
 }
 
 async function armInitialScroll() {
+  if (!initialAnchorWanted || !hasRenderedContent.value || switching.value) return
   initialScrollDone = false
   const token = ++settleToken
   // sync:response may arrive AFTER onMounted, so we rely on the watchers
   // below to re-arm whenever turns populate; a newer arm supersedes this one.
   await nextTick()
+  if (token !== settleToken || !initialAnchorWanted) return
+  // Mount/configure QVirtualScroll on the actual QScrollArea target first,
+  // then render the last card instead of jumping to an estimated height.
+  scrollTargetEl.value = scrollRef.value?.getScrollTarget() ?? null
+  await nextTick()
+  if (token !== settleToken || !initialAnchorWanted) return
+  if (turns.value.length > 0) virtualScrollRef.value?.scrollTo(turns.value.length - 1, 'end-force')
+  await nextFrame()
   let lastSize = -1
   let stableFrames = 0
   for (let frame = 0; frame < SETTLE_MAX_FRAMES && stableFrames < SETTLE_STABLE_FRAMES; frame++) {
-    if (token !== settleToken) return
+    if (token !== settleToken || !initialAnchorWanted) return
     await scrollToBottom(0)
     await nextFrame()
     const size = scrollRef.value?.getScroll().verticalSize ?? 0
+    lastMeasuredScrollSize = size
     stableFrames = size === lastSize ? stableFrames + 1 : 0
     lastSize = size
   }
-  if (token === settleToken) initialScrollDone = true
+  if (token === settleToken && !initialHistoryPending.value) {
+    initialScrollDone = true
+    initialAnchorWanted = false
+  }
 }
 
 // The user taking over (wheel, touch, keyboard) ends the settling instead of
 // fighting their reading position.
 function cancelInitialSettle() {
+  initialAnchorWanted = false
   if (initialScrollDone) return
   settleToken++
   initialScrollDone = true
@@ -714,7 +807,7 @@ const eventCount = computed(() => {
 // to anchor at the bottom. armInitialScroll waits for a nextTick so it
 // works even if the scroll-area just transitioned from v-if=false.
 watch(switching, async (isSwitching) => {
-  if (!isSwitching && eventCount.value > 0) {
+  if (!isSwitching && hasRenderedContent.value) {
     await armInitialScroll()
   }
   // QVirtualScroll needs the QScrollArea's inner scroller; the q-scroll-area
@@ -727,6 +820,12 @@ watch(switching, async (isSwitching) => {
   }
 })
 
+// A cached conversation is already visible while its initial reads run, so
+// switching never becomes true. Completion still needs a final measured jump.
+watch(initialHistoryPending, (pending, wasPending) => {
+  if (!pending && wasPending && initialAnchorWanted && hasRenderedContent.value) void armInitialScroll()
+})
+
 onMounted(() => {
   window.addEventListener('kobo:focus-history-event', focusHistoryEvent)
   // QVirtualScroll needs the QScrollArea's inner scroller; it only exists once
@@ -734,7 +833,7 @@ onMounted(() => {
   void nextTick(() => {
     scrollTargetEl.value = scrollRef.value?.getScrollTarget() ?? null
   })
-  if (eventCount.value > 0) void armInitialScroll()
+  if (hasRenderedContent.value) void armInitialScroll()
   // Fire the session-scoped fetch in parallel with sync:response, not after
   // the spinner ends. For refreshes on ?session=X where that session is
   // outside the sync:response window, this shaves off the RTT latency so
@@ -754,11 +853,9 @@ onMounted(() => {
 })
 
 // History population anchors once; only new live events trigger follow afterwards.
-let firstPopulateDone = eventCount.value > 0
-watch(eventCount, async (newLen) => {
+watch([eventCount, () => userMessages.value.length, () => rawLines.value.length], async ([events, users, raw]) => {
   if (loadingOlder.value) return
-  if (!firstPopulateDone && newLen > 0) {
-    firstPopulateDone = true
+  if (initialAnchorWanted && events + users + raw > 0) {
     await armInitialScroll()
   }
 })
@@ -774,6 +871,9 @@ watch([liveAppendCount, feedView], ([next, view], [previous, previousView]) => {
 })
 
 onUnmounted(() => {
+  settleToken++
+  initialAnchorWanted = false
+  cancelHistoryReads()
   window.removeEventListener('kobo:focus-history-event', focusHistoryEvent)
   if (pendingScrollFrame != null) {
     cancelAnimationFrame(pendingScrollFrame)
@@ -781,28 +881,15 @@ onUnmounted(() => {
   }
 })
 
-watch(
-  () => props.workspaceId,
-  () => {
-    stickToBottom.value = true
-    firstPopulateDone = eventCount.value > 0
-    initialScrollDone = false
-    void fetchSessionIfMissing()
-    if (eventCount.value > 0) void armInitialScroll()
-  },
-)
-
-// When the user flips between sessions ("All" / session-1 / session-2…),
-// re-anchor the feed at the bottom on the newly-filtered view.
-watch(
-  () => workspaceStore.selectedSessionId,
-  async () => {
-    stickToBottom.value = true
-    initialScrollDone = false
-    void fetchSessionIfMissing()
-    await armInitialScroll()
-  },
-)
+watch([() => props.workspaceId, () => workspaceStore.selectedSessionId], () => {
+  settleToken++
+  initialAnchorWanted = true
+  lastMeasuredScrollSize = null
+  stickToBottom.value = true
+  initialScrollDone = false
+  void fetchSessionIfMissing()
+  if (hasRenderedContent.value) void armInitialScroll()
+})
 
 // sync:response only replays the 300 most recent events of the workspace
 // (INITIAL_WINDOW backend-side). For workspaces with many sessions, older
@@ -821,14 +908,18 @@ async function fetchSessionIfMissing(): Promise<void> {
   if (sessionsFetched.has(cacheKey)) return
   sessionsFetched.add(cacheKey)
   pendingSessionFetches.value.add(cacheKey)
+  const signal = sessionRequest.begin()
+  pendingSessionOwners.set(cacheKey, signal)
+  historyError.value = ''
 
   try {
-    const res = await fetch(`/api/workspaces/${workspaceId}/events?session=${encodeURIComponent(sid)}&limit=500`)
-    if (!res.ok) {
-      sessionsFetched.delete(cacheKey)
-      return
-    }
+    const res = await apiFetchResponse(
+      `/api/workspaces/${workspaceId}/events?session=${encodeURIComponent(sid)}&limit=500`,
+      { signal },
+    )
+    if (!res.ok) throw await apiResponseError(res)
     const body = (await res.json()) as { events: FetchedEvent[]; hasMore: boolean }
+    if (!sessionRequest.isCurrent(signal)) return
     const fetched = body.events ?? []
     if (fetched.length === 0) return
 
@@ -865,27 +956,46 @@ async function fetchSessionIfMissing(): Promise<void> {
         })
       }
     }
-
-    await nextTick()
-    if (props.workspaceId === workspaceId && selectedSessionId.value === sid) await scrollToBottom(0)
   } catch (err) {
+    if (isAbortError(err) || !sessionRequest.isCurrent(signal)) {
+      if (!pendingSessionOwners.has(cacheKey) || pendingSessionOwners.get(cacheKey) === signal)
+        sessionsFetched.delete(cacheKey)
+      return
+    }
+    historyError.value = err instanceof Error ? err.message : String(err)
     console.error('[ActivityFeed] fetchSessionIfMissing failed:', err)
     sessionsFetched.delete(cacheKey) // allow retry
   } finally {
-    pendingSessionFetches.value.delete(cacheKey)
+    if (pendingSessionOwners.get(cacheKey) === signal) {
+      pendingSessionOwners.delete(cacheKey)
+      pendingSessionFetches.value.delete(cacheKey)
+    }
   }
 }
 
 // When the user sends a message, force the feed to the bottom even if
 // they were reading earlier history. Detect by counting non-system-prompt
 // user messages — increments exactly once per user send.
-const userSendCount = computed(() => userMessages.value.filter((m) => m.sender !== 'system-prompt').length)
-watch([userSendCount, feedView], async ([newLen, view], [oldLen, oldView]) => {
-  if (view === oldView && newLen > oldLen) {
-    stickToBottom.value = true
-    await scrollToBottom(180)
-  }
-})
+const userSendCount = computed(() => userMessages.value.filter((m) => m.sender === 'user').length)
+const pendingUserSendCount = computed(
+  () =>
+    (workspaceStore.activityFeeds[props.workspaceId] ?? []).filter(
+      (item) => item.meta?.sender === 'user' && item.meta.pending && sessionMatches(item.sessionId),
+    ).length,
+)
+watch(
+  [userSendCount, pendingUserSendCount, feedView],
+  async ([newLen, pending, view], [oldLen, oldPending, oldView]) => {
+    const localSend = pending > oldPending
+    if (
+      view === oldView &&
+      (localSend || (newLen > oldLen && stickToBottom.value && !loadingOlder.value && !initialHistoryPending.value))
+    ) {
+      stickToBottom.value = true
+      await scrollToBottom(localSend ? 180 : 0)
+    }
+  },
+)
 
 // Click handler for the scroll-to-bottom button. Uses the existing helper
 // (smooth 250ms). The button is rendered only when `!stickToBottom`.
@@ -897,11 +1007,15 @@ async function handleScrollToBottomClick() {
 
 <style scoped>
 .activity-feed-wrap {
+  display: flex;
+  flex-direction: column;
   position: relative;
   height: 100%;
   width: 100%;
 }
 .activity-feed-scroll {
+  flex: 1;
+  min-height: 0;
   height: 100%;
   width: 100%;
 }

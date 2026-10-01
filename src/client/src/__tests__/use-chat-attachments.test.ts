@@ -41,7 +41,10 @@ it('keeps the file when its surrounding label is edited and removes it only with
   state.remove(state.pending.value[0]!.tempId)
   await Promise.resolve()
   expect(state.message.value).toBe('Consulte ce fichier : ')
-  expect(fetchMock).toHaveBeenLastCalledWith('/api/workspaces/a/attachments/0123456789.md', { method: 'DELETE' })
+  expect(fetchMock).toHaveBeenLastCalledWith('/api/workspaces/a/attachments/0123456789.md', {
+    method: 'DELETE',
+    signal: expect.any(AbortSignal),
+  })
 })
 
 it('uploads a document, replaces its placeholder and retains it when handed to a sent message', async () => {
@@ -81,7 +84,10 @@ it('cleans a late upload using the original workspace after discard and navigati
   finish(receipt())
   await upload
   expect(state.message.value).toBe('New workspace draft')
-  expect(fetchMock).toHaveBeenLastCalledWith('/api/workspaces/a/attachments/0123456789.md', { method: 'DELETE' })
+  expect(fetchMock).toHaveBeenLastCalledWith('/api/workspaces/a/attachments/0123456789.md', {
+    method: 'DELETE',
+    signal: expect.any(AbortSignal),
+  })
 })
 
 it('keeps failed uploads blocking send until removed and reports validation errors', async () => {
@@ -132,7 +138,10 @@ it('preserves handed-off attachments on discard and restores their badges after 
   expect(state.pending.value).toHaveLength(1)
   state.remove(sent[0]!.tempId)
   await Promise.resolve()
-  expect(fetchMock).toHaveBeenLastCalledWith('/api/workspaces/a/attachments/0123456789.md', { method: 'DELETE' })
+  expect(fetchMock).toHaveBeenLastCalledWith('/api/workspaces/a/attachments/0123456789.md', {
+    method: 'DELETE',
+    signal: expect.any(AbortSignal),
+  })
 })
 
 it('serializes removal behind an in-flight upload to avoid lifecycle conflicts', async () => {

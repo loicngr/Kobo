@@ -4,9 +4,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 // ── Mocks ────────────────────────────────────────────────────────────────────
 
 vi.mock('../server/utils/git-ops.js', () => ({
-  listBranches: vi.fn(),
-  listRemoteBranches: vi.fn(),
-  listWorktreeFiles: vi.fn(),
+  listBranchesAsync: vi.fn(),
+  listRemoteBranchesAsync: vi.fn(),
+  listWorktreeFilesAsync: vi.fn(),
 }))
 
 vi.mock('../server/services/worktree-service.js', () => ({
@@ -43,16 +43,16 @@ beforeEach(() => {
 
 describe('GET /api/git/branches', () => {
   it('returns local and remote branches for valid path', async () => {
-    vi.mocked(gitOps.listBranches).mockReturnValue(['main', 'develop', 'feature/test'])
-    vi.mocked(gitOps.listRemoteBranches).mockReturnValue(['origin/main', 'origin/develop'])
+    vi.mocked(gitOps.listBranchesAsync).mockResolvedValue(['main', 'develop', 'feature/test'])
+    vi.mocked(gitOps.listRemoteBranchesAsync).mockResolvedValue(['origin/main', 'origin/develop'])
 
     const res = await app.request('/api/git/branches?path=/valid/repo')
     expect(res.status).toBe(200)
     const data = await res.json()
     expect(data.local).toEqual(['main', 'develop', 'feature/test'])
     expect(data.remote).toEqual(['origin/main', 'origin/develop'])
-    expect(gitOps.listBranches).toHaveBeenCalledWith('/valid/repo')
-    expect(gitOps.listRemoteBranches).toHaveBeenCalledWith('/valid/repo')
+    expect(gitOps.listBranchesAsync).toHaveBeenCalledWith('/valid/repo')
+    expect(gitOps.listRemoteBranchesAsync).toHaveBeenCalledWith('/valid/repo')
   })
 
   it('returns 400 when path query parameter is missing', async () => {
@@ -63,7 +63,7 @@ describe('GET /api/git/branches', () => {
   })
 
   it('returns 500 when git operation fails', async () => {
-    vi.mocked(gitOps.listBranches).mockImplementation(() => {
+    vi.mocked(gitOps.listBranchesAsync).mockImplementation(() => {
       throw new Error('Not a git repository')
     })
 
@@ -74,8 +74,8 @@ describe('GET /api/git/branches', () => {
   })
 
   it('returns empty arrays for repo with no branches', async () => {
-    vi.mocked(gitOps.listBranches).mockReturnValue([])
-    vi.mocked(gitOps.listRemoteBranches).mockReturnValue([])
+    vi.mocked(gitOps.listBranchesAsync).mockResolvedValue([])
+    vi.mocked(gitOps.listRemoteBranchesAsync).mockResolvedValue([])
 
     const res = await app.request('/api/git/branches?path=/empty/repo')
     expect(res.status).toBe(200)
@@ -87,31 +87,31 @@ describe('GET /api/git/branches', () => {
 
 describe('GET /api/git/files', () => {
   it('caps the listing at the server maximum when no limit is asked for', async () => {
-    vi.mocked(gitOps.listWorktreeFiles).mockReturnValue(['a.ts', 'b.ts'])
+    vi.mocked(gitOps.listWorktreeFilesAsync).mockResolvedValue(['a.ts', 'b.ts'])
     const res = await app.request('/api/git/files?path=/tmp/wt')
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ files: ['a.ts', 'b.ts'] })
-    expect(gitOps.listWorktreeFiles).toHaveBeenCalledWith('/tmp/wt', 5000)
+    expect(gitOps.listWorktreeFilesAsync).toHaveBeenCalledWith('/tmp/wt', 5000)
   })
 
   it('honours a smaller explicit limit', async () => {
-    vi.mocked(gitOps.listWorktreeFiles).mockReturnValue([])
+    vi.mocked(gitOps.listWorktreeFilesAsync).mockResolvedValue([])
     await app.request('/api/git/files?path=/tmp/wt&limit=100')
-    expect(gitOps.listWorktreeFiles).toHaveBeenCalledWith('/tmp/wt', 100)
+    expect(gitOps.listWorktreeFilesAsync).toHaveBeenCalledWith('/tmp/wt', 100)
   })
 
   it('never lets a caller ask for more than the server maximum', async () => {
-    vi.mocked(gitOps.listWorktreeFiles).mockReturnValue([])
+    vi.mocked(gitOps.listWorktreeFilesAsync).mockResolvedValue([])
     await app.request('/api/git/files?path=/tmp/wt&limit=999999')
-    expect(gitOps.listWorktreeFiles).toHaveBeenCalledWith('/tmp/wt', 5000)
+    expect(gitOps.listWorktreeFilesAsync).toHaveBeenCalledWith('/tmp/wt', 5000)
   })
 
   it('falls back to the maximum on a nonsense limit', async () => {
-    vi.mocked(gitOps.listWorktreeFiles).mockReturnValue([])
+    vi.mocked(gitOps.listWorktreeFilesAsync).mockResolvedValue([])
     await app.request('/api/git/files?path=/tmp/wt&limit=-3')
-    expect(gitOps.listWorktreeFiles).toHaveBeenCalledWith('/tmp/wt', 5000)
+    expect(gitOps.listWorktreeFilesAsync).toHaveBeenCalledWith('/tmp/wt', 5000)
     await app.request('/api/git/files?path=/tmp/wt&limit=abc')
-    expect(gitOps.listWorktreeFiles).toHaveBeenLastCalledWith('/tmp/wt', 5000)
+    expect(gitOps.listWorktreeFilesAsync).toHaveBeenLastCalledWith('/tmp/wt', 5000)
   })
 
   it('rejects a missing path', async () => {

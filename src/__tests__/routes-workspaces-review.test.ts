@@ -105,7 +105,13 @@ vi.mock('../server/services/sentry-service.js', () => ({
   parseSentryUrl: vi.fn(),
 }))
 
-vi.mock('../server/utils/git-ops.js', () => ({
+vi.mock('../server/utils/git-ops.js', async (importOriginal) => ({
+  buildNonInteractiveGitEnv: (await importOriginal<typeof import('../server/utils/git-ops.js')>())
+    .buildNonInteractiveGitEnv,
+  fetchSourceBranchOrThrowAsync: vi.fn().mockResolvedValue(undefined),
+  getCommitsBetweenAsync: vi.fn().mockResolvedValue(''),
+  getDiffStatsBetweenAsync: vi.fn().mockResolvedValue(''),
+  getWorkingTreeDiffStatsAsync: vi.fn().mockResolvedValue(''),
   fetchSourceBranch: vi.fn(),
   deleteLocalBranch: vi.fn(),
   deleteRemoteBranch: vi.fn(),
@@ -276,8 +282,11 @@ beforeEach(() => {
   vi.mocked(workspaceService.getActiveSession).mockReturnValue(fakeSession as never)
 
   vi.mocked(gitOps.getCommitsBetween).mockReturnValue('feat: do thing\nfix: bug')
+  vi.mocked(gitOps.getCommitsBetweenAsync).mockResolvedValue('feat: do thing\nfix: bug')
+  vi.mocked(gitOps.getDiffStatsBetweenAsync).mockResolvedValue(' 2 files changed, 10 insertions(+), 3 deletions(-)')
+  vi.mocked(gitOps.getWorkingTreeDiffStatsAsync).mockResolvedValue('')
   vi.mocked(gitOps.getDiffStatsBetween).mockReturnValue(' 2 files changed, 10 insertions(+), 3 deletions(-)')
-  vi.mocked(gitOps.getWorkingTreeDiffStats).mockReturnValue('')
+  vi.mocked(gitOps.getWorkingTreeDiffStatsAsync).mockResolvedValue('')
 
   vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
     makeEffectiveSettings({
@@ -567,6 +576,44 @@ describe('POST /api/workspaces/:id/start-review', () => {
     expect(prompt as string).toContain('Test Workspace')
   })
 
+  it('continues a review with the available base when a bounded fetch fails', async () => {
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.mocked(gitOps.fetchSourceBranchOrThrowAsync).mockRejectedValueOnce(new Error('Remote unavailable'))
+    try {
+      const res = await app.request('/api/workspaces/ws-1/start-review', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+      expect(res.status).toBe(200)
+      expect(warning).toHaveBeenCalledWith('[start-review] git fetch failed: Remote unavailable')
+      expect(agentManager.sendMessageForFallback).toHaveBeenCalled()
+    } finally {
+      warning.mockRestore()
+    }
+  })
+
+  it('prepares the review through bounded asynchronous Git helpers', async () => {
+    const res = await app.request('/api/workspaces/ws-1/start-review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+    expect(res.status).toBe(200)
+    expect(gitOps.fetchSourceBranchOrThrowAsync).toHaveBeenCalledWith(fakeWorkspace.worktreePath, 'main')
+    expect(gitOps.getCommitsBetweenAsync).toHaveBeenCalled()
+    expect(gitOps.getDiffStatsBetweenAsync).toHaveBeenCalled()
+    expect(gitOps.getWorkingTreeDiffStatsAsync).toHaveBeenCalled()
+    expect(execFilePromiseMock).toHaveBeenCalledWith(
+      'git',
+      ['rev-parse', 'origin/main'],
+      expect.objectContaining({
+        timeout: 15_000,
+        env: expect.objectContaining({ GIT_TERMINAL_PROMPT: '0' }),
+      }),
+    )
+  })
+
   it('returns 500 with explicit message when git rev-parse fails', async () => {
     execFilePromiseMock.mockImplementation(async (cmd: string, args: string[]) => {
       if (cmd === 'git' && args[0] === 'fetch') {
@@ -597,7 +644,7 @@ describe('POST /api/workspaces/:id/start-review', () => {
   })
 
   it('inserts the working-tree separator only when working-tree stats are non-empty', async () => {
-    vi.mocked(gitOps.getWorkingTreeDiffStats).mockReturnValue(' src/foo.ts | 5 +++--\n')
+    vi.mocked(gitOps.getWorkingTreeDiffStatsAsync).mockResolvedValue(' src/foo.ts | 5 +++--\n')
     vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce({
       status: 'sent',
       sessionId: 'delivered-session-id',
@@ -616,7 +663,7 @@ describe('POST /api/workspaces/:id/start-review', () => {
   })
 
   it('omits the working-tree separator when working-tree stats are empty', async () => {
-    vi.mocked(gitOps.getWorkingTreeDiffStats).mockReturnValue('')
+    vi.mocked(gitOps.getWorkingTreeDiffStatsAsync).mockResolvedValue('')
     vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce({
       status: 'sent',
       sessionId: 'delivered-session-id',

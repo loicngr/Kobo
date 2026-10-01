@@ -32,6 +32,7 @@
 </template>
 
 <script setup lang="ts">
+import { apiFetchStatus } from 'src/utils/api'
 import { setToken } from 'src/utils/auth-token'
 import { closeNetworkLogin, networkLoginOpen } from 'src/utils/network-login-bus'
 import { computed, ref } from 'vue'
@@ -58,7 +59,7 @@ async function submit() {
   try {
     // Send the candidate explicitly; only persist it once it actually validates,
     // so a bad attempt never overwrites a previously-working token in storage.
-    const res = await fetch('/api/settings/network/ping', { headers: { 'X-Kobo-Token': candidate } })
+    const res = await apiFetchStatus('/api/settings/network/ping', { headers: { 'X-Kobo-Token': candidate } })
     if (res.ok) {
       setToken(candidate)
       closeNetworkLogin()

@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { apiFetchResponse } from 'src/utils/api'
 import { compareVersions } from 'src/utils/compare-versions'
 import { computed, ref } from 'vue'
 
@@ -45,7 +46,7 @@ export const useUpdateStore = defineStore('update', () => {
     if (inFlight) return inFlight
     inFlight = (async () => {
       try {
-        const response = await fetch('/api/changelog')
+        const response = await apiFetchResponse('/api/changelog')
         if (response.ok) applySnapshot(await response.json())
       } catch {
         /* Offline clients retain the last known update. */

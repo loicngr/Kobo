@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { apiFetchResponse, apiResponseError } from 'src/utils/api'
 import { createLatestRequest, isAbortError } from 'src/utils/latest-request'
 import { ref } from 'vue'
 
@@ -36,8 +37,8 @@ export const useDocumentsStore = defineStore('documents', () => {
   async function fetchDocuments(workspaceId: string): Promise<void> {
     loadingList.value = true
     try {
-      const res = await fetch(`/api/workspaces/${workspaceId}/documents`)
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const res = await apiFetchResponse(`/api/workspaces/${workspaceId}/documents`)
+      if (!res.ok) throw await apiResponseError(res)
       const body = (await res.json()) as { documents: DocumentFile[] }
       documentsByWorkspace.value[workspaceId] = body.documents
     } catch (err) {
@@ -55,10 +56,13 @@ export const useDocumentsStore = defineStore('documents', () => {
   async function loadDocument(workspaceId: string, file: DocumentFile, signal: AbortSignal): Promise<boolean> {
     loadingContent.value = true
     try {
-      const res = await fetch(`/api/workspaces/${workspaceId}/document?path=${encodeURIComponent(file.path)}`, {
-        signal,
-      })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const res = await apiFetchResponse(
+        `/api/workspaces/${workspaceId}/document?path=${encodeURIComponent(file.path)}`,
+        {
+          signal,
+        },
+      )
+      if (!res.ok) throw await apiResponseError(res)
       const body = (await res.json()) as { content: string; path: string }
       if (!latestOpen.isCurrent(signal)) return false
       selected.value = { path: body.path, name: file.name, content: body.content }

@@ -206,6 +206,16 @@ export default {
 
   // Models
   'model.auto': 'Auto',
+  'model.opus55': 'Opus 5.5',
+  'model.opus55Description': 'Para tareas complejas y cotidianas, contexto de 1M',
+  'model.sonnet55': 'Sonnet 5.5',
+  'model.sonnet55Description': 'Eficiente para tareas rutinarias, contexto de 1M',
+  'model.gpt61sol': 'GPT-6.1 Sol',
+  'model.gpt61solDescription': 'Último modelo versátil para programación y trabajo cotidiano',
+  'model.gpt6sol': 'GPT-6 Sol',
+  'model.gpt6solDescription': 'Modelo versátil de la generación anterior',
+  'model.gpt6luna': 'GPT-6 Luna',
+  'model.gpt6lunaDescription': 'Modelo rápido para tareas sencillas',
   'model.fable51': 'Fable 5.1',
   'model.mythos5': 'Mythos 5 (Glasswing)',
   'model.fable51Description': 'El modelo más capaz - reemplaza a Fable 5, contexto 1M, adaptive thinking',
@@ -446,6 +456,7 @@ export default {
   'terminal.error': 'Error del terminal',
   'terminal.exited': 'Terminal cerrado',
   'terminal.disconnected': 'Conexión perdida',
+  'terminal.outputMayBeMissing': '[Conexión interrumpida. Puede faltar parte de la salida del terminal.]',
   'terminal.reconnecting': 'Reconectando… (intento {attempt} de {max})',
   'terminal.reconnect': 'Reconectar',
 
@@ -1946,6 +1957,11 @@ export default {
   'session.endedWatchdog': 'Sesión cerrada a la fuerza tras un periodo de inactividad',
   'tool.running': 'Ejecutando...',
   'activity.raw_lines': 'Líneas de salida brutas ({n})',
+  'api.timeout': 'La solicitud superó el límite de {seconds} segundos.',
+  'api.mutationTimeout':
+    'La solicitud superó el límite de {seconds} segundos. La operación puede seguir en curso. Actualiza su estado antes de volver a intentarlo.',
+  'activity.sessionsError': 'No se pudieron cargar las sesiones: {message}',
+  'activity.historyError': 'No se pudo cargar el historial: {message}',
   'activity.loading_older': 'Cargando mensajes anteriores…',
   'activity.compacting': 'Compactando el contexto…',
   'activity.prev_user_message': 'Mensaje anterior del usuario',

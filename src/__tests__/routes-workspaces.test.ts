@@ -188,7 +188,9 @@ vi.mock('../server/utils/git-ops.js', async (importOriginal) => ({
   fetchSourceBranch: vi.fn(),
   fetchSourceBranchOrThrowAsync: vi.fn(),
   localBranchExists: vi.fn(),
+  deleteLocalBranchAsync: vi.fn().mockResolvedValue(undefined),
   deleteLocalBranch: vi.fn(),
+  deleteRemoteBranchAsync: vi.fn().mockResolvedValue(undefined),
   deleteRemoteBranch: vi.fn(),
   pushBranch: vi.fn(),
   pullBranch: vi.fn(),
@@ -233,8 +235,13 @@ vi.mock('../server/utils/git-ops.js', async (importOriginal) => ({
     }
   },
   getFileAtRef: vi.fn().mockReturnValue(null),
+  getFileAtRefAsync: vi.fn().mockResolvedValue(null),
+  getWorkingTreePorcelainAsync: vi.fn().mockResolvedValue(''),
+  getWorkingTreeDiffStatsAsync: vi.fn().mockResolvedValue(''),
   getFileContent: vi.fn().mockReturnValue(null),
+  getCommitsBetweenAsync: vi.fn().mockResolvedValue(''),
   getCommitsBetween: vi.fn().mockReturnValue(''),
+  getDiffStatsBetweenAsync: vi.fn().mockResolvedValue(''),
   getDiffStatsBetween: vi.fn().mockReturnValue(''),
   getCommitCount: vi.fn().mockReturnValue(0),
   getCommitCountAsync: vi.fn().mockResolvedValue(0),
@@ -247,11 +254,17 @@ vi.mock('../server/utils/git-ops.js', async (importOriginal) => ({
   getWorkingTreeStatus: vi.fn().mockReturnValue({ staged: 0, modified: 0, untracked: 0 }),
   getWorkingTreeStatusAsync: vi.fn().mockResolvedValue({ staged: 0, modified: 0, untracked: 0 }),
   getChangedFiles: vi.fn().mockReturnValue([]),
+  getChangedFilesAsync: vi.fn().mockResolvedValue([]),
   getChangedFilesBetween: vi.fn().mockReturnValue([]),
+  getChangedFilesBetweenAsync: vi.fn().mockResolvedValue([]),
   commitExists: vi.fn().mockReturnValue(true),
+  commitExistsAsync: vi.fn().mockResolvedValue(true),
   EMPTY_TREE_SHA: '4b825dc642cb6eb9a060e54bf8d69288fbee4904',
   getUnpushedChangedFiles: vi.fn().mockReturnValue([]),
+  getUnpushedChangedFilesAsync: vi.fn().mockResolvedValue([]),
+  listBranchCommitsAsync: vi.fn().mockResolvedValue([]),
   listBranchCommits: vi.fn().mockReturnValue([]),
+  listCommitsBehindAsync: vi.fn().mockResolvedValue([]),
   listCommitsBehind: vi.fn().mockReturnValue([]),
   fetchSourceBranchAsync: vi.fn().mockResolvedValue(undefined),
   getCurrentBranch: vi.fn(),
@@ -261,6 +274,7 @@ vi.mock('../server/utils/git-ops.js', async (importOriginal) => ({
   listBackupBranches: vi.fn().mockReturnValue([]),
   pruneBackupBranches: vi.fn().mockReturnValue([]),
   restoreBranchFromBackup: vi.fn(),
+  getWorkingTreeFilesAsync: vi.fn().mockResolvedValue([]),
   getWorkingTreeFiles: vi.fn().mockReturnValue([]),
 }))
 
@@ -940,7 +954,7 @@ describe('POST /api/workspaces', () => {
       expect(res.status).toBe(500)
       expect((await res.json()).error).toContain('exclude write failed')
       expect(worktreeService.removeWorktree).toHaveBeenCalledWith(fakeWorkspace.projectPath, fakeWorkspace.worktreePath)
-      expect(gitOps.deleteLocalBranch).toHaveBeenCalledTimes(branchCreated ? 1 : 0)
+      expect(gitOps.deleteLocalBranchAsync).toHaveBeenCalledTimes(branchCreated ? 1 : 0)
       expect(workspaceService.deleteWorkspace).toHaveBeenCalledWith(fakeWorkspace.id)
       expect(agentManager.startAgent).not.toHaveBeenCalled()
     },
@@ -982,7 +996,7 @@ describe('POST /api/workspaces', () => {
     // Worktree gone from disk, branch gone, row gone from the DB (cascading to
     // tasks, sessions and events).
     expect(worktreeService.removeWorktree).toHaveBeenCalledWith('/tmp/project', '/tmp/project/.worktrees/feature/test')
-    expect(gitOps.deleteLocalBranch).toHaveBeenCalledWith('/tmp/project', 'feature/test')
+    expect(gitOps.deleteLocalBranchAsync).toHaveBeenCalledWith('/tmp/project', 'feature/test')
     expect(workspaceService.deleteWorkspace).toHaveBeenCalledWith('ws-1')
 
     // The progress stream must say the creation was undone, not sit on the last
@@ -1856,7 +1870,7 @@ describe('POST /api/workspaces', () => {
     // No orphan left in the DB, no orphan worktree, no orphan branch.
     expect(workspaceService.deleteWorkspace).toHaveBeenCalledWith('ws-1')
     expect(worktreeService.removeWorktree).toHaveBeenCalledWith('/tmp/project', '/tmp/project/.worktrees/feature/test')
-    expect(gitOps.deleteLocalBranch).toHaveBeenCalledWith('/tmp/project', 'feature/test')
+    expect(gitOps.deleteLocalBranchAsync).toHaveBeenCalledWith('/tmp/project', 'feature/test')
     expect(wsService.emitEphemeral).toHaveBeenCalledWith(
       'create-late-failure',
       'workspace:create-progress',
@@ -3546,8 +3560,8 @@ describe('DELETE /api/workspaces/:id', () => {
     expect(res.status).toBe(204)
     expect(agentManager.stopAgentAndWait).toHaveBeenCalledWith('ws-1', undefined, 'delete')
     expect(worktreeService.removeWorktree).toHaveBeenCalledWith('/tmp/project', '/tmp/project/.worktrees/feature/test')
-    expect(gitOps.deleteLocalBranch).toHaveBeenCalledWith('/tmp/project', 'feature/test')
-    expect(gitOps.deleteRemoteBranch).toHaveBeenCalledWith('/tmp/project', 'feature/test')
+    expect(gitOps.deleteLocalBranchAsync).toHaveBeenCalledWith('/tmp/project', 'feature/test')
+    expect(gitOps.deleteRemoteBranchAsync).toHaveBeenCalledWith('/tmp/project', 'feature/test')
     expect(workspaceService.deleteWorkspace).toHaveBeenCalledWith('ws-1')
     expect(wsService.emitEphemeral).toHaveBeenCalledWith('ws-1', 'workspace:deleted', { workspaceId: 'ws-1' })
   })
@@ -3583,8 +3597,8 @@ describe('DELETE /api/workspaces/:id', () => {
     const res = await app.request('/api/workspaces/ws-1', { method: 'DELETE' })
 
     expect(res.status).toBe(204)
-    expect(gitOps.deleteLocalBranch).not.toHaveBeenCalled()
-    expect(gitOps.deleteRemoteBranch).not.toHaveBeenCalled()
+    expect(gitOps.deleteLocalBranchAsync).not.toHaveBeenCalled()
+    expect(gitOps.deleteRemoteBranchAsync).not.toHaveBeenCalled()
     expect(workspaceService.deleteWorkspace).toHaveBeenCalledWith('ws-1')
   })
 
@@ -3677,8 +3691,8 @@ describe('DELETE /api/workspaces/archived', () => {
     expect(body.warnings).toEqual([])
     expect(workspaceService.deleteWorkspace).toHaveBeenCalledWith('ws-arch-1')
     expect(workspaceService.deleteWorkspace).toHaveBeenCalledWith('ws-arch-2')
-    expect(gitOps.deleteLocalBranch).toHaveBeenCalledWith('/tmp/project', 'feature/a')
-    expect(gitOps.deleteRemoteBranch).toHaveBeenCalledWith('/tmp/project', 'feature/b')
+    expect(gitOps.deleteLocalBranchAsync).toHaveBeenCalledWith('/tmp/project', 'feature/a')
+    expect(gitOps.deleteRemoteBranchAsync).toHaveBeenCalledWith('/tmp/project', 'feature/b')
   })
 
   it('does not touch branches when no options are passed', async () => {
@@ -3687,8 +3701,8 @@ describe('DELETE /api/workspaces/archived', () => {
     const res = await app.request('/api/workspaces/archived', { method: 'DELETE' })
 
     expect(res.status).toBe(200)
-    expect(gitOps.deleteLocalBranch).not.toHaveBeenCalled()
-    expect(gitOps.deleteRemoteBranch).not.toHaveBeenCalled()
+    expect(gitOps.deleteLocalBranchAsync).not.toHaveBeenCalled()
+    expect(gitOps.deleteRemoteBranchAsync).not.toHaveBeenCalled()
     expect(workspaceService.deleteWorkspace).toHaveBeenCalledWith('ws-arch-1')
   })
 
@@ -5255,41 +5269,41 @@ describe('GET /api/workspaces/:id/diff', () => {
 
   it('returns branch diff by default (vs sourceBranch)', async () => {
     const branchFiles = [{ path: 'a.ts', status: 'modified' }]
-    vi.mocked(gitOps.getChangedFiles).mockReturnValue(branchFiles as never)
-    vi.mocked(gitOps.getUnpushedChangedFiles).mockReturnValue([])
+    vi.mocked(gitOps.getChangedFilesAsync).mockResolvedValue(branchFiles as never)
+    vi.mocked(gitOps.getUnpushedChangedFilesAsync).mockResolvedValue([])
 
     const res = await app.request('/api/workspaces/w1/diff')
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.mode).toBe('branch')
     expect(body.files).toEqual(branchFiles)
-    expect(gitOps.getChangedFiles).toHaveBeenCalledWith(expect.any(String), 'develop', false)
-    expect(gitOps.getUnpushedChangedFiles).not.toHaveBeenCalled()
+    expect(gitOps.getChangedFilesAsync).toHaveBeenCalledWith(expect.any(String), 'develop', false)
+    expect(gitOps.getUnpushedChangedFilesAsync).not.toHaveBeenCalled()
   })
 
   it('forwards includeUntracked=1 query param to getChangedFiles', async () => {
-    vi.mocked(gitOps.getChangedFiles).mockReturnValue([])
+    vi.mocked(gitOps.getChangedFilesAsync).mockResolvedValue([])
     const res = await app.request('/api/workspaces/w1/diff?includeUntracked=1')
     expect(res.status).toBe(200)
-    expect(gitOps.getChangedFiles).toHaveBeenCalledWith(expect.any(String), 'develop', true)
+    expect(gitOps.getChangedFilesAsync).toHaveBeenCalledWith(expect.any(String), 'develop', true)
   })
 
   it('returns unpushed diff when mode=unpushed (vs origin/<workingBranch>)', async () => {
     const unpushedFiles = [{ path: 'b.ts', status: 'added' }]
-    vi.mocked(gitOps.getChangedFiles).mockReturnValue([])
-    vi.mocked(gitOps.getUnpushedChangedFiles).mockReturnValue(unpushedFiles as never)
+    vi.mocked(gitOps.getChangedFilesAsync).mockResolvedValue([])
+    vi.mocked(gitOps.getUnpushedChangedFilesAsync).mockResolvedValue(unpushedFiles as never)
 
     const res = await app.request('/api/workspaces/w1/diff?mode=unpushed')
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.mode).toBe('unpushed')
     expect(body.files).toEqual(unpushedFiles)
-    expect(gitOps.getUnpushedChangedFiles).toHaveBeenCalledWith(expect.any(String), 'feature/x')
-    expect(gitOps.getChangedFiles).not.toHaveBeenCalled()
+    expect(gitOps.getUnpushedChangedFilesAsync).toHaveBeenCalledWith(expect.any(String), 'feature/x')
+    expect(gitOps.getChangedFilesAsync).not.toHaveBeenCalled()
   })
 
   it('falls back to branch mode when mode is anything other than "unpushed"', async () => {
-    vi.mocked(gitOps.getChangedFiles).mockReturnValue([])
+    vi.mocked(gitOps.getChangedFilesAsync).mockResolvedValue([])
     const res = await app.request('/api/workspaces/w1/diff?mode=bogus')
     expect(res.status).toBe(200)
     const body = await res.json()
@@ -5325,7 +5339,7 @@ describe('GET /api/workspaces/:id/diff-file', () => {
   })
 
   it('reads original from sourceBranch when mode=branch (default)', async () => {
-    vi.mocked(gitOps.getFileAtRef).mockReturnValue('branch original')
+    vi.mocked(gitOps.getFileAtRefAsync).mockResolvedValue('branch original')
     const res = await app.request('/api/workspaces/w1/diff-file?path=a.ts')
     expect(res.status).toBe(200)
     const body = await res.json()
@@ -5333,17 +5347,17 @@ describe('GET /api/workspaces/:id/diff-file', () => {
     expect(body.original).toBe('branch original')
     expect(body.modified).toBe('modified content')
     expect(body.modifiedSha).toBe(`sha-${body.modified.length}`)
-    expect(gitOps.getFileAtRef).toHaveBeenCalledWith(expect.any(String), 'develop', 'a.ts')
+    expect(gitOps.getFileAtRefAsync).toHaveBeenCalledWith(expect.any(String), 'develop', 'a.ts')
   })
 
   it('reads original from origin/<workingBranch> when mode=unpushed', async () => {
-    vi.mocked(gitOps.getFileAtRef).mockReturnValue('remote original')
+    vi.mocked(gitOps.getFileAtRefAsync).mockResolvedValue('remote original')
     const res = await app.request('/api/workspaces/w1/diff-file?path=a.ts&mode=unpushed')
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.mode).toBe('unpushed')
     expect(body.original).toBe('remote original')
-    expect(gitOps.getFileAtRef).toHaveBeenCalledWith(expect.any(String), 'origin/feature/x', 'a.ts')
+    expect(gitOps.getFileAtRefAsync).toHaveBeenCalledWith(expect.any(String), 'origin/feature/x', 'a.ts')
   })
 
   it('returns 400 when path query param is missing', async () => {
@@ -5354,7 +5368,7 @@ describe('GET /api/workspaces/:id/diff-file', () => {
   it('rejects a traversal path before reading either Git or the worktree', async () => {
     const res = await app.request('/api/workspaces/w1/diff-file?path=../../etc/passwd')
     expect(res.status).toBe(400)
-    expect(gitOps.getFileAtRef).not.toHaveBeenCalled()
+    expect(gitOps.getFileAtRefAsync).not.toHaveBeenCalled()
     expect(gitOps.getFileContent).not.toHaveBeenCalled()
   })
 })
@@ -5404,7 +5418,7 @@ describe('GET /api/workspaces/:id/commits', () => {
         isPushed: false,
       },
     ]
-    vi.mocked(gitOps.listBranchCommits).mockReturnValue(fakeCommits as never)
+    vi.mocked(gitOps.listBranchCommitsAsync).mockResolvedValue(fakeCommits as never)
 
     const res = await app.request('/api/workspaces/w1/commits')
     expect(res.status).toBe(200)
@@ -5412,19 +5426,19 @@ describe('GET /api/workspaces/:id/commits', () => {
     expect(body.commits).toEqual(fakeCommits)
     expect(body.sourceBranch).toBe('develop')
     expect(body.workingBranch).toBe('feature/x')
-    expect(gitOps.listBranchCommits).toHaveBeenCalledWith(expect.any(String), 'develop', 'feature/x', 50)
+    expect(gitOps.listBranchCommitsAsync).toHaveBeenCalledWith(expect.any(String), 'develop', 'feature/x', 50)
   })
 
   it('respects the limit query param within [1, 200]', async () => {
-    vi.mocked(gitOps.listBranchCommits).mockReturnValue([])
+    vi.mocked(gitOps.listBranchCommitsAsync).mockResolvedValue([])
     await app.request('/api/workspaces/w1/commits?limit=10')
-    expect(gitOps.listBranchCommits).toHaveBeenCalledWith(expect.any(String), 'develop', 'feature/x', 10)
+    expect(gitOps.listBranchCommitsAsync).toHaveBeenCalledWith(expect.any(String), 'develop', 'feature/x', 10)
   })
 
   it('clamps invalid limit values to the default 50', async () => {
-    vi.mocked(gitOps.listBranchCommits).mockReturnValue([])
+    vi.mocked(gitOps.listBranchCommitsAsync).mockResolvedValue([])
     await app.request('/api/workspaces/w1/commits?limit=notanumber')
-    expect(gitOps.listBranchCommits).toHaveBeenCalledWith(expect.any(String), 'develop', 'feature/x', 50)
+    expect(gitOps.listBranchCommitsAsync).toHaveBeenCalledWith(expect.any(String), 'develop', 'feature/x', 50)
   })
 
   it('returns 404 for unknown workspace', async () => {
@@ -5445,7 +5459,7 @@ describe('GET /:id/branch-divergence', () => {
 
   it('returns ahead and behind lists with branch metadata', async () => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(gitOps.listBranchCommits).mockReturnValue([
+    vi.mocked(gitOps.listBranchCommitsAsync).mockResolvedValue([
       {
         sha: 'a'.repeat(40),
         shortSha: 'aaaaaaa',
@@ -5455,7 +5469,7 @@ describe('GET /:id/branch-divergence', () => {
         isPushed: true,
       },
     ] as never)
-    vi.mocked(gitOps.listCommitsBehind).mockReturnValue([
+    vi.mocked(gitOps.listCommitsBehindAsync).mockResolvedValue([
       { sha: 'b'.repeat(40), shortSha: 'bbbbbbb', subject: 'fix: b', author: 'u', date: '2026-01-02' },
     ])
     const res = await app.request('/api/workspaces/ws-1/branch-divergence')
@@ -5469,24 +5483,24 @@ describe('GET /:id/branch-divergence', () => {
 
   it('clamps limit to [1, 200]', async () => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(gitOps.listBranchCommits).mockReturnValue([] as never)
-    vi.mocked(gitOps.listCommitsBehind).mockReturnValue([])
+    vi.mocked(gitOps.listBranchCommitsAsync).mockResolvedValue([] as never)
+    vi.mocked(gitOps.listCommitsBehindAsync).mockResolvedValue([])
 
     await app.request('/api/workspaces/ws-1/branch-divergence?limit=0')
-    expect(vi.mocked(gitOps.listBranchCommits).mock.calls[0][3]).toBe(1)
-    expect(vi.mocked(gitOps.listCommitsBehind).mock.calls[0][3]).toBe(1)
+    expect(vi.mocked(gitOps.listBranchCommitsAsync).mock.calls[0][3]).toBe(1)
+    expect(vi.mocked(gitOps.listCommitsBehindAsync).mock.calls[0][3]).toBe(1)
 
-    vi.mocked(gitOps.listBranchCommits).mockClear()
-    vi.mocked(gitOps.listCommitsBehind).mockClear()
+    vi.mocked(gitOps.listBranchCommitsAsync).mockClear()
+    vi.mocked(gitOps.listCommitsBehindAsync).mockClear()
 
     await app.request('/api/workspaces/ws-1/branch-divergence?limit=999')
-    expect(vi.mocked(gitOps.listBranchCommits).mock.calls[0][3]).toBe(200)
-    expect(vi.mocked(gitOps.listCommitsBehind).mock.calls[0][3]).toBe(200)
+    expect(vi.mocked(gitOps.listBranchCommitsAsync).mock.calls[0][3]).toBe(200)
+    expect(vi.mocked(gitOps.listCommitsBehindAsync).mock.calls[0][3]).toBe(200)
   })
 
   it('returns 500 when git ops throw unexpectedly', async () => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(gitOps.listBranchCommits).mockImplementation(() => {
+    vi.mocked(gitOps.listBranchCommitsAsync).mockImplementation(() => {
       throw new Error('boom')
     })
     const res = await app.request('/api/workspaces/ws-1/branch-divergence')
@@ -5526,9 +5540,49 @@ describe('DELETE /api/workspaces/:id/pending-wakeup', () => {
 })
 
 describe('POST /api/workspaces/:id/pending-wakeup', () => {
+  beforeEach(() => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(wakeupService.schedule).mockReturnValue({ targetAt: '2026-04-22T10:02:00Z' })
+  })
+
+  it('rejects a missing workspace before scheduling', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null)
+    const res = await app.request('/api/workspaces/missing/pending-wakeup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ delaySeconds: 60, prompt: 'check' }),
+    })
+    expect(res.status).toBe(404)
+    expect(wakeupService.schedule).not.toHaveBeenCalled()
+  })
+
+  it.each(['archivedAt', 'worktreePurgedAt'] as const)('refuses scheduling for %s workspaces', async (field) => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ ...fakeWorkspace, [field]: '2026-10-01T00:00:00Z' })
+    const res = await app.request('/api/workspaces/w1/pending-wakeup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ delaySeconds: 60, prompt: 'check' }),
+    })
+    expect(res.status).toBe(409)
+    expect(wakeupService.schedule).not.toHaveBeenCalled()
+  })
+
+  it('rejects scheduling while a destructive lifecycle operation owns the workspace', async () => {
+    await withWorkspaceLifecycleGuard('w1', async () => {
+      const res = await app.request('/api/workspaces/w1/pending-wakeup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ delaySeconds: 60, prompt: 'check' }),
+      })
+      expect(res.status).toBe(409)
+      expect(wakeupService.schedule).not.toHaveBeenCalled()
+    })
+  })
+
   it('pins the wakeup to the active session and returns the resulting pending entry', async () => {
     vi.mocked(agentManager.getActiveSessionId).mockReturnValue('sess-42')
     vi.mocked(wakeupService.getPending).mockReturnValue({ targetAt: '2026-04-22T10:00:00Z', reason: 'CI' })
+    vi.mocked(wakeupService.schedule).mockReturnValue({ targetAt: '2026-04-22T10:00:00Z', reason: 'CI' })
     const res = await app.request('/api/workspaces/w1/pending-wakeup', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -7794,7 +7848,7 @@ describe('POST /api/workspaces/:id/git/commit-with-agent', () => {
 
   it('does not resume when commit-with-agent delivery reaches a live controller', async () => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(gitOps.getWorkingTreeStatus).mockReturnValue({ staged: 0, modified: 1, untracked: 0 })
+    vi.mocked(gitOps.getWorkingTreeStatusAsync).mockResolvedValue({ staged: 0, modified: 1, untracked: 0 })
     vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce({
       status: 'sent',
       sessionId: 'delivered-session-id',
@@ -7816,7 +7870,7 @@ describe('POST /api/workspaces/:id/git/commit-with-agent', () => {
 
   it('resumes the agent when commit-with-agent delivery reports stopped', async () => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(gitOps.getWorkingTreeStatus).mockReturnValue({ staged: 0, modified: 1, untracked: 0 })
+    vi.mocked(gitOps.getWorkingTreeStatusAsync).mockResolvedValue({ staged: 0, modified: 1, untracked: 0 })
     vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce({ status: 'stopped' })
 
     const res = await app.request('/api/workspaces/ws-1/git/commit-with-agent', { method: 'POST' })
@@ -7836,7 +7890,7 @@ describe('POST /api/workspaces/:id/git/commit-with-agent', () => {
 
   it('returns 409 without starting or persisting a ghost prompt when commit delivery rejects', async () => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(gitOps.getWorkingTreeStatus).mockReturnValue({ staged: 0, modified: 1, untracked: 0 })
+    vi.mocked(gitOps.getWorkingTreeStatusAsync).mockResolvedValue({ staged: 0, modified: 1, untracked: 0 })
     vi.mocked(agentManager.sendMessageForFallback).mockRejectedValueOnce(new Error('replacement rejected'))
 
     const res = await app.request('/api/workspaces/ws-1/git/commit-with-agent', { method: 'POST' })
@@ -8057,11 +8111,11 @@ describe('POST /:id/git/discard', () => {
 describe('GET /:id/diff mode=commits', () => {
   beforeEach(() => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(gitOps.commitExists).mockReturnValue(true)
+    vi.mocked(gitOps.commitExistsAsync).mockResolvedValue(true)
   })
 
   it('returns the file list between two commits', async () => {
-    vi.mocked(gitOps.getChangedFilesBetween).mockReturnValue([{ path: 'a.txt', status: 'modified' }])
+    vi.mocked(gitOps.getChangedFilesBetweenAsync).mockResolvedValue([{ path: 'a.txt', status: 'modified' }])
     const res = await app.request('/api/workspaces/ws-1/diff?mode=commits&from=aaa&to=bbb')
     expect(res.status).toBe(200)
     const body = await res.json()
@@ -8069,7 +8123,7 @@ describe('GET /:id/diff mode=commits', () => {
     expect(body.from).toBe('aaa')
     expect(body.to).toBe('bbb')
     expect(body.files).toEqual([{ path: 'a.txt', status: 'modified' }])
-    expect(gitOps.getChangedFilesBetween).toHaveBeenCalledWith(fakeWorkspace.worktreePath, 'aaa', 'bbb')
+    expect(gitOps.getChangedFilesBetweenAsync).toHaveBeenCalledWith(fakeWorkspace.worktreePath, 'aaa', 'bbb')
   })
 
   it('400 when from or to is missing', async () => {
@@ -8078,17 +8132,17 @@ describe('GET /:id/diff mode=commits', () => {
   })
 
   it('400 when the to ref is invalid', async () => {
-    vi.mocked(gitOps.commitExists).mockImplementation((_repo, ref) => ref !== 'bad')
+    vi.mocked(gitOps.commitExistsAsync).mockImplementation(async (_repo, ref) => ref !== 'bad')
     const res = await app.request('/api/workspaces/ws-1/diff?mode=commits&from=aaa&to=bad')
     expect(res.status).toBe(400)
   })
 
   it('falls back to the empty-tree base when from does not resolve (root commit)', async () => {
-    vi.mocked(gitOps.commitExists).mockImplementation((_repo, ref) => ref !== 'aaa^')
-    vi.mocked(gitOps.getChangedFilesBetween).mockReturnValue([{ path: 'a.txt', status: 'added' }])
+    vi.mocked(gitOps.commitExistsAsync).mockImplementation(async (_repo, ref) => ref !== 'aaa^')
+    vi.mocked(gitOps.getChangedFilesBetweenAsync).mockResolvedValue([{ path: 'a.txt', status: 'added' }])
     const res = await app.request('/api/workspaces/ws-1/diff?mode=commits&from=aaa%5E&to=aaa')
     expect(res.status).toBe(200)
-    expect(gitOps.getChangedFilesBetween).toHaveBeenCalledWith(
+    expect(gitOps.getChangedFilesBetweenAsync).toHaveBeenCalledWith(
       fakeWorkspace.worktreePath,
       '4b825dc642cb6eb9a060e54bf8d69288fbee4904',
       'aaa',
@@ -8099,11 +8153,11 @@ describe('GET /:id/diff mode=commits', () => {
 describe('GET /:id/diff-file mode=commits', () => {
   beforeEach(() => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(gitOps.commitExists).mockReturnValue(true)
+    vi.mocked(gitOps.commitExistsAsync).mockResolvedValue(true)
   })
 
   it('returns original/modified from each ref, no modifiedSha', async () => {
-    vi.mocked(gitOps.getFileAtRef).mockImplementation((_repo, ref) => (ref === 'aaa' ? 'old' : 'new'))
+    vi.mocked(gitOps.getFileAtRefAsync).mockImplementation(async (_repo, ref) => (ref === 'aaa' ? 'old' : 'new'))
     const res = await app.request('/api/workspaces/ws-1/diff-file?mode=commits&from=aaa&to=bbb&path=a.txt')
     expect(res.status).toBe(200)
     const body = await res.json()
@@ -8111,8 +8165,8 @@ describe('GET /:id/diff-file mode=commits', () => {
     expect(body.modified).toBe('new')
     expect(body.mode).toBe('commits')
     expect(body.modifiedSha).toBeUndefined()
-    expect(gitOps.getFileAtRef).toHaveBeenCalledWith(fakeWorkspace.worktreePath, 'aaa', 'a.txt')
-    expect(gitOps.getFileAtRef).toHaveBeenCalledWith(fakeWorkspace.worktreePath, 'bbb', 'a.txt')
+    expect(gitOps.getFileAtRefAsync).toHaveBeenCalledWith(fakeWorkspace.worktreePath, 'aaa', 'a.txt')
+    expect(gitOps.getFileAtRefAsync).toHaveBeenCalledWith(fakeWorkspace.worktreePath, 'bbb', 'a.txt')
   })
 
   it('400 when from or to is missing', async () => {
@@ -8121,17 +8175,17 @@ describe('GET /:id/diff-file mode=commits', () => {
   })
 
   it('400 when the to ref is invalid', async () => {
-    vi.mocked(gitOps.commitExists).mockImplementation((_repo, ref) => ref !== 'bad')
+    vi.mocked(gitOps.commitExistsAsync).mockImplementation(async (_repo, ref) => ref !== 'bad')
     const res = await app.request('/api/workspaces/ws-1/diff-file?mode=commits&from=aaa&to=bad&path=a.txt')
     expect(res.status).toBe(400)
   })
 
   it('falls back to the empty-tree base when from does not resolve (root commit)', async () => {
-    vi.mocked(gitOps.commitExists).mockImplementation((_repo, ref) => ref !== 'aaa^')
-    vi.mocked(gitOps.getFileAtRef).mockReturnValue('content')
+    vi.mocked(gitOps.commitExistsAsync).mockImplementation(async (_repo, ref) => ref !== 'aaa^')
+    vi.mocked(gitOps.getFileAtRefAsync).mockResolvedValue('content')
     const res = await app.request('/api/workspaces/ws-1/diff-file?mode=commits&from=aaa%5E&to=aaa&path=a.txt')
     expect(res.status).toBe(200)
-    expect(gitOps.getFileAtRef).toHaveBeenCalledWith(
+    expect(gitOps.getFileAtRefAsync).toHaveBeenCalledWith(
       fakeWorkspace.worktreePath,
       '4b825dc642cb6eb9a060e54bf8d69288fbee4904',
       'a.txt',
@@ -8146,7 +8200,7 @@ describe('GET /api/workspaces/:id/working-tree-files', () => {
   })
 
   it('returns the working-tree files', async () => {
-    vi.mocked(gitOps.getWorkingTreeFiles).mockReturnValue([
+    vi.mocked(gitOps.getWorkingTreeFilesAsync).mockResolvedValue([
       { path: 'a.txt', staged: true, modified: false, untracked: false },
       { path: 'b.txt', staged: false, modified: true, untracked: false },
     ])

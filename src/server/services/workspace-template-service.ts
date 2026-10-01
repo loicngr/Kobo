@@ -1,7 +1,7 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import path from 'node:path'
+import { existsSync, readFileSync } from 'node:fs'
 import { nanoid } from 'nanoid'
 import { getDb } from '../db/index.js'
+import { writeJsonFileAtomically } from '../utils/atomic-json-file.js'
 import { getWorkspaceTemplatesPath } from '../utils/paths.js'
 import type { AgentPermissionMode } from './workspace-service.js'
 
@@ -117,37 +117,37 @@ function readFile(): WorkspaceTemplate[] {
   const filePath = getWorkspaceTemplatesPath()
   if (!existsSync(filePath)) return []
   try {
-    const parsed = JSON.parse(readFileSync(filePath, 'utf-8')) as WorkspaceTemplatesFile
+    const parsed = JSON.parse(readFileSync(filePath, 'utf-8')) as WorkspaceTemplatesFile | null
+    if (!parsed || !Array.isArray(parsed.templates)) throw new Error('Expected a templates array')
     if (parsed.version !== FILE_VERSION) {
       console.warn(
         `[workspace-template-service] workspace-templates.json has version ${parsed.version}, expected ${FILE_VERSION}. Reading best-effort.`,
       )
     }
-    if (!Array.isArray(parsed.templates)) return []
-    // Re-sanitise on read: the file may have been edited by hand.
-    return parsed.templates
-      .filter(
+    if (
+      parsed.templates.some(
         (t) =>
-          t &&
-          typeof t.id === 'string' &&
-          typeof t.name === 'string' &&
-          typeof t.createdAt === 'string' &&
-          typeof t.updatedAt === 'string',
+          !t ||
+          typeof t.id !== 'string' ||
+          typeof t.name !== 'string' ||
+          typeof t.createdAt !== 'string' ||
+          typeof t.updatedAt !== 'string',
       )
-      .map((t) => ({ ...t, preset: sanitizePreset(t.preset) }))
+    ) {
+      throw new Error('A workspace template has missing or malformed fields')
+    }
+    // Re-sanitise on read: the file may have been edited by hand.
+    return parsed.templates.map((t) => ({ ...t, preset: sanitizePreset(t.preset) }))
   } catch (err) {
-    // Treated as empty, never overwritten here: the next successful write is
-    // the user's, after they have seen the log line.
-    console.error('[workspace-template-service] Failed to read workspace-templates.json:', err)
-    return []
+    throw new Error('Failed to read workspace-templates.json. Existing data was preserved; restore a valid file.', {
+      cause: err,
+    })
   }
 }
 
 function writeFile(templates: WorkspaceTemplate[]): void {
-  const filePath = getWorkspaceTemplatesPath()
-  mkdirSync(path.dirname(filePath), { recursive: true })
   const file: WorkspaceTemplatesFile = { version: FILE_VERSION, templates }
-  writeFileSync(filePath, JSON.stringify(file, null, 2), 'utf-8')
+  writeJsonFileAtomically(getWorkspaceTemplatesPath(), file)
 }
 
 export function listWorkspaceTemplates(): WorkspaceTemplate[] {

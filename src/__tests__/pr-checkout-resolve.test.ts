@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   applyBranchStrategy,
   computeFingerprint,
@@ -8,6 +8,7 @@ import {
   resolvePrCheckout,
   StaleDiagnosisError,
 } from '../server/services/pr-checkout-service.js'
+import * as gitOps from '../server/utils/git-ops.js'
 import { createTempRepo, type TempRepo } from './helpers/temp-git-repo.js'
 
 describe('applyBranchStrategy', () => {
@@ -30,14 +31,14 @@ describe('applyBranchStrategy', () => {
 
   it('fast-forwards a branch that is only behind', async () => {
     branchBehindOrigin()
-    applyBranchStrategy(repo.path, 'feat/s', 'fast-forward')
+    await applyBranchStrategy(repo.path, 'feat/s', 'fast-forward')
     expect(repo.git(['rev-parse', 'feat/s'])).toBe(repo.git(['rev-parse', 'origin/feat/s']))
   })
 
   it('leaves the branch alone on keep', async () => {
     branchBehindOrigin()
     const before = repo.git(['rev-parse', 'feat/s'])
-    applyBranchStrategy(repo.path, 'feat/s', 'keep')
+    await applyBranchStrategy(repo.path, 'feat/s', 'keep')
     expect(repo.git(['rev-parse', 'feat/s'])).toBe(before)
   })
 
@@ -47,7 +48,7 @@ describe('applyBranchStrategy', () => {
     repo.commit('c.txt', 'c\n', 'feat: local only')
     repo.git(['checkout', 'main'])
     const lost = repo.git(['rev-parse', 'feat/s'])
-    const result = applyBranchStrategy(repo.path, 'feat/s', 'reset-hard')
+    const result = await applyBranchStrategy(repo.path, 'feat/s', 'reset-hard')
     expect(result.backupBranch).toMatch(/^kobo-backup\/feat\/s-\d+$/)
     expect(repo.git(['rev-parse', result.backupBranch as string])).toBe(lost)
     expect(repo.git(['rev-parse', 'feat/s'])).toBe(repo.git(['rev-parse', 'origin/feat/s']))
@@ -58,7 +59,7 @@ describe('applyBranchStrategy', () => {
     repo.git(['checkout', 'feat/s'])
     repo.commit('d.txt', 'd\n', 'feat: mine')
     repo.git(['checkout', 'main'])
-    applyBranchStrategy(repo.path, 'feat/s', 'rebase')
+    await applyBranchStrategy(repo.path, 'feat/s', 'rebase')
     expect(repo.git(['log', '--oneline', 'feat/s'])).toContain('feat: mine')
     expect(() => repo.git(['merge-base', '--is-ancestor', 'origin/feat/s', 'feat/s'])).not.toThrow()
   })
@@ -68,7 +69,7 @@ describe('applyBranchStrategy', () => {
     repo.git(['checkout', 'feat/s'])
     repo.commit('e.txt', 'e\n', 'feat: mine again')
     repo.git(['checkout', 'main'])
-    applyBranchStrategy(repo.path, 'feat/s', 'rebase')
+    await applyBranchStrategy(repo.path, 'feat/s', 'rebase')
     expect(repo.git(['rev-parse', '--abbrev-ref', 'HEAD'])).toBe('main')
   })
 })
@@ -88,6 +89,28 @@ describe('resolvePrCheckout', () => {
     repo.git(['checkout', 'main'])
     repo.git(['branch', '-D', 'feat/r'])
   }
+
+  it('awaits asynchronous fetch and aborts resolution when it fails', async () => {
+    remoteOnlyBranch()
+    const report = await diagnoseLocalState(repo.path, 'feat/r', null)
+    const fetch = vi.spyOn(gitOps, 'fetchSourceBranchOrThrowAsync').mockRejectedValueOnce(new Error('fetch rejected'))
+    try {
+      await expect(
+        resolvePrCheckout({
+          projectPath: repo.path,
+          headBranch: 'feat/r',
+          baseBranch: 'main',
+          worktreesPath: null,
+          decisions: {},
+          fingerprint: await computeFingerprint(report),
+        }),
+      ).rejects.toThrow('fetch rejected')
+      expect(fetch).toHaveBeenCalledWith(repo.path, 'feat/r')
+      expect(fs.existsSync(report.targetWorktreePath)).toBe(false)
+    } finally {
+      fetch.mockRestore()
+    }
+  })
 
   it('creates the worktree from origin when nothing exists locally', async () => {
     remoteOnlyBranch()
@@ -122,6 +145,43 @@ describe('resolvePrCheckout', () => {
     })
     expect(result.worktreePath).toBe(wt)
     expect(result.applied.map((a) => a.kind)).toContain('attach-worktree')
+  })
+
+  it('keeps the event loop responsive while a pre-commit hook runs during resolution', async () => {
+    remoteOnlyBranch()
+    const wt = path.join(repo.path, '.worktrees', 'feat-r')
+    repo.git(['worktree', 'add', '-b', 'feat/r', wt, 'origin/feat/r'])
+    fs.writeFileSync(path.join(wt, 'a.txt'), 'edited\n')
+    const hook = path.join(repo.path, '.git', 'hooks', 'pre-commit')
+    fs.writeFileSync(hook, '#!/bin/sh\nsleep 0.25\nprintf yes > hook-ran\n')
+    fs.chmodSync(hook, 0o755)
+    const report = await diagnoseLocalState(repo.path, 'feat/r', null)
+    let ticks = 0
+    let maxGapMs = 0
+    let lastTick = performance.now()
+    const timer = setInterval(() => {
+      const now = performance.now()
+      maxGapMs = Math.max(maxGapMs, now - lastTick)
+      lastTick = now
+      ticks++
+    }, 10)
+    try {
+      const result = await resolvePrCheckout({
+        projectPath: repo.path,
+        headBranch: 'feat/r',
+        baseBranch: 'main',
+        worktreesPath: null,
+        decisions: { orphanWorktree: 'attach', localChanges: 'commit' },
+        fingerprint: await computeFingerprint(report),
+      })
+      await new Promise((resolve) => setTimeout(resolve, 15))
+      expect(result.applied.map((action) => action.kind)).toContain('commit-changes')
+      expect(fs.existsSync(path.join(wt, 'hook-ran'))).toBe(true)
+      expect(ticks).toBeGreaterThan(5)
+      expect(maxGapMs).toBeLessThan(175)
+    } finally {
+      clearInterval(timer)
+    }
   })
 
   it.each(['keep', undefined] as const)(

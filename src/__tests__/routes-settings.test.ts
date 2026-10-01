@@ -38,14 +38,15 @@ vi.mock('../server/db/index.js', () => ({
   })),
 }))
 
-vi.mock('../server/services/ws-events-retention-service.js', () => ({
-  countPrunableWsEvents: vi.fn(() => 0),
+vi.mock('../server/services/ws-events-retention-worker-service.js', () => ({
+  previewWsEventsRetention: vi.fn(async () => ({ deletable: 0, total: 0 })),
 }))
 
 // ── Imports (after mocks) ────────────────────────────────────────────────────
 
 import router from '../server/routes/settings.js'
 import * as settingsService from '../server/services/settings-service.js'
+import { previewWsEventsRetention } from '../server/services/ws-events-retention-worker-service.js'
 import { MASKED_SECRET } from '../shared/consts.js'
 import { makeGlobalSettings, makeProjectSettings } from './helpers/fixtures.js'
 
@@ -493,6 +494,20 @@ describe('network routes', () => {
 })
 
 describe('GET /ws-events-retention-preview', () => {
+  it('awaits the worker preview instead of running SQL maintenance on the request thread', async () => {
+    vi.mocked(previewWsEventsRetention).mockResolvedValueOnce({ deletable: 12, total: 40 })
+    const res = await app.request('/api/settings/ws-events-retention-preview?days=30&keep=10')
+    expect(previewWsEventsRetention).toHaveBeenCalledWith({ retentionDays: 30, keepPerWorkspace: 10 })
+    expect(await res.json()).toEqual({ deletable: 12, total: 40 })
+  })
+
+  it('reports a failed preview rather than a successful empty count', async () => {
+    vi.mocked(previewWsEventsRetention).mockRejectedValueOnce(new Error('Retention unavailable'))
+    const res = await app.request('/api/settings/ws-events-retention-preview?days=30&keep=10')
+    expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({ error: 'Retention unavailable' })
+  })
+
   it('refuses a negative window instead of counting something absurd', async () => {
     const res = await app.request('/api/settings/ws-events-retention-preview?days=-1&keep=0')
     expect(res.status).toBe(400)

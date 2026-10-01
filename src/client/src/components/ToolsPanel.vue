@@ -172,6 +172,7 @@ import { useSessionHandoffStore } from 'src/stores/session-handoff'
 import { useSettingsStore } from 'src/stores/settings'
 import { useWorkspaceStore, type Workspace } from 'src/stores/workspace'
 import { getActionBlocker } from 'src/utils/action-blocker'
+import { apiFetchResponse, apiFetchResponseForStatus } from 'src/utils/api'
 import { getCurrentSession } from 'src/utils/current-session'
 import { isCiFailed } from 'src/utils/pr-status'
 import { isBusyStatus } from 'src/utils/workspace-status'
@@ -290,7 +291,7 @@ function runSetupScript() {
   }).onOk(async () => {
     running.value = true
     try {
-      const res = await fetch(`/api/workspaces/${workspaceId.value}/run-setup-script`, { method: 'POST' })
+      const res = await apiFetchResponse(`/api/workspaces/${workspaceId.value}/run-setup-script`, { method: 'POST' })
       const data = await res.json()
       if (!res.ok) {
         $q.notify({
@@ -315,7 +316,7 @@ async function openEditor() {
   if (!workspaceId.value) return
   openingEditor.value = true
   try {
-    const res = await fetch(`/api/workspaces/${workspaceId.value}/open-editor`, { method: 'POST' })
+    const res = await apiFetchResponseForStatus(`/api/workspaces/${workspaceId.value}/open-editor`, { method: 'POST' })
     if (!res.ok) {
       const data = await res.json()
       $q.notify({ type: 'negative', message: data.error ?? t('git.openEditorFailed'), position: 'top', timeout: 6000 })
@@ -332,7 +333,9 @@ async function openTerminal() {
   if (!workspaceId.value) return
   openingTerminal.value = true
   try {
-    const res = await fetch(`/api/workspaces/${workspaceId.value}/open-terminal`, { method: 'POST' })
+    const res = await apiFetchResponseForStatus(`/api/workspaces/${workspaceId.value}/open-terminal`, {
+      method: 'POST',
+    })
     if (!res.ok) {
       const data = await res.json()
       $q.notify({
@@ -354,7 +357,9 @@ async function openFileManager() {
   if (!workspaceId.value) return
   openingFileManager.value = true
   try {
-    const res = await fetch(`/api/workspaces/${workspaceId.value}/open-file-manager`, { method: 'POST' })
+    const res = await apiFetchResponseForStatus(`/api/workspaces/${workspaceId.value}/open-file-manager`, {
+      method: 'POST',
+    })
     if (!res.ok) {
       const data = await res.json()
       $q.notify({
@@ -380,7 +385,7 @@ async function startCiFix() {
   if (!workspaceId.value || ciBlocker.value) return
   fixingCi.value = true
   try {
-    const res = await fetch(`/api/workspaces/${workspaceId.value}/start-ci-fix`, { method: 'POST' })
+    const res = await apiFetchResponse(`/api/workspaces/${workspaceId.value}/start-ci-fix`, { method: 'POST' })
     const data = await res.json()
     if (!res.ok) {
       $q.notify({
@@ -404,7 +409,7 @@ async function startReview(payload: StartReviewRequest) {
   if (startingReview.value || reviewBlocker.value || !workspaceId.value) return
   startingReview.value = true
   try {
-    const res = await fetch(`/api/workspaces/${workspaceId.value}/start-review`, {
+    const res = await apiFetchResponse(`/api/workspaces/${workspaceId.value}/start-review`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),

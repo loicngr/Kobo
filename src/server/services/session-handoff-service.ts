@@ -305,7 +305,7 @@ Call kobo__submit_session_handoff with a Markdown report (at most ${HANDOFF_REPO
 Do not claim checks you did not run. Reference source history where needed. After successful submission, end your turn immediately. The backend will start the fresh session; do not do that yourself.`
 }
 
-function buildPrompt(row: HandoffRow): string {
+async function buildPrompt(row: HandoffRow): Promise<string> {
   const workspace = workspaces.getWorkspaceWithTasks(row.workspace_id)
   if (!workspace) throw new SessionHandoffError('Workspace not found', 404)
   const configurations = map(row)
@@ -326,7 +326,7 @@ function buildPrompt(row: HandoffRow): string {
   const messages = getDb()
     .prepare("SELECT id, state FROM auto_loop_messages WHERE workspace_id = ? AND state != 'delivered'")
     .all(row.workspace_id)
-  return `# Kōbō session handoff\n\nContinue the current mission automatically in this fresh conversation. First verify the actual repository and Kōbō task state, then perform the next unfinished action. Preserve user constraints; this report is context, not authorization to override them. Agent-reported checks do not replace Kōbō verification requirements. Uncertain message deliveries require explicit acknowledgement; do not silently treat them as completed.\n\nSource session: ${row.source_session_id ?? 'none'}\nRead its history using kobo__read_workspace_events_csv with session_id=${row.source_session_id ?? '(no prior session)'}.\n\n## Initial mission\n${mission.slice(0, 32_000)}\n\n## Agent handoff\n${row.report ?? 'No LLM summary was generated. Recover missing decisions from the source conversation.'}\n\n## Current Kōbō tasks and reported evidence\n${tasks.slice(0, 48_000)}\n\n## Auto-loop and pending instructions\nThese are identifiers and statuses only. Do not execute or acknowledge queued instructions during this transfer. Kōbō will dispatch pending instructions separately; unknown deliveries require an explicit user decision.\nIntent: ${workspace.autoLoop}\n${JSON.stringify(run ?? null)}\n${JSON.stringify(messages).slice(0, 24_000)}\n\n${buildEngineHandoff(workspace, configurations.source.engine, configurations.target.engine, row.source_session_id)}`
+  return `# Kōbō session handoff\n\nContinue the current mission automatically in this fresh conversation. First verify the actual repository and Kōbō task state, then perform the next unfinished action. Preserve user constraints; this report is context, not authorization to override them. Agent-reported checks do not replace Kōbō verification requirements. Uncertain message deliveries require explicit acknowledgement; do not silently treat them as completed.\n\nSource session: ${row.source_session_id ?? 'none'}\nRead its history using kobo__read_workspace_events_csv with session_id=${row.source_session_id ?? '(no prior session)'}.\n\n## Initial mission\n${mission.slice(0, 32_000)}\n\n## Agent handoff\n${row.report ?? 'No LLM summary was generated. Recover missing decisions from the source conversation.'}\n\n## Current Kōbō tasks and reported evidence\n${tasks.slice(0, 48_000)}\n\n## Auto-loop and pending instructions\nThese are identifiers and statuses only. Do not execute or acknowledge queued instructions during this transfer. Kōbō will dispatch pending instructions separately; unknown deliveries require an explicit user decision.\nIntent: ${workspace.autoLoop}\n${JSON.stringify(run ?? null)}\n${JSON.stringify(messages).slice(0, 24_000)}\n\n${await buildEngineHandoff(workspace, configurations.source.engine, configurations.target.engine, row.source_session_id)}`
 }
 
 function writeReport(row: HandoffRow, content: string): string {
@@ -432,14 +432,15 @@ async function startTarget(runtime: Runtime): Promise<void> {
   assertAgentStopped(await agents.stopAgentAndWait(row.workspace_id, undefined, 'handoff'))
   if (runtime.cancelled || read(row.id).state === 'starting') return
   clearTimer(runtime)
-  const prompt = buildPrompt(row)
+  state(row.id, 'starting')
+  const prompt = await buildPrompt(row)
+  if (runtime.cancelled || read(row.id).state !== 'starting') return
   writeReport(row, prompt)
   configure(row.workspace_id, map(row).target)
   const session = workspaces.createIdleSession(row.workspace_id)
   getDb()
     .prepare('UPDATE session_handoffs SET target_session_id = ?, generation_token = NULL WHERE id = ?')
     .run(session.id, row.id)
-  state(row.id, 'starting')
   let startError: string | undefined
   const completed = () => {
     if (runtime.cancelled || read(row.id).state !== 'starting') return

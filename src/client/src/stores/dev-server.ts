@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { apiFetch } from 'src/utils/api'
+import { apiFetch, apiFetchResponse, apiResponseError } from 'src/utils/api'
 
 const statusRequests = new Map<string, number>()
 
@@ -42,8 +42,8 @@ export const useDevServerStore = defineStore('devServer', {
 
     async startDevServer(workspaceId: string) {
       try {
-        const res = await fetch(`/api/dev-server/${workspaceId}/start`, { method: 'POST' })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const res = await apiFetchResponse(`/api/dev-server/${workspaceId}/start`, { method: 'POST' })
+        if (!res.ok) throw await apiResponseError(res)
         const data = await res.json()
         this.statuses[workspaceId] = data
       } catch (err) {
@@ -54,8 +54,8 @@ export const useDevServerStore = defineStore('devServer', {
 
     async stopDevServer(workspaceId: string) {
       try {
-        const res = await fetch(`/api/dev-server/${workspaceId}/stop`, { method: 'POST' })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const res = await apiFetchResponse(`/api/dev-server/${workspaceId}/stop`, { method: 'POST' })
+        if (!res.ok) throw await apiResponseError(res)
         const data = await res.json()
         this.statuses[workspaceId] = data
       } catch (err) {
@@ -66,8 +66,8 @@ export const useDevServerStore = defineStore('devServer', {
 
     async fetchLogs(workspaceId: string, tail = 200) {
       try {
-        const res = await fetch(`/api/dev-server/${workspaceId}/logs?tail=${tail}`)
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const res = await apiFetchResponse(`/api/dev-server/${workspaceId}/logs?tail=${tail}`)
+        if (!res.ok) throw await apiResponseError(res)
         const data = await res.json()
         this.logs[workspaceId] = data.logs
         return data.logs as string

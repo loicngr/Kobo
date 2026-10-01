@@ -159,6 +159,7 @@ import TourReplayButton from 'src/components/TourReplayButton.vue'
 import WorkspaceAttentionLabels from 'src/components/WorkspaceAttentionLabels.vue'
 import { useTours } from 'src/composables/use-tours'
 import { useWorkspaceStore } from 'src/stores/workspace'
+import { apiFetchResponse } from 'src/utils/api'
 import { useTimeAgo } from 'src/utils/formatters'
 import { getAttentionReasons } from 'src/utils/workspace-attention'
 import { computed, onMounted, ref } from 'vue'
@@ -280,7 +281,7 @@ function formatResetAt(iso: string): string {
  */
 async function requestReliability(url: string, init?: RequestInit): Promise<void> {
   try {
-    const res = await fetch(url, init)
+    const res = await apiFetchResponse(url, init)
     if (!res.ok) {
       reliabilityError.value = true
       return

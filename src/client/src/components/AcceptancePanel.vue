@@ -111,6 +111,7 @@ import { useQuasar } from 'quasar'
 import { useWebSocketStore } from 'src/stores/websocket'
 import type { Task } from 'src/stores/workspace'
 import { useWorkspaceStore } from 'src/stores/workspace'
+import { apiFetchOk, apiFetchResponse, apiResponseError } from 'src/utils/api'
 import { sendCheckProgress } from 'src/utils/kobo-commands'
 import { nextTick, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -175,12 +176,11 @@ async function toggleTask(task: Task) {
   // still target the workspace that actually changed.
   const workspaceIdAtStart = task.workspaceId
   try {
-    const res = await fetch(`/api/workspaces/${task.workspaceId}/tasks/${task.id}`, {
+    await apiFetchOk(`/api/workspaces/${task.workspaceId}/tasks/${task.id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status: newStatus }),
     })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
     store.fetchWorkspaceDetails(workspaceIdAtStart)
   } catch (err) {
     console.error('Failed to update task:', err)

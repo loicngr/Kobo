@@ -19,7 +19,11 @@ import {
 } from '../services/session-handoff-service.js'
 import { AgentStopError, assertAgentStopped } from '../utils/agent-stop-result.js'
 import { withGitRepoLock } from '../utils/git-repo-lock.js'
-import { isWorkspaceLifecycleBusy, workspaceLifecycleReason } from '../utils/workspace-lifecycle-guard.js'
+import {
+  assertWorkspaceLifecycleAvailable,
+  isWorkspaceLifecycleBusy,
+  workspaceLifecycleReason,
+} from '../utils/workspace-lifecycle-guard.js'
 import autoLoopMessagesRoutes from './auto-loop-messages.js'
 
 const execFileAsync = promisify(execFileCb)
@@ -107,7 +111,11 @@ function realPathOrResolved(p: string): string {
 }
 
 function workspaceErrorStatus(err: unknown): 409 | 500 {
-  return err instanceof AgentStopError || err instanceof WorkspaceLifecycleBusyError ? 409 : 500
+  return err instanceof AgentStopError ||
+    err instanceof WorkspaceLifecycleBusyError ||
+    err instanceof terminalService.TerminalStopError
+    ? 409
+    : 500
 }
 
 /** Hono sub-router for workspace CRUD, tasks, agents, Git and PR creation. */
@@ -453,7 +461,7 @@ app.post('/:id/engine-handoff-preview', migrationGuard, async (c) => {
     if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
     const engine = listEngines().find((item) => item.id === body.engine)
     if (!engine) return c.json({ error: `Unknown engine '${body.engine ?? ''}'` }, 400)
-    return c.json({ handoff: buildEngineHandoff(workspace, workspace.engine, engine.id) })
+    return c.json({ handoff: await buildEngineHandoff(workspace, workspace.engine, engine.id) })
   } catch (err) {
     return c.json({ error: err instanceof Error ? err.message : 'Failed to build engine handoff' }, 500)
   }
@@ -501,7 +509,7 @@ app.post('/:id/switch-engine', migrationGuard, async (c) => {
     const handoff =
       typeof body.handoff === 'string' && body.handoff.trim()
         ? body.handoff.trim().slice(0, 30_000)
-        : buildEngineHandoff(workspace, workspace.engine, body.engine)
+        : await buildEngineHandoff(workspace, workspace.engine, body.engine)
 
     if (workspaceService.getWorkspace(workspace.id)?.status === 'compacting') {
       return c.json(
@@ -2145,13 +2153,18 @@ app.post('/:id/pending-wakeup', async (c) => {
     if (rawMode !== 'fresh' && rawMode !== 'resume') {
       return c.json({ error: "mode must be 'fresh' or 'resume'" }, 400)
     }
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    if (workspace.archivedAt || workspace.worktreePurgedAt) {
+      return c.json({ error: 'Restore the workspace before scheduling a wakeup' }, 409)
+    }
+    assertWorkspaceLifecycleAvailable(id)
     // 'resume' pins the active session so the wakeup resumes that conversation;
     // 'fresh' (default) — or 'resume' with no active session — leaves it unpinned
     // so the wakeup fires a brand-new session running `prompt`. This is what makes
     // manual scheduling on an idle workspace possible (no more hard 409).
     const agentSessionId = rawMode === 'resume' ? (agentManager.getActiveSessionId(id) ?? undefined) : undefined
-    wakeupService.schedule(id, delaySeconds, prompt as string, reason as string | undefined, agentSessionId)
-    const pending = wakeupService.getPending(id)
+    const pending = wakeupService.schedule(id, delaySeconds, prompt, reason as string | undefined, agentSessionId)
     return c.json({ ok: true, pending })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
@@ -3373,11 +3386,7 @@ app.post('/:id/archive', migrationGuard, async (c) => {
       throw err
     }
 
-    try {
-      terminalService.destroyTerminal(id)
-    } catch {
-      // Terminal may not exist — ignore
-    }
+    await terminalService.destroyTerminal(id)
 
     const updated = workspaceService.archiveWorkspace(id)
 
@@ -3511,11 +3520,7 @@ async function deleteWorkspaceWithSideEffectsUnlocked(
     throw err
   }
 
-  try {
-    terminalService.destroyTerminal(workspace.id)
-  } catch {
-    // Terminal may not exist — ignore
-  }
+  await terminalService.destroyTerminal(workspace.id)
 
   // Collected best-effort warnings: the DB deletion always proceeds, but
   // side-effects (worktree, local/remote branches) can fail independently.
@@ -3550,7 +3555,7 @@ async function deleteWorkspaceWithSideEffectsUnlocked(
   // Delete local branch if requested
   if (opts.deleteLocalBranch) {
     try {
-      gitOps.deleteLocalBranch(workspace.projectPath, workspace.workingBranch)
+      await gitOps.deleteLocalBranchAsync(workspace.projectPath, workspace.workingBranch)
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       console.error(`[workspaces] Failed to delete local branch: ${message}`)
@@ -3565,7 +3570,7 @@ async function deleteWorkspaceWithSideEffectsUnlocked(
   // Delete remote branch if requested
   if (opts.deleteRemoteBranch) {
     try {
-      gitOps.deleteRemoteBranch(workspace.projectPath, workspace.workingBranch)
+      await gitOps.deleteRemoteBranchAsync(workspace.projectPath, workspace.workingBranch)
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       console.error(`[workspaces] Failed to delete remote branch: ${message}`)
@@ -3826,7 +3831,7 @@ app.get('/:id/diff', async (c) => {
       if (!from || !to) {
         return c.json({ error: 'mode=commits requires from and to query params' }, 400)
       }
-      if (!gitOps.commitExists(worktreePath, to)) {
+      if (!(await gitOps.commitExistsAsync(worktreePath, to))) {
         return c.json({ error: `Invalid commit ref '${to}'` }, 400)
       }
       // `to` is strict (400 above). `from` is intentionally lenient: any ref it
@@ -3834,8 +3839,8 @@ app.get('/:id/diff', async (c) => {
       // only unresolved `from` the UI ever sends is a root commit's `<sha>^`
       // (single-commit diff of the first commit); the compare dialog otherwise
       // only offers refs that resolve.
-      const fromRef = gitOps.commitExists(worktreePath, from) ? from : gitOps.EMPTY_TREE_SHA
-      const files = gitOps.getChangedFilesBetween(worktreePath, fromRef, to)
+      const fromRef = (await gitOps.commitExistsAsync(worktreePath, from)) ? from : gitOps.EMPTY_TREE_SHA
+      const files = await gitOps.getChangedFilesBetweenAsync(worktreePath, fromRef, to)
       c.header('Cache-Control', 'no-store')
       return c.json({ files, mode: 'commits', from: fromRef, to })
     }
@@ -3849,8 +3854,8 @@ app.get('/:id/diff', async (c) => {
     }
     const files =
       mode === 'unpushed'
-        ? gitOps.getUnpushedChangedFiles(worktreePath, workspace.workingBranch)
-        : gitOps.getChangedFiles(worktreePath, workspace.sourceBranch, includeUntracked)
+        ? await gitOps.getUnpushedChangedFilesAsync(worktreePath, workspace.workingBranch)
+        : await gitOps.getChangedFilesAsync(worktreePath, workspace.sourceBranch, includeUntracked)
 
     c.header('Cache-Control', 'no-store')
     return c.json({
@@ -3870,7 +3875,7 @@ app.get('/:id/diff', async (c) => {
 //  - `branch`   → sourceBranch
 //  - `unpushed` → origin/<workingBranch>
 // `modified` is always the current worktree content.
-app.get('/:id/diff-file', (c) => {
+app.get('/:id/diff-file', async (c) => {
   try {
     const id = c.req.param('id')
     const filePath = c.req.query('path')
@@ -3898,14 +3903,16 @@ app.get('/:id/diff-file', (c) => {
       if (!from || !to) {
         return c.json({ error: 'mode=commits requires from and to query params' }, 400)
       }
-      if (!gitOps.commitExists(worktreePath, to)) {
+      if (!(await gitOps.commitExistsAsync(worktreePath, to))) {
         return c.json({ error: `Invalid commit ref '${to}'` }, 400)
       }
       // `from` is lenient (empty-tree fallback) for a root commit's `<sha>^` —
       // see the matching note in the `/diff` commits branch above.
-      const fromRef = gitOps.commitExists(worktreePath, from) ? from : gitOps.EMPTY_TREE_SHA
-      const original = gitOps.getFileAtRef(worktreePath, fromRef, filePath)
-      const modified = gitOps.getFileAtRef(worktreePath, to, filePath)
+      const fromRef = (await gitOps.commitExistsAsync(worktreePath, from)) ? from : gitOps.EMPTY_TREE_SHA
+      const [original, modified] = await Promise.all([
+        gitOps.getFileAtRefAsync(worktreePath, fromRef, filePath),
+        gitOps.getFileAtRefAsync(worktreePath, to, filePath),
+      ])
       c.header('Cache-Control', 'no-store')
       return c.json({
         original: original ?? '',
@@ -3918,7 +3925,7 @@ app.get('/:id/diff-file', (c) => {
     }
 
     const baseRef = mode === 'unpushed' ? `origin/${workspace.workingBranch}` : workspace.sourceBranch
-    const original = gitOps.getFileAtRef(worktreePath, baseRef, filePath)
+    const original = await gitOps.getFileAtRefAsync(worktreePath, baseRef, filePath)
     const modified = gitOps.getFileContent(worktreePath, filePath)
 
     c.header('Cache-Control', 'no-store')
@@ -3984,7 +3991,7 @@ app.post('/:id/rollback-file', async (c) => {
 // GET /api/workspaces/:id/branch-divergence?limit=50
 // Returns commits on the working branch ahead of `origin/<sourceBranch>`
 // (`ahead`) and commits on `origin/<sourceBranch>` not yet on the working
-// branch (`behind`). Refreshes `origin/<sourceBranch>` synchronously so the
+// branch (`behind`). Awaits refreshing `origin/<sourceBranch>` so the
 // counts and lists are never computed against a stale local source ref.
 app.get('/:id/branch-divergence', async (c) => {
   try {
@@ -3999,8 +4006,18 @@ app.get('/:id/branch-divergence', async (c) => {
     const worktreePath = workspace.worktreePath
 
     await gitOps.fetchSourceBranchAsync(worktreePath, workspace.sourceBranch)
-    const ahead = gitOps.listBranchCommits(worktreePath, workspace.sourceBranch, workspace.workingBranch, limit)
-    const behind = gitOps.listCommitsBehind(worktreePath, workspace.sourceBranch, workspace.workingBranch, limit)
+    const ahead = await gitOps.listBranchCommitsAsync(
+      worktreePath,
+      workspace.sourceBranch,
+      workspace.workingBranch,
+      limit,
+    )
+    const behind = await gitOps.listCommitsBehindAsync(
+      worktreePath,
+      workspace.sourceBranch,
+      workspace.workingBranch,
+      limit,
+    )
 
     c.header('Cache-Control', 'no-store')
     return c.json({
@@ -4017,7 +4034,7 @@ app.get('/:id/branch-divergence', async (c) => {
 
 // GET /api/workspaces/:id/commits?limit=50 — list commits between
 // `origin/<sourceBranch>` and HEAD, each tagged with whether it's already
-// pushed to origin/<branch>. Refreshes `origin/<sourceBranch>` synchronously
+// pushed to origin/<branch>. Awaits refreshing `origin/<sourceBranch>`
 // so the list is not computed against a stale local source ref.
 app.get('/:id/commits', async (c) => {
   try {
@@ -4030,7 +4047,12 @@ app.get('/:id/commits', async (c) => {
     const limit = Math.min(Math.max(1, parseInt(limitRaw ?? '50', 10) || 50), 200)
     const worktreePath = workspace.worktreePath
     await gitOps.fetchSourceBranchAsync(worktreePath, workspace.sourceBranch)
-    const commits = gitOps.listBranchCommits(worktreePath, workspace.sourceBranch, workspace.workingBranch, limit)
+    const commits = await gitOps.listBranchCommitsAsync(
+      worktreePath,
+      workspace.sourceBranch,
+      workspace.workingBranch,
+      limit,
+    )
     c.header('Cache-Control', 'no-store')
     return c.json({ commits, sourceBranch: workspace.sourceBranch, workingBranch: workspace.workingBranch })
   } catch (err) {
@@ -4040,12 +4062,12 @@ app.get('/:id/commits', async (c) => {
 })
 
 // GET /:id/working-tree-files — list uncommitted working-tree files (read-only)
-app.get('/:id/working-tree-files', (c) => {
+app.get('/:id/working-tree-files', async (c) => {
   try {
     const id = c.req.param('id')
     const workspace = workspaceService.getWorkspace(id)
     if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
-    const files = gitOps.getWorkingTreeFiles(workspace.worktreePath)
+    const files = await gitOps.getWorkingTreeFilesAsync(workspace.worktreePath)
     return c.json({ files })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
@@ -4429,7 +4451,7 @@ app.post('/:id/git/commit-with-agent', migrationGuard, async (c) => {
     const workspace = workspaceService.getWorkspace(id)
     if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
 
-    const workingTree = gitOps.getWorkingTreeStatus(workspace.worktreePath)
+    const workingTree = await gitOps.getWorkingTreeStatusAsync(workspace.worktreePath)
     if (workingTree.staged + workingTree.modified + workingTree.untracked === 0) {
       return c.json({ error: 'No uncommitted changes to commit' }, 400)
     }
@@ -4885,8 +4907,12 @@ app.post('/:id/open-pr', async (c) => {
     }
 
     // Build context and render the PR prompt template
-    const commits = gitOps.getCommitsBetween(worktreePath, workspace.sourceBranch, workspace.workingBranch)
-    const diffStats = gitOps.getDiffStatsBetween(worktreePath, workspace.sourceBranch, workspace.workingBranch)
+    const commits = await gitOps.getCommitsBetweenAsync(worktreePath, workspace.sourceBranch, workspace.workingBranch)
+    const diffStats = await gitOps.getDiffStatsBetweenAsync(
+      worktreePath,
+      workspace.sourceBranch,
+      workspace.workingBranch,
+    )
     const tasks = workspaceService.listTasks(workspace.id)
 
     const rendered = renderPrTemplate(effective.prPromptTemplate, {

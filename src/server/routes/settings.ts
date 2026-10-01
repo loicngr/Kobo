@@ -22,8 +22,8 @@ import {
   type ProjectSettings,
 } from '../services/settings-service.js'
 import { getSuitePrompts } from '../services/skill-suite-prompts.js'
-import { listTemplates, replaceAllTemplates } from '../services/templates-service.js'
-import { countPrunableWsEvents } from '../services/ws-events-retention-service.js'
+import { listTemplates, replaceAllTemplates, validateTemplatesForReplacement } from '../services/templates-service.js'
+import { previewWsEventsRetention } from '../services/ws-events-retention-worker-service.js'
 
 /** Hono sub-router for global and per-project settings CRUD. */
 const app = new Hono()
@@ -82,17 +82,15 @@ app.get('/defaults', (c) => {
 // the confirmation dialog: enabling retention on a year-old database destroys
 // months of conversation in one go, and the user is entitled to the number
 // before agreeing to it.
-app.get('/ws-events-retention-preview', (c) => {
+app.get('/ws-events-retention-preview', async (c) => {
   try {
     const days = Number.parseInt(c.req.query('days') ?? '', 10)
     const keep = Number.parseInt(c.req.query('keep') ?? '', 10)
     if (!Number.isInteger(days) || days < 0 || !Number.isInteger(keep) || keep < 0) {
       return c.json({ error: 'days and keep must be non-negative integers' }, 400)
     }
-    const db = getDb()
-    const total = (db.prepare('SELECT COUNT(*) AS c FROM ws_events').get() as { c: number }).c
-    const deletable = countPrunableWsEvents(db, { retentionDays: days, keepPerWorkspace: keep })
-    return c.json({ deletable, total })
+    const preview = await previewWsEventsRetention({ retentionDays: days, keepPerWorkspace: keep })
+    return c.json(preview)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)
@@ -271,11 +269,22 @@ app.get('/export', (c) => {
 app.post('/import', async (c) => {
   try {
     const body = (await c.req.json()) as ConfigBundle
-    // Validate settings first — throws on malformed payload before we touch disk.
+    // Validate templates before settings import writes anything. An invalid
+    // row must not leave an otherwise rejected bundle partially applied.
+    let validatedTemplates: ReturnType<typeof validateTemplatesForReplacement> | undefined
+    if (body?.templates !== undefined) {
+      try {
+        validatedTemplates = validateTemplatesForReplacement(body.templates)
+      } catch (error) {
+        return c.json({ error: error instanceof Error ? error.message : String(error) }, 400)
+      }
+    }
+    // Settings validates its section before writing. Each file is replaced
+    // atomically; this is not a transaction spanning the two files.
     settingsService.importConfigBundle(body)
-    if (body.templates !== undefined) {
-      // Accept missing templates (backward-compatible). Otherwise validate and replace.
-      replaceAllTemplates(body.templates as unknown[])
+    if (validatedTemplates !== undefined) {
+      // Accept missing templates for backward-compatible bundles.
+      replaceAllTemplates(validatedTemplates)
     }
     return c.json({ ok: true })
   } catch (err) {

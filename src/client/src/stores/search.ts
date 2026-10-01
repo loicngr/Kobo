@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { apiFetchResponse, apiResponseError } from 'src/utils/api'
 
 export interface SearchIndexStatus {
   state: 'building' | 'ready' | 'error'
@@ -55,8 +56,8 @@ export const useSearchStore = defineStore('search', {
     async refreshIndexStatus(signal?: AbortSignal): Promise<boolean> {
       const token = ++this._statusRequestToken
       try {
-        const res = await fetch('/api/search/status', { signal })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const res = await apiFetchResponse('/api/search/status', { signal })
+        if (!res.ok) throw await apiResponseError(res)
         const status = (await res.json()) as SearchIndexStatus
         if (signal?.aborted || token !== this._statusRequestToken) return false
         const changed = status.state !== this.indexStatus.state || status.processed !== this.indexStatus.processed
@@ -91,7 +92,7 @@ export const useSearchStore = defineStore('search', {
       try {
         const params = new URLSearchParams({ q })
         if (this.includeArchived) params.set('includeArchived', 'true')
-        const res = await fetch(`/api/search?${params.toString()}`, { signal: this._abortController.signal })
+        const res = await apiFetchResponse(`/api/search?${params.toString()}`, { signal: this._abortController.signal })
         if (!res.ok) {
           let message = `HTTP ${res.status}`
           try {

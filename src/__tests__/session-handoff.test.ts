@@ -281,6 +281,31 @@ it.each(['cancel', 'stop', 'restart'] as const)(
   },
 )
 
+it('cancels while asynchronous Git context is pending without dispatching a destination later', async () => {
+  const f = await fixture()
+  const git = await import('../server/utils/git-ops.js')
+  let release!: (value: string) => void
+  const pending = new Promise<string>((resolve) => {
+    release = resolve
+  })
+  const status = vi.spyOn(git, 'getWorkingTreePorcelainAsync').mockReturnValue(pending)
+  try {
+    const handoff = f.service.createSessionHandoff(f.workspace.id, f.request)
+    await vi.waitFor(() => expect(f.service.getCurrentSessionHandoff(f.workspace.id)?.state).toBe('starting'))
+    expect(f.starts).toHaveLength(1)
+    await f.service.decideSessionHandoff(f.workspace.id, handoff.id, 'cancel')
+    release('')
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(f.service.getCurrentSessionHandoff(f.workspace.id)?.state).toBe('cancelled')
+    expect(f.starts).toHaveLength(1)
+    expect(f.ws.getActiveSession(f.workspace.id)?.id).toBe(f.request.sourceSessionId)
+    expect(fs.existsSync(path.join(directory, '.ai/handoffs'))).toBe(false)
+  } finally {
+    release('')
+    status.mockRestore()
+  }
+})
+
 it('resumes the exact source only to generate, rejects stale submissions, and waits for actual closure', async () => {
   const f = await fixture()
   const h = f.service.createSessionHandoff(f.workspace.id, { ...f.request, generateSummary: true })

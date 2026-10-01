@@ -1660,7 +1660,7 @@ export function startAgent(
   const readOnly = getReviewReturn(workspaceId, agentSessionId) !== null
 
   const unavailableIntegrations: Array<'notion' | 'sentry'> = []
-  const integrationServers = buildIntegrationMcpServers(getGlobalSettings(), (name) =>
+  const integrationServers = buildIntegrationMcpServers(getGlobalSettings(), engine.id, (name) =>
     unavailableIntegrations.push(name),
   )
   const options: StartOptions = {

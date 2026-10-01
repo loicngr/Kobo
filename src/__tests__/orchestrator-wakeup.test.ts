@@ -118,7 +118,7 @@ describe('orchestrator — ScheduleWakeup detection in handleEvent', () => {
 
   it('invokes wakeupService.schedule on tool:call ScheduleWakeup with valid input', async () => {
     const wakeup = await import('../server/services/wakeup-service.js')
-    const scheduleSpy = vi.spyOn(wakeup, 'schedule').mockImplementation(() => undefined)
+    const scheduleSpy = vi.spyOn(wakeup, 'schedule').mockReturnValue({ targetAt: '2026-10-01T12:00:00.000Z' })
     const orch = await import('../server/services/agent/orchestrator.js')
 
     orch.__test__.handleEvent(wsId, 'session-1', {
@@ -134,7 +134,7 @@ describe('orchestrator — ScheduleWakeup detection in handleEvent', () => {
 
   it('ignores ScheduleWakeup with missing delaySeconds or prompt', async () => {
     const wakeup = await import('../server/services/wakeup-service.js')
-    const scheduleSpy = vi.spyOn(wakeup, 'schedule').mockImplementation(() => undefined)
+    const scheduleSpy = vi.spyOn(wakeup, 'schedule').mockReturnValue({ targetAt: '2026-10-01T12:00:00.000Z' })
     const orch = await import('../server/services/agent/orchestrator.js')
 
     orch.__test__.handleEvent(wsId, 'session-1', {
@@ -150,7 +150,7 @@ describe('orchestrator — ScheduleWakeup detection in handleEvent', () => {
 
   it('ignores non-ScheduleWakeup tool calls', async () => {
     const wakeup = await import('../server/services/wakeup-service.js')
-    const scheduleSpy = vi.spyOn(wakeup, 'schedule').mockImplementation(() => undefined)
+    const scheduleSpy = vi.spyOn(wakeup, 'schedule').mockReturnValue({ targetAt: '2026-10-01T12:00:00.000Z' })
     const orch = await import('../server/services/agent/orchestrator.js')
 
     orch.__test__.handleEvent(wsId, 'session-1', {

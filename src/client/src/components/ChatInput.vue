@@ -263,6 +263,7 @@ import { useSettingsStore } from 'src/stores/settings'
 import { useTemplatesStore } from 'src/stores/templates'
 import { useWebSocketStore } from 'src/stores/websocket'
 import { useWorkspaceStore } from 'src/stores/workspace'
+import { apiFetchOk, apiFetchResponse, apiResponseError } from 'src/utils/api'
 import { buildTemplateVars, expandTemplate } from 'src/utils/expand-template'
 import { KOBO_COMMANDS } from 'src/utils/kobo-commands'
 import { registerUnsavedScope, unregisterUnsavedScope } from 'src/utils/unsaved-guard'
@@ -654,8 +655,8 @@ const savedDraft = ref('')
 async function loadHistory() {
   const wsId = props.workspaceId
   try {
-    const res = await fetch(`/api/workspaces/${wsId}/chat-history`)
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const res = await apiFetchResponse(`/api/workspaces/${wsId}/chat-history`)
+    if (!res.ok) throw await apiResponseError(res)
     const { history } = (await res.json()) as { history: string[] }
     // Drop stale responses: if the user switched workspaces during the
     // fetch, this is no longer the active history.
@@ -678,12 +679,11 @@ async function pushToHistory(text: string, wsId = props.workspaceId) {
     if (messageHistory.value.length > MAX_HISTORY_ENTRIES) messageHistory.value.pop()
   }
   try {
-    const res = await fetch(`/api/workspaces/${wsId}/chat-history`, {
+    await apiFetchOk(`/api/workspaces/${wsId}/chat-history`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: text }),
     })
-    if (!res.ok && res.status !== 204) throw new Error(`HTTP ${res.status}`)
   } catch (err) {
     console.error('[ChatInput] pushToHistory failed:', err)
   }
@@ -948,7 +948,7 @@ async function stopVoiceCapture() {
     const fd = new FormData()
     fd.append('audio', blob, 'voice.webm')
     fd.append('language', settingsStore.global.voiceLanguage || 'auto')
-    const res = await fetch(`/api/voice/workspaces/${encodeURIComponent(props.workspaceId)}/transcribe`, {
+    const res = await apiFetchResponse(`/api/voice/workspaces/${encodeURIComponent(props.workspaceId)}/transcribe`, {
       method: 'POST',
       body: fd,
     })

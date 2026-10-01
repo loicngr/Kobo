@@ -74,7 +74,7 @@ async function gitAsync(repoPath: string, args: string[], timeout = READ_ONLY_GI
     cwd: repoPath,
     encoding: 'utf-8',
     timeout,
-    maxBuffer: 10 * 1024 * 1024,
+    maxBuffer: GIT_MAX_BUFFER_BYTES,
   })
   return stdout.trimEnd()
 }
@@ -260,6 +260,26 @@ export function deleteRemoteBranch(repoPath: string, branchName: string, remote 
   }
 }
 
+/** Non-blocking local deletion with the synchronous helper's error contract. */
+export async function deleteLocalBranchAsync(repoPath: string, branchName: string): Promise<void> {
+  try {
+    await gitNetworkAsync(repoPath, ['branch', '-D', branchName])
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    throw new Error(`Failed to delete local branch '${branchName}': ${message}`)
+  }
+}
+
+/** Non-blocking remote deletion; keeps credential prompts disabled and the network deadline. */
+export async function deleteRemoteBranchAsync(repoPath: string, branchName: string, remote = 'origin'): Promise<void> {
+  try {
+    await gitNetworkAsync(repoPath, ['push', remote, '--delete', branchName])
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    throw new Error(`Failed to delete remote branch '${remote}/${branchName}': ${message}`)
+  }
+}
+
 /**
  * Push a branch to the remote with upstream tracking (`git push -u`).
  * When `options.force` is true, adds `--force-with-lease` (safer than `--force`:
@@ -379,15 +399,19 @@ export function getConflictedFiles(repoPath: string): string[] {
   }
 }
 
+function classifyOngoingGitOperation(dir: string): 'merge' | 'rebase' | 'cherry-pick' | null {
+  if (existsSync(join(dir, 'MERGE_HEAD'))) return 'merge'
+  if (existsSync(join(dir, 'rebase-merge')) || existsSync(join(dir, 'rebase-apply'))) return 'rebase'
+  if (existsSync(join(dir, 'CHERRY_PICK_HEAD')) || existsSync(join(dir, 'sequencer'))) return 'cherry-pick'
+  return null
+}
+
 /** Detect whether a merge, rebase or cherry-pick is currently in progress in the worktree. */
 export function getOngoingGitOperation(repoPath: string): 'merge' | 'rebase' | 'cherry-pick' | null {
   try {
     const gitDir = git(repoPath, ['rev-parse', '--git-dir'])
     const dir = gitDir.startsWith('/') ? gitDir : join(repoPath, gitDir)
-    if (existsSync(join(dir, 'MERGE_HEAD'))) return 'merge'
-    if (existsSync(join(dir, 'rebase-merge')) || existsSync(join(dir, 'rebase-apply'))) return 'rebase'
-    if (existsSync(join(dir, 'CHERRY_PICK_HEAD')) || existsSync(join(dir, 'sequencer'))) return 'cherry-pick'
-    return null
+    return classifyOngoingGitOperation(dir)
   } catch {
     return null
   }
@@ -855,6 +879,19 @@ export interface Commit {
   date: string
 }
 
+const COMMIT_LOG_FORMAT = '--pretty=format:%H%x00%h%x00%s%x00%an%x00%aI'
+
+function parseCommitLog(raw: string): Commit[] {
+  const commits: Commit[] = []
+  for (const line of raw.split('\n')) {
+    if (!line) continue
+    const [sha, shortSha, subject, author, date] = line.split('\x00')
+    if (!sha) continue
+    commits.push({ sha, shortSha: shortSha ?? '', subject: subject ?? '', author: author ?? '', date: date ?? '' })
+  }
+  return commits
+}
+
 /**
  * List commits between the source branch and HEAD, each flagged with whether
  * it's already present on `origin/<workingBranch>`. Used by the Git panel
@@ -872,11 +909,10 @@ export function listBranchCommits(
   const remoteRef = `${remote}/${workingBranch}`
 
   // NUL-delimited format: sha \0 shortSha \0 subject \0 author \0 iso date \n
-  const FORMAT = '--pretty=format:%H%x00%h%x00%s%x00%an%x00%aI'
 
   let raw: string
   try {
-    raw = git(repoPath, ['log', `${sourceRef}..HEAD`, `--max-count=${limit}`, FORMAT])
+    raw = git(repoPath, ['log', `${sourceRef}..HEAD`, `--max-count=${limit}`, COMMIT_LOG_FORMAT])
   } catch {
     return []
   }
@@ -895,21 +931,7 @@ export function listBranchCommits(
     // remote ref unknown → leave pushedShas empty
   }
 
-  const commits: BranchCommit[] = []
-  for (const line of raw.split('\n')) {
-    if (!line) continue
-    const [sha, shortSha, subject, author, date] = line.split('\x00')
-    if (!sha) continue
-    commits.push({
-      sha,
-      shortSha: shortSha ?? '',
-      subject: subject ?? '',
-      author: author ?? '',
-      date: date ?? '',
-      isPushed: pushedShas.has(sha),
-    })
-  }
-  return commits
+  return parseCommitLog(raw).map((commit) => ({ ...commit, isPushed: pushedShas.has(commit.sha) }))
 }
 
 /**
@@ -919,30 +941,16 @@ export function listBranchCommits(
  */
 export function listCommitsBehind(repoPath: string, sourceBranch: string, workingBranch: string, limit = 50): Commit[] {
   const sourceRef = resolveBase(repoPath, sourceBranch)
-  const FORMAT = '--pretty=format:%H%x00%h%x00%s%x00%an%x00%aI'
 
   let raw: string
   try {
-    raw = git(repoPath, ['log', `${workingBranch}..${sourceRef}`, `--max-count=${limit}`, FORMAT])
+    raw = git(repoPath, ['log', `${workingBranch}..${sourceRef}`, `--max-count=${limit}`, COMMIT_LOG_FORMAT])
   } catch {
     return []
   }
   if (!raw) return []
 
-  const commits: Commit[] = []
-  for (const line of raw.split('\n')) {
-    if (!line) continue
-    const [sha, shortSha, subject, author, date] = line.split('\x00')
-    if (!sha) continue
-    commits.push({
-      sha,
-      shortSha: shortSha ?? '',
-      subject: subject ?? '',
-      author: author ?? '',
-      date: date ?? '',
-    })
-  }
-  return commits
+  return parseCommitLog(raw)
 }
 
 /**
@@ -1043,6 +1051,12 @@ function parseNameStatus(output: string): DiffFile[] {
 }
 
 /** List files changed between base and HEAD (committed), plus working tree changes. */
+function parseWorktreeFilenames(out: string, limit: number): string[] {
+  if (!out) return []
+  const files = out.split('\0').filter((line) => line.length > 0)
+  return files.length > limit ? files.slice(0, limit) : files
+}
+
 /**
  * List the worktree's files — tracked plus untracked-but-not-git-ignored.
  * Excludes `.git`, `node_modules`, and anything covered by `.gitignore`.
@@ -1052,9 +1066,7 @@ function parseNameStatus(output: string): DiffFile[] {
 export function listWorktreeFiles(worktreePath: string, limit = 5000): string[] {
   try {
     const out = git(worktreePath, ['ls-files', '-z', '--cached', '--others', '--exclude-standard'])
-    if (!out) return []
-    const files = out.split('\0').filter((line) => line.length > 0)
-    return files.length > limit ? files.slice(0, limit) : files
+    return parseWorktreeFilenames(out, limit)
   } catch {
     return []
   }
@@ -1301,6 +1313,20 @@ export interface WorkingTreeFile {
   untracked: boolean
 }
 
+function parseWorkingTreeFiles(output: string): WorkingTreeFile[] {
+  const files: WorkingTreeFile[] = []
+  for (const { path: filePath, x, y } of parsePorcelain(output)) {
+    const untracked = x === '?' && y === '?'
+    files.push({
+      path: filePath,
+      staged: !untracked && x !== ' ' && x !== '?',
+      modified: !untracked && y !== ' ' && y !== '?',
+      untracked,
+    })
+  }
+  return files
+}
+
 /**
  * List uncommitted working-tree files with their status, parsed from
  * `git status --porcelain`. Same classification rule as getWorkingTreeStatus.
@@ -1309,17 +1335,7 @@ export interface WorkingTreeFile {
 export function getWorkingTreeFiles(repoPath: string): WorkingTreeFile[] {
   try {
     const output = git(repoPath, ['status', '--porcelain', '-z'])
-    const files: WorkingTreeFile[] = []
-    for (const { path: filePath, x, y } of parsePorcelain(output)) {
-      const untracked = x === '?' && y === '?'
-      files.push({
-        path: filePath,
-        staged: !untracked && x !== ' ' && x !== '?',
-        modified: !untracked && y !== ' ' && y !== '?',
-        untracked,
-      })
-    }
-    return files
+    return parseWorkingTreeFiles(output)
   } catch {
     return []
   }
@@ -1450,6 +1466,136 @@ async function resolveBaseAsync(repoPath: string, base: string): Promise<string>
   }
 }
 
+/** Non-blocking branch and file discovery for forms, autocomplete and PR diagnosis. */
+export async function listBranchesAsync(repoPath: string): Promise<string[]> {
+  return (await gitAsync(repoPath, ['branch', '--format=%(refname:short)']))
+    .split('\n')
+    .map((branch) => branch.trim())
+    .filter(Boolean)
+}
+
+export async function listRemoteBranchesAsync(repoPath: string): Promise<string[]> {
+  try {
+    return (await gitAsync(repoPath, ['branch', '-r', '--format=%(refname:short)']))
+      .split('\n')
+      .map((branch) => branch.trim())
+      .filter(Boolean)
+  } catch {
+    return []
+  }
+}
+
+export async function localBranchExistsAsync(repoPath: string, name: string): Promise<boolean> {
+  try {
+    await gitAsync(repoPath, ['rev-parse', '--verify', '--quiet', `refs/heads/${name}`])
+    return true
+  } catch {
+    return false
+  }
+}
+
+export async function getIndexLockPathAsync(repoPath: string): Promise<string | null> {
+  try {
+    const directory = await gitAsync(repoPath, ['rev-parse', '--absolute-git-dir'])
+    const lockPath = join(directory, 'index.lock')
+    return existsSync(lockPath) ? lockPath : null
+  } catch {
+    return null
+  }
+}
+
+export async function getOngoingGitOperationAsync(
+  repoPath: string,
+): Promise<'merge' | 'rebase' | 'cherry-pick' | null> {
+  try {
+    const gitDirectory = await gitAsync(repoPath, ['rev-parse', '--git-dir'])
+    return classifyOngoingGitOperation(gitDirectory.startsWith('/') ? gitDirectory : join(repoPath, gitDirectory))
+  } catch {
+    return null
+  }
+}
+
+export async function listWorktreeFilesAsync(worktreePath: string, limit = 5_000): Promise<string[]> {
+  try {
+    return parseWorktreeFilenames(
+      await gitAsync(worktreePath, ['ls-files', '-z', '--cached', '--others', '--exclude-standard']),
+      limit,
+    )
+  } catch {
+    return []
+  }
+}
+
+/** Non-blocking review-template commit list, preferring the remote base. */
+export async function getCommitsBetweenAsync(repoPath: string, base: string, head: string): Promise<string> {
+  try {
+    const ref = await resolveBaseAsync(repoPath, base)
+    return await gitAsync(repoPath, ['log', `${ref}..${head}`, '--pretty=format:- %s (%h)', '--no-merges'])
+  } catch {
+    return ''
+  }
+}
+
+/** Keep the existing raw three-dot ref semantics of the shortstat helper. */
+export async function getDiffStatsBetweenAsync(repoPath: string, base: string, head: string): Promise<string> {
+  try {
+    return await gitAsync(repoPath, ['diff', '--shortstat', `${base}...${head}`])
+  } catch {
+    return ''
+  }
+}
+
+export async function listBranchCommitsAsync(
+  repoPath: string,
+  sourceBranch: string,
+  workingBranch: string,
+  limit = 50,
+  remote = 'origin',
+): Promise<BranchCommit[]> {
+  const sourceRef = await resolveBaseAsync(repoPath, sourceBranch)
+  const remoteRef = `${remote}/${workingBranch}`
+  let raw: string
+  try {
+    raw = await gitAsync(repoPath, ['log', `${sourceRef}..HEAD`, `--max-count=${limit}`, COMMIT_LOG_FORMAT])
+  } catch {
+    return []
+  }
+  if (!raw) return []
+  const pushedShas = new Set<string>()
+  try {
+    await gitAsync(repoPath, ['rev-parse', '--verify', remoteRef])
+    const pushed = await gitAsync(repoPath, ['log', `${sourceRef}..${remoteRef}`, '--pretty=format:%H'])
+    for (const sha of pushed.split('\n')) if (sha) pushedShas.add(sha.trim())
+  } catch {
+    // A branch that has never been pushed has no remote ref.
+  }
+  return parseCommitLog(raw).map((commit) => ({ ...commit, isPushed: pushedShas.has(commit.sha) }))
+}
+
+export async function listCommitsBehindAsync(
+  repoPath: string,
+  sourceBranch: string,
+  workingBranch: string,
+  limit = 50,
+): Promise<Commit[]> {
+  try {
+    const sourceRef = await resolveBaseAsync(repoPath, sourceBranch)
+    return parseCommitLog(
+      await gitAsync(repoPath, ['log', `${workingBranch}..${sourceRef}`, `--max-count=${limit}`, COMMIT_LOG_FORMAT]),
+    )
+  } catch {
+    return []
+  }
+}
+
+export async function getWorkingTreeFilesAsync(repoPath: string): Promise<WorkingTreeFile[]> {
+  try {
+    return parseWorkingTreeFiles(await gitAsync(repoPath, ['status', '--porcelain', '-z']))
+  } catch {
+    return []
+  }
+}
+
 /** Non-blocking commit count for request and polling hot paths. */
 export async function getCommitCountAsync(repoPath: string, base: string, head: string): Promise<number> {
   try {
@@ -1494,6 +1640,99 @@ export async function getWorkingTreeStatusAsync(repoPath: string): Promise<Worki
   } catch {
     return { staged: 0, modified: 0, untracked: 0 }
   }
+}
+
+/** Raw handoff state. Failures must not be presented as a clean checkout. */
+export function getWorkingTreePorcelainAsync(repoPath: string): Promise<string> {
+  return gitAsync(repoPath, ['status', '--short'])
+}
+
+export function getWorkingTreeDiffStatsAsync(repoPath: string): Promise<string> {
+  return gitAsync(repoPath, ['diff', '--stat', 'HEAD'])
+}
+
+export async function commitExistsAsync(repoPath: string, ref: string): Promise<boolean> {
+  try {
+    await gitAsync(repoPath, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])
+    return true
+  } catch {
+    return false
+  }
+}
+
+export async function getFileAtRefAsync(repoPath: string, ref: string, filePath: string): Promise<string | null> {
+  const resolvedRef = await resolveBaseAsync(repoPath, ref)
+  try {
+    // File contents must retain their leading/trailing whitespace verbatim.
+    const { stdout } = await execFileAsync('git', ['show', `${resolvedRef}:${filePath}`], {
+      cwd: repoPath,
+      encoding: 'utf-8',
+      timeout: READ_ONLY_GIT_TIMEOUT_MS,
+      maxBuffer: GIT_MAX_BUFFER_BYTES,
+      env: NON_INTERACTIVE_GIT_ENV,
+    })
+    return stdout
+  } catch {
+    return null
+  }
+}
+
+export async function getChangedFilesBetweenAsync(
+  repoPath: string,
+  fromRef: string,
+  toRef: string,
+): Promise<DiffFile[]> {
+  try {
+    return parseNameStatus(await gitAsync(repoPath, ['diff', '--name-status', '-z', `${fromRef}..${toRef}`]))
+  } catch {
+    return []
+  }
+}
+
+export async function getUnpushedChangedFilesAsync(
+  repoPath: string,
+  branchName: string,
+  remote = 'origin',
+): Promise<DiffFile[]> {
+  const ref = `${remote}/${branchName}`
+  try {
+    await gitAsync(repoPath, ['rev-parse', '--verify', ref])
+    return parseNameStatus(await gitAsync(repoPath, ['diff', '--name-status', '-z', `${ref}..HEAD`]))
+  } catch {
+    return []
+  }
+}
+
+export async function getChangedFilesAsync(
+  repoPath: string,
+  base: string,
+  includeUntracked = false,
+): Promise<DiffFile[]> {
+  const ref = await resolveBaseAsync(repoPath, base)
+  const [committed, working] = await Promise.allSettled([
+    gitAsync(repoPath, ['diff', '--name-status', '-z', `${ref}...HEAD`]),
+    gitAsync(repoPath, ['status', '--porcelain', '-z', includeUntracked ? '-uall' : '-uno']),
+  ])
+  const files = committed.status === 'fulfilled' ? parseNameStatus(committed.value) : []
+  const seen = new Set(files.map((file) => file.path))
+  if (working.status === 'fulfilled') {
+    for (const { path: filePath, x, y } of parsePorcelain(working.value)) {
+      if (seen.has(filePath)) continue
+      const status: DiffFile['status'] =
+        x === '?' && y === '?'
+          ? 'untracked'
+          : x === 'R' || y === 'R'
+            ? 'renamed'
+            : x === 'A' || y === 'A'
+              ? 'added'
+              : x === 'D' || y === 'D'
+                ? 'deleted'
+                : 'modified'
+      files.push({ path: filePath, status })
+      seen.add(filePath)
+    }
+  }
+  return files
 }
 
 /**

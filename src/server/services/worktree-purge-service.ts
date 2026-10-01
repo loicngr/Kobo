@@ -58,9 +58,7 @@ async function purgeWorktreeGuarded(workspaceId: string, expectedArchivedAt?: st
     logError('purge', `stopDevServer failed for '${workspace.name}'`, { workspaceId: workspace.id, error: msg })
     throw err
   }
-  try {
-    destroyTerminal(workspaceId)
-  } catch {}
+  await destroyTerminal(workspaceId)
 
   // Snapshot the forge BEFORE removing the worktree — the PR lookup uses
   // `worktreePath` as cwd.

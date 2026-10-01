@@ -141,17 +141,10 @@ describe('workspace templates CRUD', () => {
     expect(() => createWorkspaceTemplate({ name: 'one too many', preset: {} })).toThrow(/Too many templates/)
   })
 
-  it('treats a corrupt file as empty and logs it, without overwriting it until the next write', () => {
+  it('refuses a corrupt file and preserves it for recovery', () => {
     fs.writeFileSync(tmpFile, '{ not json')
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-
-    try {
-      expect(listWorkspaceTemplates()).toEqual([])
-      expect(errorSpy).toHaveBeenCalled()
-      expect(fs.readFileSync(tmpFile, 'utf-8')).toBe('{ not json')
-    } finally {
-      errorSpy.mockRestore()
-    }
+    expect(listWorkspaceTemplates).toThrow(/Failed to read workspace-templates.json/)
+    expect(fs.readFileSync(tmpFile, 'utf-8')).toBe('{ not json')
   })
 })
 

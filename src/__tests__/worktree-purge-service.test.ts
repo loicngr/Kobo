@@ -80,6 +80,14 @@ beforeEach(() => {
 })
 
 describe('purgeWorktree()', () => {
+  it('retains the worktree and database state when terminal exit is unconfirmed', async () => {
+    getWorkspaceMock.mockReturnValue(makeWorkspace())
+    destroyTerminalMock.mockRejectedValueOnce(new Error('Terminal exit unconfirmed'))
+    await expect(purgeWorktree('ws-1')).rejects.toThrow('Terminal exit unconfirmed')
+    expect(removeWorktreeMock).not.toHaveBeenCalled()
+    expect(archiveWorkspaceMock).not.toHaveBeenCalled()
+    expect(markWorktreePurgedMock).not.toHaveBeenCalled()
+  })
   it.each(['timeout', 'failed'])('refuses removal when agent stop returns %s', async (outcome) => {
     getWorkspaceMock.mockReturnValue(makeWorkspace())
     stopAgentAndWaitMock.mockResolvedValueOnce(outcome)

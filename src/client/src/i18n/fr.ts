@@ -206,6 +206,16 @@ export default {
 
   // Models
   'model.auto': 'Auto',
+  'model.opus55': 'Opus 5.5',
+  'model.opus55Description': 'Pour les tâches complexes et quotidiennes, contexte 1M',
+  'model.sonnet55': 'Sonnet 5.5',
+  'model.sonnet55Description': 'Efficace pour les tâches courantes, contexte 1M',
+  'model.gpt61sol': 'GPT-6.1 Sol',
+  'model.gpt61solDescription': 'Dernier modèle polyvalent pour le code et le travail quotidien',
+  'model.gpt6sol': 'GPT-6 Sol',
+  'model.gpt6solDescription': 'Modèle polyvalent de la génération précédente',
+  'model.gpt6luna': 'GPT-6 Luna',
+  'model.gpt6lunaDescription': 'Modèle rapide pour les tâches simples',
   'model.fable51': 'Fable 5.1',
   'model.mythos5': 'Mythos 5 (Glasswing)',
   'model.fable51Description': 'Modèle le plus capable - remplace Fable 5, contexte 1M, adaptive thinking',
@@ -449,6 +459,7 @@ export default {
   'terminal.error': 'Erreur du terminal',
   'terminal.exited': 'Terminal fermé',
   'terminal.disconnected': 'Connexion perdue',
+  'terminal.outputMayBeMissing': '[Connexion interrompue. Une partie de la sortie du terminal peut manquer.]',
   'terminal.reconnecting': 'Reconnexion… (essai {attempt} sur {max})',
   'terminal.reconnect': 'Reconnecter',
 
@@ -1955,6 +1966,11 @@ export default {
   'session.endedWatchdog': "Session fermée de force après une période d'inactivité",
   'tool.running': 'En cours...',
   'activity.raw_lines': 'Lignes de sortie brutes ({n})',
+  'api.timeout': 'La requête a dépassé le délai de {seconds} secondes.',
+  'api.mutationTimeout':
+    'La requête a dépassé le délai de {seconds} secondes. L’opération peut encore être en cours. Actualisez son état avant de réessayer.',
+  'activity.sessionsError': 'Impossible de charger les sessions : {message}',
+  'activity.historyError': 'Impossible de charger l’historique : {message}',
   'activity.loading_older': 'Chargement des messages plus anciens…',
   'activity.compacting': 'Compaction du contexte…',
   'activity.prev_user_message': 'Message utilisateur précédent',

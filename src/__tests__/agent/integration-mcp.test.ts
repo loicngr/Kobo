@@ -44,7 +44,7 @@ describe('agent integration MCP configuration', () => {
       args: ['sentry.js'],
       env: { SENTRY_ACCESS_TOKEN: 'direct-sentry' },
     })
-    const servers = buildIntegrationMcpServers(enabled)
+    const servers = buildIntegrationMcpServers(enabled, 'claude-code')
     expect(servers.map((s) => s.name)).toEqual([
       expect.stringMatching(/^kobo-notion-/),
       expect.stringMatching(/^kobo-sentry-/),
@@ -54,43 +54,66 @@ describe('agent integration MCP configuration', () => {
     expect(servers[1].env).toEqual({ SENTRY_ACCESS_TOKEN: 'direct-sentry' })
     expect(JSON.stringify(servers)).not.toContain('must-not-be-serialized')
   })
-  it('prefers direct configuration over selected legacy entries and rereads on each launch', () => {
+  it.each(['claude-code', 'codex'] as const)(
+    'prefers direct configuration and rereads on each %s launch',
+    (engineId) => {
+      legacy()
+      saveIntegrationConfig('notion', { command: 'node', args: ['direct.js'], env: { NOTION_TOKEN: 'first' } })
+      const settings = { ...enabled, sentryEnabled: false, notionMcpKey: 'notion-team' }
+      const first = buildIntegrationMcpServers(settings, engineId)
+      expect(first[0].args).toEqual(['direct.js'])
+      saveIntegrationConfig('notion', { command: 'node', args: ['replacement.js'], env: { NOTION_TOKEN: 'second' } })
+      const second = buildIntegrationMcpServers(settings, engineId)
+      expect(second[0].args).toEqual(['replacement.js'])
+      expect(second[0].env.NOTION_TOKEN).toBe('second')
+      if (engineId === 'claude-code') expect(second[0].name).toBe(first[0].name)
+      saveIntegrationConfig('notion', null)
+      expect(buildIntegrationMcpServers(settings, engineId)[0].args).toEqual(['legacy-notion.js'])
+    },
+  )
+  it.each(['claude-code', 'codex'] as const)('uses exact selected legacy entries for %s', (engineId) => {
     legacy()
-    saveIntegrationConfig('notion', { command: 'node', args: ['direct.js'], env: { NOTION_TOKEN: 'first' } })
-    const settings = { ...enabled, sentryEnabled: false, notionMcpKey: 'notion-team' }
-    expect(buildIntegrationMcpServers(settings)[0].args).toEqual(['direct.js'])
-    saveIntegrationConfig('notion', { command: 'node', args: ['replacement.js'], env: { NOTION_TOKEN: 'second' } })
-    expect(buildIntegrationMcpServers(settings)[0].env.NOTION_TOKEN).toBe('second')
-    saveIntegrationConfig('notion', null)
-    expect(buildIntegrationMcpServers(settings)[0].args).toEqual(['legacy-notion.js'])
-  })
-  it('uses exact selected legacy entries for either engine', () => {
-    legacy()
-    const servers = buildIntegrationMcpServers({ ...enabled, notionMcpKey: 'notion-team', sentryMcpKey: 'sentry-team' })
+    const servers = buildIntegrationMcpServers(
+      { ...enabled, notionMcpKey: 'notion-team', sentryMcpKey: 'sentry-team' },
+      engineId,
+    )
     expect(servers.map((s) => s.args)).toEqual([['legacy-notion.js'], ['legacy-sentry.js']])
   })
   it('omits disabled or unconfigured integrations without breaking ordinary sessions', () => {
-    expect(buildIntegrationMcpServers(enabled)).toEqual([])
+    expect(buildIntegrationMcpServers(enabled, 'claude-code')).toEqual([])
     saveIntegrationConfig('notion', { command: 'node', args: [], env: { NOTION_TOKEN: 'unused' } })
-    expect(buildIntegrationMcpServers({ ...enabled, notionEnabled: false })).toEqual([])
+    expect(buildIntegrationMcpServers({ ...enabled, notionEnabled: false }, 'claude-code')).toEqual([])
   })
   it('supports environment-only Notion authentication with the same server overrides as imports', () => {
     vi.stubEnv('NOTION_API_TOKEN', 'environment-token')
     vi.stubEnv('NOTION_MCP_COMMAND', 'custom-notion')
-    expect(buildIntegrationMcpServers(enabled)[0]).toMatchObject({
+    expect(buildIntegrationMcpServers(enabled, 'claude-code')[0]).toMatchObject({
       command: 'custom-notion',
       env: { NOTION_TOKEN: 'environment-token' },
     })
   })
-  it('uses fresh names on each launch and never puts credentials into agent instructions', () => {
+  it('keeps Claude integration tool names and instructions stable across launches', () => {
+    saveIntegrationConfig('notion', { command: 'node', args: ['notion.js'], env: { NOTION_TOKEN: 'synthetic' } })
+    saveIntegrationConfig('sentry', { command: 'node', args: ['sentry.js'], env: {} })
+
+    const first = buildIntegrationMcpServers(enabled, 'claude-code')
+    const second = buildIntegrationMcpServers(enabled, 'claude-code')
+
+    expect(first).toHaveLength(2)
+    expect(second.map((server) => server.name)).toEqual(first.map((server) => server.name))
+    expect(integrationMcpPrompt(second)).toBe(integrationMcpPrompt(first))
+  })
+  it('uses fresh names on each Codex launch and never puts credentials into agent instructions', () => {
     saveIntegrationConfig('notion', {
       command: 'node',
       args: ['--secret', 'synthetic-private-arg'],
       env: { NOTION_TOKEN: 'synthetic-private-token' },
     })
-    const first = buildIntegrationMcpServers(enabled)
-    const second = buildIntegrationMcpServers(enabled)
+    saveIntegrationConfig('sentry', { command: 'node', args: ['sentry.js'], env: {} })
+    const first = buildIntegrationMcpServers(enabled, 'codex')
+    const second = buildIntegrationMcpServers(enabled, 'codex')
     expect(second[0].name).not.toBe(first[0].name)
+    expect(second[1].name).not.toBe(first[1].name)
     expect(integrationMcpPrompt(second)).toContain(second[0].name)
     expect(integrationMcpPrompt(second)).not.toContain('synthetic-private')
     expect(integrationMcpPrompt([])).toBe('')
@@ -99,7 +122,11 @@ describe('agent integration MCP configuration', () => {
     vi.stubEnv('NOTION_API_TOKEN', 'synthetic-token')
     saveIntegrationConfig('sentry', { command: 'node', args: [], env: {} })
     const unavailable = vi.fn()
-    const servers = buildIntegrationMcpServers({ ...enabled, notionMcpKey: 'missing-entry' }, unavailable)
+    const servers = buildIntegrationMcpServers(
+      { ...enabled, notionMcpKey: 'missing-entry' },
+      'claude-code',
+      unavailable,
+    )
     expect(servers).toHaveLength(1)
     expect(servers[0].name).toMatch(/^kobo-sentry-/)
     expect(unavailable).toHaveBeenCalledExactlyOnceWith('notion')
@@ -109,7 +136,7 @@ describe('agent integration MCP configuration', () => {
     vi.stubEnv('SENTRY_HOST', 'sentry.example.test')
     vi.stubEnv('UNRELATED_SECRET', 'private')
     saveIntegrationConfig('sentry', { command: 'node', args: [], env: {} })
-    const [server] = buildIntegrationMcpServers({ ...enabled, notionEnabled: false })
+    const [server] = buildIntegrationMcpServers({ ...enabled, notionEnabled: false }, 'claude-code')
     expect(server.env).toMatchObject({ SENTRY_ACCESS_TOKEN: 'ambient-token', SENTRY_HOST: 'sentry.example.test' })
     expect(server.env).not.toHaveProperty('UNRELATED_SECRET')
   })
