@@ -365,7 +365,12 @@ async function hasLiveProcessGroup(groupId: number): Promise<boolean> {
     process.kill(-groupId, 0)
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ESRCH') return false
-    throw err
+    // Some CI process supervisors reject the signal-0 probe after the shell
+    // exits even though `ps` can still inspect its former group. `ps` below is
+    // our authoritative liveness check and distinguishes live descendants
+    // from a reaped group without turning that platform quirk into a failed
+    // dev-server stop.
+    if ((err as NodeJS.ErrnoException).code !== 'EPERM') throw err
   }
   const processes = await runCommand('ps', ['-eo', 'pgid=,stat='], { timeout: 1000 })
   return processes.split('\n').some((line) => {

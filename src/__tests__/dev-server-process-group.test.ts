@@ -61,3 +61,27 @@ it.each([false, true])(
   },
   10_000,
 )
+
+it('uses ps to confirm a group has ended when signal-0 returns EPERM', async () => {
+  fs.writeFileSync(
+    path.join(root, 'child.cjs'),
+    "require('node:fs').writeFileSync('child.pid', String(process.pid)); setInterval(() => {}, 1_000)",
+  )
+  const escapedNode = `'${process.execPath.replaceAll("'", "'\\''")}'`
+  vi.mocked(getProjectSettings).mockReturnValue(
+    makeProjectSettings({ devServer: { startCommand: `${escapedNode} child.cjs & exit 0`, stopCommand: '' } }),
+  )
+  startDevServer('w')
+  await vi.waitFor(() => expect(fs.existsSync(path.join(root, 'child.pid'))).toBe(true))
+  childPid = Number(fs.readFileSync(path.join(root, 'child.pid'), 'utf8'))
+
+  const actualKill = process.kill.bind(process)
+  vi.spyOn(process, 'kill').mockImplementation(((pid: number, signal?: number | NodeJS.Signals) => {
+    if (pid < 0 && signal === 0) {
+      throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' })
+    }
+    return actualKill(pid, signal)
+  }) as typeof process.kill)
+
+  await expect(stopDevServer('w')).resolves.toMatchObject({ status: 'stopped' })
+})
