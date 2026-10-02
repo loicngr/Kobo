@@ -1,5 +1,5 @@
 <template>
-  <div class="subagents-panel q-pa-md">
+  <div ref="panelRef" class="subagents-panel q-pa-md">
     <div class="row items-center no-wrap q-mb-sm">
       <div class="col text-caption text-uppercase text-weight-bold text-kobo-3" style="letter-spacing: 0.05em;">
         {{ $t('subagents.title') }}
@@ -24,19 +24,34 @@
       {{ $t('subagents.empty') }}
     </div>
 
-    <div v-for="sa in subagents" :key="cardId(sa)" class="subagent-item q-mb-sm rounded-borders q-pa-sm">
+    <div
+      v-for="sa in subagents"
+      :key="cardId(sa)"
+      class="subagent-item q-mb-sm rounded-borders q-pa-sm"
+      :data-subagent-id="cardId(sa)"
+    >
       <div class="row items-center q-mb-xs">
-        <q-icon
-          :name="STATUS_DISPLAY[sa.status].icon"
-          size="14px"
-          :color="STATUS_DISPLAY[sa.status].color"
-          class="q-mr-xs"
+        <div
+          role="button"
+          tabindex="0"
+          class="subagent-summary row items-center col"
+          :aria-expanded="expandedId === cardId(sa)"
+          @click="toggleActivity(sa)"
+          @keydown.enter.prevent="toggleActivity(sa)"
+          @keydown.space.prevent="toggleActivity(sa)"
         >
-          <q-tooltip>{{ t(STATUS_DISPLAY[sa.status].label) }}</q-tooltip>
-        </q-icon>
-        <span class="col text-caption text-weight-medium text-kobo-1 ellipsis" style="max-width: 220px;">
-          {{ sa.description || sa.toolUseId }}
-        </span>
+          <q-icon
+            :name="STATUS_DISPLAY[sa.status].icon"
+            size="14px"
+            :color="STATUS_DISPLAY[sa.status].color"
+            class="q-mr-xs"
+          >
+            <q-tooltip>{{ t(STATUS_DISPLAY[sa.status].label) }}</q-tooltip>
+          </q-icon>
+          <span class="col text-caption text-weight-medium text-kobo-1 ellipsis" style="max-width: 220px;">
+            {{ sa.description || sa.toolUseId }}
+          </span>
+        </div>
         <q-btn
           v-if="canStop && sa.status === 'running'"
           class="subagent-stop-btn"
@@ -65,6 +80,7 @@
         <span v-if="sa.totalTokens">· {{ formatTokens(sa.totalTokens) }} tok</span>
         <span v-if="sa.durationMs">· {{ formatDuration(sa.durationMs) }}</span>
       </div>
+      <SubagentActivity v-if="expandedId === cardId(sa)" :workspace-id="store.selectedWorkspaceId!" :subagent="sa" />
     </div>
   </div>
 </template>
@@ -72,9 +88,11 @@
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
 import { supportsSubagentStop } from 'src/constants/engineFeatures'
+import { subagentActivityTargetKey } from 'src/services/subagent-activity-navigation'
 import { type Subagent, type SubagentStatus, useWorkspaceStore } from 'src/stores/workspace'
-import { computed, reactive, ref } from 'vue'
+import { computed, inject, nextTick, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import SubagentActivity from './SubagentActivity.vue'
 
 const { t } = useI18n()
 const $q = useQuasar()
@@ -93,6 +111,36 @@ function cardId(sa: Subagent): string {
 
 const stoppingIds = reactive(new Set<string>())
 const stoppingAll = ref(false)
+const expandedId = ref<string | null>(null)
+const panelRef = ref<HTMLElement | null>(null)
+const activityTarget = inject(subagentActivityTargetKey, ref(null))
+
+function toggleActivity(sa: Subagent): void {
+  const id = cardId(sa)
+  expandedId.value = expandedId.value === id ? null : id
+}
+
+function matchesActivityTarget(sa: Subagent): boolean {
+  const target = activityTarget.value
+  if (!target) return false
+  if (target.origin.toolCallId && (target.origin.toolCallId === sa.toolUseId || target.origin.toolCallId === sa.taskId))
+    return true
+  return !!target.origin.threadId && (sa.threadIds?.includes(target.origin.threadId) ?? false)
+}
+
+watch(
+  [activityTarget, subagents],
+  async ([target]) => {
+    if (!target) return
+    const subagent = subagents.value.find(matchesActivityTarget)
+    if (!subagent) return
+    const id = cardId(subagent)
+    expandedId.value = id
+    await nextTick()
+    panelRef.value?.querySelector<HTMLElement>(`[data-subagent-id="${id}"]`)?.scrollIntoView({ block: 'nearest' })
+  },
+  { immediate: true },
+)
 
 function notifyStopError(err: unknown): void {
   const message = err instanceof Error ? err.message : String(err)
@@ -166,4 +214,6 @@ function formatTokens(count?: number): string {
   background: var(--kobo-surface);
   border: 1px solid var(--kobo-border-subtle);
 }
+.subagent-summary { width: 100%; border: 0; background: transparent; padding: 0; color: inherit; text-align: left; cursor: pointer; }
+.subagent-summary:focus-visible { outline: 2px solid var(--kobo-accent); outline-offset: 2px; }
 </style>

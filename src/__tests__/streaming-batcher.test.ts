@@ -21,4 +21,18 @@ describe('createStreamingBatcher', () => {
     batcher.push({ kind: 'message:end', messageId: 'm1' })
     expect(events.map((event) => event.kind)).toEqual(['message:text', 'message:end'])
   })
+
+  it('retains child provenance across coalescing and does not merge origins', () => {
+    const events: AgentEvent[] = []
+    const batcher = createStreamingBatcher((event) => events.push(event))
+    const child = { kind: 'subagent' as const, toolCallId: 'task-1' }
+    batcher.push({ kind: 'message:text', messageId: 'shared', text: 'child ', streaming: true, origin: child })
+    batcher.push({ kind: 'message:text', messageId: 'shared', text: 'text', streaming: true, origin: child })
+    batcher.push({ kind: 'message:text', messageId: 'shared', text: 'parent', streaming: true })
+    batcher.close()
+    expect(events).toEqual([
+      { kind: 'message:text', messageId: 'shared', text: 'child text', streaming: true, origin: child },
+      { kind: 'message:text', messageId: 'shared', text: 'parent', streaming: true },
+    ])
+  })
 })

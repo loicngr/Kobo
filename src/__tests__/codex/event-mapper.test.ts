@@ -377,6 +377,7 @@ describe('handleItemStarted — collabAgentToolCall', () => {
     expect(events[1]).toEqual({
       kind: 'subagent:progress',
       toolCallId: 'test_item_sa',
+      threadIds: ['thr_child'],
       status: 'running',
       description: 'Summarise the README',
       taskType: 'spawnAgent',
@@ -403,6 +404,7 @@ describe('handleItemStarted — collabAgentToolCall', () => {
     expect(events[1]).toEqual({
       kind: 'subagent:progress',
       toolCallId: 'test_item_sa',
+      threadIds: ['thr_child'],
       status: 'running',
       description: 'wait',
       taskType: 'wait',
@@ -457,6 +459,7 @@ describe('handleItemCompleted — collabAgentToolCall', () => {
     expect(events[1]).toEqual({
       kind: 'subagent:progress',
       toolCallId: 'test_item_sa',
+      threadIds: ['thr_child'],
       status: 'done',
       description: 'Do thing',
       taskType: 'spawnAgent',

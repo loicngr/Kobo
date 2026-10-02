@@ -26,6 +26,7 @@ const globalStubs = {
     template:
       '<button class="q-btn" :data-icon="icon" :disabled="disable || loading" @click="$emit(\'click\')">{{ label }}<slot /></button>',
   },
+  SubagentActivity: { template: '<div class="subagent-activity-stub">activity</div>' },
 }
 
 function mountPanel() {
@@ -62,6 +63,21 @@ describe('SubagentsPanel.vue', () => {
     expect(wrapper.text()).toContain('3 tools')
     expect(wrapper.text()).toContain('1.5k tok')
     expect(wrapper.text()).toContain('5.2s')
+  })
+
+  it('opens and closes an activity card from mouse and keyboard', async () => {
+    const store = useWorkspaceStore()
+    store.selectedWorkspaceId = 'ws-1'
+    store.upsertSubagent('ws-1', { toolUseId: 'tool-1', description: 'Inspect logs', status: 'running' })
+    const wrapper = mountPanel()
+    const summary = wrapper.get('.subagent-summary')
+
+    await summary.trigger('click')
+    expect(wrapper.find('.subagent-activity-stub').exists()).toBe(true)
+    expect(summary.attributes('aria-expanded')).toBe('true')
+
+    await summary.trigger('keydown', { key: 'Enter' })
+    expect(wrapper.find('.subagent-activity-stub').exists()).toBe(false)
   })
 
   it('renders multiple subagents with newest first', async () => {

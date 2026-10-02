@@ -322,6 +322,7 @@ export function dispatchAgentEvent(
   if (event.kind === 'subagent:progress') {
     workspaceStore.upsertSubagent(workspaceId, {
       toolUseId: event.toolCallId,
+      threadIds: event.threadIds,
       taskId: event.taskId,
       sessionId,
       status: event.status,
@@ -1114,6 +1115,7 @@ export const useWebSocketStore = defineStore('websocket', {
                     const workspaceStore = useWorkspaceStore()
                     workspaceStore.upsertSubagent(workspaceId, {
                       toolUseId: ev.toolCallId,
+                      threadIds: ev.threadIds,
                       taskId: ev.taskId,
                       sessionId: evSessionId,
                       status: ev.status,

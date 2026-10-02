@@ -1532,6 +1532,10 @@ export default {
   'subagents.stop': 'Arrêter ce sub-agent',
   'subagents.stopAll': 'Tout arrêter',
   'subagents.stopFailed': "Impossible d'arrêter le sub-agent : {error}",
+  'subagents.activity': 'Activité du sous-agent',
+  'subagents.noActivity': 'Aucune activité visible du fournisseur pour le moment',
+  'chat.subagentActivity': 'Activité d’un sous-agent',
+  'chat.openSubagentActivity': 'Ouvrir ce sous-agent dans le panneau latéral',
 
   // Rate-limit usage labels (shared by QuotaFooter)
   'stats.resetsAt': 'Reset {value}',

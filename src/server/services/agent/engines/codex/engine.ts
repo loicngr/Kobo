@@ -310,7 +310,15 @@ export function createCodexEngine(): AgentEngine {
         }
         // Child output remains visible, but its failures/compaction/markers
         // cannot control the parent session or its auto-loop lifecycle.
-        return map(state).filter((event) => event.kind !== 'error' && !event.kind.startsWith('session:'))
+        return map(state)
+          .filter((event) => event.kind !== 'error' && !event.kind.startsWith('session:'))
+          .map((event) => {
+            const origin = { kind: 'subagent' as const, threadId: notification.threadId }
+            if (event.kind === 'message:text' || event.kind === 'message:thinking' || event.kind === 'message:end')
+              return { ...event, origin }
+            if (event.kind === 'tool:call' || event.kind === 'tool:result') return { ...event, origin }
+            return event
+          })
       }
       const itemKey = (threadId: string, turnId: string, itemId: string): string =>
         JSON.stringify([threadId, turnId, itemId])

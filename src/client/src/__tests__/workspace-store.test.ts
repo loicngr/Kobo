@@ -509,6 +509,14 @@ describe('workspace store', () => {
       expect(subagent?.totalTokens).toBe(1000)
     })
 
+    it('keeps every Codex child thread reported for the same subagent', () => {
+      const store = useWorkspaceStore()
+      store.upsertSubagent('ws-1', { toolUseId: 'tool-1', threadIds: ['thread-a'] })
+      store.upsertSubagent('ws-1', { toolUseId: 'tool-1', threadIds: ['thread-b', 'thread-a'] })
+
+      expect(store.subagents['ws-1']?.['tool-1']?.threadIds).toEqual(['thread-a', 'thread-b'])
+    })
+
     it('reopens the same card when a done task is relaunched', () => {
       const store = useWorkspaceStore()
       store.upsertSubagent('ws-1', { toolUseId: 'tool-1', status: 'running' })

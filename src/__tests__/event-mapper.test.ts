@@ -37,6 +37,79 @@ describe('event-mapper', () => {
         ),
       ).toEqual([{ kind: 'message:text', messageId: 'msg-streamed', text: 'Hello', streaming: true }])
     })
+
+    it('attributes a child stream, final message and tool result to its Task call', () => {
+      const state = createMapperState()
+      mapSdkMessage(
+        asMsg({
+          type: 'stream_event',
+          parent_tool_use_id: 'task-1',
+          event: { type: 'message_start', message: { id: 'child-1' } },
+        }),
+        state,
+      )
+      expect(
+        mapSdkMessage(
+          asMsg({
+            type: 'stream_event',
+            event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'working' } },
+          }),
+          state,
+        ),
+      ).toEqual([
+        {
+          kind: 'message:text',
+          messageId: 'child-1',
+          text: 'working',
+          streaming: true,
+          origin: { kind: 'subagent', toolCallId: 'task-1' },
+        },
+      ])
+      expect(
+        mapSdkMessage(
+          asMsg({
+            type: 'assistant',
+            parent_tool_use_id: 'task-1',
+            message: {
+              id: 'child-1',
+              content: [{ type: 'tool_use', id: 'read-1', name: 'Read', input: { file_path: 'a.ts' } }],
+              stop_reason: 'tool_use',
+            },
+          }),
+          state,
+        ),
+      ).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: 'tool:call',
+            toolCallId: 'read-1',
+            origin: { kind: 'subagent', toolCallId: 'task-1' },
+          }),
+          expect.objectContaining({
+            kind: 'message:end',
+            messageId: 'child-1',
+            origin: { kind: 'subagent', toolCallId: 'task-1' },
+          }),
+        ]),
+      )
+      expect(
+        mapSdkMessage(
+          asMsg({
+            type: 'user',
+            message: { content: [{ type: 'tool_result', tool_use_id: 'read-1', content: 'ok' }] },
+          }),
+          state,
+        ),
+      ).toEqual([
+        {
+          kind: 'tool:result',
+          toolCallId: 'read-1',
+          output: 'ok',
+          isError: false,
+          origin: { kind: 'subagent', toolCallId: 'task-1' },
+        },
+      ])
+    })
   })
 
   describe('system:init', () => {

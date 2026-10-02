@@ -180,6 +180,8 @@ export interface Subagent {
    * `taskId ?? toolUseId` so both forms reach the same card.
    */
   taskId?: string
+  /** Codex child threads owned by this card. */
+  threadIds?: string[]
   description: string
   taskType?: string
   /** Every non-running status is terminal. */
@@ -2505,9 +2507,13 @@ export const useWorkspaceStore = defineStore('workspace', {
       // (the SDK flags ambient on task_started/task_notification only).
       const ambient = data.phase === 'started' ? data.ambient === true : (data.ambient ?? existing?.ambient)
       const sessionId = data.sessionId || existing?.sessionId
+      const threadIds = data.threadIds?.length
+        ? [...new Set([...(existing?.threadIds ?? []), ...data.threadIds])]
+        : existing?.threadIds
       map[taskId ?? toolUseId] = {
         toolUseId,
         ...(taskId ? { taskId } : {}),
+        ...(threadIds?.length ? { threadIds } : {}),
         description: data.description ?? existing?.description ?? '',
         taskType: data.taskType ?? existing?.taskType,
         status: nextStatus,

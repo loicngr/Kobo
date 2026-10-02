@@ -176,6 +176,11 @@ import WorkspaceList from 'src/components/WorkspaceList.vue'
 import { useTours } from 'src/composables/use-tours'
 import { useWhatsNew } from 'src/composables/use-whats-new'
 import { supportsSubagents } from 'src/constants/engineFeatures'
+import {
+  openSubagentActivityKey,
+  type SubagentActivityTarget,
+  subagentActivityTargetKey,
+} from 'src/services/subagent-activity-navigation'
 import { useCustomSoundsStore } from 'src/stores/custom-sounds'
 import { useDocumentsStore } from 'src/stores/documents'
 import { useLayoutStore } from 'src/stores/layout'
@@ -390,6 +395,14 @@ const showRightDrawer = computed(() => route.name === 'workspace')
 provide('openDrawerTab', (tab: string) => {
   layout.setRight(true)
   setRightTab(tab)
+})
+
+const subagentActivityTarget = ref<SubagentActivityTarget | null>(null)
+provide(subagentActivityTargetKey, subagentActivityTarget)
+provide(openSubagentActivityKey, (target: SubagentActivityTarget) => {
+  subagentActivityTarget.value = target
+  layout.setRight(true)
+  setRightTab('subagents')
 })
 
 const SPLIT_KEY = 'kobo:rightDrawerSplit'

@@ -37,6 +37,21 @@ describe('foldEvents', () => {
     expect(tool.result?.output).toBe('ok')
   })
 
+  it('preserves subagent origin for the global-chat collapse', () => {
+    const origin = { kind: 'subagent' as const, toolCallId: 'task-1' }
+    const items = foldEvents([
+      { kind: 'message:text', messageId: 'm1', text: 'child text', streaming: true, origin },
+      { kind: 'message:end', messageId: 'm1', origin },
+      { kind: 'tool:call', messageId: 'm1', toolCallId: 'tool-1', name: 'Bash', input: {}, origin },
+      { kind: 'tool:result', toolCallId: 'tool-1', output: 'done', isError: false, origin },
+    ])
+
+    expect(items).toMatchObject([
+      { type: 'text', text: 'child text', streaming: false, origin },
+      { type: 'tool', toolCallId: 'tool-1', origin, result: { output: 'done' } },
+    ])
+  })
+
   it('leaves tool:call without result as pending (no standalone tool:result item)', () => {
     const events: AgentEvent[] = [{ kind: 'tool:call', messageId: 'm1', toolCallId: 't1', name: 'Read', input: {} }]
     const items = foldEvents(events)

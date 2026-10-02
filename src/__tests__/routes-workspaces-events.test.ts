@@ -265,3 +265,76 @@ describe('GET /:id/events — pre-existing before / session behavior (regression
     expect(body.events).toHaveLength(1)
   })
 })
+
+describe('GET /:id/events — subagent activity filter', () => {
+  it('returns only the selected child activity and paginates within it', async () => {
+    const { getDb } = await import('../server/db/index.js')
+    const db = getDb()
+    const insert = db.prepare(
+      "INSERT INTO ws_events(id,workspace_id,session_id,type,payload,created_at) VALUES (?,?,?,?,?,datetime('now'))",
+    )
+    const add = (id: string, payload: unknown) =>
+      insert.run(id, workspaceId, 'session-1', 'agent:event', JSON.stringify(payload))
+
+    add('child-old', {
+      kind: 'message:text',
+      messageId: 'old',
+      text: 'first child message',
+      streaming: false,
+      origin: { kind: 'subagent', toolCallId: 'task-1' },
+    })
+    add('parent', { kind: 'message:text', messageId: 'parent', text: 'parent message', streaming: false })
+    add('other-child', {
+      kind: 'message:text',
+      messageId: 'other',
+      text: 'other child message',
+      streaming: false,
+      origin: { kind: 'subagent', toolCallId: 'task-2' },
+    })
+    add('child-new', {
+      kind: 'tool:call',
+      messageId: '',
+      toolCallId: 'tool-1',
+      name: 'Bash',
+      input: {},
+      origin: { kind: 'subagent', threadId: 'thread-1' },
+    })
+
+    const app = await getApp()
+    const params = 'session=session-1&subagentToolCallId=task-1&subagentThreadIds=thread-1&limit=1'
+    const first = await app.request(`/${workspaceId}/events?${params}`)
+    const firstBody = (await first.json()) as { events: Array<{ id: string }>; hasMore: boolean }
+    expect(firstBody.events.map((event) => event.id)).toEqual(['child-new'])
+    expect(firstBody.hasMore).toBe(true)
+
+    const older = await app.request(`/${workspaceId}/events?${params}&before=child-new`)
+    const olderBody = (await older.json()) as { events: Array<{ id: string }>; hasMore: boolean }
+    expect(olderBody.events.map((event) => event.id)).toEqual(['child-old'])
+    expect(olderBody.hasMore).toBe(false)
+  })
+
+  it('includes a nested tool call whose origin belongs to its parent agent', async () => {
+    const { getDb } = await import('../server/db/index.js')
+    const db = getDb()
+    db.prepare(
+      "INSERT INTO ws_events(id,workspace_id,session_id,type,payload,created_at) VALUES ('nested',?,?,'agent:event',?,datetime('now'))",
+    ).run(
+      workspaceId,
+      'session-1',
+      JSON.stringify({
+        kind: 'tool:result',
+        toolCallId: 'nested-task',
+        output: 'child result',
+        isError: false,
+        origin: { kind: 'subagent', toolCallId: 'parent-task' },
+      }),
+    )
+
+    const app = await getApp()
+    const response = await app.request(
+      `/${workspaceId}/events?session=session-1&subagentToolCallId=nested-task&limit=10`,
+    )
+    const body = (await response.json()) as { events: Array<{ id: string }> }
+    expect(body.events.map((event) => event.id)).toEqual(['nested'])
+  })
+})

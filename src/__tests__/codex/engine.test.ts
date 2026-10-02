@@ -324,6 +324,36 @@ describe('createCodexEngine — background subagents', () => {
     return process
   }
 
+  it('marks child thread output with its origin for the activity drawer', async () => {
+    resetChild()
+    vi.useFakeTimers()
+    try {
+      const events: AgentEvent[] = []
+      await startBackgroundTurn(events)
+      pushNotification('item/agentMessage/delta', {
+        threadId: 'thr_child',
+        turnId: 'child_turn',
+        itemId: 'child_text',
+        delta: 'Child update',
+      })
+      await vi.advanceTimersByTimeAsync(100)
+
+      expect(
+        events.some(
+          (event) =>
+            event.kind === 'message:text' &&
+            event.text === 'Child update' &&
+            event.streaming &&
+            event.origin?.threadId === 'thr_child',
+        ),
+      ).toBe(true)
+    } finally {
+      _child.kill('SIGTERM')
+      await vi.advanceTimersByTimeAsync(1)
+      vi.useRealTimers()
+    }
+  })
+
   it('renews the background deadline on child progress', async () => {
     resetChild()
     vi.useFakeTimers()

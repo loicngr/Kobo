@@ -199,6 +199,7 @@ export function handleItemStarted(item: ThreadItem, state: MapperState): AgentEv
     events.push({
       kind: 'subagent:progress',
       toolCallId,
+      threadIds: item.receiverThreadIds,
       status: 'running',
       description: item.prompt ?? item.tool,
       taskType: item.tool,
@@ -353,6 +354,7 @@ export function handleItemCompleted(item: ThreadItem, state: MapperState): Agent
     events.push({
       kind: 'subagent:progress',
       toolCallId,
+      threadIds: item.receiverThreadIds,
       status: hasActiveAgent ? 'running' : 'done',
       description: item.prompt ?? item.tool,
       taskType: item.tool,

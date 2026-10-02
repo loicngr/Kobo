@@ -21,13 +21,50 @@
       </span>
     </div>
     <div class="turn-body">
-      <template v-for="item in turn.items" :key="itemKey(item)">
-        <TextMessageItem v-if="item.type === 'text'" :item="item" />
-        <ThinkingItem v-else-if="item.type === 'thinking'" :item="item" />
-        <ToolCallItem v-else-if="item.type === 'tool'" :item="item" />
-        <UserMessageItem v-else-if="item.type === 'user'" :item="item" :workspace-id="workspaceId" />
-        <SessionEventItem v-else-if="item.type === 'session'" :item="item" />
-        <AgentErrorItem v-else-if="item.type === 'error'" :item="item" />
+      <template v-for="row in displayRows" :key="row.key">
+        <q-expansion-item
+          v-if="row.type === 'subagent'"
+          class="turn-subagent-activity"
+          dense
+          :label="t('chat.subagentActivity')"
+          :caption="t('chat.nActions', { n: row.items.length })"
+          :default-opened="highlighted && row.items.some((item) => item.eventIds?.some((id: string) => eventIds.includes(id)))"
+        >
+          <template #header>
+            <q-item-section>
+              <q-item-label>{{ t('chat.subagentActivity') }}</q-item-label>
+              <q-item-label caption>{{ t('chat.nActions', { n: row.items.length }) }}</q-item-label>
+            </q-item-section>
+            <q-item-section side>
+              <q-btn
+                flat
+                round
+                dense
+                size="sm"
+                icon="open_in_new"
+                :aria-label="t('chat.openSubagentActivity')"
+                @click.stop="openSubagentActivity(row.items[0]!)"
+              >
+                <q-tooltip>{{ t('chat.openSubagentActivity') }}</q-tooltip>
+              </q-btn>
+            </q-item-section>
+          </template>
+          <div class="q-px-sm q-pb-sm">
+            <template v-for="item in row.items" :key="itemKey(item)">
+              <TextMessageItem v-if="item.type === 'text'" :item="item" />
+              <ThinkingItem v-else-if="item.type === 'thinking'" :item="item" />
+              <ToolCallItem v-else-if="item.type === 'tool'" :item="item" />
+            </template>
+          </div>
+        </q-expansion-item>
+        <template v-else>
+          <TextMessageItem v-if="row.item.type === 'text'" :item="row.item" />
+          <ThinkingItem v-else-if="row.item.type === 'thinking'" :item="row.item" />
+          <ToolCallItem v-else-if="row.item.type === 'tool'" :item="row.item" />
+          <UserMessageItem v-else-if="row.item.type === 'user'" :item="row.item" :workspace-id="workspaceId" />
+          <SessionEventItem v-else-if="row.item.type === 'session'" :item="row.item" />
+          <AgentErrorItem v-else-if="row.item.type === 'error'" :item="row.item" />
+        </template>
       </template>
     </div>
     <!-- Scroll-to-top button: useful on long agent cards (many tool calls)
@@ -52,9 +89,11 @@
 </template>
 
 <script setup lang="ts">
+import type { ConversationItem } from 'src/services/agent-event-view'
 import { itemKey, type Turn } from 'src/services/conversation-turns'
+import { openSubagentActivityKey } from 'src/services/subagent-activity-navigation'
 import { isHookSender } from 'src/utils/hook-events'
-import { computed, ref } from 'vue'
+import { computed, inject, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AgentErrorItem from './items/AgentErrorItem.vue'
 import SessionEventItem from './items/SessionEventItem.vue'
@@ -74,6 +113,7 @@ const emit = defineEmits<{
   scrollTo: [y: number]
 }>()
 const { t } = useI18n()
+const openSubagentActivityInDrawer = inject(openSubagentActivityKey)
 
 // Template ref on the card root — used by the "scroll to top of this message"
 // button so it can compute the card's absolute Y inside the scroll content.
@@ -174,6 +214,38 @@ const updatedTimeLabel = computed(() => {
 })
 
 const showUpdatedTime = computed(() => updatedTimeLabel.value !== '')
+
+type DisplayRow =
+  | { type: 'item'; key: string; item: ConversationItem }
+  | {
+      type: 'subagent'
+      key: string
+      items: Array<Extract<ConversationItem, { type: 'text' | 'thinking' | 'tool' }>>
+    }
+
+const displayRows = computed<DisplayRow[]>(() => {
+  const rows: DisplayRow[] = []
+  for (const item of props.turn.items) {
+    const isSubagentItem =
+      (item.type === 'text' || item.type === 'thinking' || item.type === 'tool') && item.origin?.kind === 'subagent'
+    const previous = rows.at(-1)
+    if (isSubagentItem && previous?.type === 'subagent') {
+      previous.items.push(item)
+      continue
+    }
+    if (isSubagentItem) {
+      rows.push({ type: 'subagent', key: `subagent:${itemKey(item)}`, items: [item] })
+      continue
+    }
+    rows.push({ type: 'item', key: itemKey(item), item })
+  }
+  return rows
+})
+
+function openSubagentActivity(item: Extract<ConversationItem, { type: 'text' | 'thinking' | 'tool' }>): void {
+  if (!item.origin) return
+  openSubagentActivityInDrawer?.({ origin: item.origin })
+}
 
 // Count non-text items (tools + thinking) for the header badge
 const actionCount = computed(() => props.turn.items.filter((i) => i.type === 'tool').length)

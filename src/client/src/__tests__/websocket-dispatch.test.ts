@@ -217,10 +217,16 @@ describe('websocket dispatch — AgentEvent side-effects to workspace store', ()
     const ws = useWorkspaceStore()
     const spy = vi.spyOn(ws, 'upsertSubagent')
     const { dispatchAgentEvent } = await import('../stores/websocket.js')
-    dispatchAgentEvent('w1', { kind: 'subagent:progress', toolCallId: 't1', status: 'done', totalTokens: 100 })
+    dispatchAgentEvent('w1', {
+      kind: 'subagent:progress',
+      toolCallId: 't1',
+      status: 'done',
+      totalTokens: 100,
+      threadIds: ['thread-1'],
+    })
     expect(spy).toHaveBeenCalledWith(
       'w1',
-      expect.objectContaining({ toolUseId: 't1', status: 'done', totalTokens: 100 }),
+      expect.objectContaining({ toolUseId: 't1', status: 'done', totalTokens: 100, threadIds: ['thread-1'] }),
     )
   })
 

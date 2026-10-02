@@ -14,6 +14,8 @@ export interface RateLimitInfo {
   buckets: RateLimitBucket[]
 }
 
+export type AgentEventOrigin = { kind: 'subagent'; toolCallId?: string; threadId?: string }
+
 export type AgentEvent =
   // Lifecycle
   | { kind: 'session:started'; engineSessionId: string; model?: string }
@@ -43,16 +45,25 @@ export type AgentEvent =
   | { kind: 'session:compacting'; active: boolean }
   | { kind: 'session:brainstorm-complete' }
   // Conversation
-  | { kind: 'message:text'; messageId: string; text: string; streaming: boolean }
-  | { kind: 'message:thinking'; messageId: string; text: string }
-  | { kind: 'message:end'; messageId: string }
+  | { kind: 'message:text'; messageId: string; text: string; streaming: boolean; origin?: AgentEventOrigin }
+  | { kind: 'message:thinking'; messageId: string; text: string; origin?: AgentEventOrigin }
+  | { kind: 'message:end'; messageId: string; origin?: AgentEventOrigin }
   | { kind: 'message:raw'; content: string }
-  | { kind: 'tool:call'; messageId: string; toolCallId: string; name: string; input: unknown }
-  | { kind: 'tool:result'; toolCallId: string; output: unknown; isError: boolean }
+  | {
+      kind: 'tool:call'
+      messageId: string
+      toolCallId: string
+      name: string
+      input: unknown
+      origin?: AgentEventOrigin
+    }
+  | { kind: 'tool:result'; toolCallId: string; output: unknown; isError: boolean; origin?: AgentEventOrigin }
   // Subagent
   | {
       kind: 'subagent:progress'
       toolCallId: string
+      /** Codex child threads owned by this launch (one launch may own several). */
+      threadIds?: string[]
       /** Claude SDK task id, used by stopTask; Codex has no equivalent. */
       taskId?: string
       /** Every non-running status is terminal. */

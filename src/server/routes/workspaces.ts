@@ -2709,8 +2709,39 @@ app.get('/:id/events', (c) => {
     // optional: scope to a session view. Session views also include
     // workspace-level rows where session_id IS NULL (legacy/pre-session items).
     const session = c.req.query('session')
+    // Optional, narrow history to one child. Nested tool calls keep their
+    // parent origin, so match both that origin and their own toolCallId.
+    const subagentToolCallId = c.req.query('subagentToolCallId')
+    const subagentThreadIds = (c.req.query('subagentThreadIds') ?? '')
+      .split(',')
+      .map((threadId) => threadId.trim())
+      .filter(Boolean)
+      .slice(0, 50)
     const parsedLimit = parseInt(c.req.query('limit') ?? '100', 10)
     const limit = Math.max(1, Math.min(Number.isFinite(parsedLimit) ? parsedLimit : 100, 500))
+
+    const sessionClause = session ? ' AND (session_id = ? OR session_id IS NULL)' : ''
+    const sessionParams: string[] = session ? [session] : []
+    const originPayload = "CASE WHEN json_valid(payload) THEN payload ELSE '{}' END"
+    const originClauses: string[] = []
+    const originParams: string[] = []
+    if (subagentToolCallId) {
+      originClauses.push(
+        `(json_extract(${originPayload}, '$.origin.toolCallId') = ? OR json_extract(${originPayload}, '$.toolCallId') = ?)`,
+      )
+      originParams.push(subagentToolCallId, subagentToolCallId)
+    }
+    if (subagentThreadIds.length > 0) {
+      originClauses.push(
+        `json_extract(${originPayload}, '$.origin.threadId') IN (${subagentThreadIds.map(() => '?').join(', ')})`,
+      )
+      originParams.push(...subagentThreadIds)
+    }
+    const originClause = originClauses.length
+      ? ` AND type = 'agent:event' AND json_extract(${originPayload}, '$.origin.kind') = 'subagent' AND (${originClauses.join(' OR ')})`
+      : ''
+    const scopedClause = `${sessionClause}${originClause}`
+    const scopedParams = [...sessionParams, ...originParams]
 
     const db = getDb()
     let rows: Array<{
@@ -2728,15 +2759,11 @@ app.get('/:id/events', (c) => {
         | undefined
       if (!targetRow) return c.json({ events: [], hasMore: false })
       const halfWindow = Math.floor(limit / 2)
-      rows = session
-        ? (db
-            .prepare(
-              'SELECT * FROM ws_events WHERE workspace_id = ? AND (session_id = ? OR session_id IS NULL) AND rowid BETWEEN ? AND ? ORDER BY rowid ASC',
-            )
-            .all(id, session, targetRow.rowid - halfWindow, targetRow.rowid + halfWindow) as typeof rows)
-        : (db
-            .prepare('SELECT * FROM ws_events WHERE workspace_id = ? AND rowid BETWEEN ? AND ? ORDER BY rowid ASC')
-            .all(id, targetRow.rowid - halfWindow, targetRow.rowid + halfWindow) as typeof rows)
+      rows = db
+        .prepare(
+          `SELECT * FROM ws_events WHERE workspace_id = ?${scopedClause} AND rowid BETWEEN ? AND ? ORDER BY rowid ASC`,
+        )
+        .all(id, ...scopedParams, targetRow.rowid - halfWindow, targetRow.rowid + halfWindow) as typeof rows
     } else if (before) {
       // Get the rowid of the cursor event
       const cursorRow = db.prepare('SELECT rowid FROM ws_events WHERE id = ?').get(before) as
@@ -2745,28 +2772,18 @@ app.get('/:id/events', (c) => {
       if (!cursorRow) {
         return c.json({ events: [], hasMore: false })
       }
-      rows = session
-        ? (db
-            .prepare(
-              'SELECT * FROM ws_events WHERE workspace_id = ? AND (session_id = ? OR session_id IS NULL) AND rowid < ? ORDER BY rowid DESC LIMIT ?',
-            )
-            .all(id, session, cursorRow.rowid, limit) as typeof rows)
-        : (db
-            .prepare('SELECT * FROM ws_events WHERE workspace_id = ? AND rowid < ? ORDER BY rowid DESC LIMIT ?')
-            .all(id, cursorRow.rowid, limit) as typeof rows)
+      rows = db
+        .prepare(
+          `SELECT * FROM ws_events WHERE workspace_id = ?${scopedClause} AND rowid < ? ORDER BY rowid DESC LIMIT ?`,
+        )
+        .all(id, ...scopedParams, cursorRow.rowid, limit) as typeof rows
     } else {
       // No cursor — return events. When filtering by session, we want the
       // MOST RECENT events of that session first (so the feed renders from
       // the end), reversed to chronological order below.
-      rows = session
-        ? (db
-            .prepare(
-              'SELECT * FROM ws_events WHERE workspace_id = ? AND (session_id = ? OR session_id IS NULL) ORDER BY rowid DESC LIMIT ?',
-            )
-            .all(id, session, limit) as typeof rows)
-        : (db
-            .prepare('SELECT * FROM ws_events WHERE workspace_id = ? ORDER BY rowid DESC LIMIT ?')
-            .all(id, limit) as typeof rows)
+      rows = db
+        .prepare(`SELECT * FROM ws_events WHERE workspace_id = ?${scopedClause} ORDER BY rowid DESC LIMIT ?`)
+        .all(id, ...scopedParams, limit) as typeof rows
     }
 
     // Reverse to chronological order (we queried DESC for "before" pagination,
@@ -2798,30 +2815,18 @@ app.get('/:id/events', (c) => {
           | { rowid: number }
           | undefined
         if (firstRow) {
-          const older = session
-            ? (db
-                .prepare(
-                  'SELECT 1 as c FROM ws_events WHERE workspace_id = ? AND (session_id = ? OR session_id IS NULL) AND rowid < ? LIMIT 1',
-                )
-                .get(id, session, firstRow.rowid) as { c: number } | undefined)
-            : (db
-                .prepare('SELECT 1 as c FROM ws_events WHERE workspace_id = ? AND rowid < ? LIMIT 1')
-                .get(id, firstRow.rowid) as { c: number } | undefined)
+          const older = db
+            .prepare(`SELECT 1 as c FROM ws_events WHERE workspace_id = ?${scopedClause} AND rowid < ? LIMIT 1`)
+            .get(id, ...scopedParams, firstRow.rowid) as { c: number } | undefined
           hasMore = older !== undefined
         }
       } else {
         // `LIMIT 1 OFFSET <page size>` answers "is there anything past this
         // page?" by reading one row, where COUNT(*) walked every event the
         // workspace ever produced — on each page, synchronously.
-        const beyond = session
-          ? (db
-              .prepare(
-                'SELECT 1 as c FROM ws_events WHERE workspace_id = ? AND (session_id = ? OR session_id IS NULL) LIMIT 1 OFFSET ?',
-              )
-              .get(id, session, rows.length) as { c: number } | undefined)
-          : (db.prepare('SELECT 1 as c FROM ws_events WHERE workspace_id = ? LIMIT 1 OFFSET ?').get(id, rows.length) as
-              | { c: number }
-              | undefined)
+        const beyond = db
+          .prepare(`SELECT 1 as c FROM ws_events WHERE workspace_id = ?${scopedClause} LIMIT 1 OFFSET ?`)
+          .get(id, ...scopedParams, rows.length) as { c: number } | undefined
         hasMore = beyond !== undefined
       }
     }

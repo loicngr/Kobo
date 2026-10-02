@@ -1,5 +1,5 @@
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
-import type { AgentEvent, RateLimitBucket, RateLimitInfo } from '../types.js'
+import type { AgentEvent, AgentEventOrigin, RateLimitBucket, RateLimitInfo } from '../types.js'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 // `rate_limit_info` is shaped for claude.ai subscriptions and may evolve.
@@ -86,6 +86,8 @@ const ASSISTANT_QUOTA_NOTICE =
 
 /** Mutable state carried across SDK messages within the same stream. */
 export interface MapperState {
+  childMessageOrigins: Map<string, AgentEventOrigin>
+  childToolOrigins: Map<string, AgentEventOrigin>
   /** The last known engine session_id, to feed session:started once. */
   sessionId?: string
   /** Whether session:started has been emitted for the current session. */
@@ -149,6 +151,8 @@ const TASK_UPDATED_TERMINAL_STATUS: Record<string, 'done' | 'failed' | 'stopped'
 
 export function createMapperState(): MapperState {
   return {
+    childMessageOrigins: new Map(),
+    childToolOrigins: new Map(),
     sessionStartedEmitted: false,
     openMessages: new Map(),
     sawErrorResult: false,
@@ -205,6 +209,35 @@ function tryEmitQuotaError(state: MapperState, events: AgentEvent[], message: st
  * `state` as needed.
  */
 export function mapSdkMessage(msg: SDKMessage, state: MapperState): AgentEvent[] {
+  const parsed = msg as unknown as Record<string, unknown>
+  const parentId = typeof parsed.parent_tool_use_id === 'string' ? parsed.parent_tool_use_id : undefined
+  const origin: AgentEventOrigin | undefined = parentId ? { kind: 'subagent', toolCallId: parentId } : undefined
+  const streamed = parsed.event as { type?: string; message?: { id?: string } } | undefined
+  if (origin && streamed?.type === 'message_start' && streamed.message?.id) {
+    state.childMessageOrigins.set(streamed.message.id, origin)
+  }
+  const events = mapSdkMessagePayload(msg, state)
+  return events.map((event) => {
+    if (event.kind === 'message:text' || event.kind === 'message:thinking' || event.kind === 'message:end') {
+      const eventOrigin = origin ?? state.childMessageOrigins.get(event.messageId)
+      if (origin) state.childMessageOrigins.set(event.messageId, origin)
+      if (event.kind === 'message:end') state.childMessageOrigins.delete(event.messageId)
+      return eventOrigin ? { ...event, origin: eventOrigin } : event
+    }
+    if (event.kind === 'tool:call') {
+      if (origin) state.childToolOrigins.set(event.toolCallId, origin)
+      return origin ? { ...event, origin } : event
+    }
+    if (event.kind === 'tool:result') {
+      const eventOrigin = origin ?? state.childToolOrigins.get(event.toolCallId)
+      state.childToolOrigins.delete(event.toolCallId)
+      return eventOrigin ? { ...event, origin: eventOrigin } : event
+    }
+    return event
+  })
+}
+
+function mapSdkMessagePayload(msg: SDKMessage, state: MapperState): AgentEvent[] {
   // Treat as a generic record — the SDK discriminated union is too broad to
   // narrow per branch here.
   const parsed = msg as unknown as Record<string, unknown>

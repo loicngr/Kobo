@@ -1,15 +1,24 @@
 import type { MessageSource } from '../../../shared/workspace-message-types'
-import type { AgentEvent } from '../types/agent-event'
+import type { AgentEvent, AgentEventOrigin } from '../types/agent-event'
 
 export type ConversationItem =
-  | { type: 'text'; messageId: string; text: string; streaming: boolean; ts?: string; eventIds?: string[] }
-  | { type: 'thinking'; messageId: string; text: string; ts?: string; eventIds?: string[] }
+  | {
+      type: 'text'
+      messageId: string
+      text: string
+      streaming: boolean
+      origin?: AgentEventOrigin
+      ts?: string
+      eventIds?: string[]
+    }
+  | { type: 'thinking'; messageId: string; text: string; origin?: AgentEventOrigin; ts?: string; eventIds?: string[] }
   | {
       type: 'tool'
       toolCallId: string
       name: string
       input: unknown
       result?: { output: unknown; isError: boolean }
+      origin?: AgentEventOrigin
       ts?: string
       eventIds?: string[]
     }
@@ -267,6 +276,7 @@ function foldRange(
             ...existing.item,
             text: existing.item.text + ev.text,
             streaming: ev.streaming,
+            origin: ev.origin ?? existing.item.origin,
             eventIds: appendEventId(existing.item.eventIds, eventId),
           })
         } else {
@@ -275,6 +285,7 @@ function foldRange(
             messageId: ev.messageId,
             text: ev.text,
             streaming: ev.streaming,
+            origin: ev.origin,
             ts,
             eventIds: eventId ? [eventId] : undefined,
           }
@@ -295,6 +306,7 @@ function foldRange(
           type: 'thinking',
           messageId: ev.messageId,
           text: ev.text,
+          origin: ev.origin,
           ts,
           eventIds: eventId ? [eventId] : undefined,
         })
@@ -306,6 +318,7 @@ function foldRange(
           toolCallId: ev.toolCallId,
           name: ev.name,
           input: ev.input,
+          origin: ev.origin,
           ts,
           eventIds: eventId ? [eventId] : undefined,
         }
