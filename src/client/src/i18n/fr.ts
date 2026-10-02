@@ -217,8 +217,10 @@ export default {
   'model.gpt6luna': 'GPT-6 Luna',
   'model.gpt6lunaDescription': 'Modèle rapide pour les tâches simples',
   'model.fable51': 'Fable 5.1',
+  'model.mythos51': 'Mythos 5.1 (Glasswing)',
   'model.mythos5': 'Mythos 5 (Glasswing)',
   'model.fable51Description': 'Modèle le plus capable - remplace Fable 5, contexte 1M, adaptive thinking',
+  'model.mythos51Description': 'Fable 5.1 proposé sur invitation uniquement via Project Glasswing',
   'model.mythos5Description': 'Fable 5.1 sans classificateurs de sécurité — accès limité (Project Glasswing)',
   'model.opus': 'Opus 4.6',
   'model.sonnet': 'Sonnet 4.6',
@@ -446,8 +448,8 @@ export default {
 
   // Agent Busy
   'agentBusy.banner': "L'agent est occupé",
-  'agentBusy.subagentsRunning': '1 sub-agent en cours | {n} sub-agents en cours',
-  'agentBusy.viewSubagents': 'Voir les sub-agents',
+  'agentBusy.subagentsRunning': '1 sous-agent en cours | {n} sous-agents en cours',
+  'agentBusy.viewSubagents': 'Voir les sous-agents',
   'agentBusy.pendingMessage': "En attente — l'agent est occupé",
 
   // Terminal
@@ -570,6 +572,8 @@ export default {
   'createPage.sectionMissionHint': 'Donnez à l’agent un objectif clair et le contexte nécessaire pour le réaliser.',
   'createPage.workspaceNameLabel': 'Nom du workspace',
   'createPage.descriptionLabel': 'Description de la mission',
+  'createPage.tagsLabel': 'Tags',
+  'createPage.tagsHint': 'Classifiez ce workspace',
   'createPage.sources': 'Sources facultatives',
   'createPage.sectionGit': 'Projet Git',
   'createPage.sectionGitHint': 'Choisissez le dépôt, la branche de départ et le mode de worktree.',
@@ -1520,7 +1524,7 @@ export default {
 
   // Sub-agents Panel
   'subagents.title': 'Sub-agents',
-  'subagents.empty': 'Aucune activité de sub-agent',
+  'subagents.empty': 'Aucune activité de sous-agent',
   'subagents.tools': '{count} outils',
   'subagents.running': 'En cours : ',
   'subagents.status.running': 'En cours',
@@ -1529,9 +1533,9 @@ export default {
   'subagents.status.stopped': 'Arrêté',
   'subagents.ambient': 'Surveillance en arrière-plan',
   'subagents.ambientTooltip': "Surveillance en arrière-plan (ex. Monitor) : non comptée comme activité de l'agent",
-  'subagents.stop': 'Arrêter ce sub-agent',
+  'subagents.stop': 'Arrêter ce sous-agent',
   'subagents.stopAll': 'Tout arrêter',
-  'subagents.stopFailed': "Impossible d'arrêter le sub-agent : {error}",
+  'subagents.stopFailed': "Impossible d'arrêter le sous-agent : {error}",
   'subagents.activity': 'Activité du sous-agent',
   'subagents.noActivity': 'Aucune activité visible du fournisseur pour le moment',
   'chat.subagentActivity': 'Activité d’un sous-agent',
@@ -1731,6 +1735,7 @@ export default {
   'contextMenu.rename': 'Renommer',
   'contextMenu.editDescription': 'Modifier la description',
   'contextMenu.copyPath': 'Copier le chemin du worktree',
+  'contextMenu.copyWorkspaceId': "Copier l'identifiant du workspace",
   'contextMenu.openEditor': "Ouvrir dans l'éditeur",
   'contextMenu.openFileManager': "Ouvrir dans l'explorateur de fichiers",
   'contextMenu.unarchiveDisabledPurged':

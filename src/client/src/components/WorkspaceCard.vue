@@ -22,6 +22,7 @@
       @rename="emit('rename', $event)"
       @edit-description="emit('editDescription', $event)"
       @copy-path="emit('copyPath', $event)"
+      @copy-id="emit('copyId', $event)"
       @open-editor="emit('openEditor', $event)"
       @open-file-manager="emit('openFileManager', $event)"
       @run-setup="emit('runSetup', $event)"
@@ -118,6 +119,7 @@ const emit = defineEmits<{
   rename: [ws: Workspace]
   editDescription: [ws: Workspace]
   copyPath: [ws: Workspace]
+  copyId: [ws: Workspace]
   openEditor: [ws: Workspace]
   openFileManager: [ws: Workspace]
   runSetup: [ws: Workspace]

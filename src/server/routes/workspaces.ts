@@ -555,6 +555,7 @@ interface CreateWorkspaceBody {
   reasoningEffort?: string
   tasks?: string[]
   acceptanceCriteria?: string[]
+  tags?: string[]
   skipSetupScript?: boolean
   description?: string
   agentPermissionMode?: 'plan' | 'bypass' | 'strict' | 'interactive'
@@ -622,6 +623,9 @@ app.post('/', migrationGuard, creationBodyLimit, async (c) => {
     }
     if (body.comparisonId !== undefined && typeof body.comparisonId !== 'string') {
       return c.json({ error: 'comparisonId must be a string' }, 400)
+    }
+    if (body.tags !== undefined && (!Array.isArray(body.tags) || body.tags.some((tag) => typeof tag !== 'string'))) {
+      return c.json({ error: 'tags must be an array of strings' }, 400)
     }
 
     creationId = typeof body.creationId === 'string' && body.creationId.length > 0 ? body.creationId : undefined
@@ -999,7 +1003,7 @@ app.post('/', migrationGuard, creationBodyLimit, async (c) => {
       // Skip any tag the user has removed from the catalogue so we respect
       // their choice (they may have pruned "notion"/"sentry" on purpose).
       const catalogTags = new Set(globalSettings.tags ?? [])
-      const autoTags: string[] = []
+      const autoTags = [...(body.tags ?? [])]
       if (body.notionUrl && catalogTags.has('notion')) autoTags.push('notion')
       if (body.sentryUrl && catalogTags.has('sentry')) autoTags.push('sentry')
       if (autoTags.length > 0) {

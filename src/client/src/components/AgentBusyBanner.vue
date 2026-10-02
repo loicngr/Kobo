@@ -3,7 +3,7 @@
     <q-spinner-dots size="14px" color="primary" class="q-mr-sm" />
     <span>{{ t('agentBusy.banner') }}</span>
     <span v-if="runningSubagentCount > 0" class="q-ml-xs">
-      — {{ t('agentBusy.subagentsRunning', { n: runningSubagentCount }, runningSubagentCount) }}
+      - {{ t('agentBusy.subagentsRunning', { n: runningSubagentCount }, runningSubagentCount) }}
     </span>
     <template v-if="runningSubagentCount > 0">
       <q-space />

@@ -79,6 +79,17 @@
         </q-expansion-item>
       </div>
     </q-scroll-area>
+    <button
+      v-if="stickyLatestUserMessage"
+      type="button"
+      class="activity-feed-last-user"
+      data-testid="latest-user-message"
+      :title="stickyLatestUserMessage.content"
+      @click="scrollToLatestUserMessage"
+    >
+      <q-icon name="person" size="16px" />
+      <span class="ellipsis">{{ stickyLatestUserMessage.content }}</span>
+    </button>
     <div class="activity-feed-nav-cluster">
       <q-btn
         v-if="!stickToBottom"
@@ -346,6 +357,7 @@ interface ScrollInfo {
 }
 
 function onScroll(info: ScrollInfo) {
+  queueLatestUserTurnVisibilityCheck()
   const previousSize = lastMeasuredScrollSize
   lastMeasuredScrollSize = info.verticalSize
   // Images and virtual cards finish measuring after the first paint. Keep
@@ -683,9 +695,69 @@ const virtualScrollRef = ref<{ scrollTo(index: number, edge?: 'start' | 'center'
 const scrollTargetEl = ref<Element | null>(null)
 // First turn index currently in view, fed by QVirtualScroll's own event.
 const firstVisibleTurnIndex = ref(0)
+const latestUserTurnVisible = ref(false)
+
+const latestUserTurnIndex = computed(() => {
+  for (let index = turns.value.length - 1; index >= 0; index--) {
+    if (turns.value[index]?.speaker === 'user') return index
+  }
+  return -1
+})
+const MAX_STICKY_USER_MESSAGE_LENGTH = 255
+
+let latestUserVisibilityFrame: number | null = null
+
+function updateLatestUserTurnVisibility(): void {
+  const turnIndex = latestUserTurnIndex.value
+  const target = scrollRef.value?.getScrollTarget()
+  const card = target?.querySelector<HTMLElement>(`[data-turn-index="${turnIndex}"]`)
+  if (!card || !target) {
+    latestUserTurnVisible.value = false
+    return
+  }
+  const viewport = target.getBoundingClientRect()
+  const bounds = card.getBoundingClientRect()
+  latestUserTurnVisible.value = bounds.bottom > viewport.top && bounds.top < viewport.bottom
+}
+
+function queueLatestUserTurnVisibilityCheck(): void {
+  if (latestUserVisibilityFrame !== null) return
+  latestUserVisibilityFrame = requestAnimationFrame(() => {
+    latestUserVisibilityFrame = null
+    updateLatestUserTurnVisibility()
+  })
+}
+
+function truncateStickyUserMessage(content: string): string {
+  return content.length <= MAX_STICKY_USER_MESSAGE_LENGTH
+    ? content
+    : `${content.slice(0, MAX_STICKY_USER_MESSAGE_LENGTH - 3)}...`
+}
+
+const stickyLatestUserMessage = computed(() => {
+  const index = latestUserTurnIndex.value
+  const turn = turns.value[index]
+  if (!turn || firstVisibleTurnIndex.value <= index || latestUserTurnVisible.value) return null
+  const content = turn.items
+    .filter((item): item is Extract<typeof item, { type: 'user' }> => item.type === 'user')
+    .map((item) => item.content)
+    .join('\n')
+    .trim()
+  return content ? { index, content: truncateStickyUserMessage(content) } : null
+})
 
 function onVirtualScroll(details: { index: number }): void {
   firstVisibleTurnIndex.value = details.index
+  queueLatestUserTurnVisibilityCheck()
+}
+
+function scrollToLatestUserMessage(): void {
+  const latest = stickyLatestUserMessage.value
+  if (!latest) return
+  cancelInitialSettle()
+  stickToBottom.value = false
+  virtualScrollRef.value?.scrollTo(latest.index, 'start')
+  firstVisibleTurnIndex.value = latest.index
 }
 
 // True while a "jump to previous user message" is walking back through the
@@ -816,6 +888,7 @@ watch(switching, async (isSwitching) => {
   if (!isSwitching) {
     void nextTick(() => {
       scrollTargetEl.value = scrollRef.value?.getScrollTarget() ?? null
+      queueLatestUserTurnVisibilityCheck()
     })
   }
 })
@@ -832,6 +905,7 @@ onMounted(() => {
   // the scroll area is mounted.
   void nextTick(() => {
     scrollTargetEl.value = scrollRef.value?.getScrollTarget() ?? null
+    queueLatestUserTurnVisibilityCheck()
   })
   if (hasRenderedContent.value) void armInitialScroll()
   // Fire the session-scoped fetch in parallel with sync:response, not after
@@ -859,6 +933,9 @@ watch([eventCount, () => userMessages.value.length, () => rawLines.value.length]
     await armInitialScroll()
   }
 })
+watch([latestUserTurnIndex, () => turns.value.length], () => {
+  void nextTick(queueLatestUserTurnVisibilityCheck)
+})
 const liveAppendCount = computed(() => stream.liveAppendCountFor(props.workspaceId, sessionMatches))
 // Both counters are per workspace/session: a switch changes them without any
 // new message. Only follow growth within the same view (the switch anchors
@@ -879,6 +956,7 @@ onUnmounted(() => {
     cancelAnimationFrame(pendingScrollFrame)
     pendingScrollFrame = null
   }
+  if (latestUserVisibilityFrame !== null) cancelAnimationFrame(latestUserVisibilityFrame)
 })
 
 watch([() => props.workspaceId, () => workspaceStore.selectedSessionId], () => {
@@ -1027,6 +1105,35 @@ async function handleScrollToBottomClick() {
   display: flex;
   gap: 8px;
   align-items: center;
+}
+.activity-feed-last-user {
+  position: absolute;
+  top: 14px;
+  right: 104px;
+  left: 14px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--kobo-border);
+  border-radius: 6px;
+  background: var(--kobo-surface-2);
+  color: var(--kobo-text-2);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+.activity-feed-last-user:hover {
+  color: var(--kobo-text);
+  border-color: var(--q-primary);
+}
+.activity-feed-last-user:focus-visible {
+  outline: 2px solid var(--q-primary);
+  outline-offset: 2px;
 }
 .activity-feed-compacting {
   position: absolute;

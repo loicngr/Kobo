@@ -745,6 +745,36 @@ describe('POST /api/workspaces', () => {
     expect(agentManager.startAgent).toHaveBeenCalledOnce()
   })
 
+  it('applies requested tags when creating a workspace', async () => {
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(workspaceService.setWorkspaceTags).mockReturnValue({
+      ...fakeWorkspace,
+      tags: ['API', 'backend'],
+    })
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
+      worktreePath: '/tmp/worktree',
+      base: 'origin',
+      branchCreated: true,
+    })
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Tagged workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/tagged-workspace',
+        tags: ['API', 'backend'],
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    expect(workspaceService.setWorkspaceTags).toHaveBeenCalledWith('ws-1', ['API', 'backend'])
+  })
+
   it('refuses a working branch name git would read as an option', async () => {
     const res = await app.request('/api/workspaces', {
       method: 'POST',

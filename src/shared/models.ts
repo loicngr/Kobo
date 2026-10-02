@@ -37,6 +37,12 @@ export const CLAUDE_MODELS: readonly AgentModel[] = [
     i18nDescriptionKey: 'model.fable51Description',
   },
   {
+    id: 'claude-mythos-5-1',
+    label: 'Mythos 5.1 (Glasswing)',
+    i18nLabelKey: 'model.mythos51',
+    i18nDescriptionKey: 'model.mythos51Description',
+  },
+  {
     id: 'claude-mythos-5',
     label: 'Mythos 5 (Glasswing)',
     i18nLabelKey: 'model.mythos5',
@@ -49,64 +55,10 @@ export const CLAUDE_MODELS: readonly AgentModel[] = [
     i18nDescriptionKey: 'model.opus55Description',
   },
   {
-    id: 'claude-opus-5',
-    label: 'Opus 5',
-    i18nLabelKey: 'model.opus5',
-    i18nDescriptionKey: 'model.opus5Description',
-  },
-  {
-    id: 'claude-opus-4-8',
-    label: 'Opus 4.8',
-    i18nLabelKey: 'model.opus48',
-    i18nDescriptionKey: 'model.opus48Description',
-  },
-  {
-    id: 'claude-opus-4-7',
-    label: 'Opus 4.7 (Classic)',
-    i18nLabelKey: 'model.opus47Classic',
-    i18nDescriptionKey: 'model.opus47ClassicDescription',
-  },
-  {
-    id: 'claude-opus-4-7[1m]',
-    label: 'Opus 4.7 (1M)',
-    i18nLabelKey: 'model.opus471m',
-    i18nDescriptionKey: 'model.opus471mDescription',
-  },
-  {
-    id: 'claude-opus-4-6',
-    label: 'Opus 4.6 (Classic)',
-    i18nLabelKey: 'model.opusClassic',
-    i18nDescriptionKey: 'model.opusClassicDescription',
-  },
-  {
-    id: 'claude-opus-4-6[1m]',
-    label: 'Opus 4.6 (1M)',
-    i18nLabelKey: 'model.opus1m',
-    i18nDescriptionKey: 'model.opus1mDescription',
-  },
-  {
     id: 'claude-sonnet-5-5',
     label: 'Sonnet 5.5',
     i18nLabelKey: 'model.sonnet55',
     i18nDescriptionKey: 'model.sonnet55Description',
-  },
-  {
-    id: 'claude-sonnet-5',
-    label: 'Sonnet 5',
-    i18nLabelKey: 'model.sonnet5',
-    i18nDescriptionKey: 'model.sonnet5Description',
-  },
-  {
-    id: 'claude-sonnet-4-6',
-    label: 'Sonnet 4.6 (Classic)',
-    i18nLabelKey: 'model.sonnetClassic',
-    i18nDescriptionKey: 'model.sonnetClassicDescription',
-  },
-  {
-    id: 'claude-sonnet-4-6[1m]',
-    label: 'Sonnet 4.6 (1M)',
-    i18nLabelKey: 'model.sonnet1m',
-    i18nDescriptionKey: 'model.sonnet1mDescription',
   },
   {
     id: 'claude-haiku-4-5-20251001',

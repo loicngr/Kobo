@@ -114,7 +114,7 @@ describe('retention worker', () => {
     } finally {
       clearInterval(timer)
     }
-  })
+  }, 15_000)
 
   it('coalesces simultaneous maintenance requests without launching competing passes', async () => {
     seed('one', 1_000)

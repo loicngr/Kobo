@@ -52,6 +52,21 @@
               <q-item-label caption>{{ $t('engine.select') }}</q-item-label>
               <q-item-label>{{ currentEngineId === 'codex' ? $t('workspacePage.engineCodex') : currentEngineId === 'claude-code' ? $t('workspacePage.engineClaude') : currentEngineId }}</q-item-label>
             </q-item-section></q-item>
+            <q-item>
+              <q-item-section>
+                <q-input
+                  v-model="descriptionDraft"
+                  dense
+                  dark
+                  :label="t('workspace.descriptionPlaceholder')"
+                  :maxlength="200"
+                  input-class="text-caption"
+                  class="workspace-description-input"
+                  @blur="saveDescription"
+                  @keydown.enter.prevent="saveDescription"
+                />
+              </q-item-section>
+            </q-item>
             <WorkspaceToolbarSelectors section="configuration" :sessions="sessions" :session-options="sessionOptions"
               :permission-mode-options="permissionModeOptions" :model-options="modelOptions"
               :reasoning-options="reasoningOptions" :pending-spawn-changes="pendingSpawnChanges"
@@ -95,33 +110,6 @@
       </template>
 
     </div>
-
-    <!-- Workspace description (own line under the header) -->
-    <div v-if="selectedWs" class="wp-subheader column q-px-md q-pb-sm">
-      <q-input
-        v-model="descriptionDraft"
-        dense
-        dark
-        borderless
-        :placeholder="t('workspace.descriptionPlaceholder')"
-        :maxlength="200"
-        input-class="text-caption text-kobo-2"
-        class="workspace-description-input"
-        style="width: 100%; max-width: 960px;"
-        @blur="saveDescription"
-        @keydown.enter.prevent="saveDescription"
-      />
-      <div
-        v-if="selectedWs?.agentDescription"
-        class="text-caption text-kobo-3 q-mt-xs ellipsis"
-        style="font-style: italic; max-width: 960px;"
-        :title="t('workspace.agentDescriptionTooltip')"
-      >
-        {{ selectedWs.agentDescription }}
-      </div>
-    </div>
-
-    <q-separator dark />
 
     <div
       v-if="selectedWs?.worktreePurgedAt"

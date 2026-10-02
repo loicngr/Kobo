@@ -17,6 +17,10 @@
         <q-item-section side><q-icon name="content_copy" size="xs" /></q-item-section>
         <q-item-section>{{ $t('contextMenu.copyPath') }}</q-item-section>
       </q-item>
+      <q-item clickable v-close-popup @click="emit('copyId', workspace)">
+        <q-item-section side><q-icon name="content_copy" size="xs" /></q-item-section>
+        <q-item-section>{{ $t('contextMenu.copyWorkspaceId') }}</q-item-section>
+      </q-item>
       <q-item v-if="settingsStore.global.editorCommand" clickable v-close-popup @click="emit('openEditor', workspace)">
         <q-item-section side><q-icon name="open_in_new" size="xs" /></q-item-section>
         <q-item-section>{{ $t('contextMenu.openEditor') }}</q-item-section>
@@ -190,6 +194,7 @@ const emit = defineEmits<{
   rename: [ws: Workspace]
   editDescription: [ws: Workspace]
   copyPath: [ws: Workspace]
+  copyId: [ws: Workspace]
   openEditor: [ws: Workspace]
   openFileManager: [ws: Workspace]
   runSetup: [ws: Workspace]

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { belongsToSubagent, subagentActivityEvents } from '../services/subagent-activity'
+import { belongsToSubagent, findSubagentForActivity, subagentActivityEvents } from '../services/subagent-activity'
 import type { AgentEvent } from '../types/agent-event'
 
 describe('subagent activity', () => {
@@ -70,5 +70,19 @@ describe('subagent activity', () => {
         (event) => event.kind === 'message:text' && event.text,
       ),
     ).toEqual(['right'])
+  })
+
+  it('finds the named sub-agent for Claude aliases and Codex child threads', () => {
+    const subagents = [
+      { toolUseId: 'task-1', taskId: 'sdk-1', description: 'Inspect API rate limit', status: 'running' },
+      { toolUseId: 'task-2', threadIds: ['thread-2'], description: 'Write regression test', status: 'done' },
+    ]
+
+    expect(findSubagentForActivity({ kind: 'subagent', toolCallId: 'sdk-1' }, subagents)?.description).toBe(
+      'Inspect API rate limit',
+    )
+    expect(findSubagentForActivity({ kind: 'subagent', threadId: 'thread-2' }, subagents)?.description).toBe(
+      'Write regression test',
+    )
   })
 })

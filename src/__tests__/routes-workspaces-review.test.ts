@@ -743,8 +743,8 @@ describe('POST /api/workspaces/:id/start-review', () => {
 })
 
 describe('review LLM configuration', () => {
-  const codex = { engine: 'codex', model: 'gpt-5.4', reasoningEffort: 'high', agentPermissionMode: 'strict' }
-  it.each([codex, { model: 'claude-sonnet-4-6' }, { reasoningEffort: 'high' }, { agentPermissionMode: 'plan' }])(
+  const codex = { engine: 'codex', model: 'gpt-6.1-sol', reasoningEffort: 'high', agentPermissionMode: 'strict' }
+  it.each([codex, { model: 'claude-sonnet-5-5' }, { reasoningEffort: 'high' }, { agentPermissionMode: 'plan' }])(
     'forces a fresh session for changed settings: %j',
     async (configuration) => {
       const response = await app.request('/api/workspaces/ws-1/start-review', {
@@ -861,7 +861,7 @@ describe('review return option', () => {
     const response = await app.request('/api/workspaces/ws-1/start-review', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ engine: 'codex', model: 'gpt-5.4', returnToSession: true, newSession: false }),
+      body: JSON.stringify({ engine: 'codex', model: 'gpt-6.1-sol', returnToSession: true, newSession: false }),
     })
     expect(response.status).toBe(200)
     expect(await response.json()).toMatchObject({ newSession: true })
@@ -872,7 +872,7 @@ describe('review return option', () => {
         reviewSessionId: 'review-session',
         original: expect.objectContaining({ engine: fakeWorkspace.engine, model: fakeWorkspace.model }),
         // A returning review always runs read-only, whatever the dialog sent.
-        review: expect.objectContaining({ engine: 'codex', model: 'gpt-5.4', agentPermissionMode: 'plan' }),
+        review: expect.objectContaining({ engine: 'codex', model: 'gpt-6.1-sol', agentPermissionMode: 'plan' }),
       }),
     )
     expect(vi.mocked(reviewReturns.registerReviewReturn).mock.invocationCallOrder[0]).toBeLessThan(
@@ -882,7 +882,7 @@ describe('review return option', () => {
       'ws-1',
       fakeWorkspace.worktreePath,
       expect.stringContaining('standalone summary'),
-      'gpt-5.4',
+      'gpt-6.1-sol',
       false,
       'plan',
       'review-session',
@@ -936,7 +936,7 @@ describe('review return option', () => {
 it('starts fresh when the actual running model differs from unchanged workspace settings', async () => {
   vi.mocked(workspaceService.getActiveSession).mockReturnValue({
     ...fakeSession,
-    model: 'claude-sonnet-4-6',
+    model: 'claude-sonnet-5-5',
     engine: 'claude-code',
   } as never)
   const response = await app.request('/api/workspaces/ws-1/start-review', {

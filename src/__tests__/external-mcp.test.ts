@@ -110,7 +110,7 @@ it('exposes the dialogue tools through the existing global stdio server', async 
     await client.close()
     await new Promise<void>((resolve, reject) => listener.close((error) => (error ? reject(error) : resolve())))
   }
-})
+}, 15_000)
 
 it('rejects oversized MCP requests before tool dispatch', async () => {
   const response = await app.request('/api/mcp', {

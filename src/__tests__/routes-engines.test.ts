@@ -38,7 +38,7 @@ describe('GET /api/engines', () => {
     expect(codex!.capabilities.supportsSubagents).toBe(true)
     expect(codex!.capabilities.supportsQuotaStatus).toBe(true)
     // Codex catalogue must surface the OpenAI model IDs, not Claude ones.
-    expect(codex!.capabilities.models.some((m) => m.id === 'gpt-5.4')).toBe(true)
+    expect(codex!.capabilities.models.some((m) => m.id === 'gpt-6.1-sol')).toBe(true)
     expect(codex!.capabilities.models.some((m) => m.id.startsWith('claude-'))).toBe(false)
   })
 })

@@ -124,6 +124,7 @@ export interface CreateWorkspaceInput {
   agentPermissionMode?: 'plan' | 'bypass' | 'strict' | 'interactive'
   tasks?: string[]
   acceptanceCriteria?: string[]
+  tags?: string[]
   autoLoop?: boolean
   autoLoopSessionMode?: 'per_task' | 'continuous'
   // Client-generated channel id the caller subscribed to (via

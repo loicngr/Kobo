@@ -2,6 +2,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { computed } from 'vue'
 import { useDevServerStore } from '../stores/dev-server'
+import { useSessionHandoffStore } from '../stores/session-handoff'
 import { useUpdateStore } from '../stores/update'
 import { useWebSocketStore } from '../stores/websocket'
 import { useWorkspaceStore, type Workspace } from '../stores/workspace'
@@ -49,6 +50,7 @@ describe('websocket sync request loading', () => {
     vi.spyOn(useWorkspaceStore(), 'fetchAutoLoopStates').mockResolvedValue()
     vi.spyOn(useWorkspaceStore(), 'fetchAutoLoopMessages').mockResolvedValue()
     vi.spyOn(useDevServerStore(), 'fetchStatus').mockResolvedValue()
+    vi.spyOn(useSessionHandoffStore(), 'refresh').mockResolvedValue()
   })
 
   afterEach(() => {
@@ -164,6 +166,7 @@ describe('websocket sync request loading', () => {
     vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true)
     vi.spyOn(useWorkspaceStore(), 'fetchWorkspacesInfo').mockResolvedValue()
     vi.spyOn(useDevServerStore(), 'fetchStatus').mockResolvedValue()
+    vi.spyOn(useSessionHandoffStore(), 'refresh').mockResolvedValue()
     window.dispatchEvent(new Event('online'))
     const replacement = FakeWebSocket.instances.at(-1)!
     replacement.open()

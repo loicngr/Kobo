@@ -17,4 +17,11 @@ describe('TurnCard', () => {
     expect(source).toContain("t('chat.openSubagentActivity')")
     expect(source).toContain('@click.stop="openSubagentActivity(row.items[0]!)"')
   })
+
+  it('shows an icon and the matching sub-agent description in collapsed activity', () => {
+    expect(source).toContain('findSubagentForActivity')
+    expect(source).toContain('row.subagentName')
+    expect(source).toContain('name="hub"')
+    expect(source).toContain("return name || t('chat.subagentActivity')")
+  })
 })

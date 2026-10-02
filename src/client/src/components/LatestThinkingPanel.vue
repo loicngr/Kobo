@@ -1,5 +1,5 @@
 <template>
-  <div v-if="isVisible" class="latest-thinking-panel q-px-md q-pb-sm">
+  <div v-if="isVisible" class="latest-thinking-panel bg-dark q-px-md q-pb-sm">
     <ThinkingItem :item="displayThinking" />
   </div>
 </template>

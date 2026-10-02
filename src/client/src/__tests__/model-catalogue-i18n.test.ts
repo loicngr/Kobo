@@ -13,20 +13,24 @@ import itLocale from '../i18n/it'
 const locales = { en, fr, de, es, it: itLocale } as const
 
 describe('Codex model catalogue', () => {
-  it('lists the current GPT-6 models in the CLI order', () => {
+  it('lists only the current Codex models in the CLI order', () => {
     const ids = CODEX_MODELS.map((m) => m.id)
-    expect(ids[0]).toBe('auto')
-    expect(ids.slice(1, 5)).toEqual(['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna'])
+    expect(ids).toEqual(['auto', 'gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna'])
   })
 })
 
 describe('Claude model catalogue', () => {
-  it('offers the current Opus and Sonnet versions while retaining older pinned models', () => {
+  it('lists only the current Claude and specialized models', () => {
     const ids = CLAUDE_MODELS.map((m) => m.id)
-    expect(ids).toContain('claude-opus-5-5')
-    expect(ids).toContain('claude-sonnet-5-5')
-    expect(ids).toContain('claude-opus-5')
-    expect(ids).toContain('claude-sonnet-5')
+    expect(ids).toEqual([
+      'auto',
+      'claude-fable-5-1',
+      'claude-mythos-5-1',
+      'claude-mythos-5',
+      'claude-opus-5-5',
+      'claude-sonnet-5-5',
+      'claude-haiku-4-5-20251001',
+    ])
   })
 })
 

@@ -181,6 +181,20 @@
               </div>
             </CreationAttachments>
 
+            <q-select
+              v-if="createTagOptions.length > 0"
+              v-model="workspaceTags"
+              :options="createTagOptions"
+              dark
+              dense
+              outlined
+              stack-label
+              multiple
+              use-chips
+              :label="$t('createPage.tagsLabel')"
+              :hint="$t('createPage.tagsHint')"
+            />
+
             <div
               class="column q-gutter-y-sm"
             >
@@ -1051,6 +1065,7 @@ const pathFilterOptions = ref<string[]>([])
 // Form fields
 const workspaceName = ref('')
 const description = ref('')
+const workspaceTags = ref<string[]>([])
 const creationAttachments = ref<File[]>([])
 const descriptionRef = ref<QInput | null>(null)
 // Tracks the last project task-prompt auto-injected into `description`. Used to
@@ -1079,6 +1094,7 @@ const branch = ref<string | null>(null)
 const branchType = ref('feature')
 const skipSetupScript = ref(false)
 const createVoiceEnabled = computed(() => settingsStore.global.voiceEnabled)
+const createTagOptions = computed(() => settingsStore.global.tags ?? [])
 
 // Engine selector state — engine list is loaded from `/api/engines` on mount.
 const engines = ref<EngineDto[]>([])
@@ -2619,6 +2635,7 @@ async function createOneWorkspace(
       // Preserve explicit false: PR imports skip setup when this field is absent.
       skipSetupScript: resolvedOverrides.value.skipSetupScript,
       ...(description.value.trim() ? { description: description.value.trim() } : {}),
+      ...(workspaceTags.value.length > 0 ? { tags: workspaceTags.value } : {}),
       ...(autoLoop.value
         ? {
             autoLoop: true,

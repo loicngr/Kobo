@@ -24,7 +24,7 @@ it('never includes server error text in a tool exception', async () => {
   child.stdin.on('data', (chunk) => {
     const request = JSON.parse(chunk.toString())
     queueMicrotask(() =>
-      child.stdout.write(JSON.stringify({ id: request.id, error: { code: -32000, message: 'SECRET_CANARY' } }) + '\n'),
+      child.stdout.write(`${JSON.stringify({ id: request.id, error: { code: -32000, message: 'SECRET_CANARY' } })}\n`),
     )
   })
   await expect(callMcpTool(child as unknown as ChildProcess, 'get_ticket', {})).rejects.not.toThrow('SECRET_CANARY')
@@ -51,10 +51,10 @@ it('rejects an MCP tool failure before connection tests can report success', asy
     const request = JSON.parse(chunk.toString())
     queueMicrotask(() =>
       child.stdout.write(
-        JSON.stringify({
+        `${JSON.stringify({
           id: request.id,
           result: { isError: true, content: [{ type: 'text', text: 'SECRET_CANARY' }] },
-        }) + '\n',
+        })}\n`,
       ),
     )
   })

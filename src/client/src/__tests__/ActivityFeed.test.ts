@@ -1,7 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { defineComponent, h, nextTick } from 'vue'
+import { defineComponent, h, nextTick, ref } from 'vue'
 import { createI18n } from 'vue-i18n'
 import ActivityFeed from '../components/ActivityFeed.vue'
 import en from '../i18n/en'
@@ -20,25 +20,27 @@ const QScrollAreaStub = defineComponent({
   name: 'QScrollArea',
   emits: ['scroll'],
   setup(_props, { slots, emit, expose }) {
+    const root = ref<HTMLElement | null>(null)
     const api = {
       getScroll: () => ({
         verticalSize: stubScrollSize,
         verticalPosition: 0,
         verticalContainerSize: 400,
       }),
-      getScrollTarget: () => document.createElement('div'),
+      getScrollTarget: () => root.value ?? document.createElement('div'),
       setScrollPosition: vi.fn(() => onStubScroll?.()),
       emitScroll: (info: { verticalPosition: number; verticalSize: number; verticalContainerSize: number }) =>
         emit('scroll', info),
     }
     expose(api)
-    return () => h('div', { class: 'q-scroll-area-stub' }, slots.default?.())
+    return () => h('div', { ref: root, class: 'q-scroll-area-stub' }, slots.default?.())
   },
 })
 
 const QVirtualScrollStub = defineComponent({
   name: 'QVirtualScroll',
   props: { items: { type: Array, default: () => [] } },
+  emits: ['virtual-scroll'],
   setup(props, { slots, expose }) {
     expose({ scrollTo: vi.fn() })
     // Render everything: virtualisation is a rendering strategy, not a
@@ -57,6 +59,7 @@ const globalStubs = {
   'q-btn': { template: '<button><slot /></button>' },
   'q-spinner': { template: '<span class="q-spinner"></span>' },
   'q-spinner-dots': { template: '<span class="q-spinner-dots"></span>' },
+  'q-icon': { template: '<span class="q-icon"></span>' },
   'q-expansion-item': { template: '<div><slot /></div>' },
   'q-scroll-area': QScrollAreaStub,
   'q-virtual-scroll': QVirtualScrollStub,
@@ -1044,5 +1047,67 @@ describe('ActivityFeed.vue', () => {
 
     expect(wrapper.find('.q-virtual-scroll-stub').exists()).toBe(true)
     expect(wrapper.findAll('.turn-card-stub').length).toBeGreaterThan(0)
+  })
+
+  it('keeps the latest user message visible after it scrolls above the feed', async () => {
+    const workspaceStore = useWorkspaceStore()
+    const streamStore = useAgentStreamStore()
+    workspaceStore.addActivityItem('sticky-user-message', {
+      id: 'prompt-0',
+      type: 'text',
+      content: 'Ancien message utilisateur',
+      timestamp: '2025-12-31T23:59:59Z',
+      meta: { sender: 'user' },
+    })
+    workspaceStore.addActivityItem('sticky-user-message', {
+      id: 'prompt-1',
+      type: 'text',
+      content: 'Relance la vérification de la migration',
+      timestamp: '2026-01-01T00:00:00Z',
+      meta: { sender: 'user' },
+    })
+    streamStore.reset(
+      'sticky-user-message',
+      [
+        { kind: 'message:text', messageId: 'answer-0', text: 'Ancienne réponse.', streaming: false },
+        { kind: 'message:text', messageId: 'answer-1', text: 'Je vérifie.', streaming: false },
+      ],
+      ['2026-01-01T00:00:00Z', '2026-01-01T00:00:01Z'],
+      { hasMoreOlder: false, sessionIds: [null, null], eventIds: ['answer-event-0', 'answer-event-1'] },
+    )
+
+    const wrapper = mount(ActivityFeed, {
+      props: { workspaceId: 'sticky-user-message' },
+      global: { plugins: [i18n], stubs: globalStubs },
+    })
+    await vi.advanceTimersByTimeAsync(100)
+
+    const virtual = wrapper.findComponent(QVirtualScrollStub)
+    virtual.vm.$emit('virtual-scroll', { index: 3 })
+    await nextTick()
+    const stickyMessage = wrapper.find('[data-testid="latest-user-message"]').text()
+    expect(stickyMessage).toContain('Relance la vérification de la migration')
+    expect(stickyMessage).not.toContain('Ancien message utilisateur')
+
+    const scrollTarget = wrapper.find('.q-scroll-area-stub').element
+    const latestUserCard = wrapper.find('[data-turn-index="2"]').element
+    Object.defineProperty(scrollTarget, 'getBoundingClientRect', {
+      value: () => ({ top: 0, bottom: 400 }),
+    })
+    Object.defineProperty(latestUserCard, 'getBoundingClientRect', {
+      value: () => ({ top: 100, bottom: 180 }),
+    })
+    wrapper.findComponent(QScrollAreaStub).vm.$emit('scroll', {
+      verticalPosition: 500,
+      verticalSize: 1000,
+      verticalContainerSize: 400,
+    })
+    await vi.advanceTimersByTimeAsync(20)
+    await nextTick()
+    expect(wrapper.find('[data-testid="latest-user-message"]').exists()).toBe(false)
+
+    virtual.vm.$emit('virtual-scroll', { index: 0 })
+    await nextTick()
+    expect(wrapper.find('[data-testid="latest-user-message"]').exists()).toBe(false)
   })
 })

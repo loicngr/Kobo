@@ -209,6 +209,7 @@
                 @rename="renameWorkspace"
                 @edit-description="editDescription"
                 @copy-path="copyWorktreePath"
+                @copy-id="copyWorkspaceId"
                 @open-editor="openInEditor"
                 @open-file-manager="openInFileManager"
                 @run-setup="runSetupScript"
@@ -236,6 +237,7 @@
               @rename="renameWorkspace"
               @edit-description="editDescription"
               @copy-path="copyWorktreePath"
+              @copy-id="copyWorkspaceId"
               @open-editor="openInEditor"
               @open-file-manager="openInFileManager"
               @run-setup="runSetupScript"
@@ -303,6 +305,7 @@
                 @rename="renameWorkspace"
                 @edit-description="editDescription"
                 @copy-path="copyWorktreePath"
+                @copy-id="copyWorkspaceId"
                 @open-editor="openInEditor"
                 @open-file-manager="openInFileManager"
                 @run-setup="runSetupScript"
@@ -330,6 +333,7 @@
               @rename="renameWorkspace"
               @edit-description="editDescription"
               @copy-path="copyWorktreePath"
+              @copy-id="copyWorkspaceId"
               @open-editor="openInEditor"
               @open-file-manager="openInFileManager"
               @run-setup="runSetupScript"
@@ -397,6 +401,7 @@
                 @rename="renameWorkspace"
                 @edit-description="editDescription"
                 @copy-path="copyWorktreePath"
+                @copy-id="copyWorkspaceId"
                 @open-editor="openInEditor"
                 @open-file-manager="openInFileManager"
                 @run-setup="runSetupScript"
@@ -424,6 +429,7 @@
               @rename="renameWorkspace"
               @edit-description="editDescription"
               @copy-path="copyWorktreePath"
+              @copy-id="copyWorkspaceId"
               @open-editor="openInEditor"
               @open-file-manager="openInFileManager"
               @run-setup="runSetupScript"
@@ -498,6 +504,7 @@
             @rename="renameWorkspace"
             @edit-description="editDescription"
             @copy-path="copyWorktreePath"
+            @copy-id="copyWorkspaceId"
             @open-editor="openInEditor"
             @open-file-manager="openInFileManager"
             @run-setup="runSetupScript"
@@ -1197,6 +1204,10 @@ function moveFocus(delta: number) {
 
 function copyWorktreePath(ws: Workspace) {
   navigator.clipboard.writeText(ws.worktreePath).catch(() => {})
+}
+
+function copyWorkspaceId(ws: Workspace) {
+  navigator.clipboard.writeText(ws.id).catch(() => {})
 }
 
 function renameWorkspace(ws: Workspace) {

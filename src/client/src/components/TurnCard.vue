@@ -26,13 +26,18 @@
           v-if="row.type === 'subagent'"
           class="turn-subagent-activity"
           dense
-          :label="t('chat.subagentActivity')"
+          :label="subagentActivityLabel(row.subagentName)"
           :caption="t('chat.nActions', { n: row.items.length })"
           :default-opened="highlighted && row.items.some((item) => item.eventIds?.some((id: string) => eventIds.includes(id)))"
         >
           <template #header>
             <q-item-section>
-              <q-item-label>{{ t('chat.subagentActivity') }}</q-item-label>
+              <q-item-label class="row items-center no-wrap" :title="row.subagentName ?? undefined">
+                <q-icon name="hub" size="16px" class="q-mr-xs">
+                  <q-tooltip>{{ t('chat.subagentActivity') }}</q-tooltip>
+                </q-icon>
+                <span class="ellipsis">{{ subagentActivityLabel(row.subagentName) }}</span>
+              </q-item-label>
               <q-item-label caption>{{ t('chat.nActions', { n: row.items.length }) }}</q-item-label>
             </q-item-section>
             <q-item-section side>
@@ -91,7 +96,9 @@
 <script setup lang="ts">
 import type { ConversationItem } from 'src/services/agent-event-view'
 import { itemKey, type Turn } from 'src/services/conversation-turns'
+import { findSubagentForActivity } from 'src/services/subagent-activity'
 import { openSubagentActivityKey } from 'src/services/subagent-activity-navigation'
+import { useWorkspaceStore } from 'src/stores/workspace'
 import { isHookSender } from 'src/utils/hook-events'
 import { computed, inject, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -113,6 +120,7 @@ const emit = defineEmits<{
   scrollTo: [y: number]
 }>()
 const { t } = useI18n()
+const workspaceStore = useWorkspaceStore()
 const openSubagentActivityInDrawer = inject(openSubagentActivityKey)
 
 // Template ref on the card root — used by the "scroll to top of this message"
@@ -215,34 +223,61 @@ const updatedTimeLabel = computed(() => {
 
 const showUpdatedTime = computed(() => updatedTimeLabel.value !== '')
 
+type SubagentConversationItem = Extract<ConversationItem, { type: 'text' | 'thinking' | 'tool' }>
+
 type DisplayRow =
   | { type: 'item'; key: string; item: ConversationItem }
   | {
       type: 'subagent'
       key: string
-      items: Array<Extract<ConversationItem, { type: 'text' | 'thinking' | 'tool' }>>
+      items: SubagentConversationItem[]
+      subagentKey: string
+      subagentName: string | null
     }
+
+function subagentFor(item: SubagentConversationItem) {
+  return findSubagentForActivity(
+    item.origin,
+    Object.values(workspaceStore.subagents[props.workspaceId] ?? {}),
+    item.type === 'tool' ? item.toolCallId : undefined,
+  )
+}
+
+function subagentActivityLabel(name: string | null): string {
+  return name || t('chat.subagentActivity')
+}
+
+function isSubagentConversationItem(item: ConversationItem): item is SubagentConversationItem {
+  return (item.type === 'text' || item.type === 'thinking' || item.type === 'tool') && item.origin?.kind === 'subagent'
+}
 
 const displayRows = computed<DisplayRow[]>(() => {
   const rows: DisplayRow[] = []
   for (const item of props.turn.items) {
-    const isSubagentItem =
-      (item.type === 'text' || item.type === 'thinking' || item.type === 'tool') && item.origin?.kind === 'subagent'
+    if (!isSubagentConversationItem(item)) {
+      rows.push({ type: 'item', key: itemKey(item), item })
+      continue
+    }
+
+    const subagent = subagentFor(item)
+    const subagentKey = subagent?.toolUseId ?? item.origin?.toolCallId ?? item.origin?.threadId ?? itemKey(item)
     const previous = rows.at(-1)
-    if (isSubagentItem && previous?.type === 'subagent') {
+    if (previous?.type === 'subagent' && previous.subagentKey === subagentKey) {
       previous.items.push(item)
       continue
     }
-    if (isSubagentItem) {
-      rows.push({ type: 'subagent', key: `subagent:${itemKey(item)}`, items: [item] })
-      continue
-    }
-    rows.push({ type: 'item', key: itemKey(item), item })
+    rows.push({
+      type: 'subagent',
+      key: `subagent:${itemKey(item)}`,
+      items: [item],
+      subagentKey,
+      subagentName: subagent?.description || null,
+    })
   }
   return rows
 })
 
-function openSubagentActivity(item: Extract<ConversationItem, { type: 'text' | 'thinking' | 'tool' }>): void {
+function openSubagentActivity(item: SubagentConversationItem): void {
   if (!item.origin) return
   openSubagentActivityInDrawer?.({ origin: item.origin })
 }

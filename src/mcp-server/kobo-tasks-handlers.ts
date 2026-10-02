@@ -76,6 +76,7 @@ export interface WorkspaceListItemDto {
   id: string
   title: string
   status: string
+  tags: string[]
   createdAt: string
 }
 
@@ -83,7 +84,17 @@ interface WorkspaceListRow {
   id: string
   name: string
   status: string
+  tags: string
   created_at: string
+}
+
+function parseWorkspaceTags(raw: string): string[] {
+  try {
+    const tags = JSON.parse(raw)
+    return Array.isArray(tags) ? tags.filter((tag): tag is string => typeof tag === 'string') : []
+  } catch {
+    return []
+  }
 }
 
 /**
@@ -93,19 +104,23 @@ interface WorkspaceListRow {
  */
 export function listWorkspacesHandler(
   db: Database.Database,
-  opts: { includeArchived?: boolean },
+  opts: { includeArchived?: boolean; tag?: string },
 ): WorkspaceListItemDto[] {
   // updated_at can collide at second resolution (e.g. bulk-seeded test data); rowid DESC breaks ties, most-recently-inserted first.
   const sql = opts.includeArchived
-    ? 'SELECT id, name, status, created_at FROM workspaces ORDER BY updated_at DESC, rowid DESC'
-    : 'SELECT id, name, status, created_at FROM workspaces WHERE archived_at IS NULL ORDER BY updated_at DESC, rowid DESC'
+    ? 'SELECT id, name, status, tags, created_at FROM workspaces ORDER BY updated_at DESC, rowid DESC'
+    : 'SELECT id, name, status, tags, created_at FROM workspaces WHERE archived_at IS NULL ORDER BY updated_at DESC, rowid DESC'
   const rows = db.prepare(sql).all() as WorkspaceListRow[]
-  return rows.map((row) => ({
-    id: row.id,
-    title: row.name,
-    status: row.status,
-    createdAt: row.created_at,
-  }))
+  const tag = opts.tag?.trim()
+  return rows
+    .map((row) => ({
+      id: row.id,
+      title: row.name,
+      status: row.status,
+      tags: parseWorkspaceTags(row.tags),
+      createdAt: row.created_at,
+    }))
+    .filter((workspace) => !tag || workspace.tags.includes(tag))
 }
 
 /**

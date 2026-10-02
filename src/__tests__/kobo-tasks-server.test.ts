@@ -783,6 +783,15 @@ describe('MCP tasks server handlers', () => {
       const result = listWorkspacesHandler(db, { includeArchived: true })
       expect(result.map((w) => w.id)).toContain('archived-ws')
     })
+
+    it('filters workspaces by an exact tag and returns their tags', () => {
+      db.prepare('UPDATE workspaces SET tags = ? WHERE id = ?').run(JSON.stringify(['API', 'notion']), workspaceId)
+      db.prepare('UPDATE workspaces SET tags = ? WHERE id = ?').run(JSON.stringify(['web']), 'other-ws')
+
+      expect(listWorkspacesHandler(db, { tag: 'API' })).toEqual([
+        expect.objectContaining({ id: workspaceId, tags: ['API', 'notion'] }),
+      ])
+    })
   })
 })
 

@@ -52,13 +52,13 @@ it('starts with the workspace configuration and keeps the current session by def
 })
 
 it('switches catalogues, forces a fresh session, and allows an explicit return with a summary', async () => {
-  useSettingsStore().global.defaultModelByEngine.codex = 'gpt-5.4'
+  useSettingsStore().global.defaultModelByEngine.codex = 'gpt-6.1-sol'
   const view = mountDialog()
   const engine = view.findAllComponents({ name: 'QSelect' })[0]!
   engine.vm.$emit('update:modelValue', 'codex')
   await view.vm.$nextTick()
   const selects = view.findAllComponents({ name: 'QSelect' })
-  expect(selects[1]!.props('modelValue')).toBe('gpt-5.4')
+  expect(selects[1]!.props('modelValue')).toBe('gpt-6.1-sol')
   expect(selects[1]!.props('options').every((o: { value: string }) => !o.value.startsWith('claude-'))).toBe(true)
   const toggles = view.findAllComponents({ name: 'QToggle' })
   expect(toggles[0]!.props()).toMatchObject({ modelValue: true, disable: true })
@@ -68,7 +68,7 @@ it('switches catalogues, forces a fresh session, and allows an explicit return w
   await view.findAllComponents({ name: 'QBtn' }).at(-1)!.trigger('click')
   expect(view.emitted('submit')?.[0]?.[0]).toMatchObject({
     engine: 'codex',
-    model: 'gpt-5.4',
+    model: 'gpt-6.1-sol',
     newSession: true,
     returnToSession: true,
   })

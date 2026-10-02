@@ -8,7 +8,11 @@ import type { Workspace } from '../stores/workspace'
 
 const i18n = createI18n({ legacy: false, locale: 'en', messages: { en } })
 const stubs = {
-  WorkspaceContextMenu: { template: '<div class="ctx-stub" />' },
+  WorkspaceContextMenu: {
+    props: ['workspace'],
+    emits: ['copy-id'],
+    template: '<button class="copy-id-stub" @click="$emit(\'copy-id\', workspace)" />',
+  },
   WorkspaceDrawerIndicators: { template: '<div class="indicators-stub" />' },
   WorkspaceAttentionLabels: {
     name: 'WorkspaceAttentionLabels',
@@ -95,6 +99,12 @@ describe('WorkspaceCard.vue', () => {
     await root.trigger('keydown', { key: ' ' })
     await root.trigger('click')
     expect(card.emitted('select')).toHaveLength(3)
+  })
+
+  it('relays the copy workspace ID action from its context menu', async () => {
+    const card = mountCard()
+    await card.get('.copy-id-stub').trigger('click')
+    expect(card.emitted('copyId')).toEqual([[makeWorkspace()]])
   })
 
   it('shows the full attention labels on the attention variant only', () => {

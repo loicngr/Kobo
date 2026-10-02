@@ -605,13 +605,18 @@ const GLOBAL_TOOLS: typeof WORKSPACE_SCOPED_TOOLS = [
   {
     name: 'list_workspaces',
     description:
-      'List Kōbō workspaces with their id, title, status, and creation date. Works even when the Kōbō backend server is not running (reads the database directly). Use this to discover existing workspaces before creating one or targeting one with archive_workspace/stop_workspace.',
+      'List Kōbō workspaces with their id, title, status, tags, and creation date. Set tag to return only workspaces carrying that exact tag. Works even when the Kōbō backend server is not running (reads the database directly). Use this to discover existing workspaces before creating one or targeting one with archive_workspace/stop_workspace.',
     inputSchema: {
       type: 'object',
       properties: {
         include_archived: {
           type: 'boolean',
           description: 'Include archived workspaces (default false).',
+        },
+        tag: {
+          type: 'string',
+          minLength: 1,
+          description: 'Return only workspaces with this exact tag, for example "API".',
         },
       },
       required: [],
@@ -636,6 +641,11 @@ const GLOBAL_TOOLS: typeof WORKSPACE_SCOPED_TOOLS = [
         reasoning_effort: { type: 'string', description: 'Reasoning effort override (optional).' },
         engine: { type: 'string', description: 'Agent engine id, e.g. "claude-code" or "codex" (optional).' },
         description: { type: 'string', description: 'Task description / initial brainstorming prompt (optional).' },
+        tags: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Workspace tags to assign at creation (optional).',
+        },
         tasks: { type: 'array', items: { type: 'string' }, description: 'Initial manual task titles (optional).' },
         acceptance_criteria: {
           type: 'array',
@@ -1047,7 +1057,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     if (name === 'list_workspaces') {
       const includeArchived = a.include_archived === true
-      return ok(listWorkspacesHandler(db, { includeArchived }))
+      const tag = typeof a.tag === 'string' ? a.tag : undefined
+      return ok(listWorkspacesHandler(db, { includeArchived, tag }))
     }
 
     if (name === 'create_workspace') {
@@ -1068,6 +1079,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           reasoningEffort: a.reasoning_effort as string | undefined,
           engine: a.engine as string | undefined,
           description: a.description as string | undefined,
+          tags: a.tags as string[] | undefined,
           tasks: a.tasks as string[] | undefined,
           acceptanceCriteria: a.acceptance_criteria as string[] | undefined,
           agentPermissionMode: a.agent_permission_mode as string | undefined,
