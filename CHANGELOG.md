@@ -7,8 +7,6 @@ section — the in-app "What's new" dialog reads this file.
 ## 2.1.9
 
 - fix: resolve secret scan false positive in memory fixture
-- feat: add persistent scoped memory with MCP access and management UI
-- fix: group subagent activity by task
 
 ## 2.1.8
 
