@@ -4,6 +4,12 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads this file.
 
+## 2.1.9
+
+- fix: resolve secret scan false positive in memory fixture
+- feat: add persistent scoped memory with MCP access and management UI
+- fix: group subagent activity by task
+
 ## 2.1.8
 
 - feat: add persistent scoped memory with MCP access and management UI
