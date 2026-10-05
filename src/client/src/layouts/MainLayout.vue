@@ -62,6 +62,10 @@
             <q-tab name="schedule" data-tour="ws-tabnav-schedule" icon="event" :aria-label="$t('schedule.tabLabel')">
               <q-tooltip>{{ $t('schedule.tabLabel') }}</q-tooltip>
             </q-tab>
+            <q-tab name="memory" data-tour="ws-tabnav-memory" icon="psychology" :aria-label="$t('memory.panel.title')">
+              <q-badge v-if="pendingMemoryCount" color="warning" floating>{{ pendingMemoryCount }}</q-badge>
+              <q-tooltip>{{ $t('memory.panel.title') }}</q-tooltip>
+            </q-tab>
           </q-tabs>
 
           <q-separator dark />
@@ -97,6 +101,15 @@
 
               <q-tab-panel name="schedule" data-tour="ws-tab-schedule" class="q-pa-none">
                 <SchedulePanel v-if="store.selectedWorkspaceId" :workspace-id="store.selectedWorkspaceId" />
+              </q-tab-panel>
+              <q-tab-panel name="memory" data-tour="ws-tab-memory" class="q-pa-none">
+                <MemoryPanel
+                  v-if="store.selectedWorkspaceId"
+                  :workspace-id="store.selectedWorkspaceId"
+                  :session-id="currentMemorySession?.id"
+                  :archived="Boolean(store.selectedWorkspace?.archivedAt)"
+                  :purged="Boolean(store.selectedWorkspace?.worktreePurgedAt)"
+                />
               </q-tab-panel>
             </q-tab-panels>
           </div>
@@ -184,7 +197,9 @@ import {
 import { useCustomSoundsStore } from 'src/stores/custom-sounds'
 import { useDocumentsStore } from 'src/stores/documents'
 import { useLayoutStore } from 'src/stores/layout'
+import { useMemoryStore } from 'src/stores/memory'
 import { useWorkspaceStore } from 'src/stores/workspace'
+import { getCurrentSession } from 'src/utils/current-session'
 import { cappedDrawerWidth } from 'src/utils/drawer-width'
 import { isWorkspacePane } from 'src/utils/split-workspace'
 import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, provide, ref, watch } from 'vue'
@@ -202,6 +217,7 @@ const GitPanel = defineAsyncComponent(() => import('src/components/GitPanel.vue'
 const ComparisonPanel = defineAsyncComponent(() => import('src/components/ComparisonPanel.vue'))
 const SchedulePanel = defineAsyncComponent(() => import('src/components/SchedulePanel.vue'))
 const TerminalPanel = defineAsyncComponent(() => import('src/components/TerminalPanel.vue'))
+const MemoryPanel = defineAsyncComponent(() => import('src/components/MemoryPanel.vue'))
 
 // First-run home tour, and the post-update "What's new" dialog.
 const { scheduleAutoRun, migrateLegacyFlag } = useTours()
@@ -219,7 +235,7 @@ onMounted(() => {
 })
 
 const DRAWER_TAB_KEY = 'kobo:rightTab'
-const VALID_RIGHT_TABS = ['git', 'timeline', 'tasks', 'subagents', 'documents', 'schedule'] as const
+const VALID_RIGHT_TABS = ['git', 'timeline', 'tasks', 'subagents', 'documents', 'schedule', 'memory'] as const
 const storedRightTab = localStorage.getItem(DRAWER_TAB_KEY)
 const rightTab = ref(
   storedRightTab && (VALID_RIGHT_TABS as readonly string[]).includes(storedRightTab) ? storedRightTab : 'git',
@@ -343,6 +359,25 @@ watch(
   { immediate: true },
 )
 const store = useWorkspaceStore()
+const memoryStore = useMemoryStore()
+const currentMemorySession = computed(() =>
+  getCurrentSession(
+    store.sessions.filter((session) => session.workspaceId === store.selectedWorkspaceId && session.status !== 'idle'),
+  ),
+)
+const currentMemoryView = computed(() =>
+  store.selectedWorkspaceId
+    ? memoryStore.workspaceView(store.selectedWorkspaceId, currentMemorySession.value?.id)
+    : undefined,
+)
+const pendingMemoryCount = computed(() => currentMemoryView.value?.proposals.length ?? 0)
+watch(
+  () => [store.selectedWorkspaceId, currentMemorySession.value?.id],
+  ([workspaceId, sessionId]) => {
+    if (workspaceId) void memoryStore.loadWorkspace(workspaceId, sessionId || undefined, true).catch(() => undefined)
+  },
+  { immediate: true },
+)
 
 // The home tour belongs to the home route, whichever route the app opened on.
 // A slightly longer delay lets the sidebar render its anchors.

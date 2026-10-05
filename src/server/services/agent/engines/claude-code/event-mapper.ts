@@ -237,6 +237,11 @@ export function mapSdkMessage(msg: SDKMessage, state: MapperState): AgentEvent[]
   })
 }
 
+function sdkCompactionId(msg: SDKMessage): string | undefined {
+  const uuid = (msg as unknown as { uuid?: unknown }).uuid
+  return typeof uuid === 'string' && uuid.length > 0 ? uuid : undefined
+}
+
 function mapSdkMessagePayload(msg: SDKMessage, state: MapperState): AgentEvent[] {
   // Treat as a generic record — the SDK discriminated union is too broad to
   // narrow per branch here.
@@ -288,7 +293,10 @@ function mapSdkMessagePayload(msg: SDKMessage, state: MapperState): AgentEvent[]
 
   if (type === 'system') {
     if (subtype === 'compact' || subtype === 'compact_boundary') {
-      events.push({ kind: 'session:compacted' })
+      events.push({
+        kind: 'session:compacted',
+        ...(sdkCompactionId(msg) ? { compactionId: sdkCompactionId(msg) } : {}),
+      })
       return events
     }
     // Live status message: the SDK announces it is compacting context before the
@@ -296,7 +304,11 @@ function mapSdkMessagePayload(msg: SDKMessage, state: MapperState): AgentEvent[]
     // UI can tell the user "compacting…" instead of looking frozen.
     if (subtype === 'status') {
       const sdkStatus = typeof parsed.status === 'string' ? (parsed.status as string) : null
-      events.push({ kind: 'session:compacting', active: sdkStatus === 'compacting' })
+      events.push({
+        kind: 'session:compacting',
+        active: sdkStatus === 'compacting',
+        ...(sdkCompactionId(msg) ? { compactionId: sdkCompactionId(msg) } : {}),
+      })
       return events
     }
     if (

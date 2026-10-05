@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3'
 import { initAutoLoopSchema } from './auto-loop-schema.js'
 import { initMcpMessageSchema } from './mcp-message-schema.js'
+import { migrateMemorySchema } from './memory-schema.js'
 import { initReviewReturnSchema } from './review-return-schema.js'
 import { initSchema } from './schema.js'
 import { initSearchSchema } from './search-schema.js'
@@ -818,6 +819,11 @@ export const migrations: Migration[] = [
         'CREATE TABLE IF NOT EXISTS reliability_reset (id INTEGER PRIMARY KEY CHECK (id = 1), reset_at TEXT NOT NULL)',
       )
     },
+  },
+  {
+    version: 51,
+    name: 'persistent-memory-schema',
+    migrate: migrateMemorySchema,
   },
 ]
 

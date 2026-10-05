@@ -127,6 +127,11 @@ src/
 | `schema_migrations` | applied migration versions, names and timestamps |
 | `workspace_chat_history` | chat-input history per workspace: message text + `created_at`, ordered by autoincrement id, capped at 200 entries by the service; CASCADE DELETE on workspace |
 | `workspace_permission_rules` | remembered per-workspace tool approvals, scoped to an exact operation or every invocation of a tool; CASCADE DELETE on workspace |
+| `memory_scopes` / `memory_entries` | global, normalized-project and workspace scopes; active explicit facts with revision and provenance |
+| `memory_proposals` | pending Hybrid project/global writes; body retained only while pending and removed on approval/rejection/clear |
+| `memory_operations` | paginated content-free mutation/read journal with actor, source and affected-count metadata |
+| `memory_contexts` | per-launch receipts with dispatch state, revision refs, omissions and budget metadata; CASCADE DELETE on workspace/session |
+| `memory_budget_contexts` | cumulative native conversation/epoch and external cooperative-context ledgers, including delivered refs and conservative charges |
 
 `status` enum: `created | extracting | brainstorming | executing | compacting | awaiting-user | completed | idle | error | quota`. Transitions are validated in `updateWorkspaceStatus` against `VALID_TRANSITIONS`.
 
@@ -139,6 +144,16 @@ src/
 `auto_loop` preserves the user's execution intent. `auto_loop_runs` (migration v45) stores phase (`grooming | execution | finalization`), operational state (`active | waiting | blocked | completed | stopped`), iteration count and diagnostic recovery. `auto_loop_progress` records monotone task milestones; metadata changes are not progress. After three stagnant iterations, run one diagnostic and two further attempts, then block explicitly without clearing intent. Quotas wait for their actual reset, including multi-day windows; only transient failures use the retry cap. Archived/deleted workspaces disable the loop.
 
 Tasks have `role` (`work | finalization`) and structured `verification`. MCP and HTTP share transactional task mutations. An auto-loop task cannot become done without passing reported checks. Finalization runs after all other tasks/criteria, is invalidated by scope changes, and is mandatory before completion. The proof is agent-reported evidence, not server-side execution of arbitrary commands.
+
+## Persistent memory
+
+Kōbō memory is independent of provider chat history/native memory and shared by Claude Code and Codex. `memoryMode` is a global setting defaulting to `hybrid`: Manual permits reads only; Hybrid applies workspace writes and proposes project/global writes; Automatic applies writes to the explicitly targeted scope. Mode is checked per operation, so a setting change affects existing agent sessions; pending/rejected proposals are never automatically approved or revived. Plan/review/report-only capabilities cannot write.
+
+`memory_scopes` identify global, normalized configured project path, or durable workspace id. Project identity is not a display name, branch, or worktree path. Clear is transactional: it deletes entries and pending proposals only from the exact scope, increments generation, and writes content-free journal metadata. Every delayed writer supplies its expected generation. Workspace archive/purge preserves memory; workspace deletion cascades its own scope and launch records while leaving global/project scopes intact. Provenance FKs become null when the source session/workspace is deleted; saved memory remains in its scope until explicitly erased.
+
+Agents deliberately save knowledge through shared internal MCP tools; there is no background transcript extraction or extra LLM turn. Workspace-bound tool calls derive actor, scope and write permission from a per-launch capability. It is revoked when stopping begins; bodies cannot forge human identity or widen workspace scope. External clients use the same service through `/api/mcp` HTTP or global stdio, explicitly select scopes, and receive `external-mcp` provenance (display name + transport). They need no native session. They cannot delete, approve, promote or bulk-clear memory.
+
+Context injection and every memory-tool response are bounded independently of provider window telemetry. Bootstrap targets 1,000 estimated tokens; normal responses target 1,000 with a hard 1,500-token cap; cumulative native conversation/context epoch output is capped at 6,000 estimated tokens. Regular output stops at 5,500 to preserve a single 500-token terminal denial reserve; later exhausted MCP calls return `isError: true` and empty `content`. Final serialized envelopes are guarded by a 12,000-byte ceiling and 96-byte framing headroom, including escaped and structured MCP duplication. These conservative estimates are not full conversation occupancy. Scope catalogues include generation/revision for CAS writes. Listing/search defaults to compact metadata and explicit body fragments are charged by range; repeated unchanged content is not blindly resent on resume. A confirmed current-controller compaction opens a new budget epoch. Failed/ambiguous delivery is charged conservatively and never replayed automatically. External stateless callers should reuse opaque external `memory_context_id`; it is not authentication and never addresses an internal ledger. See `src/shared/memory-tools.ts`, `services/memory-context-service.ts`, `services/memory-budget-service.ts`, and [CONFIGURATION.md](./CONFIGURATION.md#persistent-memory).
 
 `auto_loop_messages` durably queues next-iteration instructions, independently of engine session ids. A dispatch interrupted before confirmed completion becomes `unknown`, requiring explicit acknowledgement or retry. Unknown or in-flight instructions prevent completion. Actual engine closure (`EngineProcess.closed`), not a logical end event alone, releases controller ownership and permits the next writer.
 
@@ -177,6 +192,7 @@ Every feature that touches the schema:
 
 - **Run migrations on every backend start.** `src/server/index.ts` opens the connection with `getDb()`, checks for pending migrations, attempts a pre-migration backup, then calls `runMigrations(db)`. `getDb()` only opens/configures SQLite; it does not initialize or migrate the schema. Tests creating their own database must initialize it explicitly.
 - **Settings migrations are separate.** The JSON settings migration versions in `settings-service.ts` are independent of SQLite's `SCHEMA_VERSION`.
+- **Memory is migration v51** (`persistent-memory-schema`). Keep `initMemorySchema` in `src/server/db/memory-schema.ts` synchronized with fresh-install schema. `memoryMode` is a JSON setting and defaults to Hybrid for missing/invalid legacy values; it is not a SQLite column.
 - **Test upgrades, not just fresh installs.** The `migrations.test.ts` suite must exercise "old DB → new DB" paths.
 
 ## WebSocket protocol

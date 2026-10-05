@@ -55,4 +55,16 @@ describe('workspace UI layout', () => {
     expect(source).toContain('MAX_STICKY_USER_MESSAGE_LENGTH = 255')
     expect(source).toContain(['`', '$', '{content.slice(0, MAX_STICKY_USER_MESSAGE_LENGTH - 3)}', '...`'].join(''))
   })
+
+  it('adds a lazy memory drawer tab keyed to the selected current session', () => {
+    const source = read('src/layouts/MainLayout.vue')
+
+    expect(source).toContain("'memory'")
+    expect(source).toContain('data-tour="ws-tabnav-memory"')
+    expect(source).toContain('data-tour="ws-tab-memory"')
+    expect(source).toContain("import('src/components/MemoryPanel.vue')")
+    expect(source).toContain('getCurrentSession(')
+    expect(source).toContain(':session-id="currentMemorySession?.id"')
+    expect(source).toContain('cappedDrawerWidth')
+  })
 })

@@ -41,4 +41,28 @@ export const CODEX_MODELS: readonly AgentModel[] = [
     i18nLabelKey: 'model.gpt6luna',
     i18nDescriptionKey: 'model.gpt6lunaDescription',
   },
+  {
+    id: 'gpt-5.6-sol',
+    label: 'GPT-5.6 Sol',
+    i18nLabelKey: 'model.gpt56sol',
+    i18nDescriptionKey: 'model.gpt56solDescription',
+  },
+  {
+    id: 'gpt-5.6-terra',
+    label: 'GPT-5.6 Terra',
+    i18nLabelKey: 'model.gpt56terra',
+    i18nDescriptionKey: 'model.gpt56terraDescription',
+  },
+  {
+    id: 'gpt-5.6-luna',
+    label: 'GPT-5.6 Luna',
+    i18nLabelKey: 'model.gpt56luna',
+    i18nDescriptionKey: 'model.gpt56lunaDescription',
+  },
+  {
+    id: 'gpt-5.5',
+    label: 'GPT-5.5',
+    i18nLabelKey: 'model.gpt55',
+    i18nDescriptionKey: 'model.gpt55Description',
+  },
 ] as const

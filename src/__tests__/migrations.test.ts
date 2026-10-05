@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs'
 import Database from 'better-sqlite3'
 import { describe, expect, it, vi } from 'vitest'
 import {
@@ -57,8 +58,8 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 50', () => {
-    expect(SCHEMA_VERSION).toBe(50)
+  it('exporte SCHEMA_VERSION = 51', () => {
+    expect(SCHEMA_VERSION).toBe(51)
   })
 
   it('migration v33 records and backfills the engine on agent sessions', () => {
@@ -2566,6 +2567,185 @@ describe('reliability reset migration v50', () => {
     expect(() =>
       db.prepare('INSERT INTO reliability_reset (id, reset_at) VALUES (2, ?)').run('2026-09-24T11:00:00.000Z'),
     ).toThrow()
+    db.close()
+  })
+})
+
+describe('persistent memory schema migration v51', () => {
+  it('upgrades a v50 database without losing workspace data and converges with a fresh install', () => {
+    const missingRepositoryPath = '/repo/that/does/not/exist'
+    const missingWorktreePath = '/worktree/that/does/not/exist'
+    expect(existsSync(missingRepositoryPath)).toBe(false)
+    expect(existsSync(missingWorktreePath)).toBe(false)
+
+    const old = new Database(':memory:')
+    initSchema(old)
+    old.exec(`
+      DROP TABLE IF EXISTS memory_budget_contexts;
+      DROP TABLE IF EXISTS memory_contexts;
+      DROP TABLE IF EXISTS memory_operations;
+      DROP TABLE IF EXISTS memory_proposals;
+      DROP TABLE IF EXISTS memory_entries;
+      DROP TABLE IF EXISTS memory_scopes;
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+      INSERT INTO schema_migrations (version, name, applied_at) VALUES (1, 'init-schema', 'v50');
+      INSERT INTO workspaces (id, name, project_path, worktree_path, source_branch, working_branch, created_at, updated_at)
+        VALUES ('memory-ws', 'Preserve me', '${missingRepositoryPath}', '${missingWorktreePath}', 'main', 'feature', 'created', 'updated');
+      INSERT INTO tasks (id, workspace_id, title, status, created_at, updated_at)
+        VALUES ('memory-task', 'memory-ws', 'Keep task', 'done', 'task-created', 'task-updated');
+      INSERT INTO agent_sessions (id, workspace_id, status, started_at, ended_at, name)
+        VALUES ('memory-session', 'memory-ws', 'completed', 'session-start', 'session-end', 'Keep session');
+      INSERT INTO ws_events (id, workspace_id, type, payload, session_id, created_at)
+        VALUES ('memory-event', 'memory-ws', 'user:message', '{"text":"keep event"}', 'memory-session', 'event-created');
+    `)
+    const markApplied = old.prepare('INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)')
+    for (const migration of migrations.filter((entry) => entry.version <= 50)) {
+      markApplied.run(migration.version, migration.name, 'v50')
+    }
+
+    const memoryObjects = (db: Database.Database) => {
+      const objects = db
+        .prepare(
+          "SELECT type, name, tbl_name, sql FROM sqlite_master WHERE tbl_name LIKE 'memory_%' AND name NOT LIKE 'sqlite_%' ORDER BY type, name",
+        )
+        .all()
+      const foreignKeys = [
+        'memory_scopes',
+        'memory_entries',
+        'memory_proposals',
+        'memory_operations',
+        'memory_contexts',
+        'memory_budget_contexts',
+      ].map((table) => ({
+        table,
+        keys: db.prepare(`PRAGMA foreign_key_list(${table})`).all(),
+      }))
+      return { objects, foreignKeys }
+    }
+
+    // initSchema represents the current v50 core shape; the memory tables are
+    // removed above and the recorded migration history ends at v50.
+    const beforeUpgrade = memoryObjects(old)
+    expect(beforeUpgrade.objects).toEqual([])
+    expect(getMigrationHistory(old).at(-1)?.version).toBe(50)
+    expect(getPendingMigrations(old)).toEqual([51])
+
+    runMigrations(old)
+    migrations.find((entry) => entry.version === 51)!.migrate(old)
+    runMigrations(old)
+
+    expect(
+      old.prepare("SELECT name, project_path, worktree_path FROM workspaces WHERE id = 'memory-ws'").get(),
+    ).toEqual({
+      name: 'Preserve me',
+      project_path: missingRepositoryPath,
+      worktree_path: missingWorktreePath,
+    })
+    expect(old.prepare("SELECT title, status FROM tasks WHERE id = 'memory-task'").get()).toEqual({
+      title: 'Keep task',
+      status: 'done',
+    })
+    expect(old.prepare("SELECT name, ended_at FROM agent_sessions WHERE id = 'memory-session'").get()).toEqual({
+      name: 'Keep session',
+      ended_at: 'session-end',
+    })
+    expect(old.prepare("SELECT payload FROM ws_events WHERE id = 'memory-event'").get()).toEqual({
+      payload: '{"text":"keep event"}',
+    })
+    expect(getMigrationHistory(old).filter((entry) => entry.version === 51)).toHaveLength(1)
+    expect(getMigrationHistory(old).at(-1)?.version).toBe(51)
+    expect(
+      (old.prepare('PRAGMA table_info(memory_contexts)').all() as Array<{ name: string }>).map(({ name }) => name),
+    ).toContain('budget_context_id')
+    expect(old.prepare('PRAGMA foreign_key_list(memory_contexts)').all()).toEqual(
+      expect.arrayContaining([expect.objectContaining({ table: 'memory_budget_contexts', from: 'budget_context_id' })]),
+    )
+
+    const fresh = new Database(':memory:')
+    initSchema(fresh)
+    expect(memoryObjects(old)).toEqual(memoryObjects(fresh))
+    old.close()
+    fresh.close()
+  })
+
+  it('keeps project memory provenance valid when the source workspace is deleted', () => {
+    const db = new Database(':memory:')
+    db.pragma('foreign_keys = ON')
+    initSchema(db)
+    db.exec(`
+      INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
+        VALUES ('source-ws', 'Source', '/missing/repo', 'main', 'work', 'now', 'now');
+      INSERT INTO agent_sessions (id, workspace_id, status, started_at)
+        VALUES ('source-session', 'source-ws', 'completed', 'now');
+      INSERT INTO memory_scopes (id, level, project_path, created_at, updated_at)
+        VALUES ('project-scope', 'project', '/missing/repo', 'now', 'now');
+      INSERT INTO memory_entries (id, scope_id, memory_key, title, body, actor_kind, source_workspace_id, source_session_id, source_engine, created_at, updated_at)
+        VALUES ('entry', 'project-scope', 'key', 'Title', 'Body', 'internal-agent', 'source-ws', 'source-session', 'codex', 'now', 'now');
+      INSERT INTO memory_proposals (id, scope_id, memory_key, title, body, generation, actor_kind, source_workspace_id, source_session_id, source_engine, created_at, updated_at)
+        VALUES ('proposal', 'project-scope', 'proposal-key', 'Title', 'Body', 0, 'internal-agent', 'source-ws', 'source-session', 'codex', 'now', 'now');
+      INSERT INTO memory_operations (scope_id, operation, actor_kind, source_workspace_id, source_session_id, source_engine, source_project_path, created_at)
+        VALUES ('project-scope', 'created', 'internal-agent', 'source-ws', 'source-session', 'codex', '/missing/repo', 'now');
+      DELETE FROM agent_sessions WHERE id = 'source-session';
+    `)
+
+    for (const table of ['memory_entries', 'memory_proposals', 'memory_operations']) {
+      const row = db
+        .prepare(`SELECT actor_kind, source_workspace_id, source_session_id, source_engine FROM ${table}`)
+        .get()
+      expect(row).toEqual({
+        actor_kind: 'internal-agent',
+        source_workspace_id: 'source-ws',
+        source_session_id: null,
+        source_engine: 'codex',
+      })
+    }
+
+    db.prepare("DELETE FROM workspaces WHERE id = 'source-ws'").run()
+    for (const table of ['memory_entries', 'memory_proposals', 'memory_operations']) {
+      const row = db
+        .prepare(`SELECT actor_kind, source_workspace_id, source_session_id, source_engine FROM ${table}`)
+        .get()
+      expect(row).toEqual({
+        actor_kind: 'internal-agent',
+        source_workspace_id: null,
+        source_session_id: null,
+        source_engine: 'codex',
+      })
+    }
+    expect(db.prepare('SELECT source_workspace_id, source_project_path FROM memory_operations').get()).toEqual({
+      source_workspace_id: null,
+      source_project_path: '/missing/repo',
+    })
+    db.close()
+  })
+
+  it('uses a durable opaque key to separate native conversations when the provider ID is unknown', () => {
+    const db = new Database(':memory:')
+    db.pragma('foreign_keys = ON')
+    initSchema(db)
+    db.exec(`
+      INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
+        VALUES ('budget-ws', 'Budget', '/repo', 'main', 'work', 'now', 'now');
+      INSERT INTO agent_sessions (id, workspace_id, status, started_at)
+        VALUES ('budget-session', 'budget-ws', 'running', 'now');
+    `)
+    const addBudget = db.prepare(`
+      INSERT INTO memory_budget_contexts (
+        id, kind, session_id, engine, conversation_key, epoch, created_at, updated_at
+      ) VALUES (?, 'internal', 'budget-session', 'codex', ?, 0, 'now', 'now')
+    `)
+    const addBudgetWithoutKey = db.prepare(`
+      INSERT INTO memory_budget_contexts (id, kind, session_id, engine, epoch, created_at, updated_at)
+      VALUES ('missing-key', 'internal', 'budget-session', 'codex', 0, 'now', 'now')
+    `)
+
+    expect(() => addBudgetWithoutKey.run()).toThrow()
+    addBudget.run('budget-one', 'fresh-thread-one')
+    addBudget.run('budget-two', 'fresh-thread-two')
+    expect(db.prepare("SELECT COUNT(*) AS count FROM memory_budget_contexts WHERE kind = 'internal'").get()).toEqual({
+      count: 2,
+    })
+    expect(() => addBudget.run('budget-duplicate', 'fresh-thread-one')).toThrow()
     db.close()
   })
 })

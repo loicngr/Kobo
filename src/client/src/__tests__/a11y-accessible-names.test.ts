@@ -15,7 +15,7 @@ describe('accessible names', () => {
     // Negative lookahead excludes `<q-tab-panel(s)`, which also matches
     // `\b` after "tab" since `-` is a non-word character.
     const tabs = source.match(/<q-tab(?!-)\b[\s\S]*?(?:\/>|<\/q-tab>)/g) ?? []
-    expect(tabs).toHaveLength(8)
+    expect(tabs).toHaveLength(9)
     for (const tab of tabs) {
       expect(tab, tab).toMatch(/:aria-label="/)
     }

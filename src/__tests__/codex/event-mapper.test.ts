@@ -608,7 +608,7 @@ describe('handleItemStarted — contextCompaction', () => {
     const state = mkState()
     const item = { id: 'cmp_1', type: 'contextCompaction' as const }
     const events = handleItemStarted(item, state)
-    expect(events).toEqual([{ kind: 'session:compacting', active: true }])
+    expect(events).toEqual([{ kind: 'session:compacting', active: true, compactionId: 'cmp_1' }])
   })
 })
 
@@ -1006,7 +1006,7 @@ describe('createMapperState', () => {
 it('emits session:compacted only when the context compaction item completes', () => {
   const state = mkState()
   expect(handleItemCompleted({ id: 'cmp_1', type: 'contextCompaction' }, state)).toEqual([
-    { kind: 'session:compacted' },
+    { kind: 'session:compacted', compactionId: 'cmp_1' },
   ])
 })
 

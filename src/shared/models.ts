@@ -66,4 +66,46 @@ export const CLAUDE_MODELS: readonly AgentModel[] = [
     i18nLabelKey: 'model.haiku',
     i18nDescriptionKey: 'model.haikuDescription',
   },
+  {
+    id: 'claude-sonnet-5',
+    label: 'Sonnet 5',
+    i18nLabelKey: 'model.sonnet5',
+    i18nDescriptionKey: 'model.sonnet5Description',
+  },
+  {
+    id: 'claude-opus-5',
+    label: 'Opus 5',
+    i18nLabelKey: 'model.opus5',
+    i18nDescriptionKey: 'model.opus5Description',
+  },
+  {
+    id: 'claude-fable-5',
+    label: 'Fable 5',
+    i18nLabelKey: 'model.fable5',
+    i18nDescriptionKey: 'model.fable5Description',
+  },
+  {
+    id: 'claude-opus-4-8',
+    label: 'Opus 4.8',
+    i18nLabelKey: 'model.opus48',
+    i18nDescriptionKey: 'model.opus48Description',
+  },
+  {
+    id: 'claude-opus-4-7',
+    label: 'Opus 4.7',
+    i18nLabelKey: 'model.opus47Classic',
+    i18nDescriptionKey: 'model.opus47ClassicDescription',
+  },
+  {
+    id: 'claude-opus-4-6',
+    label: 'Opus 4.6',
+    i18nLabelKey: 'model.opus',
+    i18nDescriptionKey: 'model.opusClassicDescription',
+  },
+  {
+    id: 'claude-sonnet-4-6',
+    label: 'Sonnet 4.6',
+    i18nLabelKey: 'model.sonnet',
+    i18nDescriptionKey: 'model.sonnetClassicDescription',
+  },
 ] as const

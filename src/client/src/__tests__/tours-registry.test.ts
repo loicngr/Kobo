@@ -13,7 +13,7 @@ import { createTour } from '../tours/create'
 import { gitPrTour } from '../tours/git-pr'
 import { homeTour } from '../tours/home'
 import { TOURS } from '../tours/registry'
-import { SETTINGS_GROUPS } from '../tours/settings'
+import { SETTINGS_GROUPS, settingsTour } from '../tours/settings'
 import { workspaceTour } from '../tours/workspace'
 
 const LOCALES: Record<string, Record<string, string>> = { en, fr, de, es, it: itLocale }
@@ -126,6 +126,40 @@ describe('create tour', () => {
 })
 
 describe('workspace tour', () => {
+  it('waits for the lazy memory link before scrolling it into view', async () => {
+    setActivePinia(createPinia())
+    vi.useFakeTimers()
+    const panel = document.createElement('div')
+    panel.dataset.tour = 'ws-tab-memory'
+    panel.getClientRects = () => [{}] as unknown as DOMRectList
+    panel.getBoundingClientRect = () => ({ top: 0, left: 0, right: 200, bottom: 200 }) as DOMRect
+    document.body.append(panel)
+    try {
+      const step = workspaceTour.steps.find((step) => step.id === 'ws-memory-settings')!
+      const preparing = step.beforeShow!()
+      await vi.advanceTimersByTimeAsync(100)
+      const link = document.createElement('a')
+      link.dataset.tour = 'ws-memory-settings'
+      link.scrollIntoView = vi.fn()
+      panel.append(link)
+      await vi.advanceTimersByTimeAsync(100)
+      await preparing
+      expect(link.scrollIntoView).toHaveBeenCalledWith({ block: 'center' })
+    } finally {
+      panel.remove()
+      vi.useRealTimers()
+    }
+  })
+
+  it('explains the memory settings link after opening the memory tab', () => {
+    const ids = workspaceTour.steps.map((step) => step.id)
+    expect(ids.indexOf('ws-memory-settings')).toBe(ids.indexOf('ws-tab-memory') + 1)
+    const step = workspaceTour.steps.find((step) => step.id === 'ws-memory-settings')
+    expect(step?.anchor).toBe('ws-memory-settings')
+    expect(step?.clickTarget).toBe('ws-tabnav-memory')
+    expect(step?.beforeShow).toBeTypeOf('function')
+  })
+
   it('visits the documents tab right after the (gated) sub-agents tab', () => {
     const ids = workspaceTour.steps.map((s) => s.id)
     expect(ids.indexOf('ws-tab-documents')).toBe(ids.indexOf('ws-tab-subagents') + 1)
@@ -178,6 +212,15 @@ describe('home tour onDone', () => {
 
 describe('settings tour groups', () => {
   const navTabs = settingsNavTabs()
+
+  it('explains memory modes immediately after the memory overview', () => {
+    const ids = settingsTour.steps.map((step) => step.id)
+    expect(ids.indexOf('settings-memory-modes')).toBe(ids.indexOf('settings-memory') + 1)
+    const step = settingsTour.steps.find((step) => step.id === 'settings-memory-modes')
+    expect(step?.anchor).toBe('settings-memory-modes')
+    expect(step?.clickTarget).toBe('settings-nav-memory')
+    expect(step?.beforeShow).toBeTypeOf('function')
+  })
 
   it('covers every Settings tab exactly once', () => {
     const grouped = Object.values(SETTINGS_GROUPS).flat()

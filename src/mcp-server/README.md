@@ -382,6 +382,29 @@ Stop the currently running agent session on a workspace, like the Stop action in
 
 ---
 
+## Persistent memory tools
+
+The same six memory tools are available on a workspace-bound agent server and on the global external MCP server: `list_memory_scopes`, `list_memories`, `read_memory`, `search_memories`, `list_memory_operations`, and `remember`. They call Kōbō's shared memory service; HTTP and stdio clients see the same stored scopes and entries. External calls do not create or resume a workspace, agent session, or native engine conversation.
+
+| Tool | Purpose and important arguments |
+|---|---|
+| `list_memory_scopes` | Lists selectable scopes; external clients may pass `workspace_id` to list exactly the applicable global/project/workspace scopes. |
+| `list_memories` | Bounded page of compact metadata; select one `scope_id`, or an applicable `workspace_id` externally. |
+| `read_memory` | Reads a specific `scope_id` + `entry_id`; large bodies are returned as explicit fragments with a revision/code-point cursor. Set `repeat: true` only to intentionally spend budget rereading an unchanged range. |
+| `search_memories` | Bounded search in a selected scope or external workspace view; results are metadata/excerpts, not a corpus dump. |
+| `list_memory_operations` | Bounded content-free journal page for one scope or external workspace view. |
+| `remember` | Creates/updates a concise fact. Supply `scope_id`, `expected_generation`, `key`, `title`, and `body`; updates also require `entry_id`, `expected_revision`, and `key`. |
+
+Internal tools derive workspace/session/engine attribution and access from a short-lived launch capability. Do not send an actor field. A read-only plan/review/report launch cannot write, and stopping revokes its capability. External clients must choose a scope explicitly for writes and `read_memory`; they cannot forge an internal session, human actor, or use the workspace bridge to escape its scope. Memory MCP exposes no delete, promotion, proposal approval, or clear operation; a human performs those in Settings/the workspace drawer.
+
+Mode applies to internal and external writes at call time: Manual denies agent writes, Hybrid applies workspace writes and proposes project/global changes, and Automatic applies the selected scope. A `remember` receipt reports denied/applied/proposed and revision/generation metadata, not a copy of the saved body. No mutation is retried automatically after a transport error; inspect the key/proposal before deciding whether to retry. Hybrid proposals stay pending until human approval; switching modes never approves them.
+
+Each response is independently bounded, and native conversation memory output is cumulatively budgeted across resumes/restarts. Bootstrap targets 1,000 estimated tokens, ordinary tool output targets 1,000 with a hard 1,500 cap, and a native context epoch has a 6,000 cumulative estimated-token ceiling. Regular output stops at 5,500, reserving up to 500 tokens for one terminal budget-denial receipt. After that receipt, exhausted MCP calls return `isError: true` with `content: []`. The final serialized envelope has a separate 12,000-byte ceiling and includes 96 bytes of framing headroom in its cost. These values estimate only Kōbō memory output; Kōbō has no trustworthy full-context/window telemetry and cannot promise the rest of a provider conversation fits.
+
+External `list_memory_scopes` returns scope IDs, levels, and generation/revision CAS values; pass the current generation to `remember` and rediscover after a clear/conflict. HTTP/global-stdio clients should reuse the opaque `memory_context_id` returned by receipts for one cooperative external conversation. This keeps its cumulative allowance across stateless requests; it is budget bookkeeping, not an authorization token and cannot reference an internal conversation ledger. Kōbō cannot detect external compaction or know that a new ID means an empty model context. External provenance records the normalized display client name and `http`/`stdio` transport, not an authenticated identity. Reuse the same id across calls and respect returned exhaustion receipts instead of looping.
+
+Automatic mode means the agent deliberately calls `remember` when it has stable, reusable knowledge; there is no background transcript extraction or post-session model call. Clear prevents later Kōbō memory reads/injection but cannot retract text already transmitted to an engine or remove provider chat history. See [Persistent memory](../../CONFIGURATION.md#persistent-memory) for scope lifecycle, erasure and UI behavior.
+
 ## Implementation notes
 
 - **Handlers** live in `kobo-tasks-handlers.ts` as pure functions taking the DB handle (and sometimes paths) as arguments. This keeps them unit-testable in isolation — see `src/__tests__/kobo-tasks-server.test.ts`.

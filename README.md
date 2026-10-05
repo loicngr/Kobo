@@ -66,6 +66,10 @@ Kōbō's production build is an installable PWA — use your browser's **Install
 - **Observability**: a per-session timeline (duration, tools, tokens, errors) and a downloadable redacted diagnostic JSON.
 - **Optional integrations**: Notion (import missions) and Sentry (fix from issue URL), usable by both agent engines through saved connections, each independently toggled with a **Test connection** action; local voice transcription via `whisper.cpp`.
 
+### Persistent memory across engines
+
+Kōbō offers **Manual**, **Hybrid** (the default), and **Automatic** memory behavior in **Settings → Memory**. Global, project, and workspace scopes are shared by Claude Code and Codex but remain independently manageable. Hybrid applies workspace notes while asking for human approval before shared project/global changes. The workspace's right-hand **Memory** tab shows the current conversation's delivered context, pending proposals, and a provenance-aware operation journal. Memory has conservative per-response and per-conversation budgets; it cannot retract facts already transmitted into an agent or provider conversation. See the [persistent memory guide](./CONFIGURATION.md#persistent-memory) and [MCP memory tools](./src/mcp-server/README.md#persistent-memory-tools).
+
 ## Fresh sessions and LLM handoffs
 
 Long conversation getting crowded? Use **Continue in a fresh session** at the bottom of the right-hand Tools panel. **Change LLM** uses the same transfer flow and also lets you select another model within the current engine.

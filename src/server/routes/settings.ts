@@ -1,4 +1,5 @@
 import { Hono } from 'hono'
+import { isMemoryMode } from '../../shared/memory.js'
 import { isValidSkillSuite } from '../../shared/skill-suite-prompts.js'
 import { isWorkflowPolicy } from '../../shared/workflow-policy.js'
 import { getDb } from '../db/index.js'
@@ -182,6 +183,8 @@ app.put('/global', async (c) => {
     if (!body) return c.json({ error: 'Invalid JSON body' }, 400)
     if (body.workflowPolicy !== undefined && !isWorkflowPolicy(body.workflowPolicy))
       return c.json({ error: 'Invalid workflowPolicy' }, 400)
+    if (body.memoryMode !== undefined && !isMemoryMode(body.memoryMode))
+      return c.json({ error: 'Invalid memoryMode' }, 400)
     const updated = settingsService.updateGlobalSettings(body)
     // The client assigns this response straight into its store, so echoing the
     // real credentials back would undo the masking on GET the first time

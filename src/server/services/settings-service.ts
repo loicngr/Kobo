@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { MASK_CHARACTER, MASKED_SECRET, SECRET_GLOBAL_KEYS, WORKTREES_PATH } from '../../shared/consts.js'
+import { isMemoryMode, type MemoryMode } from '../../shared/memory.js'
 import { normalizePublicSounds } from '../../shared/notification-assets.js'
 import { isValidProjectColor, type ProjectColor } from '../../shared/project-colors.js'
 import { isValidSkillSuite, type SkillSuite } from '../../shared/skill-suite-prompts.js'
@@ -226,6 +227,7 @@ export interface ProjectSettings {
 /** Global settings that apply as defaults when no project override is set. */
 export interface GlobalSettings {
   workflowPolicy: WorkflowPolicy
+  memoryMode: MemoryMode
   onboardingComplete: boolean
   /**
    * Default model id per engine. Keys are engine ids (e.g. `'claude-code'`,
@@ -1302,6 +1304,13 @@ const settingsMigrations: SettingsMigration[] = [
       }
     },
   },
+  {
+    version: 63,
+    name: 'add-memory-mode',
+    migrate: ({ global }) => {
+      if (!isMemoryMode(global.memoryMode)) global.memoryMode = 'hybrid'
+    },
+  },
 ]
 
 /** Current settings schema version — always equals the highest migration version. */
@@ -1365,6 +1374,7 @@ function defaultSettings(): Settings {
     schemaVersion: SETTINGS_SCHEMA_VERSION,
     global: {
       workflowPolicy: { ...MANUAL_WORKFLOW_POLICY },
+      memoryMode: 'hybrid',
       onboardingComplete: false,
       defaultModelByEngine: { ...FRESH_MODEL_BY_ENGINE },
       dangerouslySkipPermissions: true,
@@ -1544,6 +1554,7 @@ export function runSettingsMigrations(raw: Record<string, unknown>): Settings {
 
   if (typeof current.global.onboardingComplete !== 'boolean') current.global.onboardingComplete = true
   current.global.workflowPolicy = resolveWorkflowPolicy(current.global.workflowPolicy as Partial<WorkflowPolicy>)
+  if (!isMemoryMode(current.global.memoryMode)) current.global.memoryMode = 'hybrid'
   for (const project of current.projects as Array<Record<string, unknown>>) {
     if (!isWorkflowPolicy(project.workflowPolicy)) project.workflowPolicy = {}
   }
@@ -1777,6 +1788,10 @@ export function importConfigBundle(bundle: ConfigBundle): void {
   if (!Array.isArray(incomingSettings.projects)) {
     throw new Error('Invalid bundle: settings.projects must be an array')
   }
+  const incomingGlobal = incomingSettings.global as Record<string, unknown>
+  if (incomingGlobal.memoryMode !== undefined && !isMemoryMode(incomingGlobal.memoryMode)) {
+    throw new Error('Invalid bundle: settings.global.memoryMode must be manual, automatic, or hybrid')
+  }
   for (let i = 0; i < incomingSettings.projects.length; i++) {
     const p = incomingSettings.projects[i]
     if (!p || typeof p !== 'object' || Array.isArray(p)) {
@@ -1955,8 +1970,10 @@ export function updateGlobalSettings(input: Partial<GlobalSettings>): GlobalSett
     if (!isWorkflowPolicy(data.workflowPolicy)) throw new Error('Invalid workflowPolicy')
     data.workflowPolicy = resolveWorkflowPolicy(settings.global.workflowPolicy, data.workflowPolicy)
   }
+  if ('memoryMode' in data && !isMemoryMode(data.memoryMode)) throw new Error('Invalid memoryMode')
   const allowedGlobalKeys = [
     'workflowPolicy',
+    'memoryMode',
     'onboardingComplete',
     'defaultModelByEngine',
     'dangerouslySkipPermissions',

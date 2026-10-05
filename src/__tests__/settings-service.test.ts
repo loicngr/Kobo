@@ -149,6 +149,10 @@ describe('getGlobalSettings()', () => {
     expect(typeof global.prPromptTemplate).toBe('string')
   })
 
+  it('creates fresh settings with hybrid memory mode', () => {
+    expect(getGlobalSettings().memoryMode).toBe('hybrid')
+  })
+
   it('exposes terminalCommand defaulting to empty string', () => {
     const settings = getGlobalSettings()
     expect(settings.terminalCommand).toBe('')
@@ -811,6 +815,36 @@ describe('runSettingsMigrations()', () => {
     expect(migrated.projects).toEqual([])
   })
 
+  it('v63 seeds hybrid memory mode and preserves a valid v62 choice and custom fields', () => {
+    const missing = runSettingsMigrations({
+      schemaVersion: 62,
+      global: { customValue: 'keep' },
+      projects: [{ path: '/repo', customProjectValue: 'also keep' }],
+    })
+    expect(missing.schemaVersion).toBe(63)
+    expect(missing.global.memoryMode).toBe('hybrid')
+    expect((missing.global as unknown as Record<string, unknown>).customValue).toBe('keep')
+    expect((missing.projects[0] as unknown as Record<string, unknown>)?.customProjectValue).toBe('also keep')
+
+    for (const mode of ['manual', 'automatic', 'hybrid']) {
+      const preserved = runSettingsMigrations({
+        schemaVersion: 62,
+        global: { memoryMode: mode },
+        projects: [],
+      })
+      expect(preserved.global.memoryMode).toBe(mode)
+    }
+  })
+
+  it('normalizes unknown memory modes already present at the current schema version', () => {
+    const migrated = runSettingsMigrations({
+      schemaVersion: 63,
+      global: { memoryMode: 'unexpected' },
+      projects: [],
+    })
+    expect(migrated.global.memoryMode).toBe('hybrid')
+  })
+
   it('preserves existing gitConventions string during migration', () => {
     const legacy = {
       global: { gitConventions: 'my custom rules' },
@@ -1358,6 +1392,27 @@ describe('importConfigBundle()', () => {
     expect(after.prPromptTemplate).toBe('imported')
     expect(after.tags).toEqual(['imported-tag'])
     expect(after.worktreesPath).toBe('$HOME/kobo/worktress')
+  })
+
+  it.each(['manual', 'automatic', 'hybrid'] as const)('preserves imported memory mode %s', (memoryMode) => {
+    const incoming: Settings = {
+      ...getSettings(),
+      schemaVersion: SETTINGS_SCHEMA_VERSION,
+      global: makeGlobalSettings({ memoryMode }),
+      projects: [],
+    }
+    importConfigBundle({ bundleVersion: 1, exportedAt: '', settings: incoming, templates: [] })
+    expect(getGlobalSettings().memoryMode).toBe(memoryMode)
+  })
+
+  it('rejects an invalid imported memory mode before replacing settings', () => {
+    const before = getSettings()
+    const incoming = structuredClone(before)
+    ;(incoming.global as unknown as Record<string, unknown>).memoryMode = 'invalid'
+    expect(() => importConfigBundle({ bundleVersion: 1, exportedAt: '', settings: incoming, templates: [] })).toThrow(
+      /memoryMode/,
+    )
+    expect(getSettings()).toEqual(before)
   })
 
   it('preserves local networkAccessToken when importing', () => {
@@ -1983,6 +2038,17 @@ describe('migration v22 — add-skill-suite-selector', () => {
   it('updateGlobalSettings accepts skillSuite=custom', () => {
     updateGlobalSettings({ skillSuite: 'custom' })
     expect(getSettings().global.skillSuite).toBe('custom')
+  })
+
+  it.each(['manual', 'automatic', 'hybrid'] as const)('persists memoryMode=%s', (memoryMode) => {
+    updateGlobalSettings({ memoryMode })
+    expect(getGlobalSettings().memoryMode).toBe(memoryMode)
+  })
+
+  it('rejects an unknown memory mode without changing the stored mode', () => {
+    updateGlobalSettings({ memoryMode: 'manual' })
+    expect(() => updateGlobalSettings({ memoryMode: 'unknown' as never })).toThrow(/Invalid memoryMode/)
+    expect(getGlobalSettings().memoryMode).toBe('manual')
   })
 
   it('updateGlobalSettings accepts skillSuite=ecc', () => {

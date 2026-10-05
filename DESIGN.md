@@ -221,7 +221,7 @@ The old three-tab redesign description is no longer the implementation baseline.
 
 - Section membership is declared by `navItems` in `SettingsPage.vue`: General,
   Agents, Skills, Git, Prompts, Scripts, Notion, Sentry, Forge, Voice, Notifications,
-  Worktrees, Projects, prompt Templates, Workspace templates, and Export.
+  Worktrees, Memory, Projects, prompt Templates, Workspace templates, and Export.
 - Git groups workflow preferences, conventions and branch prefixes.
   Prompts keeps post-PR/MR, review, CI-fix and finalization instructions. Project overrides use
   the same Git grouping. Retry limits belong to Agents and reminders to Notifications.
@@ -233,6 +233,16 @@ The old three-tab redesign description is no longer the implementation baseline.
   frontend `design-system-*` tests cover token consistency, palette, typography
   and contrast; they complement browser review rather than proving every screen
   follows this guide.
+
+## Memory surfaces
+
+Memory has two entry points in the existing settings/drawer navigation, not a separate application shell:
+
+- **Settings → Memory** owns the global mode draft/save interaction and the full scope catalogue. Scope selection, CRUD, proposal review and destructive clears are explicit; clearing one scope never implies clearing its parents or children.
+- The workspace right drawer has a **Memory** tab, lazy-loaded like other heavy panels. It is keyed to the selected workspace and current conversation (activation order, with legacy timestamp fallback), not the newest-created session. It shows the memory context that was actually recorded as delivered, including state, budget, omissions, and revision-current text only. Changed/deleted facts are placeholders, never historical body snapshots.
+- The workspace panel keeps the journal and entries readable in the existing narrow/mobile drawer; long IDs, note text and provenance wrap instead of forcing a wider canvas. Archived or purged workspaces retain access to memory controls. The workspace clear affordance names only that scope and links to Settings for global/project management.
+
+The shared-memory policy is intentional: Hybrid is the default; workspace facts can be applied while project/global changes await human approval. Proposals and entries use the same compact, flat rows and subtle dividers as other operational panels. Destructive confirmation names the exact entry/scope or clear counts. Memory controls never imply deletion of provider chat history, and a scope clear cannot promise retraction from text already transmitted to an engine.
 
 ## CSS Variables
 

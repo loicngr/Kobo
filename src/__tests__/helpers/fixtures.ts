@@ -142,6 +142,7 @@ export function makeProjectSettings(overrides: Partial<ProjectSettings> = {}): P
 export function makeGlobalSettings(overrides: Partial<GlobalSettings> = {}): GlobalSettings {
   return {
     workflowPolicy: { ...LEGACY_WORKFLOW_POLICY },
+    memoryMode: 'hybrid',
     onboardingComplete: true,
     defaultModelByEngine: {},
     dangerouslySkipPermissions: true,

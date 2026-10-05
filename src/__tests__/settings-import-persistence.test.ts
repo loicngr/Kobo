@@ -38,6 +38,30 @@ function importRequest(templates?: unknown) {
 }
 
 describe('configuration import persistence', () => {
+  it('rejects an unknown memory mode without changing settings or templates', async () => {
+    getSettings()
+    createTemplate({ slug: 'saved', description: 'Saved prompt', content: 'Preserve this' })
+    const settingsFile = path.join(directory, 'settings.json')
+    const templatesFile = path.join(directory, 'templates.json')
+    const settingsBefore = fs.readFileSync(settingsFile, 'utf8')
+    const templatesBefore = fs.readFileSync(templatesFile, 'utf8')
+    const current = getSettings()
+    const result = await app.request('/api/settings/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        bundleVersion: 1,
+        settings: { ...current, global: { ...current.global, memoryMode: 'unknown' } },
+        templates: [],
+      }),
+    })
+
+    expect(result.status).toBe(400)
+    expect((await result.json()).error).toMatch(/memoryMode/)
+    expect(fs.readFileSync(settingsFile, 'utf8')).toBe(settingsBefore)
+    expect(fs.readFileSync(templatesFile, 'utf8')).toBe(templatesBefore)
+  })
+
   it.each([
     { templates: 'not-an-array' },
     { templates: [{ slug: 'UPPERCASE', description: 'Invalid slug', content: 'Text' }] },

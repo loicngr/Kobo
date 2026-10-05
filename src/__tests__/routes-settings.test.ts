@@ -227,6 +227,17 @@ describe('malformed JSON bodies', () => {
 })
 
 describe('PUT /api/settings/global', () => {
+  it('rejects an unknown memory mode before calling the settings writer', async () => {
+    const res = await app.request('/api/settings/global', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ memoryMode: 'unknown' }),
+    })
+
+    expect(res.status).toBe(400)
+    expect(settingsService.updateGlobalSettings).not.toHaveBeenCalled()
+  })
+
   it('updates global settings', async () => {
     const updated = makeGlobalSettings({ prPromptTemplate: 'New template' })
     vi.mocked(settingsService.updateGlobalSettings).mockReturnValue(updated)

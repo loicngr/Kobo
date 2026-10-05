@@ -64,6 +64,26 @@ export const workspaceTour: TourDefinition = {
     },
     tabStep('documents', 'tours.workspace.documents'),
     tabStep('schedule', 'tours.workspace.schedule'),
+    tabStep('memory', 'tours.workspace.memory'),
+    {
+      id: 'ws-memory-settings',
+      anchor: 'ws-memory-settings',
+      i18nKey: 'tours.workspace.memorySettings',
+      clickTarget: 'ws-tabnav-memory',
+      beforeShow: async () => {
+        if (!(await openRightTab('ws-tabnav-memory', 'ws-tab-memory'))) return
+        // The panel shell can precede its lazy-loaded component. Scroll only
+        // once the link exists, including when replaying this step on its own.
+        for (let attempt = 0; attempt < 40; attempt++) {
+          const link = document.querySelector<HTMLElement>('[data-tour="ws-memory-settings"]')
+          if (link) {
+            link.scrollIntoView({ block: 'center' })
+            return
+          }
+          await new Promise((resolve) => setTimeout(resolve, 50))
+        }
+      },
+    },
     {
       id: 'ws-session-handoff',
       anchor: 'ws-session-handoff',

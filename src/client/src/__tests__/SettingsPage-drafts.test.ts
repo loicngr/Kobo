@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent, h } from 'vue'
 import { createI18n } from 'vue-i18n'
 import IntegrationConnectionSettings from '../components/IntegrationConnectionSettings.vue'
+import MemorySettingsPanel from '../components/MemorySettingsPanel.vue'
 import SettingsNavList from '../components/SettingsNavList.vue'
 import WorkflowPolicyEditor from '../components/WorkflowPolicyEditor.vue'
 import en from '../i18n/en'
@@ -126,6 +127,7 @@ async function setup() {
     savebarSave(): void
     selectedProjectIndex: number
     applyCopyFrom(path: string): void
+    syncGlobalForm(): void
   }
   return { wrapper, store, tab, vm }
 }
@@ -227,6 +229,36 @@ describe('settings drafts', () => {
       }),
     )
     expect(hasUnsavedWork()).toBe(false)
+  })
+
+  it('keeps memory mode in the global draft until save, and discards it without a write when leaving', async () => {
+    const { wrapper, store, tab, vm } = await setup()
+    await tab('memory')
+    const panel = wrapper.getComponent(MemorySettingsPanel)
+    expect(panel.props('memoryMode')).toBe('hybrid')
+    panel.vm.$emit('update:memoryMode', 'automatic')
+    await flushPromises()
+    expect(hasUnsavedWork()).toBe(true)
+    expect(store.global.memoryMode).toBe('hybrid')
+    expect(api).not.toHaveBeenCalledWith('/api/settings/global', expect.anything())
+
+    vm.savebarSave()
+    await flushPromises()
+    expect(api).toHaveBeenCalledWith(
+      '/api/settings/global',
+      expect.objectContaining({ body: expect.objectContaining({ memoryMode: 'automatic' }) }),
+    )
+    expect(hasUnsavedWork()).toBe(false)
+
+    panel.vm.$emit('update:memoryMode', 'manual')
+    await flushPromises()
+    expect(hasUnsavedWork()).toBe(true)
+    vm.syncGlobalForm()
+    await flushPromises()
+    expect(store.global.memoryMode).toBe('automatic')
+    expect(wrapper.getComponent(MemorySettingsPanel).props('memoryMode')).toBe('automatic')
+    expect(hasUnsavedWork()).toBe(false)
+    expect(api.mock.calls.filter(([url]) => url === '/api/settings/global')).toHaveLength(1)
   })
 
   it('retains a failed workflow save and saves project inheritance without copying the global policy', async () => {

@@ -14,6 +14,7 @@ export const SETTINGS_GROUPS = {
   integrations: ['notion', 'sentry', 'forge'],
   automation: ['scripts', 'prompts', 'templates', 'workspaceTemplates'],
   worktrees: ['worktrees'],
+  memory: ['memory'],
   projects: ['projects'],
   misc: ['general', 'voice', 'notifications', 'export'],
 } as const satisfies Record<string, readonly [string, ...string[]]>
@@ -36,7 +37,20 @@ export const settingsTour: TourDefinition = {
   route: 'settings',
   i18nKey: 'tours.settings',
   steps: [
-    ...(Object.keys(SETTINGS_GROUPS) as SettingsGroup[]).map(groupStep),
+    ...(Object.keys(SETTINGS_GROUPS) as SettingsGroup[]).flatMap((group): TourStep[] => [
+      groupStep(group),
+      ...(group === 'memory'
+        ? [
+            {
+              id: 'settings-memory-modes',
+              anchor: 'settings-memory-modes',
+              i18nKey: 'tours.settings.memoryModes',
+              clickTarget: 'settings-nav-memory',
+              beforeShow: () => clickAnchor('settings-nav-memory', 'settings-memory-modes'),
+            },
+          ]
+        : []),
+    ]),
     {
       id: 'settings-mcp',
       anchor: 'settings-mcp',

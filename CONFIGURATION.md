@@ -23,6 +23,7 @@ Reference for Kōbō configuration and external integrations. The tables cover t
 - [Network access](#network-access)
   - [Reachable addresses](#reachable-addresses)
 - [External LLM access through MCP](#external-llm-access-through-mcp)
+- [Persistent memory](#persistent-memory)
 - [Kōbō update checks](#kōbō-update-checks)
 - [Docker deployment](#docker-deployment)
   - [Choosing a compose file](#choosing-a-compose-file)
@@ -803,6 +804,44 @@ See [Connect an external LLM](src/mcp-server/README.md#connect-an-external-llm) 
 The **External LLM access (MCP)** panel within global Network access settings provides copyable URLs and HTTP/stdio configurations for this running installation. Previews use token placeholders; copying a configuration with the real token is a separate action. Set a client name to identify its messages and question answers in workspace history.
 
 External senders can supply `idempotency_key` once per intended message and reuse it on retries. The durable receipt survives backend restarts and event retention. An uncertain delivery is explicitly reported and never automatically sent again; see the MCP guide for response codes and limitations.
+
+## Persistent memory
+
+Kōbō stores deliberate, concise facts in SQLite, independently of Claude Code's native memory and provider chat history. Claude Code and Codex read the same Kōbō scopes, so a fact saved in one engine can be available to the other. There is no background transcript extractor or extra LLM call: agents must deliberately use the memory tools to save useful knowledge.
+
+Choose the global behavior in **Settings → Memory**. New and upgraded installations default to **Hybrid**:
+
+| Mode | Agent reads | Agent writes |
+|---|---|---|
+| Manual | Reads applicable notes | No writes or proposals |
+| Hybrid | Reads applicable notes | Applies workspace notes; proposes project/global changes for human review |
+| Automatic | Reads applicable notes | Applies changes to the explicitly selected scope |
+
+The setting is global, and is checked on every operation; changing it does not delete data, approve pending proposals, or revive rejected proposals. Read-only review and handoff-report launches cannot write even in Automatic mode. Human CRUD, proposal decisions, promotion and clear remain explicit actions.
+
+Memory is isolated at three levels:
+
+- **Global**: available to all workspaces.
+- **Project**: shared by workspaces using the same normalized configured repository path (not branch, display name or worktree path).
+- **Workspace**: available across that workspace's sessions and retained through archive/worktree purge.
+
+Settings can browse and clear each stored scope independently. The workspace drawer shows applicable entries, current-session delivery records, pending proposals and the operation journal; its clear action only clears that workspace scope. Clear removes active entries and proposals in that exact scope, increments its generation, and prevents delayed writes carrying the previous generation. Deleting a workspace deletes its workspace scope and launch records but retains global/project memory; project scopes remain selectable even if no workspace currently uses that path. The journal keeps bounded action/provenance metadata, not deleted note bodies. Clearing memory cannot retract text already sent to an agent or erase provider conversation history.
+
+Hybrid changes to project/global memory are proposals until a human approves them. Approval uses revision/generation checks; stale proposals remain reviewable and cannot silently overwrite concurrent edits. Promotion copies a note to a wider scope and preserves the source; conflicts are surfaced rather than overwritten. Changing modes never auto-approves pending proposals.
+
+### Bounded context and retrieval
+
+At launch, Kōbō adds a compact ranked index/excerpt within a **1,000 estimated-token** bootstrap target. Individual memory tool responses target **1,000 estimated tokens**, hard-cap at **1,500**, and a native conversation/context epoch has a **6,000 estimated-token** cumulative memory-output ceiling. These are conservative memory budgets, not provider context-window sizes or a measurement of total conversation occupancy. Serialized output—including JSON escaping, structured MCP content and framing—is also guarded by byte limits.
+
+The index may omit entries; it reports omission counts and agents can retrieve relevant notes with bounded search/read tools. Large note bodies use explicit character-range fragments and stable cursors. Listing/search returns compact metadata for unchanged entries; explicit full reads/fragments consume budget. Resume does not blindly resend unchanged notes: only new/changed material and a compact reminder may be added within the remaining allowance. A confirmed compaction starts a new memory epoch. Unknown or failed dispatches are charged conservatively; Kōbō does not automatically replay them.
+
+The native conversation ledger allows up to **5,500 tokens of regular memory output** and retains a **500-token terminal-receipt reserve**, for a hard **6,000-token cumulative** ceiling. One bounded exhaustion/denial response may use that reserve; later exhausted MCP calls return `isError: true` with an empty `content` array instead of repeating a free error indefinitely. Internal `/api/memory/agent` callers receive a small suppression marker so the workspace bridge can emit the same empty MCP error response. Each final serialized envelope also has a separate **12,000-byte hard ceiling** and includes **96 bytes of framing headroom** in its charge.
+
+An external MCP client uses the same memory tools and current database via `/api/mcp` HTTP or the global stdio server. `list_memory_scopes` returns each selectable scope's ID, level, generation and revision; use the current generation in `remember` and rediscover after a clear/conflict. External clients choose their target explicitly and do not need a bound workspace or native engine session. In Manual mode external writes are denied; Hybrid applies workspace writes and proposes broader changes; Automatic applies the requested scope. External provenance records a display client name and HTTP/stdio transport, not an authenticated identity. No delete, approve or clear tool is exposed to MCP clients.
+
+Because `/api/mcp` is stateless, an external client should reuse the opaque `memory_context_id` returned by memory calls to carry its cumulative allowance across tool calls. External regular responses share the 5,500-token allowance and a single bounded 500-token denial reserve; after the one terminal denial, later calls return `isError: true` and empty `content`. The handle is budget bookkeeping, not authentication; it cannot reference an internal native-conversation ledger. Kōbō cannot observe an external model's full context or compaction, so it cannot infer that a new ID means an empty LLM context. Keep the same ID for one external conversation and start a new one only when appropriate. Mutation calls are not retried automatically; after an uncertain result, inspect the receipt/state before deciding whether to retry.
+
+The workspace-scoped MCP capability is read-only for plan/review/report launches and is revoked as soon as stopping begins. Its token limits attribution and scope within Kōbō; it is not an operating-system sandbox for an agent with broader tools. See the [MCP memory tool guide](./src/mcp-server/README.md#persistent-memory-tools) for arguments and result details.
 
 ## Kōbō update checks
 

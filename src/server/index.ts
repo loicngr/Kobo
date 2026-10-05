@@ -22,6 +22,7 @@ import healthRouter from './routes/health.js'
 import imagesRouter from './routes/images.js'
 import integrationsRouter from './routes/integrations.js'
 import mcpRouter from './routes/mcp.js'
+import memoryRouter from './routes/memory.js'
 import { migrationRouter } from './routes/migration.js'
 import notionRouter from './routes/notion.js'
 import pullRequestsRouter from './routes/pull-requests.js'
@@ -56,6 +57,7 @@ import {
 } from './services/db-backup-service.js'
 import { startDevServer, stopAllDevServers, stopDevServer } from './services/dev-server-service.js'
 import { reconcileMessageRequests } from './services/mcp-message-request-service.js'
+import { reconcileMemoryContextsOnStartup } from './services/memory-context-service.js'
 import {
   authorizeWsUpgrade,
   generateToken,
@@ -118,6 +120,7 @@ try {
 
 runMigrations(db)
 reconcileMessageRequests(db)
+reconcileMemoryContextsOnStartup()
 startSearchIndex()
 
 // Event retention. OPT-IN: disabled by default, so this is a no-op until the
@@ -197,6 +200,7 @@ app.get('/api/health', (c) => c.json({ status: 'ok', version: getPackageVersion(
 // Mount route sub-routers
 app.route('/api/workspaces', workspacesRouter)
 app.route('/api/mcp', mcpRouter)
+app.route('/api/memory', memoryRouter)
 app.route('/api/pull-requests', pullRequestsRouter)
 app.route('/api/workspaces', imagesRouter)
 app.route('/api/notion', notionRouter)

@@ -4,6 +4,7 @@ import { expect, it, vi } from 'vitest'
 import { hostCheckMiddleware } from '../server/middleware/host-check-middleware.js'
 import { networkAuthMiddleware } from '../server/middleware/network-auth-middleware.js'
 import mcp from '../server/routes/mcp.js'
+import { executeMemoryMcpTool } from '../server/services/memory-mcp-service.js'
 import { getGlobalSettings } from '../server/services/settings-service.js'
 import { executeWorkspaceDialogueTool } from '../server/services/workspace-dialogue-service.js'
 
@@ -12,6 +13,7 @@ vi.mock('../server/services/settings-service.js', () => ({ getGlobalSettings: vi
 vi.mock('../server/services/workspace-dialogue-service.js', () => ({
   executeWorkspaceDialogueTool: vi.fn(async () => []),
 }))
+vi.mock('../server/services/memory-mcp-service.js', () => ({ executeMemoryMcpTool: vi.fn(() => ({ items: [] })) }))
 
 const app = new Hono().use('*', hostCheckMiddleware).use('/api/*', networkAuthMiddleware).route('/api/mcp', mcp)
 
@@ -50,4 +52,37 @@ it.each([
   })
   expect(response.status).toBe(scenario.status)
   expect(executeWorkspaceDialogueTool).toHaveBeenCalledTimes(scenario.status === 200 ? 1 : 0)
+})
+
+it.each([
+  { address: '192.0.2.10', enabled: true, status: 401 },
+  { address: '192.0.2.10', enabled: true, token: 'wrong', status: 401 },
+  { address: '127.0.0.1', enabled: true, behindProxy: true, status: 401 },
+  { address: '127.0.0.1', enabled: false, host: 'evil.example', status: 403 },
+  { address: '127.0.0.1', enabled: false, origin: 'https://evil.example', status: 403 },
+])('blocks memory dispatch before tool execution under the existing access policy: %j', async (scenario) => {
+  vi.clearAllMocks()
+  vi.mocked(getConnInfo).mockReturnValue({ remote: { address: scenario.address } })
+  vi.mocked(getGlobalSettings).mockReturnValue({
+    networkAccessEnabled: scenario.enabled,
+    networkAccessToken: 'secret',
+    networkAccessBehindProxy: scenario.behindProxy ?? false,
+  } as never)
+  const response = await app.request(`http://${scenario.host ?? 'localhost'}/api/mcp`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json, text/event-stream',
+      ...(scenario.token ? { Authorization: `Bearer ${scenario.token}` } : {}),
+      ...(scenario.origin ? { Origin: scenario.origin } : {}),
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'list_memory_scopes', arguments: {} },
+    }),
+  })
+  expect(response.status).toBe(scenario.status)
+  expect(executeMemoryMcpTool).not.toHaveBeenCalled()
 })

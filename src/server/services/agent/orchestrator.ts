@@ -20,6 +20,19 @@ import * as cleanupScriptService from '../cleanup-script-service.js'
 import * as cronService from '../cron-service.js'
 import { resolveForge } from '../forge/resolve.js'
 import * as lifecycleHookService from '../lifecycle-hook-service.js'
+import {
+  advanceMemoryConversationEpoch,
+  allocateMemoryConversationKey,
+  bindMemoryNativeConversation,
+  createMemoryCapability,
+  revokeMemoryCapability,
+} from '../memory-agent-runtime.js'
+import {
+  buildMemoryContext,
+  markMemoryContextFailed,
+  markMemoryContextInitialized,
+  markMemoryContextSubmitted,
+} from '../memory-context-service.js'
 import * as quotaBackoffService from '../quota-backoff-service.js'
 import { buildReviewReturnPrompt, getReviewReturn, restoreReviewConfiguration } from '../review-return-service.js'
 import { activateSession, SESSION_RECENCY_ORDER } from '../session-activity-service.js'
@@ -581,7 +594,11 @@ function readEffectiveSettingsSafe(projectPath: string): ReturnType<typeof getEf
   }
 }
 
-function buildMcpServers(workspaceId: string, extraEnv?: Record<string, string>): McpServerSpec[] {
+function buildMcpServers(
+  workspaceId: string,
+  extraEnv?: Record<string, string>,
+  memoryCapability?: string,
+): McpServerSpec[] {
   const mcpServerCompiled = getCompiledMcpServerPath()
   const mcpServerSource = getMcpServerSourcePath()
   return [
@@ -592,6 +609,7 @@ function buildMcpServers(workspaceId: string, extraEnv?: Record<string, string>)
       env: {
         KOBO_WORKSPACE_ID: workspaceId,
         ...extraEnv,
+        ...(memoryCapability ? { KOBO_MEMORY_SESSION_TOKEN: memoryCapability } : {}),
         KOBO_DB_PATH: getDbPath(),
         KOBO_SETTINGS_PATH: getSettingsPath(),
         KOBO_BACKEND_URL: `http://127.0.0.1:${backendPort}`,
@@ -1018,6 +1036,12 @@ function handleEvent(
   // any side effect that could resurrect the session the user just told to
   // stop — see `sourceControllerIsStopping` further down.
   if (sourceNoLongerOwnsWorkspace && ev.kind !== 'session:ended') return
+  if (sourceController && ev.kind === 'session:started') {
+    const conversationKey = controllerMemoryConversationKeys.get(sourceController)
+    if (conversationKey) bindMemoryNativeConversation(conversationKey, ev.engineSessionId)
+  }
+  if (sourceController && ev.kind === 'session:ended' && terminalAfterClose)
+    revokeControllerMemoryCapability(sourceController)
   // A controller already told to stop (D1) keeps emitting real events until it
   // actually dies — they are persisted and broadcast like any other (see
   // `routeEvent` below, unconditional). But a handful of side effects here
@@ -1038,6 +1062,34 @@ function handleEvent(
     !['session:started', 'session:ended', 'session:user-input-requested'].includes(ev.kind)
   )
     return
+
+  if (
+    sourceController &&
+    !sourceControllerIsStopping &&
+    controllers.get(workspaceId) === sourceController &&
+    pendingStarts.get(workspaceId) === undefined
+  ) {
+    const compaction = memoryCompactionStates.get(sourceController) ?? { active: false, compactedWithoutId: false }
+    if (ev.kind === 'session:compacting' && ev.active) {
+      compaction.active = true
+      compaction.compactedWithoutId = false
+      if (ev.compactionId) compaction.activeId = ev.compactionId
+      memoryCompactionStates.set(sourceController, compaction)
+    } else if (ev.kind === 'session:compacted') {
+      const duplicateId = ev.compactionId !== undefined && ev.compactionId === compaction.lastId
+      const hasDistinctSignal =
+        ev.compactionId !== undefined ? !duplicateId : compaction.active || !compaction.compactedWithoutId
+      if (hasDistinctSignal) {
+        const conversationKey = controllerMemoryConversationKeys.get(sourceController)
+        if (conversationKey) advanceMemoryConversationEpoch(conversationKey)
+        if (ev.compactionId) compaction.lastId = ev.compactionId
+        compaction.compactedWithoutId = true
+      }
+      compaction.active = false
+      compaction.activeId = undefined
+      memoryCompactionStates.set(sourceController, compaction)
+    }
+  }
 
   if (sourceController && !sourceControllerIsStopping) {
     if (ev.kind === 'session:compacting' && ev.active) {
@@ -1556,6 +1608,25 @@ export interface AgentLaunchOptions {
   onEnded?: (event: Extract<AgentEvent, { kind: 'session:ended' }>) => void
 }
 const launchOptions = new WeakMap<SessionController, AgentLaunchOptions>()
+const controllerMemoryCapabilities = new WeakMap<SessionController, string>()
+const controllerMemoryConversationKeys = new WeakMap<SessionController, string>()
+const controllerMemoryContextIds = new WeakMap<SessionController, string>()
+const memoryCompactionStates = new WeakMap<
+  SessionController,
+  {
+    active: boolean
+    compactedWithoutId: boolean
+    activeId?: string
+    lastId?: string
+  }
+>()
+
+function revokeControllerMemoryCapability(controller: SessionController): void {
+  const token = controllerMemoryCapabilities.get(controller)
+  if (!token) return
+  revokeMemoryCapability(token)
+  controllerMemoryCapabilities.delete(controller)
+}
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -1658,6 +1729,22 @@ export function startAgent(
   // A review whose report returns to the original session must end by itself:
   // enforce read-only plan mode here, not only through its prompt.
   const readOnly = getReviewReturn(workspaceId, agentSessionId) !== null
+  const effectivePermissionMode = readOnly ? 'plan' : (agentPermissionMode ?? ws?.agentPermissionMode ?? 'bypass')
+  const memoryDispatchId = nanoid()
+  const memoryCapability = createMemoryCapability({
+    dispatchId: memoryDispatchId,
+    workspaceId,
+    sessionId: agentSessionId,
+    engine: engine.id,
+    // A resume continues its prior native conversation; a fresh dispatch starts
+    // a separate context even if application session selection is reused.
+    conversationKey: allocateMemoryConversationKey({
+      sessionId: agentSessionId,
+      engine: engine.id,
+      ...(resumeFromEngineSessionId ? { nativeConversationId: resumeFromEngineSessionId } : {}),
+    }),
+    readOnly: effectivePermissionMode === 'plan' || !!launch?.handoffGeneration,
+  })
 
   const unavailableIntegrations: Array<'notion' | 'sentry'> = []
   const integrationServers = buildIntegrationMcpServers(getGlobalSettings(), engine.id, (name) =>
@@ -1673,7 +1760,7 @@ export function startAgent(
     model,
     effort: reasoningEffort,
     // Cascade: explicit caller override → workspace setting → 'bypass'.
-    agentPermissionMode: readOnly ? 'plan' : (agentPermissionMode ?? ws?.agentPermissionMode ?? 'bypass'),
+    agentPermissionMode: effectivePermissionMode,
     readOnly,
     resumeFromEngineSessionId,
     backendUrl: `http://127.0.0.1:${backendPort}`,
@@ -1685,15 +1772,25 @@ export function startAgent(
       }
     })(),
     settings,
-    mcpServers: [...buildMcpServers(workspaceId, launch?.mcpEnv), ...integrationServers],
+    mcpServers: [...buildMcpServers(workspaceId, launch?.mcpEnv, memoryCapability.token), ...integrationServers],
     env: ws ? buildAgentEnv(ws.projectPath) : undefined,
   }
 
-  beforeDispatch?.()
+  try {
+    beforeDispatch?.()
+  } catch (error) {
+    revokeMemoryCapability(memoryCapability.token)
+    throw error
+  }
   let controller: SessionController
   controller = new SessionController(workspaceId, agentSessionId, engine, (ev) =>
     handleEvent(workspaceId, agentSessionId, controller, ev),
   )
+  controllerMemoryCapabilities.set(controller, memoryCapability.token)
+  controllerMemoryConversationKeys.set(controller, memoryCapability.conversationKey)
+  // This promise settles only after the controller confirms actual process
+  // closure, covering direct stop() paths that do not emit session:ended.
+  void controller.closed.then(() => revokeControllerMemoryCapability(controller))
   if (launch) launchOptions.set(controller, launch)
   registerSessionLifecycleOwner(workspaceId, agentSessionId, controller)
   if (!existingCtrl) controllers.set(workspaceId, controller)
@@ -1715,10 +1812,35 @@ export function startAgent(
       const registered = controllers.get(workspaceId)
       if (registered && registered !== controller) throw new Error('Agent is still stopping')
       controllers.set(workspaceId, controller)
+      const memoryContext = launch?.handoffGeneration
+        ? undefined
+        : buildMemoryContext({
+            workspaceId,
+            sessionId: agentSessionId,
+            engine: engine.id,
+            dispatchId: memoryDispatchId,
+            conversationKey: memoryCapability.conversationKey,
+            resume: Boolean(resumeFromEngineSessionId),
+            readOnly: effectivePermissionMode === 'plan' || !!launch?.handoffGeneration,
+            mode: getGlobalSettings().memoryMode,
+          })
+      if (memoryContext) {
+        controllerMemoryContextIds.set(controller, memoryContext.recordId)
+        options.prompt = `${options.prompt}\n\n${memoryContext.prompt}`
+        markMemoryContextSubmitted(memoryContext.recordId)
+      }
       return controller.start(options)
     })
     .then(async () => {
-      if (launch?.onStarted) await controller.engineProcess?.ready
+      const ready = controller.engineProcess?.ready
+      const contextId = controllerMemoryContextIds.get(controller)
+      if (ready && contextId) {
+        void ready.then(
+          () => markMemoryContextInitialized(contextId),
+          () => markMemoryContextFailed(contextId),
+        )
+      }
+      if (launch?.onStarted && ready) await ready
       if (controller.status !== 'stopping') launch?.onStarted?.()
       const pid = controller.pid
       if (pid !== undefined) {
@@ -1731,6 +1853,9 @@ export function startAgent(
       }
     })
     .catch((err) => {
+      revokeControllerMemoryCapability(controller)
+      const contextId = controllerMemoryContextIds.get(controller)
+      if (contextId) markMemoryContextFailed(contextId)
       if (existingCtrl && controller.status === 'stopping') return
       console.error('[orchestrator] engine.start failed:', err)
       const message = err instanceof Error ? err.message : String(err)
@@ -1821,6 +1946,7 @@ export const STOP_AGENT_TIMEOUT_MS = 15_000
 export type { StopAgentOutcome } from '../../utils/agent-stop-result.js'
 
 async function stopController(workspaceId: string, ctrl: SessionController, cause: StopCause = 'user'): Promise<void> {
+  revokeControllerMemoryCapability(ctrl)
   ctrl.stopCause = cause
   restoreReviewConfiguration(workspaceId, ctrl.agentSessionId)
   preCompactionStatus.delete(ctrl)
@@ -1908,6 +2034,7 @@ export async function stopAgentAndWait(
   let pendingStop = Promise.resolve()
   if (pending) {
     pendingStarts.delete(workspaceId)
+    revokeControllerMemoryCapability(pending)
     pending.stopCause = cause
     pendingStop = pending.stop().then(() => {
       handleEvent(workspaceId, pending.agentSessionId, pending, {

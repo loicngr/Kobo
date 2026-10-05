@@ -41,9 +41,11 @@ function makeGatedEngine(): {
   engine: AgentEngine
   releaseStop: () => void
   startCount: () => number
+  lastMemoryCapability: () => string | undefined
 } {
   let resolveStop: (() => void) | undefined
   let startCount = 0
+  let memoryCapability: string | undefined
   const engine: AgentEngine = {
     id: 'claude-code',
     displayName: 'Claude Code',
@@ -56,8 +58,10 @@ function makeGatedEngine(): {
       supportsSubagents: false,
       supportsQuotaStatus: false,
     },
-    async start() {
+    async start(options) {
       startCount++
+      memoryCapability = (options.mcpServers ?? []).find((server) => server.name === 'kobo-tasks')?.env
+        ?.KOBO_MEMORY_SESSION_TOKEN
       return {
         pid: undefined,
         engineSessionId: undefined,
@@ -77,6 +81,7 @@ function makeGatedEngine(): {
     engine,
     releaseStop: () => resolveStop?.(),
     startCount: () => startCount,
+    lastMemoryCapability: () => memoryCapability,
   }
 }
 
@@ -118,6 +123,38 @@ describe('Orchestrator — stopping window', () => {
     await expect(stopped).resolves.toBe('stopped')
     expect(orch.hasController(ws.id)).toBe(false)
     expect(orch.getAgentStatus(ws.id)).toBeNull()
+  })
+
+  it('revokes the exact stopped generation and leaves a replacement token active', async () => {
+    const { createWorkspace } = await import('../../server/services/workspace-service.js')
+    const { getMemoryCapability } = await import('../../server/services/memory-agent-runtime.js')
+    const ws = createWorkspace({
+      name: 'W',
+      projectPath: '/tmp',
+      sourceBranch: 'develop',
+      workingBranch: 'feature/memory-capability-generation',
+    })
+    const orch = await import('../../server/services/agent/orchestrator.js')
+
+    orch.startAgent(ws.id, '/tmp', 'first')
+    await flush()
+    const firstToken = gated.lastMemoryCapability()
+    expect(firstToken).toBeDefined()
+    expect(getMemoryCapability(firstToken)).toMatchObject({ workspaceId: ws.id })
+
+    const stopped = orch.stopAgentAndWait(ws.id)
+    await flush()
+    gated.releaseStop()
+    await expect(stopped).resolves.toBe('stopped')
+    expect(getMemoryCapability(firstToken)).toBeUndefined()
+
+    orch.startAgent(ws.id, '/tmp', 'replacement')
+    await flush()
+    const replacementToken = gated.lastMemoryCapability()
+    expect(replacementToken).toBeDefined()
+    expect(replacementToken).not.toBe(firstToken)
+    expect(getMemoryCapability(firstToken)).toBeUndefined()
+    expect(getMemoryCapability(replacementToken)).toMatchObject({ workspaceId: ws.id })
   })
 
   it('does not start the replacement engine before the evicted zombie has stopped', async () => {

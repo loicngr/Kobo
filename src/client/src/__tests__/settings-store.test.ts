@@ -129,6 +129,10 @@ describe('settings store', () => {
     expect(store.global.sentryInitialPromptTemplate).toBeDefined()
   })
 
+  it('defaults memory mode to hybrid', () => {
+    expect(useSettingsStore().global.memoryMode).toBe('hybrid')
+  })
+
   it('defaults the whip feature to disabled', () => {
     const store = useSettingsStore()
     expect(store.global.whipEnabled).toBe(false)

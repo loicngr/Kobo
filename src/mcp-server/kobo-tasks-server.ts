@@ -4,6 +4,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema, type Tool } from '@modelcontextprotocol/sdk/types.js'
 import type Database from 'better-sqlite3'
 import { getDb } from '../server/db/index.js'
+import { EXTERNAL_MEMORY_TOOL_DEFINITIONS, isMemoryToolName, MEMORY_TOOL_DEFINITIONS } from '../shared/memory-tools.js'
 import { WORKSPACE_DIALOGUE_TOOLS } from '../shared/workspace-dialogue-tools.js'
 import {
   createTaskHandler,
@@ -26,6 +27,7 @@ import {
   setWorkspaceAgentDescriptionHandler,
   updateTaskHandler,
 } from './kobo-tasks-handlers.js'
+import { callMemoryTool, isMemoryOutputSuppressed } from './memory-client.js'
 import { callWorkspaceDialogueTool } from './workspace-dialogue-client.js'
 
 const handoffId = process.env.KOBO_HANDOFF_ID
@@ -598,10 +600,12 @@ const WORKSPACE_SCOPED_TOOLS: Tool[] = [
     inputSchema: { type: 'object', properties: {}, required: [] },
     annotations: { destructiveHint: false, openWorldHint: false },
   },
+  ...MEMORY_TOOL_DEFINITIONS,
 ]
 
 const GLOBAL_TOOLS: typeof WORKSPACE_SCOPED_TOOLS = [
   ...WORKSPACE_DIALOGUE_TOOLS,
+  ...EXTERNAL_MEMORY_TOOL_DEFINITIONS,
   {
     name: 'list_workspaces',
     description:
@@ -706,7 +710,11 @@ const GLOBAL_TOOLS: typeof WORKSPACE_SCOPED_TOOLS = [
 const GLOBAL_TOOL_NAMES = new Set(GLOBAL_TOOLS.map((t) => t.name))
 
 function availableTools(): Tool[] {
-  const tools = workspaceId ? [...WORKSPACE_SCOPED_TOOLS, ...GLOBAL_TOOLS] : GLOBAL_TOOLS
+  // A workspace process exposes the capability-bound memory tools exactly once.
+  // Unbound/global stdio exposes the external bridge variant instead.
+  const tools = workspaceId
+    ? [...WORKSPACE_SCOPED_TOOLS, ...GLOBAL_TOOLS.filter((tool) => !isMemoryToolName(tool.name))]
+    : GLOBAL_TOOLS
   return tools.filter((tool) =>
     handoffId && handoffToken
       ? tool.name === 'submit_session_handoff' || tool.annotations?.readOnlyHint === true
@@ -762,6 +770,35 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           report: a.report,
         }),
       )
+    }
+    if (isMemoryToolName(name)) {
+      if (!workspaceId) {
+        return await callWorkspaceDialogueTool(
+          backendUrl,
+          name,
+          a,
+          process.env.KOBO_NETWORK_TOKEN,
+          process.env.KOBO_MCP_CLIENT_NAME ?? server.getClientVersion()?.name,
+        )
+      }
+      // Workspace-bound memory is always dispatched to its launch-scoped capability.
+      // It must never fall through to the unrestricted external/global bridge.
+      if (!process.env.KOBO_MEMORY_SESSION_TOKEN)
+        return fail('Memory tools require the current workspace launch capability.')
+      const memoryResult = await callMemoryTool({
+        backendUrl,
+        name,
+        args: a,
+        capability: process.env.KOBO_MEMORY_SESSION_TOKEN,
+        networkToken: process.env.KOBO_NETWORK_TOKEN,
+      })
+      if (isMemoryOutputSuppressed(memoryResult)) return { content: [], isError: true }
+      return {
+        ...ok(memoryResult),
+        ...(memoryResult && typeof memoryResult === 'object' && 'budgetExhausted' in memoryResult
+          ? { isError: true }
+          : {}),
+      }
     }
     if (WORKSPACE_DIALOGUE_TOOLS.some((tool) => tool.name === name)) {
       if (workspaceId && a.workspace_id === workspaceId && name === 'send_workspace_message')

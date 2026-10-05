@@ -1,5 +1,6 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import { isMemoryToolName, validateMemoryToolArguments } from '../shared/memory-tools.js'
 import { validateDialogueArguments } from '../shared/workspace-dialogue-tools.js'
 import { normalizeClientName } from '../shared/workspace-message-types.js'
 
@@ -11,7 +12,9 @@ export async function callWorkspaceDialogueTool(
   token?: string,
   clientName?: string,
 ) {
-  const arguments_ = validateDialogueArguments(name, args)
+  const arguments_ = isMemoryToolName(name)
+    ? validateMemoryToolArguments(name, args, true)
+    : validateDialogueArguments(name, args)
   const client = new Client({ name: 'kobo-stdio-bridge', version: '1.0.0' })
   const signal = AbortSignal.timeout(30_000)
   const transport = new StreamableHTTPClientTransport(new URL(`${backendUrl.replace(/\/$/, '')}/api/mcp`), {

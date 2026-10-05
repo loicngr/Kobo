@@ -20,6 +20,7 @@ import type { SessionHandoff } from '../../../shared/session-handoff'
 import { parseMessageSource } from '../utils/message-source'
 import type { DevServerStatus } from './dev-server'
 import { useDevServerStore } from './dev-server'
+import { useMemoryStore } from './memory'
 import type { MigrationStatus } from './migration'
 import { useMigrationStore } from './migration'
 import type { PendingCron, Workspace } from './workspace'
@@ -549,6 +550,12 @@ export const useWebSocketStore = defineStore('websocket', {
           this._send({ type: 'subscribe', payload: { workspaceId: wid } })
         }
 
+        void useMemoryStore()
+          .refreshVisibleData()
+          .catch((err) => {
+            console.error('[websocket] memory refresh after reconnect failed:', err)
+          })
+
         this._refreshAfterSync = true
         // Request sync to catch up on missed events
         if (this.lastEventId) {
@@ -834,6 +841,26 @@ export const useWebSocketStore = defineStore('websocket', {
       }
 
       switch (msg.type) {
+        case 'memory:changed': {
+          const level = payload.level
+          if (
+            typeof payload.scopeId === 'string' &&
+            (level === 'global' || level === 'project' || level === 'workspace') &&
+            typeof payload.revision === 'number' &&
+            typeof payload.generation === 'number' &&
+            typeof payload.operationId === 'number'
+          ) {
+            useMemoryStore().invalidate({
+              scopeId: payload.scopeId,
+              level,
+              revision: payload.revision,
+              generation: payload.generation,
+              operationId: payload.operationId,
+              ...(payload.journalOnly === true ? { journalOnly: true } : {}),
+            })
+          }
+          break
+        }
         case 'workspace:handoff': {
           if (!wid || this._replaying) break
           const handoff = payload.handoff as SessionHandoff | undefined

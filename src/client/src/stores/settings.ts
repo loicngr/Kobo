@@ -4,6 +4,7 @@ import { DEFAULT_PR_NOTIFICATION_AUDIO_SETTINGS } from 'src/utils/notification-s
 import type { ProjectColor } from 'src/utils/project-color'
 import { DEFAULT_WHIP_SHORTCUT } from 'src/utils/whip-shortcut'
 import { WORKTREES_PATH } from '../../../shared/consts'
+import type { MemoryMode } from '../../../shared/memory'
 import type { SkillSuite } from '../../../shared/skill-suite-prompts'
 import { MANUAL_WORKFLOW_POLICY, type WorkflowPolicy } from '../../../shared/workflow-policy'
 
@@ -66,6 +67,7 @@ interface ProjectSettings {
 
 interface GlobalSettings {
   workflowPolicy: WorkflowPolicy
+  memoryMode: MemoryMode
   onboardingComplete: boolean
   /**
    * Default model id per engine. Keys are engine ids (e.g. `'claude-code'`,
@@ -240,6 +242,7 @@ export const useSettingsStore = defineStore('settings', {
   state: () => ({
     global: {
       workflowPolicy: { ...MANUAL_WORKFLOW_POLICY },
+      memoryMode: 'hybrid' as MemoryMode,
       onboardingComplete: false,
       defaultModelByEngine: { 'claude-code': 'auto', codex: 'auto' } as Record<string, string>,
       dangerouslySkipPermissions: true,

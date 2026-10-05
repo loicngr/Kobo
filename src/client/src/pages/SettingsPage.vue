@@ -66,6 +66,12 @@
         <div class="settings-panels">
         <div v-show="isGlobalSection" class="settings-global-wrap">
 
+            <MemorySettingsPanel
+              v-if="activeTab === 'memory'"
+              :memory-mode="globalMemoryMode"
+              @update:memory-mode="globalMemoryMode = $event"
+            />
+
             <!-- Localization -->
             <div
               v-if="activeTab === 'general'"
@@ -2735,6 +2741,7 @@ import DrawerToggleButton from 'src/components/DrawerToggleButton.vue'
 import FolderPickerDialog from 'src/components/FolderPickerDialog.vue'
 import IntegrationConnectionSettings from 'src/components/IntegrationConnectionSettings.vue'
 import McpConnectionSettings from 'src/components/McpConnectionSettings.vue'
+import MemorySettingsPanel from 'src/components/MemorySettingsPanel.vue'
 import PrNotificationSoundSettings from 'src/components/PrNotificationSoundSettings.vue'
 import SettingsNavList from 'src/components/SettingsNavList.vue'
 import TourReplayButton from 'src/components/TourReplayButton.vue'
@@ -2775,6 +2782,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import { WORKTREES_PATH } from '../../../shared/consts'
+import type { MemoryMode } from '../../../shared/memory'
 import {
   AGNOSTIC_AUTO_LOOP_GROOMING_INTRO,
   AGNOSTIC_AUTO_LOOP_REVIEW_GATE,
@@ -2821,6 +2829,7 @@ const navItems = computed(() => [
   { value: 'voice', icon: 'mic', label: t('settings.nav.voice') },
   { value: 'notifications', icon: 'notifications', label: t('settings.nav.notifications') },
   { value: 'worktrees', icon: 'account_tree', label: t('settings.nav.worktrees') },
+  { value: 'memory', icon: 'psychology', label: t('settings.nav.memory') },
   { value: 'projects', icon: 'folder', label: t('settings.projects') },
   { value: 'templates', icon: 'description', label: t('settings.nav.promptTemplates') },
   { value: 'workspaceTemplates', icon: 'bookmarks', label: t('settings.nav.workspaceTemplates') },
@@ -2851,6 +2860,7 @@ const isGlobalSection = computed(() =>
     'voice',
     'notifications',
     'worktrees',
+    'memory',
     'export',
   ].includes(activeTab.value),
 )
@@ -2872,6 +2882,7 @@ const globalAwaitingUserReminderMinutes = ref(0)
 const globalActivityDigestEnabled = ref(true)
 const globalWsEventsRetentionDays = ref(0)
 const globalWsEventsKeepPerWorkspace = ref(0)
+const globalMemoryMode = ref<MemoryMode>('hybrid')
 
 // Network access
 interface NetworkState {
@@ -3974,6 +3985,7 @@ function readGlobalForm(): Record<string, unknown> {
     worktreesPath: globalWorktreesPath.value,
     worktreesPrefixByProject: globalWorktreesPrefixByProject.value,
     flattenWorkspaceList: globalFlattenWorkspaceList.value,
+    memoryMode: globalMemoryMode.value,
     skillSuite: globalSkillSuite.value,
     customReviewTemplate: globalCustomReviewTemplate.value,
     customAutoLoopReviewGate: globalCustomAutoLoopReviewGate.value,
@@ -4140,6 +4152,7 @@ function syncGlobalForm() {
   globalWorktreesPath.value = store.global.worktreesPath ?? WORKTREES_PATH
   globalWorktreesPrefixByProject.value = store.global.worktreesPrefixByProject ?? false
   globalFlattenWorkspaceList.value = store.global.flattenWorkspaceList ?? false
+  globalMemoryMode.value = store.global.memoryMode ?? 'hybrid'
   globalSkillSuite.value = store.global.skillSuite ?? 'standard'
   globalCustomReviewTemplate.value = store.global.customReviewTemplate ?? ''
   globalCustomAutoLoopReviewGate.value = store.global.customAutoLoopReviewGate ?? ''
@@ -4486,6 +4499,7 @@ async function saveGlobal() {
       worktreesPath: globalWorktreesPath.value,
       worktreesPrefixByProject: globalWorktreesPrefixByProject.value,
       flattenWorkspaceList: globalFlattenWorkspaceList.value,
+      memoryMode: globalMemoryMode.value,
       skillSuite: globalSkillSuite.value,
       customReviewTemplate: globalCustomReviewTemplate.value,
       customAutoLoopReviewGate: globalCustomAutoLoopReviewGate.value,
