@@ -2515,7 +2515,12 @@ export const useWorkspaceStore = defineStore('workspace', {
         toolUseId,
         ...(taskId ? { taskId } : {}),
         ...(threadIds?.length ? { threadIds } : {}),
-        description: data.description ?? existing?.description ?? '',
+        // Claude updates `description` with the current shell command during
+        // progress. The launch description is the sub-agent's stable name.
+        description:
+          data.description && (!existing || data.phase === 'started' || !existing.description)
+            ? data.description
+            : (existing?.description ?? data.description ?? ''),
         taskType: data.taskType ?? existing?.taskType,
         status: nextStatus,
         ...(ambient ? { ambient: true } : {}),

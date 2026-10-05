@@ -18,6 +18,12 @@ describe('TurnCard', () => {
     expect(source).toContain('@click.stop="openSubagentActivity(row.items[0]!)"')
   })
 
+  it('groups every action from one sub-agent in one collapsed block', () => {
+    expect(source).toContain("const subagentRows = new Map<string, Extract<DisplayRow, { type: 'subagent' }>>()")
+    expect(source).toContain('const existingRow = subagentRows.get(subagentKey)')
+    expect(source).not.toContain('const previous = rows.at(-1)')
+  })
+
   it('shows an icon and the matching sub-agent description in collapsed activity', () => {
     expect(source).toContain('findSubagentForActivity')
     expect(source).toContain('row.subagentName')

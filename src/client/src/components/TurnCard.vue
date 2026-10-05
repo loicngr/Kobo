@@ -253,6 +253,9 @@ function isSubagentConversationItem(item: ConversationItem): item is SubagentCon
 
 const displayRows = computed<DisplayRow[]>(() => {
   const rows: DisplayRow[] = []
+  // A parent action may land between two child events. Keep one fold per
+  // sub-agent for the complete turn, even when the original stream interleaves.
+  const subagentRows = new Map<string, Extract<DisplayRow, { type: 'subagent' }>>()
   for (const item of props.turn.items) {
     if (!isSubagentConversationItem(item)) {
       rows.push({ type: 'item', key: itemKey(item), item })
@@ -261,18 +264,20 @@ const displayRows = computed<DisplayRow[]>(() => {
 
     const subagent = subagentFor(item)
     const subagentKey = subagent?.toolUseId ?? item.origin?.toolCallId ?? item.origin?.threadId ?? itemKey(item)
-    const previous = rows.at(-1)
-    if (previous?.type === 'subagent' && previous.subagentKey === subagentKey) {
-      previous.items.push(item)
+    const existingRow = subagentRows.get(subagentKey)
+    if (existingRow) {
+      existingRow.items.push(item)
       continue
     }
-    rows.push({
+    const row: Extract<DisplayRow, { type: 'subagent' }> = {
       type: 'subagent',
       key: `subagent:${itemKey(item)}`,
       items: [item],
       subagentKey,
       subagentName: subagent?.description || null,
-    })
+    }
+    subagentRows.set(subagentKey, row)
+    rows.push(row)
   }
   return rows
 })

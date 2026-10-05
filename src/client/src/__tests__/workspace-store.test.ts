@@ -509,6 +509,24 @@ describe('workspace store', () => {
       expect(subagent?.totalTokens).toBe(1000)
     })
 
+    it('keeps the launch description when progress reports a current command', () => {
+      const store = useWorkspaceStore()
+      store.upsertSubagent('ws-1', {
+        toolUseId: 'tool-1',
+        description: 'Inspect API rate limit',
+        status: 'running',
+        phase: 'started',
+      })
+      store.upsertSubagent('ws-1', {
+        toolUseId: 'tool-1',
+        description: 'Running f=/tmp/claude-1000/worktree/test.sh',
+        status: 'running',
+        phase: 'progress',
+      })
+
+      expect(store.subagents['ws-1']?.['tool-1']?.description).toBe('Inspect API rate limit')
+    })
+
     it('keeps every Codex child thread reported for the same subagent', () => {
       const store = useWorkspaceStore()
       store.upsertSubagent('ws-1', { toolUseId: 'tool-1', threadIds: ['thread-a'] })
