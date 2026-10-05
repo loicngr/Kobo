@@ -14,7 +14,7 @@ const descriptor: MemoryCapabilityDescriptor = {
   workspaceId: 'workspace-1',
   sessionId: 'session-1',
   engine: 'codex',
-  conversationKey: 'conversation-1',
+  conversationKey: 'test',
   readOnly: false,
 }
 

@@ -1,3 +1,6 @@
 # Reviewed synthetic networkAccessToken set/assert fixture in a disposable settings test.
 # Exact historical finding only; do not exclude the test directory or token rule.
 b492c85f430cde5590c6e57c9ce1964ba9f0f5b5:src/__tests__/settings-service.test.ts:generic-api-key:1982
+# Reviewed synthetic conversation identifier in a capability test, not a credential.
+# Exact historical finding; the current fixture uses a non-secret placeholder.
+120e83f1f6c8b973e8ce605b06a23bb64305e9ad:src/__tests__/memory-agent-runtime.test.ts:generic-api-key:17
