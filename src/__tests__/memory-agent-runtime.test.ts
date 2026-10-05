@@ -130,8 +130,10 @@ describe('memory agent capability', () => {
     expect(humanAction.status).toBe(404)
   })
 
-  it('does not apply an internal remember write when the response reservation is refused', async () => {
-    await resetDb()
+  it('applies an internal remember write independently of the exhausted retrieval budget', async () => {
+    const { tmpDir } = await resetDb()
+    const { _setSettingsPath } = await import('../server/services/settings-service.js')
+    _setSettingsPath(`${tmpDir}/settings.json`)
     const { createWorkspace, createIdleSession } = await import('../server/services/workspace-service.js')
     const { getDb } = await import('../server/db/index.js')
     const workspace = createWorkspace({
@@ -141,6 +143,7 @@ describe('memory agent capability', () => {
       workingBranch: 'feature/memory-budget',
     })
     const session = createIdleSession(workspace.id)
+    getDb().prepare("UPDATE agent_sessions SET engine = 'codex' WHERE id = ?").run(session.id)
     const conversationKey = allocateMemoryConversationKey({ sessionId: session.id, engine: 'codex' })
     const issued = createMemoryCapability({
       ...descriptor,
@@ -164,13 +167,14 @@ describe('memory agent capability', () => {
       body: JSON.stringify({
         scope_id: scope.id,
         expected_generation: 0,
-        key: 'must.not.persist',
-        title: 'Must not persist',
-        body: 'The write is gated by its receipt reservation.',
+        key: 'must.persist',
+        title: 'Must persist',
+        body: 'Saving does not require retrieval allowance.',
       }),
     })
 
-    expect(await response.json()).toMatchObject({ budgetExhausted: true })
-    expect(getDb().prepare('SELECT id FROM memory_entries WHERE scope_id = ?').all(scope.id)).toEqual([])
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ status: 'applied', budget: { chargedTokens: 0 } })
+    expect(getDb().prepare('SELECT id FROM memory_entries WHERE scope_id = ?').all(scope.id)).toHaveLength(1)
   })
 })

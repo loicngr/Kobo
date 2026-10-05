@@ -30,7 +30,11 @@ import {
   searchMemories,
   updateMemory,
 } from '../services/memory-service.js'
-import { prepareMemoryToolEnvelope, sliceMemoryBodyFragment } from '../utils/memory-token-budget.js'
+import {
+  prepareMemoryControlReply,
+  prepareMemoryToolEnvelope,
+  sliceMemoryBodyFragment,
+} from '../utils/memory-token-budget.js'
 
 const app = new Hono()
 const human = { kind: 'human' } as const
@@ -113,7 +117,6 @@ function boundedAgentReply(
     start?: number
     end?: number
   }> = [],
-  preReserved?: ReturnType<typeof reserveMemoryBudget>,
   pageOffset?: number,
 ): Response {
   let ledger: ReturnType<typeof getInternalMemoryBudgetContext>
@@ -145,14 +148,12 @@ function boundedAgentReply(
     delivery.end = delivery.start! + [...body].length
     return true
   })
-  const reservation =
-    preReserved ??
-    reserveMemoryBudget({
-      budgetContextId: ledger.id,
-      estimatedTokens: sized.estimatedTokens,
-      responseLimitTokens: 1_000,
-      deliveries: emittedDeliveries,
-    })
+  const reservation = reserveMemoryBudget({
+    budgetContextId: ledger.id,
+    estimatedTokens: sized.estimatedTokens,
+    responseLimitTokens: 1_000,
+    deliveries: emittedDeliveries,
+  })
   if (!reservation.accepted) {
     return exhaustedAgentReply(c, capability)
   }
@@ -171,7 +172,7 @@ function boundedAgentReply(
 function exhaustedAgentReply(
   c: Context,
   capability: NonNullable<ReturnType<typeof getMemoryCapability>>,
-  message = 'Budget mémoire épuisé; ne répète pas cette lecture dans la conversation courante.',
+  message = 'Lectures épuisées; remember reste disponible.',
 ): Response {
   const ledger = getInternalMemoryBudgetContext(capability.conversationKey)
   const denial = prepareMemoryToolEnvelope(
@@ -188,19 +189,6 @@ function exhaustedAgentReply(
     reservation.responseAllowed ? denial.data : { budgetExhausted: true, memoryOutputSuppressed: true },
     200,
   )
-}
-
-function reserveAgentWrite(
-  capability: NonNullable<ReturnType<typeof getMemoryCapability>>,
-): ReturnType<typeof reserveMemoryBudget> {
-  const ledger = getInternalMemoryBudgetContext(capability.conversationKey)
-  // Reserve the full output ceiling before mutating. Sizing a synthetic large
-  // receipt can collapse it to a small fallback and undercharge the real result.
-  return reserveMemoryBudget({
-    budgetContextId: ledger.id,
-    estimatedTokens: 1_000,
-    responseLimitTokens: 1_000,
-  })
 }
 
 app.use(
@@ -402,7 +390,7 @@ app.post('/agent/:toolName', async (c) => {
   if (!capability) return c.json({ error: 'Invalid or expired memory capability' }, 401)
   const toolName = c.req.param('toolName')
   if (!isMemoryToolName(toolName)) return c.json({ error: 'Unknown memory tool' }, 404)
-  let writeReservation: ReturnType<typeof reserveMemoryBudget> | undefined
+  const controlReply = toolName === 'remember' || toolName === 'list_memory_scopes'
 
   try {
     const input = await readJson(c)
@@ -425,17 +413,15 @@ app.post('/agent/:toolName', async (c) => {
         ...(typeof args.cursor === 'string' ? { cursor: args.cursor } : {}),
         ...(typeof args.limit === 'number' ? { limit: args.limit } : {}),
       })
-      return boundedAgentReply(
-        c,
-        capability,
-        {
-          ...page,
-          items: page.items.map(({ id, level, generation, revision }) => ({ id, level, generation, revision })),
-        },
-        200,
-        [],
-        undefined,
-        Number(args.cursor ?? 0),
+      return c.json(
+        prepareMemoryControlReply(
+          {
+            ...page,
+            items: page.items.map(({ id, level, generation, revision }) => ({ id, level, generation, revision })),
+          },
+          'internal',
+          Number(args.cursor ?? 0),
+        ),
       )
     }
     if (toolName === 'list_memories') {
@@ -463,15 +449,7 @@ app.post('/agent/:toolName', async (c) => {
           updatedAt: entry.updatedAt,
         }
       })
-      return boundedAgentReply(
-        c,
-        capability,
-        { ...page, items },
-        200,
-        freshDeliveries,
-        undefined,
-        Number(args.cursor ?? 0),
-      )
+      return boundedAgentReply(c, capability, { ...page, items }, 200, freshDeliveries, Number(args.cursor ?? 0))
     }
     if (toolName === 'read_memory') {
       const entry = readMemory({ scopeId: scopeId!, entryId: args.entry_id as string, actor })
@@ -541,15 +519,7 @@ app.post('/agent/:toolName', async (c) => {
           updatedAt: entry.updatedAt,
         }
       })
-      return boundedAgentReply(
-        c,
-        capability,
-        { ...page, items },
-        200,
-        freshDeliveries,
-        undefined,
-        Number(args.cursor ?? 0),
-      )
+      return boundedAgentReply(c, capability, { ...page, items }, 200, freshDeliveries, Number(args.cursor ?? 0))
     }
     if (toolName === 'list_memory_operations') {
       return boundedAgentReply(
@@ -566,11 +536,7 @@ app.post('/agent/:toolName', async (c) => {
     }
 
     if (capability.readOnly)
-      return boundedAgentReply(c, capability, { error: 'This agent launch is read-only for memory' }, 403)
-    writeReservation = reserveAgentWrite(capability)
-    if (!writeReservation.accepted) {
-      return exhaustedAgentReply(c, capability, 'Budget mémoire épuisé; aucune écriture mémoire n’a été effectuée.')
-    }
+      return c.json(prepareMemoryControlReply({ error: 'This agent launch is read-only for memory' }, 'internal'), 403)
     const result = remember({
       scopeId: scopeId!,
       expectedGeneration: args.expected_generation as number,
@@ -603,7 +569,7 @@ app.post('/agent/:toolName', async (c) => {
               },
             }
           : { status: result.status, reason: result.reason }
-    return boundedAgentReply(c, capability, receipt, 200, [], writeReservation)
+    return c.json(prepareMemoryControlReply(receipt, 'internal'))
   } catch (error) {
     const status =
       error instanceof MemoryNotFoundError
@@ -614,8 +580,7 @@ app.post('/agent/:toolName', async (c) => {
             ? 400
             : 500
     const message = error instanceof Error ? error.message : String(error)
-    if (writeReservation?.accepted)
-      return boundedAgentReply(c, capability, { error: message }, status, [], writeReservation)
+    if (controlReply) return c.json(prepareMemoryControlReply({ error: message }, 'internal'), status)
     return boundedAgentReply(c, capability, { error: message }, status)
   }
 })

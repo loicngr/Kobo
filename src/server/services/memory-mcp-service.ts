@@ -2,7 +2,11 @@ import type { MemoryActor, MemoryScopeCatalogueItem, MemoryTransport } from '../
 import { deriveMemoryActor } from '../../shared/memory.js'
 import { isMemoryToolName, validateMemoryToolArguments } from '../../shared/memory-tools.js'
 import type { MessageSource } from '../../shared/workspace-message-types.js'
-import { prepareMemoryToolEnvelope, sliceMemoryBodyFragment } from '../utils/memory-token-budget.js'
+import {
+  prepareMemoryControlReply,
+  prepareMemoryToolEnvelope,
+  sliceMemoryBodyFragment,
+} from '../utils/memory-token-budget.js'
 import {
   createExternalMemoryBudgetContext,
   reserveMemoryBudget,
@@ -172,7 +176,6 @@ function chargeExternalOutput(input: {
   source: MessageSource
   delivery?: { entryId: string; revision: number; kind: 'body-fragment'; start: number; end: number }
   deliveries?: Array<{ entryId: string; revision: number; kind: 'metadata' | 'excerpt'; start?: number; end?: number }>
-  preReserved?: ReturnType<typeof reserveMemoryBudget>
   pageOffset?: number
 }): Record<string, unknown> {
   // Use a worst-case fixed-width receipt while sizing, then reserve before the
@@ -196,27 +199,19 @@ function chargeExternalOutput(input: {
       })()
     : undefined
   const emittedDeliveries = (input.deliveries ?? []).filter((delivery) => emittedIds.has(delivery.entryId))
-  const reservation =
-    input.preReserved ??
-    reserveMemoryBudget({
-      budgetContextId: input.contextId,
-      estimatedTokens: sized.estimatedTokens,
-      responseLimitTokens: 1_000,
-      ...(emittedDelivery ? { delivery: emittedDelivery } : {}),
-      ...(emittedDeliveries.length ? { deliveries: emittedDeliveries } : {}),
-    })
+  const reservation = reserveMemoryBudget({
+    budgetContextId: input.contextId,
+    estimatedTokens: sized.estimatedTokens,
+    responseLimitTokens: 1_000,
+    ...(emittedDelivery ? { delivery: emittedDelivery } : {}),
+    ...(emittedDeliveries.length ? { deliveries: emittedDeliveries } : {}),
+  })
   if (!reservation.accepted) {
-    const writeWasSkipped =
-      input.data.budgetExhausted === true &&
-      typeof input.data.message === 'string' &&
-      input.data.message.includes('aucune écriture')
     const denial = prepareMemoryToolEnvelope(
       {
         memory_context_id: input.contextId,
         budgetExhausted: true,
-        message: writeWasSkipped
-          ? 'Budget épuisé; écriture ignorée. Arrête les outils mémoire.'
-          : 'Budget mémoire épuisé; arrête les outils mémoire.',
+        message: 'Lectures épuisées; remember reste disponible.',
       },
       { targetTokens: 1_000, transport: 'external' },
     )
@@ -224,16 +219,6 @@ function chargeExternalOutput(input: {
     return denialReservation.responseAllowed ? denial.data : { memoryOutputSuppressed: true }
   }
   return addBudgetReceipt(sized.data, input.contextId, reservation.estimatedTokens, reservation.remainingTokens)
-}
-
-function reserveExternalWrite(contextId: string): ReturnType<typeof reserveMemoryBudget> {
-  // The actual receipt is bounded to this ceiling, including transport framing.
-  // A synthetic receipt must not be compacted to a cheaper fallback as a bound.
-  return reserveMemoryBudget({
-    budgetContextId: contextId,
-    estimatedTokens: 1_000,
-    responseLimitTokens: 1_000,
-  })
 }
 
 /** Execute the external memory surface; caller identity is always derived from MCP transport. */
@@ -249,10 +234,15 @@ export function executeMemoryMcpTool(name: string, input: unknown, source: Messa
     actor.kind === 'external-mcp' ? actor.clientName : 'External MCP client',
     transport,
   )
+  const controlReply = name === 'remember' || name === 'list_memory_scopes'
+  const controlResult = (data: Record<string, unknown>, pageOffset?: number) =>
+    prepareMemoryControlReply({ ...data, memory_context_id: context.id }, 'external', pageOffset)
   let args: Record<string, unknown>
   try {
     args = validateMemoryToolArguments(name, input, true)
   } catch (error) {
+    if (controlReply)
+      return controlResult({ error: error instanceof Error ? error.message : String(error), __mcpError: true })
     const charged = chargeExternalOutput({
       data: { error: error instanceof Error ? error.message : String(error) },
       contextId: context.id,
@@ -266,7 +256,6 @@ export function executeMemoryMcpTool(name: string, input: unknown, source: Messa
     ? selectedScope(args)
     : undefined
   let data: Record<string, unknown>
-  let preReserved: ReturnType<typeof reserveMemoryBudget> | undefined
   let delivery: Parameters<typeof chargeExternalOutput>[0]['delivery']
   let deliveries: Parameters<typeof chargeExternalOutput>[0]['deliveries']
 
@@ -336,25 +325,6 @@ export function executeMemoryMcpTool(name: string, input: unknown, source: Messa
         break
       }
       case 'remember':
-        preReserved = reserveExternalWrite(context.id)
-        if (!preReserved.accepted) {
-          return chargeExternalOutput({
-            data: {
-              memory_context_id: context.id,
-              budget: {
-                estimatedTokens: 0,
-                chargedTokens: 0,
-                remainingTokens: 0,
-                limitTokens: preReserved.limitTokens,
-                exhausted: true,
-              },
-              budgetExhausted: true,
-              message: 'Budget mémoire épuisé; aucune écriture mémoire n’a été effectuée.',
-            },
-            contextId: context.id,
-            source,
-          })
-        }
         data = compactWriteReceipt(
           remember({
             scopeId: args.scope_id as string,
@@ -370,14 +340,16 @@ export function executeMemoryMcpTool(name: string, input: unknown, source: Messa
         break
     }
   } catch (error) {
+    if (controlReply)
+      return controlResult({ error: error instanceof Error ? error.message : String(error), __mcpError: true })
     const charged = chargeExternalOutput({
       data: { error: error instanceof Error ? error.message : String(error) },
       contextId: context.id,
       source,
-      ...(preReserved?.accepted ? { preReserved } : {}),
     })
     return { ...charged, __mcpError: true }
   }
+  if (controlReply) return controlResult(data, Number(cursor ?? 0))
   return chargeExternalOutput({
     data,
     contextId: context.id,
@@ -385,6 +357,5 @@ export function executeMemoryMcpTool(name: string, input: unknown, source: Messa
     pageOffset: name === 'list_memory_operations' ? undefined : Number(cursor ?? 0),
     ...(delivery ? { delivery } : {}),
     ...(deliveries ? { deliveries } : {}),
-    ...(preReserved ? { preReserved } : {}),
   })
 }

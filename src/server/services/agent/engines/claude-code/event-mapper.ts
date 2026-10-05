@@ -124,6 +124,8 @@ export interface MapperState {
    * reusing the learned tool_use_id keeps one identity per sub-agent.
    */
   taskToolUseIds: Map<string, string>
+  /** SDK task type by task id and tool id; progress/terminal messages may omit it. */
+  taskTypes: Map<string, string>
   /**
    * SDK task_id -> ambient / skip_transcript flags. The SDK sets them only on
    * task_started and task_notification; remembering them stamps every event
@@ -159,6 +161,7 @@ export function createMapperState(): MapperState {
     quotaErrorEmitted: false,
     userInterrupted: false,
     taskToolUseIds: new Map(),
+    taskTypes: new Map(),
     taskFlags: new Map(),
   }
 }
@@ -322,6 +325,14 @@ function mapSdkMessagePayload(msg: SDKMessage, state: MapperState): AgentEvent[]
       if (taskId && toolUseId) state.taskToolUseIds.set(taskId, toolUseId)
       const toolCallId = toolUseId ?? (taskId ? (state.taskToolUseIds.get(taskId) ?? taskId) : undefined)
       if (!toolCallId) return events
+      const taskType =
+        typeof parsed.task_type === 'string'
+          ? parsed.task_type
+          : ((taskId ? state.taskTypes.get(taskId) : undefined) ?? state.taskTypes.get(toolCallId))
+      if (taskType) {
+        if (taskId) state.taskTypes.set(taskId, taskType)
+        state.taskTypes.set(toolCallId, taskType)
+      }
       let status: 'running' | 'done' | 'failed' | 'stopped'
       let phase: 'started' | 'progress' | undefined
       if (subtype === 'task_updated') {
@@ -375,7 +386,7 @@ function mapSdkMessagePayload(msg: SDKMessage, state: MapperState): AgentEvent[]
         ...(flags?.ambient ? { ambient: true } : {}),
         ...(flags?.skipTranscript ? { skipTranscript: true } : {}),
         description,
-        taskType: typeof parsed.task_type === 'string' ? (parsed.task_type as string) : undefined,
+        taskType,
         lastToolName: typeof parsed.last_tool_name === 'string' ? (parsed.last_tool_name as string) : undefined,
         totalTokens: typeof usage?.total_tokens === 'number' ? (usage.total_tokens as number) : undefined,
         toolUses: typeof usage?.tool_uses === 'number' ? (usage.tool_uses as number) : undefined,

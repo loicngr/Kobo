@@ -69,7 +69,7 @@ function textResult(result: unknown): unknown {
 }
 
 it.each(['internal', 'external'] as const)(
-  'reserves at least the serialized write receipt cost (%s)',
+  'bounds write receipts without spending the retrieval budget (%s)',
   async (transport) => {
     const scope = resolveMemoryScope({ level: 'workspace', workspaceId: 'ws-1' })
     const args = { scope_id: scope.id, expected_generation: 0, key: 'k'.repeat(80), title: 'Title', body: 'Fact' }
@@ -107,12 +107,73 @@ it.each(['internal', 'external'] as const)(
         ? { content: [{ type: 'text', text }], structuredContent: result }
         : { rest: text, content: [{ type: 'text', text }] }
     const cost = estimateMemoryTokens(JSON.stringify(envelope))
-    const charged = (result.budget as { estimatedTokens: number }).estimatedTokens
-    expect(charged).toBeGreaterThanOrEqual(cost)
+    const budget = result.budget as { estimatedTokens: number; chargedTokens: number }
+    expect(budget.estimatedTokens).toBeGreaterThanOrEqual(cost)
+    expect(budget.estimatedTokens).toBeLessThanOrEqual(1_000)
+    expect(budget.chargedTokens).toBe(0)
     const ledger = getDb().prepare('SELECT cumulative_estimated_tokens AS total FROM memory_budget_contexts').get() as {
       total: number
     }
-    expect(ledger.total).toBe(charged)
+    expect(ledger.total).toBe(0)
+  },
+)
+
+it.each([false, true])(
+  'preserves exhausted-session permissions after reopening the database (readOnly=%s)',
+  async (readOnly) => {
+    const session = createIdleSession('ws-1')
+    const conversationKey = allocateMemoryConversationKey({ sessionId: session.id, engine: 'claude-code' })
+    getDb()
+      .prepare(
+        'UPDATE memory_budget_contexts SET cumulative_estimated_tokens = 6000, delivered_json = ? WHERE conversation_key = ?',
+      )
+      .run(JSON.stringify([{ kind: 'budget-denial', estimatedTokens: 500 }]), conversationKey)
+    closeDb()
+    getDb(join(directory, 'test.db'))
+    const capability = createMemoryCapability({
+      dispatchId: 'resumed-exhausted',
+      workspaceId: 'ws-1',
+      sessionId: session.id,
+      engine: 'claude-code',
+      conversationKey,
+      readOnly,
+    })
+    try {
+      const call = (name: string, args: Record<string, unknown>) =>
+        app.request(`/api/memory/agent/${name}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Kobo-Memory-Session': capability.token },
+          body: JSON.stringify(args),
+        })
+      const scopes = (await (await call('list_memory_scopes', {})).json()) as {
+        items: Array<{ id: string; level: string; generation: number }>
+      }
+      const project = scopes.items.find((scope) => scope.level === 'project')!
+      expect(project).toBeDefined()
+      const result = await call('remember', {
+        scope_id: project.id,
+        expected_generation: project.generation,
+        key: 'project-rule',
+        title: 'Title',
+        body: 'Durable project convention',
+      })
+      const receipt = await result.json()
+      expect(result.status).toBe(readOnly ? 403 : 200)
+      expect(receipt).toMatchObject(
+        readOnly ? { error: 'This agent launch is read-only for memory' } : { status: 'proposed' },
+      )
+      expect(JSON.stringify(receipt)).not.toContain('Durable project convention')
+      expect(listMemoryProposals(project.id)).toHaveLength(readOnly ? 0 : 1)
+      const deniedRead = await (await call('list_memories', {})).json()
+      expect(deniedRead).toMatchObject({ memoryOutputSuppressed: true })
+      expect(
+        getDb()
+          .prepare('SELECT cumulative_estimated_tokens AS total FROM memory_budget_contexts WHERE conversation_key = ?')
+          .get(conversationKey),
+      ).toEqual({ total: 6000 })
+    } finally {
+      revokeMemoryCapability(capability.token)
+    }
   },
 )
 
@@ -163,7 +224,7 @@ it('rejects an agent write revoked while its request body was pending', async ()
 })
 
 it.each(['internal', 'external'] as const)(
-  'bounds repeated write receipts and stops mutations at exhaustion (%s)',
+  'bounds every repeated write receipt without blocking saves (%s)',
   async (transport) => {
     const scope = resolveMemoryScope({ level: 'workspace', workspaceId: 'ws-1' })
     const session = createIdleSession('ws-1')
@@ -177,7 +238,6 @@ it.each(['internal', 'external'] as const)(
       readOnly: false,
     })
     let contextId: string | undefined
-    let emittedCost = 0
     let applied = 0
     try {
       for (let i = 0; i < 9; i++) {
@@ -202,22 +262,22 @@ it.each(['internal', 'external'] as const)(
         if (result.status === 'applied') applied++
         if (!result.memoryOutputSuppressed) {
           const text = JSON.stringify(result)
-          emittedCost += estimateMemoryTokens(
+          const emittedCost = estimateMemoryTokens(
             JSON.stringify(
               transport === 'external'
                 ? { content: [{ type: 'text', text }], structuredContent: result }
                 : { rest: text, content: [{ type: 'text', text }] },
             ),
           )
+          expect(emittedCost).toBeLessThanOrEqual(1_000)
         }
       }
-      expect(applied).toBe(5)
+      expect(applied).toBe(9)
       expect(getDb().prepare('SELECT COUNT(*) AS count FROM memory_entries').get()).toEqual({ count: applied })
       const ledger = getDb()
         .prepare('SELECT SUM(cumulative_estimated_tokens) AS total FROM memory_budget_contexts')
         .get() as { total: number }
-      expect(ledger.total).toBeLessThanOrEqual(6_000)
-      expect(emittedCost).toBeLessThanOrEqual(ledger.total)
+      expect(ledger.total).toBe(0)
     } finally {
       revokeMemoryCapability(capability.token)
     }
@@ -331,7 +391,9 @@ it('serves bounded memory discovery and calls through the SDK HTTP transport, wi
     })
     const writeContextId = (textResult(repeatedApply) as { memory_context_id: string }).memory_context_id
     expect(writeContextId).not.toBe(memoryContextId)
-    expect((textResult(repeatedApply) as { budget: { estimatedTokens: number } }).budget.estimatedTokens).toBe(1_000)
+    expect(
+      (textResult(repeatedApply) as { budget: { estimatedTokens: number } }).budget.estimatedTokens,
+    ).toBeLessThanOrEqual(1_000)
 
     const proposed = await client.callTool({
       name: 'remember',
@@ -359,9 +421,8 @@ it('serves bounded memory discovery and calls through the SDK HTTP transport, wi
       },
     })
     expect(textResult(repeatedProposal)).toMatchObject({ status: 'proposed', proposalId: receipt.proposalId })
-    expect(
-      (textResult(repeatedProposal) as { budget: { remainingTokens: number } }).budget.remainingTokens,
-    ).toBeLessThan((textResult(proposed) as { budget: { remainingTokens: number } }).budget.remainingTokens)
+    expect(textResult(repeatedProposal)).toMatchObject({ budget: { chargedTokens: 0 } })
+    expect(textResult(proposed)).toMatchObject({ budget: { chargedTokens: 0 } })
     const proposal = listMemoryProposals(project.id)[0]
     expect(proposal.id).toBe(receipt.proposalId)
     const approved = await app.request(`/api/memory/proposals/${proposal.id}/approve`, { method: 'POST' })
@@ -416,7 +477,7 @@ it('serves bounded memory discovery and calls through the SDK HTTP transport, wi
   }
 })
 
-it('does not apply an external remember write when its response cannot be reserved', () => {
+it('applies an external remember write even when the retrieval budget is fully exhausted', () => {
   const scope = resolveMemoryScope({ level: 'workspace', workspaceId: 'ws-1' })
   const source = {
     kind: 'mcp' as const,
@@ -427,7 +488,7 @@ it('does not apply an external remember write when its response cannot be reserv
     memory_context_id: string
   }
   getDb()
-    .prepare('UPDATE memory_budget_contexts SET cumulative_estimated_tokens = 5_100 WHERE external_context_id = ?')
+    .prepare('UPDATE memory_budget_contexts SET cumulative_estimated_tokens = 6_000 WHERE external_context_id = ?')
     .run(first.memory_context_id)
 
   const result = executeMemoryMcpTool(
@@ -436,15 +497,15 @@ it('does not apply an external remember write when its response cannot be reserv
       memory_context_id: first.memory_context_id,
       scope_id: scope.id,
       expected_generation: 0,
-      key: 'must.not.persist',
-      title: 'Must not persist',
-      body: 'The response reservation must happen before this write.',
+      key: 'must.persist',
+      title: 'Must persist',
+      body: 'Saving durable facts does not require retrieval budget.',
     },
     source,
-  ) as { budgetExhausted?: boolean }
+  ) as { status: string }
 
-  expect(result.budgetExhausted).toBe(true)
-  expect(getDb().prepare('SELECT id FROM memory_entries WHERE scope_id = ?').all(scope.id)).toEqual([])
+  expect(result.status).toBe('applied')
+  expect(getDb().prepare('SELECT id FROM memory_entries WHERE scope_id = ?').all(scope.id)).toHaveLength(1)
 })
 
 it('records only list metadata that survived the external response envelope', () => {
@@ -540,16 +601,16 @@ it('limits exhausted-budget receipts and hides the suppression marker from exter
       .run(contextId)
 
     const firstDenial = await client.callTool({
-      name: 'list_memory_scopes',
-      arguments: { memory_context_id: contextId },
+      name: 'list_memories',
+      arguments: { memory_context_id: contextId, workspace_id: 'ws-1' },
     })
     expect(firstDenial.isError).toBe(true)
     expect(textResult(firstDenial)).toMatchObject({ memory_context_id: contextId, budgetExhausted: true })
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const suppressed = await client.callTool({
-        name: 'list_memory_scopes',
-        arguments: { memory_context_id: contextId },
+        name: 'list_memories',
+        arguments: { memory_context_id: contextId, workspace_id: 'ws-1' },
       })
       expect(suppressed.isError).toBe(true)
       expect(suppressed.content).toEqual([])
@@ -565,6 +626,25 @@ it('limits exhausted-budget receipts and hides the suppression marker from exter
     expect(
       JSON.parse(ledger.delivered_json).filter((item: { kind?: string }) => item.kind === 'budget-denial'),
     ).toHaveLength(1)
+    const scopes = await client.callTool({
+      name: 'list_memory_scopes',
+      arguments: { memory_context_id: contextId, workspace_id: 'ws-1' },
+    })
+    expect(scopes.isError, JSON.stringify(scopes)).not.toBe(true)
+    const workspaceScope = resolveMemoryScope({ level: 'workspace', workspaceId: 'ws-1' })
+    const saved = await client.callTool({
+      name: 'remember',
+      arguments: {
+        memory_context_id: contextId,
+        scope_id: workspaceScope.id,
+        expected_generation: 0,
+        key: 'after-exhaustion',
+        title: 'Title',
+        body: 'Still saved',
+      },
+    })
+    expect(saved.isError).not.toBe(true)
+    expect(textResult(saved)).toMatchObject({ status: 'applied', budget: { chargedTokens: 0 } })
   } finally {
     await client.close()
   }
@@ -577,6 +657,7 @@ it('returns no MCP content from the workspace bridge after its denial allowance 
   if (!address || typeof address === 'string') throw new Error('Missing test listener address')
   const session = createIdleSession('ws-1')
   const conversationKey = allocateMemoryConversationKey({ sessionId: session.id, engine: 'codex' })
+  getDb().prepare("UPDATE agent_sessions SET engine = 'codex' WHERE id = ?").run(session.id)
   const capability = createMemoryCapability({
     dispatchId: 'workspace-budget-test',
     workspaceId: 'ws-1',
@@ -607,14 +688,43 @@ it('returns no MCP content from the workspace bridge after its denial allowance 
         stderr: 'pipe',
       }),
     )
-    const first = await client.callTool({ name: 'list_memory_scopes', arguments: {} })
+    const first = await client.callTool({ name: 'list_memories', arguments: {} })
     expect(first.isError).toBe(true)
     expect(textResult(first)).toMatchObject({ budgetExhausted: true })
 
-    const second = await client.callTool({ name: 'list_memory_scopes', arguments: {} })
+    const second = await client.callTool({ name: 'list_memories', arguments: {} })
     expect(second.isError).toBe(true)
     expect(second.content).toEqual([])
     expect(JSON.stringify(second)).not.toContain('memoryOutputSuppressed')
+    getDb().prepare('UPDATE memory_budget_contexts SET cumulative_estimated_tokens = 6000 WHERE id = ?').run(ledger.id)
+    const scopes = await client.callTool({ name: 'list_memory_scopes', arguments: {} })
+    expect(scopes.isError, JSON.stringify(scopes)).not.toBe(true)
+    const scope = resolveMemoryScope({ level: 'workspace', workspaceId: 'ws-1' })
+    const args = {
+      scope_id: scope.id,
+      expected_generation: 0,
+      key: 'after-exhaustion',
+      title: 'Title',
+      body: 'Still saved',
+    }
+    const saved = await client.callTool({ name: 'remember', arguments: args })
+    expect(saved.isError).not.toBe(true)
+    expect(textResult(saved)).toMatchObject({ status: 'applied', budget: { chargedTokens: 0 } })
+    const repeated = await client.callTool({ name: 'remember', arguments: args })
+    expect(textResult(repeated)).toMatchObject({ status: 'applied' })
+    expect(getDb().prepare('SELECT COUNT(*) AS count FROM memory_entries').get()).toEqual({ count: 1 })
+    const conflict = await client.callTool({ name: 'remember', arguments: { ...args, expected_generation: 1 } })
+    expect(conflict.isError).toBe(true)
+    expect(JSON.stringify(conflict.content)).toContain('409')
+    updateGlobalSettings({ memoryMode: 'manual' })
+    const denied = await client.callTool({ name: 'remember', arguments: { ...args, key: 'manual-denied' } })
+    expect(textResult(denied)).toMatchObject({ status: 'denied' })
+    expect(getDb().prepare('SELECT COUNT(*) AS count FROM memory_entries').get()).toEqual({ count: 1 })
+    expect(
+      getDb()
+        .prepare('SELECT cumulative_estimated_tokens AS total FROM memory_budget_contexts WHERE id = ?')
+        .get(ledger.id),
+    ).toEqual({ total: 6000 })
   } finally {
     revokeMemoryCapability(capability.token)
     await client.close()

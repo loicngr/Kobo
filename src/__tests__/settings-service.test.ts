@@ -48,11 +48,18 @@ afterEach(() => {
 })
 
 describe('getSettings()', () => {
+  it('preserves an explicitly saved Auto model instead of replacing it with the fresh-install default', () => {
+    getSettings()
+    updateGlobalSettings({ defaultModelByEngine: { 'claude-code': 'auto', codex: 'auto' } })
+    expect(getSettings().global.defaultModelByEngine['claude-code']).toBe('auto')
+    expect(getEffectiveSettings('/tmp/unspecified-project').model).toBe('auto')
+  })
+
   it('creates default settings file when it does not exist', () => {
     expect(fs.existsSync(settingsPath)).toBe(false)
     const settings = getSettings()
     expect(fs.existsSync(settingsPath)).toBe(true)
-    expect(settings.global.defaultModelByEngine['claude-code']).toBe('auto')
+    expect(settings.global.defaultModelByEngine['claude-code']).toBe('claude-sonnet-5-5')
     expect(settings.global.defaultModelByEngine.codex).toBe('auto')
     expect(settings.global.worktreesPath).toBe('.worktrees')
     expect(settings.global.notionEnabled).toBe(false)
@@ -101,7 +108,7 @@ describe('getSettings()', () => {
     expect(backups.length).toBe(1)
     // The new settings.json should contain valid defaults
     const written = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'))
-    expect(written.global.defaultModelByEngine?.['claude-code']).toBe('auto')
+    expect(written.global.defaultModelByEngine?.['claude-code']).toBe('claude-sonnet-5-5')
   })
 
   it('restores missing global fields to defaults when schemaVersion is current', () => {
@@ -129,7 +136,7 @@ describe('getSettings()', () => {
     const settings = getSettings()
 
     // Missing fields must be restored to their defaults
-    expect(settings.global.defaultModelByEngine['claude-code']).toBe('auto')
+    expect(settings.global.defaultModelByEngine['claude-code']).toBe('claude-sonnet-5-5')
     expect(typeof settings.global.prPromptTemplate).toBe('string')
     expect(settings.global.prPromptTemplate.length).toBeGreaterThan(0)
     // Existing custom values must be preserved
@@ -265,7 +272,7 @@ describe('updateGlobalSettings()', () => {
     updateGlobalSettings({ prPromptTemplate: 'new template' })
 
     const global = getGlobalSettings()
-    expect(global.defaultModelByEngine['claude-code']).toBe('auto') // unchanged
+    expect(global.defaultModelByEngine['claude-code']).toBe('claude-sonnet-5-5') // unchanged
     expect(global.prPromptTemplate).toBe('new template') // updated
   })
 

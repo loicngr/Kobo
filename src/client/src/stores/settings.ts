@@ -244,7 +244,7 @@ export const useSettingsStore = defineStore('settings', {
       workflowPolicy: { ...MANUAL_WORKFLOW_POLICY },
       memoryMode: 'hybrid' as MemoryMode,
       onboardingComplete: false,
-      defaultModelByEngine: { 'claude-code': 'auto', codex: 'auto' } as Record<string, string>,
+      defaultModelByEngine: { 'claude-code': 'claude-sonnet-5-5', codex: 'auto' } as Record<string, string>,
       dangerouslySkipPermissions: true,
       prPromptTemplate: '',
       reviewPromptTemplate: '',

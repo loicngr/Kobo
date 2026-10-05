@@ -200,6 +200,23 @@ describe('event-mapper', () => {
   })
 
   describe('subagent task events', () => {
+    it.each(['local_bash', 'local_agent', 'mcp_task', 'local_workflow'])(
+      'retains task classification on progress and completion (%s)',
+      (taskType) => {
+        const state = createMapperState()
+        mapSdkMessage(
+          asMsg({ type: 'system', subtype: 'task_started', task_id: 'job', tool_use_id: 'tool', task_type: taskType }),
+          state,
+        )
+        for (const message of [
+          { subtype: 'task_progress', task_id: 'job' },
+          { subtype: 'task_notification', tool_use_id: 'tool', status: 'completed' },
+          { subtype: 'task_updated', task_id: 'job', patch: { status: 'killed' } },
+        ])
+          expect(mapSdkMessage(asMsg({ type: 'system', ...message }), state)).toMatchObject([{ taskType }])
+      },
+    )
+
     it('emits subagent:progress with running for task_started', () => {
       const events = mapSdkMessage(
         asMsg({

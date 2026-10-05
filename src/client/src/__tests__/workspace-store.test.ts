@@ -483,6 +483,27 @@ describe('workspace store', () => {
   })
 
   describe('upsertSubagent', () => {
+    it.each(['local_bash', 'mcp_task', 'local_workflow'])(
+      'excludes non-agent tasks from cards and busy counts after progress and replay (%s)',
+      (taskType) => {
+        const store = useWorkspaceStore()
+        store.selectedWorkspaceId = 'ws-1'
+        store.upsertSubagent('ws-1', { toolUseId: 'agent', taskType: 'local_agent', status: 'running' })
+        store.upsertSubagent('ws-1', {
+          toolUseId: 'shell',
+          taskId: 'job',
+          taskType,
+          status: 'running',
+          phase: 'started',
+        })
+        store.upsertSubagent('ws-1', { toolUseId: 'job', taskId: 'job', status: 'running', phase: 'progress' })
+        expect(store.currentSubagents.map((agent) => agent.toolUseId)).toEqual(['agent'])
+        expect(store.currentBusySubagentCount).toBe(1)
+        store.upsertSubagent('ws-1', { toolUseId: 'job', taskId: 'job', status: 'done' })
+        expect(store.currentSubagents.map((agent) => agent.toolUseId)).toEqual(['agent'])
+      },
+    )
+
     it('creates a new subagent on first upsert', () => {
       const store = useWorkspaceStore()
       store.upsertSubagent('ws-1', {

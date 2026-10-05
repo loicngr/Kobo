@@ -8,6 +8,7 @@ import {
   type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk'
 import { nanoid } from 'nanoid'
+import { isSubagentTask } from '../../../../../shared/subagent-classification.js'
 import { isWorkspacePermissionAllowed } from '../../../workspace-permission-policy-service.js'
 import { createStreamingBatcher } from '../../streaming-batcher.js'
 import { createTurnLiveness } from '../../turn-liveness.js'
@@ -798,10 +799,13 @@ export function createClaudeCodeEngine(): AgentEngine {
         },
         stopSubagents(ids?: string[]): number {
           const isRunning = (taskId: string): boolean =>
-            activeSubagentTaskIds.has(taskId) || ambientSubagentTaskIds.has(taskId)
+            (activeSubagentTaskIds.has(taskId) || ambientSubagentTaskIds.has(taskId)) &&
+            isSubagentTask({ taskType: mapperState.taskTypes.get(taskId) })
           const targets = new Set<string>()
           if (ids === undefined) {
-            for (const taskId of [...activeSubagentTaskIds, ...ambientSubagentTaskIds]) targets.add(taskId)
+            for (const taskId of [...activeSubagentTaskIds, ...ambientSubagentTaskIds]) {
+              if (isRunning(taskId)) targets.add(taskId)
+            }
           } else {
             for (const id of ids) {
               // A card id is the SDK task id, or the tool call id when the

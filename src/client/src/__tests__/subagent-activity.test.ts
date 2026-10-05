@@ -3,6 +3,26 @@ import { belongsToSubagent, findSubagentForActivity, subagentActivityEvents } fr
 import type { AgentEvent } from '../types/agent-event'
 
 describe('subagent activity', () => {
+  it('groups a background Bash action under its real parent agent, not under a fake shell agent', () => {
+    const cards = [
+      { toolUseId: 'bash', taskType: 'local_bash', description: 'Run tests' },
+      { toolUseId: 'agent', taskType: 'local_agent', description: 'Implement feature' },
+    ]
+    expect(findSubagentForActivity({ kind: 'subagent', toolCallId: 'agent' }, cards, 'bash')?.description).toBe(
+      'Implement feature',
+    )
+  })
+
+  it('prefers an actual nested agent over its parent regardless of card insertion order', () => {
+    const cards = [
+      { toolUseId: 'parent', taskType: 'local_agent', description: 'Parent' },
+      { toolUseId: 'nested', taskType: 'local_agent', description: 'Nested agent' },
+    ]
+    expect(findSubagentForActivity({ kind: 'subagent', toolCallId: 'parent' }, cards, 'nested')?.description).toBe(
+      'Nested agent',
+    )
+  })
+
   const card = { toolUseId: 'task-1', taskId: 'sdk-1', threadIds: ['thread-1'], sessionId: 'session-1' }
 
   it('matches Claude aliases and Codex child threads without matching parent events', () => {

@@ -46,6 +46,8 @@ export default {
   'memory.panel.deleted': 'Deleted since this context',
   'memory.panel.truncated': '(text truncated)',
   'memory.engine.codex': 'Codex',
+  'memory.tool.unexplainedError':
+    'The memory tool returned no details. If the retrieval budget is exhausted, stop reading; saving remains available subject to permissions. A new conversation or confirmed context compaction renews the retrieval budget, not a new message.',
   'memory.engine.claude-code': 'Claude Code',
   'memory.context.state.failed': 'Failed',
   'memory.context.state.prepared': 'Prepared',

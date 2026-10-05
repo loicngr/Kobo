@@ -47,6 +47,8 @@ export default {
   'memory.panel.deleted': 'Eliminata dopo questo contesto',
   'memory.panel.truncated': '(testo abbreviato)',
   'memory.engine.codex': 'Codex',
+  'memory.tool.unexplainedError':
+    'Lo strumento di memoria non ha restituito dettagli. Se il budget di lettura è esaurito, interrompi le letture; salvare resta possibile secondo i permessi. Una nuova conversazione o una compattazione confermata rinnova il budget di lettura, non un nuovo messaggio.',
   'memory.engine.claude-code': 'Claude Code',
   'memory.context.state.failed': 'Non riuscito',
   'memory.context.state.prepared': 'Preparato',

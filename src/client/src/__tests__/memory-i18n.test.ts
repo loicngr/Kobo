@@ -25,6 +25,7 @@ describe('memory labels', () => {
       for (const state of Object.keys(states)) expect(te(`memory.context.state.${state}`)).toBe(true)
       expect(te('memory.panel.openDialog')).toBe(true)
       expect(te('memory.panel.closeDialog')).toBe(true)
+      expect(te('memory.tool.unexplainedError')).toBe(true)
       for (const section of ['contexts', 'entries', 'proposals', 'operations'])
         expect(te(`memory.panel.${section}Hint`)).toBe(true)
     },

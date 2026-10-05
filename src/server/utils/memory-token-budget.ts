@@ -4,6 +4,19 @@ export const MEMORY_OUTPUT_FRAMING_HEADROOM_BYTES = 96
 export const MEMORY_OUTPUT_HARD_BYTES = 12_000
 const MAX_EXCERPT_CODE_POINTS = 180
 
+/** Control-plane replies contain no saved bodies and never consume retrieval allowance. */
+export function prepareMemoryControlReply(
+  data: Record<string, unknown>,
+  transport: 'internal' | 'external',
+  pageOffset?: number,
+): Record<string, unknown> {
+  const sized = prepareMemoryToolEnvelope(
+    { ...data, budget: { estimatedTokens: 1_000, chargedTokens: 0 } },
+    { targetTokens: 1_000, transport, pageOffset },
+  )
+  return { ...sized.data, budget: { estimatedTokens: sized.estimatedTokens, chargedTokens: 0 } }
+}
+
 export interface BoundedMemoryOutput {
   data: Record<string, unknown>
   serializedEnvelope: string

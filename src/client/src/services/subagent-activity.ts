@@ -1,17 +1,26 @@
 import type { Subagent } from 'src/stores/workspace'
 import type { AgentEvent, AgentEventOrigin } from 'src/types/agent-event'
+import { isSubagentTask } from '../../../shared/subagent-classification'
+
+type ActivitySubagent = Pick<Subagent, 'toolUseId' | 'taskId' | 'threadIds' | 'description' | 'taskType'>
 
 /** Finds the sub-agent card which owns an activity event. */
 export function findSubagentForActivity(
   origin: AgentEventOrigin | undefined,
-  subagents: readonly Pick<Subagent, 'toolUseId' | 'taskId' | 'threadIds' | 'description'>[],
+  subagents: readonly ActivitySubagent[],
   toolCallId?: string,
-): Pick<Subagent, 'toolUseId' | 'taskId' | 'threadIds' | 'description'> | undefined {
+): ActivitySubagent | undefined {
   if (origin?.kind !== 'subagent') return undefined
-  return subagents.find((subagent) => {
+  const agents = subagents.filter(isSubagentTask)
+  // A nested Agent call belongs to its own card, but an ordinary/background
+  // tool call stays grouped with the real parent from its origin.
+  const nested = toolCallId
+    ? agents.find((agent) => agent.toolUseId === toolCallId || agent.taskId === toolCallId)
+    : undefined
+  if (nested) return nested
+  return agents.find((subagent) => {
     const toolCallIds = new Set([subagent.toolUseId, ...(subagent.taskId ? [subagent.taskId] : [])])
     return (
-      (toolCallId !== undefined && toolCallIds.has(toolCallId)) ||
       (origin.toolCallId !== undefined && toolCallIds.has(origin.toolCallId)) ||
       (origin.threadId !== undefined && (subagent.threadIds ?? []).includes(origin.threadId))
     )

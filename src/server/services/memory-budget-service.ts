@@ -27,6 +27,29 @@ export interface MemoryDeliveryMetadata {
   end?: number
 }
 
+export interface MemoryBootstrapFingerprint {
+  guidanceHash: string
+  snapshotHash: string
+}
+
+/** Metadata only: fingerprints never retain note bodies or prompt text. */
+export function getMemoryBootstrapFingerprint(budgetContextId: string): MemoryBootstrapFingerprint | undefined {
+  const row = getDb().prepare('SELECT delivered_json FROM memory_budget_contexts WHERE id = ?').get(budgetContextId) as
+    | { delivered_json: string }
+    | undefined
+  if (!row) return undefined
+  try {
+    const records: unknown = JSON.parse(row.delivered_json)
+    if (!Array.isArray(records)) return undefined
+    const record = records.reverse().find((item) => item?.kind === 'bootstrap')
+    if (typeof record?.guidanceHash === 'string' && typeof record?.snapshotHash === 'string')
+      return { guidanceHash: record.guidanceHash, snapshotHash: record.snapshotHash }
+  } catch {
+    /* Legacy or malformed metadata cannot prove prior delivery. */
+  }
+  return undefined
+}
+
 export interface ExternalMemoryBudgetContext {
   id: string
   cumulativeEstimatedTokens: number
@@ -111,6 +134,7 @@ export function reserveMemoryBudget(input: {
   delivery?: MemoryDeliveryMetadata
   deliveries?: ReadonlyArray<MemoryDeliveryMetadata>
   responseLimitTokens?: number
+  bootstrap?: MemoryBootstrapFingerprint
 }): MemoryBudgetReservation {
   if (!Number.isSafeInteger(input.estimatedTokens) || input.estimatedTokens < 1)
     throw new TypeError('Memory budget charge must be a positive integer')
@@ -158,6 +182,12 @@ export function reserveMemoryBudget(input: {
         }
       }
       const newDeliveries = [...(input.deliveries ?? []), ...(input.delivery ? [input.delivery] : [])]
+      if (input.bootstrap) {
+        delivered = delivered.filter(
+          (item) => !item || typeof item !== 'object' || (item as Record<string, unknown>).kind !== 'bootstrap',
+        )
+        delivered.push({ kind: 'bootstrap', ...input.bootstrap })
+      }
       if (newDeliveries.length > 0) {
         delivered.push(...newDeliveries)
         if (delivered.length > 2_000) delivered = delivered.slice(-2_000)

@@ -5,6 +5,7 @@ import { getWorkspaceQueueHost } from 'src/services/workspace-queue-bridge'
 import { apiFetch, apiFetchOk, apiFetchResponse, apiFetchResponseForStatus, apiResponseError } from 'src/utils/api'
 import { isAbortError } from 'src/utils/latest-request'
 import type { AutoLoopRuntime, QueuedAutoLoopMessage } from '../../../shared/auto-loop-types'
+import { isSubagentTask } from '../../../shared/subagent-classification'
 import type { WorkflowPolicy } from '../../../shared/workflow-policy'
 import type { ProviderId, UsageSnapshot } from '../types/usage'
 import { hasPrAttention } from '../utils/pr-status'
@@ -575,7 +576,9 @@ export const useWorkspaceStore = defineStore('workspace', {
     currentSubagents: (state): Subagent[] => {
       if (!state.selectedWorkspaceId) return []
       const map = state.subagents[state.selectedWorkspaceId] ?? {}
-      return Object.values(map).sort((a, b) => a.startedAt.localeCompare(b.startedAt))
+      return Object.values(map)
+        .filter(isSubagentTask)
+        .sort((a, b) => a.startedAt.localeCompare(b.startedAt))
     },
 
     /**

@@ -74,6 +74,7 @@ import type { ConversationItem } from 'src/services/agent-event-view'
 import { computeInlineDiff, type DiffLine, getFileChangeInfo } from 'src/services/inline-diff'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { compactPath } from 'src/utils/compact-path'
+import { isUnexplainedMemoryError } from 'src/utils/memory-tool-error'
 import { requestDiffOpen } from 'src/utils/pending-diff-open'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -161,6 +162,7 @@ const diffLines = computed<DiffLine[] | null>(() => {
 const outputSummary = computed(() => {
   const result = props.item.result
   if (!result) return ''
+  if (isUnexplainedMemoryError(props.item.name, result)) return t('memory.tool.unexplainedError')
   if (typeof result.output === 'string') return result.output
   try {
     return JSON.stringify(result.output)

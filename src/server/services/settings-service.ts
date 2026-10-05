@@ -1837,7 +1837,8 @@ export function getEffectiveSettings(projectPath: string): EffectiveSettings {
   const project = settings.projects.find((p) => p.path === projectPath) ?? null
 
   if (!project) {
-    const claudeCodeDefault = settings.global.defaultModelByEngine?.['claude-code'] ?? 'auto'
+    const claudeCodeDefault =
+      settings.global.defaultModelByEngine?.['claude-code'] ?? FRESH_MODEL_BY_ENGINE['claude-code']!
     return {
       model: claudeCodeDefault,
       dangerouslySkipPermissions: settings.global.dangerouslySkipPermissions,
@@ -1868,7 +1869,8 @@ export function getEffectiveSettings(projectPath: string): EffectiveSettings {
   // `global.defaultModelByEngine[engineId]` and is read directly by the create
   // flow / settings UI. Fall back through claude-code's entry (the historical
   // semantics) so this field never goes empty.
-  const claudeCodeDefault = settings.global.defaultModelByEngine?.['claude-code'] ?? 'auto'
+  const claudeCodeDefault =
+    settings.global.defaultModelByEngine?.['claude-code'] ?? FRESH_MODEL_BY_ENGINE['claude-code']!
   return {
     model: project.defaultModel || claudeCodeDefault,
     dangerouslySkipPermissions: project.dangerouslySkipPermissions ?? settings.global.dangerouslySkipPermissions,

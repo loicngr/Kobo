@@ -14,6 +14,56 @@ import { createIdleSession, createWorkspace } from '../server/services/workspace
 import { resetDb } from './helpers/reset-db.js'
 
 describe('bounded memory launch context', () => {
+  it('does not spend budget on unchanged resumes, but refreshes guidance after a mode change or compaction', async () => {
+    await resetDb()
+    const workspace = createWorkspace({
+      name: 'Empty memory',
+      projectPath: '/tmp/empty-memory',
+      sourceBranch: 'main',
+      workingBranch: 'test',
+    })
+    const session = createIdleSession(workspace.id)
+    const conversationKey = allocateMemoryConversationKey({ sessionId: session.id, engine: 'claude-code' })
+    const options = {
+      workspaceId: workspace.id,
+      sessionId: session.id,
+      engine: 'claude-code' as const,
+      conversationKey,
+    }
+    const first = buildMemoryContext({ ...options, dispatchId: 'first', resume: false })
+    markMemoryContextSubmitted(first.recordId)
+    markMemoryContextInitialized(first.recordId)
+    for (let i = 0; i < 12; i++) {
+      const resumed = buildMemoryContext({ ...options, dispatchId: `resume-${i}`, resume: true })
+      expect(resumed.prompt).toBe('')
+      expect(resumed.estimatedTokens).toBe(0)
+    }
+    expect(listMemoryContextRecords(workspace.id, session.id)[0].cumulativeEstimatedTokens).toBe(first.estimatedTokens)
+    const scope = resolveMemoryScope({ level: 'workspace', workspaceId: workspace.id })
+    const entry = createMemory({
+      scopeId: scope.id,
+      key: 'new',
+      title: 'New fact',
+      body: 'Durable knowledge',
+      actor: { kind: 'human' },
+    })
+    const changed = buildMemoryContext({ ...options, dispatchId: 'changed', resume: true })
+    expect(changed.prompt).toContain('Durable knowledge')
+    expect(changed.prompt).not.toContain('## Kōbō memory')
+    expect(changed.entryRevisions).toEqual([{ id: entry.id, revision: 1 }])
+    markMemoryContextSubmitted(changed.recordId)
+    markMemoryContextInitialized(changed.recordId)
+    expect(buildMemoryContext({ ...options, dispatchId: 'unchanged-fact', resume: true }).prompt).toBe('')
+    deleteMemory({ scopeId: scope.id, entryId: entry.id, expectedRevision: 1, actor: { kind: 'human' } })
+    expect(buildMemoryContext({ ...options, dispatchId: 'deleted', resume: true }).prompt).toContain('supprimés')
+    expect(buildMemoryContext({ ...options, dispatchId: 'unchanged-deletion', resume: true }).prompt).toBe('')
+    const changedMode = buildMemoryContext({ ...options, dispatchId: 'manual', resume: true, mode: 'manual' })
+    expect(changedMode.prompt).toContain('Mode manual')
+    const { advanceMemoryConversationEpoch } = await import('../server/services/memory-agent-runtime.js')
+    advanceMemoryConversationEpoch(conversationKey)
+    expect(buildMemoryContext({ ...options, dispatchId: 'compacted', resume: true }).prompt).toContain('Kōbō memory')
+  })
+
   afterEach(async () => {
     await resetDb()
   })

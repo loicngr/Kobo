@@ -46,6 +46,8 @@ export default {
   'memory.panel.deleted': 'Supprimée depuis ce contexte',
   'memory.panel.truncated': '(texte tronqué)',
   'memory.engine.codex': 'Codex',
+  'memory.tool.unexplainedError':
+    'L’outil mémoire n’a fourni aucun détail. Si le budget de lecture est épuisé, arrêtez les lectures ; enregistrer reste possible selon les permissions. Une nouvelle conversation ou une compaction confirmée renouvelle le budget de lecture, pas un simple message.',
   'memory.engine.claude-code': 'Claude Code',
   'memory.context.state.failed': 'Échec',
   'memory.context.state.prepared': 'Préparé',

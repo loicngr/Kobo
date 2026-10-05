@@ -93,7 +93,8 @@ export const MEMORY_TOOL_DEFINITIONS: MemoryToolDefinition[] = [
   },
   {
     name: 'remember',
-    description: 'Create or update a concise memory; current mode may deny, apply, or propose the change.',
+    description:
+      'Create or update a concise memory; current mode may deny, apply, or propose the change. Available even when the retrieval budget is exhausted; never echoes the saved body.',
     inputSchema: {
       type: 'object',
       properties: {

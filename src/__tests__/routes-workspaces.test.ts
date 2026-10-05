@@ -651,6 +651,9 @@ describe('POST /api/workspaces', () => {
     const prompt = vi.mocked(agentManager.startAgent).mock.calls[0]?.[2]
     expect(prompt).toContain('Match this screenshot')
     expect(prompt).toContain('Attached document')
+    expect(prompt).toContain('list_memory_scopes')
+    expect(prompt).toContain('remember')
+    expect(prompt).toContain('A new message does not reset the memory budget')
     expect(
       vi.mocked(fs.writeFileSync).mock.invocationCallOrder[
         vi.mocked(fs.writeFileSync).mock.calls.indexOf(documentWrite!)

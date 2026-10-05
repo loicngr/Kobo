@@ -48,6 +48,8 @@ export default {
   'memory.panel.deleted': 'Seit diesem Kontext gelöscht',
   'memory.panel.truncated': '(Text gekürzt)',
   'memory.engine.codex': 'Codex',
+  'memory.tool.unexplainedError':
+    'Das Speicherwerkzeug hat keine Details geliefert. Bei erschöpftem Lesebudget keine weiteren Leseaufrufe senden; Speichern bleibt gemäß den Berechtigungen möglich. Nur eine neue Konversation oder bestätigte Kontextkomprimierung erneuert das Lesebudget, keine neue Nachricht.',
   'memory.engine.claude-code': 'Claude Code',
   'memory.context.state.failed': 'Fehlgeschlagen',
   'memory.context.state.prepared': 'Vorbereitet',

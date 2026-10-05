@@ -690,6 +690,23 @@ describe('claude-code engine — result drain watchdog', () => {
   })
 
   describe('stopSubagents()', () => {
+    it('does not stop background shell or MCP tasks through the sub-agent action', async () => {
+      vi.useFakeTimers()
+      try {
+        const process = await startWith([
+          task('task_started', { task_id: 'agent', tool_use_id: 'agent-tool' }, { task_type: 'local_agent' }),
+          task('task_started', { task_id: 'shell', tool_use_id: 'shell-tool' }, { task_type: 'local_bash' }),
+          task('task_started', { task_id: 'mcp', tool_use_id: 'mcp-tool' }, { task_type: 'mcp_task' }),
+        ])
+        expect(process.stopSubagents?.(['shell-tool', 'mcp'])).toBe(0)
+        expect(process.stopSubagents?.()).toBe(1)
+        expect(stopTaskMock.mock.calls).toEqual([['agent']])
+        expect(abortSignal?.aborted).toBe(false)
+      } finally {
+        await cleanup()
+      }
+    })
+
     const cleanup = async (): Promise<void> => {
       completeSubagent?.()
       await vi.advanceTimersByTimeAsync(0)

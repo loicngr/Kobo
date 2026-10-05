@@ -48,6 +48,8 @@ export default {
   'memory.panel.deleted': 'Eliminada desde este contexto',
   'memory.panel.truncated': '(texto truncado)',
   'memory.engine.codex': 'Codex',
+  'memory.tool.unexplainedError':
+    'La herramienta de memoria no devolvió detalles. Si el presupuesto de lectura se agotó, deja de leer; guardar sigue disponible según los permisos. Una nueva conversación o una compactación confirmada renueva el presupuesto de lectura, no un nuevo mensaje.',
   'memory.engine.claude-code': 'Claude Code',
   'memory.context.state.failed': 'Fallido',
   'memory.context.state.prepared': 'Preparado',

@@ -93,8 +93,8 @@ export const DEFAULT_MODEL_BY_ENGINE: Readonly<Record<string, string>> = {
   codex: 'gpt-5.6-terra',
 }
 
-/** Fresh installs defer model selection to the authenticated engine. Historical migrations retain DEFAULT_MODEL_BY_ENGINE. */
+/** Fresh installs use Sonnet 5.5 for Claude; Codex defers to its engine. Historical migrations retain DEFAULT_MODEL_BY_ENGINE. */
 export const FRESH_MODEL_BY_ENGINE: Readonly<Record<string, string>> = {
-  'claude-code': 'auto',
+  'claude-code': 'claude-sonnet-5-5',
   codex: 'auto',
 }
