@@ -1273,8 +1273,12 @@ The model selector is populated from [`src/shared/models.ts`](./src/shared/model
 #### Session watchdogs
 
 Kōbō distinguishes a finished response from a fully closed SDK session. Once a
-response is settled, it allows 3 seconds for continuation, then 15 seconds for
-SDK cleanup. Metadata alone cannot extend this cleanup deadline.
+response is settled, it allows 3 seconds for continuation, then explicitly closes
+the SDK query. Normal cleanup is reported as completion, not a watchdog failure.
+A 15-second drain watchdog remains if that close fails to end the iterator.
+Metadata alone cannot extend this cleanup deadline. Writer ownership waits for
+both iterator completion and confirmed runtime exit, even if the SDK's own
+bounded cleanup returns earlier.
 
 Silence limits are 2 minutes without a pending tool, 10 minutes for background
 agents, and 30 minutes for tools (including background Bash, workflow and MCP

@@ -96,10 +96,35 @@ async function result(ids: string[]) {
 
 it('keeps the drain deadline after trailing metadata', async () => {
   await result([await start()])
+  close.mockImplementation(() => {}) // A genuinely stuck transport, not normal SDK idle waiting.
   await vi.advanceTimersByTimeAsync(RESULT_CONTINUATION_GRACE_MS)
   await emit({ type: 'system', subtype: 'stop_hook_summary' })
   await vi.advanceTimersByTimeAsync(RESULT_DRAIN_TIMEOUT_MS)
   expect(events).toContainEqual(expect.objectContaining({ kind: 'error', code: 'result_drain_timeout' }))
+})
+
+it('closes a settled SDK query proactively and reports completion only after it closes', async () => {
+  await result([await start()])
+  close.mockImplementation(() => {})
+  let closed = false
+  void process.closed?.then(() => {
+    closed = true
+  })
+  await vi.advanceTimersByTimeAsync(RESULT_CONTINUATION_GRACE_MS)
+  expect(close).toHaveBeenCalledOnce()
+  expect(events.some((event) => event.kind === 'session:ended')).toBe(false)
+  expect(closed).toBe(false)
+  end()
+  await process.closed
+  expect(events).toContainEqual({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
+  expect(events.some((event) => event.kind === 'error')).toBe(false)
+})
+
+it('does not classify successful SDK cleanup as a watchdog failure', async () => {
+  await result([await start()])
+  await vi.advanceTimersByTimeAsync(RESULT_CONTINUATION_GRACE_MS + RESULT_DRAIN_TIMEOUT_MS)
+  expect(events).toContainEqual({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
+  expect(events.some((event) => event.kind === 'error')).toBe(false)
 })
 
 it('does not let child output cancel the parent completion grace', async () => {

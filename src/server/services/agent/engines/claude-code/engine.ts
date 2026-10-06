@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import {
   type CanUseTool,
@@ -372,6 +373,30 @@ export function createClaudeCodeEngine(): AgentEngine {
         env: options.env,
       })
       sdkOptions.abortController = abortController
+      // SDK cleanup has its own bounded wait. Iterator completion alone does
+      // not prove that its runtime exited: retain writer ownership until both.
+      let runtimeRunning = false
+      let runtimeClosed: Promise<void> = Promise.resolve()
+      sdkOptions.spawnClaudeCodeProcess = ({ command, args, cwd, env, signal }) => {
+        const child = spawn(command, args, { cwd, env, signal, windowsHide: true, stdio: 'pipe' })
+        runtimeRunning = true
+        runtimeClosed = new Promise<void>((resolve) => {
+          const exited = () => {
+            runtimeRunning = false
+            resolve()
+          }
+          child.once('exit', exited)
+          child.once('error', () => {
+            // A failed spawn has no process; an abort/kill error does not
+            // establish that an already spawned runtime has actually exited.
+            if (child.pid === undefined) exited()
+          })
+        })
+        child.stderr.setEncoding('utf8')
+        child.stderr.on('data', (data: string) => sdkOptions.stderr?.(data))
+        child.stderr.on('error', () => {})
+        return child
+      }
 
       // Override the SDK's libc-blind binary resolution on Linux glibc — see
       // resolve-binary.ts for the full rationale. No-op on macOS/Windows/musl.
@@ -438,6 +463,9 @@ export function createClaudeCodeEngine(): AgentEngine {
 
       let iteratorRunning = false
       let userInterrupted = false
+      // Normal post-result disposal is distinct from a watchdog/user abort.
+      // The SDK can wait for an `idle` state even after stdin's iterable ends.
+      let settledCloseRequested = false
       let completedResponses = 0
       let waitingForBackground = false
       let turnCompletedEmittedForResponse = 0
@@ -599,6 +627,8 @@ export function createClaudeCodeEngine(): AgentEngine {
         continuationGraceTimer = setTimeout(() => {
           continuationGraceTimer = undefined
           if (
+            completedResponses === 0 ||
+            !settlementPending ||
             activeSubagentTaskIds.size > 0 ||
             pendingResolvers.size > 0 ||
             pendingToolCallIds.size > 0 ||
@@ -611,6 +641,19 @@ export function createClaudeCodeEngine(): AgentEngine {
           emitTurnCompletedIfSettled()
           inputStream.close()
           armResultDrainWatchdog()
+          // Closing the input iterable alone leaves the SDK in waitForRunEnd
+          // when its last session state is still running. Dispose explicitly,
+          // but let the iterator confirm actual closure before session:ended.
+          // The drain watchdog now guards a FAILED close, not normal cleanup.
+          if (!settledCloseRequested && typeof q.close === 'function') {
+            settledCloseRequested = true
+            try {
+              q.close()
+            } catch (error) {
+              settledCloseRequested = false
+              console.warn('[claude-engine] Post-result SDK close failed:', error)
+            }
+          }
         }, delayMs)
         continuationGraceTimer.unref?.()
       }
@@ -809,7 +852,10 @@ export function createClaudeCodeEngine(): AgentEngine {
             abortController.signal.aborted ||
             /aborted by user|process aborted|abortError|ede_diagnostic/i.test(error.message ?? '')
           if (isAbort) {
-            emitSessionEnded('killed', null)
+            if (settledCloseRequested && !userInterrupted && !abortController.signal.aborted) {
+              const reason = mapperState.sawErrorResult ? 'error' : 'completed'
+              emitSessionEnded(reason, reason === 'completed' ? 0 : null)
+            } else emitSessionEnded('killed', null)
           } else {
             safeEmit({
               kind: 'error',
@@ -847,7 +893,7 @@ export function createClaudeCodeEngine(): AgentEngine {
 
       const engineProcess: EngineProcess = {
         ready,
-        closed: iteratorPromise.then(() => {}),
+        closed: iteratorPromise.then(() => runtimeClosed),
         get pid() {
           return undefined
         },
@@ -855,10 +901,10 @@ export function createClaudeCodeEngine(): AgentEngine {
           return discoveredSessionId
         },
         isAlive(): boolean {
-          return iteratorRunning
+          return iteratorRunning || runtimeRunning
         },
         sendMessage(text: string) {
-          if (!iteratorRunning || queryCloseRequested || sessionEndedEmitted)
+          if (!iteratorRunning || queryCloseRequested || settledCloseRequested || sessionEndedEmitted)
             throw new Error(`Claude ${AGENT_NO_LONGER_RUNNING_TEXT}`)
           inputStream.send(text)
           armSubagentStallWatchdog()

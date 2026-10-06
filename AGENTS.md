@@ -269,6 +269,14 @@ Two engines live under `src/server/services/agent/engines/`, both implementing t
 
 **Claude Code** (`claude-code/`): consumes the `@anthropic-ai/claude-agent-sdk` async iterator. The SDK manages the Claude runtime; Kōbō does not launch a separate `claude` CLI command. Authentication reuses the user's Claude login or `ANTHROPIC_API_KEY`. A settled result gets a **3 s continuation grace**, then a **15 s result-drain watchdog**. Trailing metadata and child output must not cancel the parent's drain/grace. Silence is bounded at **2 minutes** without tools, **30 minutes** for foreground tools and background shell/workflow/MCP jobs, and **10 minutes** for agents. Compaction has an absolute **10-minute** ceiling; repeated status messages cannot extend it. Human questions/permissions pause inactivity; resolution AND SDK cancellation re-evaluate that pause. Watchdogs request abort plus SDK `query.close()`; neither is proof of closure: controller ownership is released only when `EngineProcess.closed` confirms it. Never fake closure or allow a second writer if the SDK ignores termination. End emission is idempotent and timers are cleared on termination and in `finally`.
 
+After the continuation grace, Claude explicitly calls `query.close()`; closing
+the input iterator alone can leave the SDK waiting for an idle notification after
+a successful result. The 15-second drain watchdog is a failed-close backstop,
+not normal cleanup. The SDK still constructs its runtime command; Kōbō's
+`spawnClaudeCodeProcess` hook tracks actual child exit and forwards stderr.
+`EngineProcess.closed` waits for both that exit and iterator completion because
+the SDK's internal cleanup wait is bounded and can return before child exit.
+
 **OpenAI Codex** (`codex/`): uses the **`codex app-server` JSON-RPC protocol** (line-delimited JSON over stdio with a long-lived `codex` subprocess). The engine layers are:
 - `jsonrpc/transport.ts` + `jsonrpc/peer.ts`: generic JSON-RPC 2.0 stdio peer (request correlation, notifications, server-initiated requests)
 - `client.ts`: typed `AppServerClient` wrapping the peer (initialize / thread.start / thread.resume / turn.start / turn.interrupt)
