@@ -276,6 +276,10 @@ not normal cleanup. The SDK still constructs its runtime command; Kōbō's
 `spawnClaudeCodeProcess` hook tracks actual child exit and forwards stderr.
 `EngineProcess.closed` waits for both that exit and iterator completion because
 the SDK's internal cleanup wait is bounded and can return before child exit.
+Liveness must also inspect non-empty SDK content deltas (text, thinking,
+input JSON, signature), not just mapped UI events: long reasoning/tool argument
+generation can otherwise be killed as idle. Do not count empty deltas or neutral
+metadata, or let child deltas cancel a settled parent's drain/grace.
 
 **OpenAI Codex** (`codex/`): uses the **`codex app-server` JSON-RPC protocol** (line-delimited JSON over stdio with a long-lived `codex` subprocess). The engine layers are:
 - `jsonrpc/transport.ts` + `jsonrpc/peer.ts`: generic JSON-RPC 2.0 stdio peer (request correlation, notifications, server-initiated requests)

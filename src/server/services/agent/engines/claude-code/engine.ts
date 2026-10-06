@@ -180,6 +180,24 @@ class ClaudeInputStream implements AsyncIterable<SDKUserMessage> {
   }
 }
 
+/** Generation can be active without any user-visible mapped event. */
+function hasStreamingContent(msg: SDKMessage): boolean {
+  if (msg.type !== 'stream_event' || msg.event.type !== 'content_block_delta') return false
+  const delta = msg.event.delta
+  switch (delta.type) {
+    case 'text_delta':
+      return delta.text.length > 0
+    case 'thinking_delta':
+      return delta.thinking.length > 0
+    case 'input_json_delta':
+      return delta.partial_json.length > 0
+    case 'signature_delta':
+      return delta.signature.length > 0
+    default:
+      return false
+  }
+}
+
 export function createClaudeCodeEngine(): AgentEngine {
   return {
     id: 'claude-code',
@@ -704,15 +722,17 @@ export function createClaudeCodeEngine(): AgentEngine {
           for await (const msg of q as AsyncIterable<SDKMessage>) {
             const events = mapSdkMessage(msg, mapperState)
             const isForeground = !('parent_tool_use_id' in msg && msg.parent_tool_use_id != null)
+            const streamingContent = hasStreamingContent(msg)
             const foregroundProgress =
               isForeground &&
-              events.some(
-                (ev) =>
-                  ev.kind === 'message:text' ||
-                  ev.kind === 'message:thinking' ||
-                  ev.kind === 'tool:call' ||
-                  ev.kind === 'tool:result',
-              )
+              (streamingContent ||
+                events.some(
+                  (ev) =>
+                    ev.kind === 'message:text' ||
+                    ev.kind === 'message:thinking' ||
+                    ev.kind === 'tool:call' ||
+                    ev.kind === 'tool:result',
+                ))
             // A parent continuation owns the foreground again. Background
             // progress notifications alone do not end the between-turn wait.
             if (foregroundProgress) {

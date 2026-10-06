@@ -94,6 +94,32 @@ async function result(ids: string[]) {
   await emit({ type: 'result', subtype: 'success', user_message_uuids: ids, user_message_uuid: ids[0] })
 }
 
+it.each([
+  { type: 'thinking_delta', thinking: 'reasoning' },
+  { type: 'input_json_delta', partial_json: 'partial file content' },
+  { type: 'signature_delta', signature: 'signature fragment' },
+])('counts non-visible $type generation as activity, then still bounds silence', async (delta) => {
+  await start()
+  for (let i = 0; i < 4; i++) {
+    await vi.advanceTimersByTimeAsync(CLAUDE_STREAM_IDLE_TIMEOUT_MS - 1000)
+    await emit({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta } })
+    expect(events.some((event) => event.kind === 'session:ended')).toBe(false)
+  }
+  await vi.advanceTimersByTimeAsync(CLAUDE_STREAM_IDLE_TIMEOUT_MS)
+  expect(events).toContainEqual(expect.objectContaining({ kind: 'error', code: 'stream_idle_timeout' }))
+})
+
+it.each([{ type: 'thinking_delta', thinking: '' }, { type: 'input_json_delta', partial_json: '' }, { type: 'ping' }])(
+  'does not treat empty or neutral $type deltas as activity',
+  async (delta) => {
+    await start()
+    await vi.advanceTimersByTimeAsync(CLAUDE_STREAM_IDLE_TIMEOUT_MS - 1000)
+    await emit({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta } })
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(events).toContainEqual(expect.objectContaining({ kind: 'error', code: 'stream_idle_timeout' }))
+  },
+)
+
 it('keeps the drain deadline after trailing metadata', async () => {
   await result([await start()])
   close.mockImplementation(() => {}) // A genuinely stuck transport, not normal SDK idle waiting.
@@ -101,6 +127,33 @@ it('keeps the drain deadline after trailing metadata', async () => {
   await emit({ type: 'system', subtype: 'stop_hook_summary' })
   await vi.advanceTimersByTimeAsync(RESULT_DRAIN_TIMEOUT_MS)
   expect(events).toContainEqual(expect.objectContaining({ kind: 'error', code: 'result_drain_timeout' }))
+})
+
+it('does not close a parent still generating tool arguments after an intermediate result', async () => {
+  await result([await start()])
+  await emit({
+    type: 'stream_event',
+    event: {
+      type: 'content_block_delta',
+      index: 0,
+      delta: { type: 'input_json_delta', partial_json: '{"content":"plan' },
+    },
+  })
+  await vi.advanceTimersByTimeAsync(RESULT_CONTINUATION_GRACE_MS + RESULT_DRAIN_TIMEOUT_MS)
+  expect(close).not.toHaveBeenCalled()
+  expect(events.some((event) => event.kind === 'session:ended')).toBe(false)
+})
+
+it('does not let child deltas cancel the settled parent grace', async () => {
+  await result([await start()])
+  await emit({
+    type: 'stream_event',
+    parent_tool_use_id: 'old-child',
+    event: { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'child thinking' } },
+  })
+  await vi.advanceTimersByTimeAsync(RESULT_CONTINUATION_GRACE_MS)
+  expect(close).toHaveBeenCalledOnce()
+  expect(events).toContainEqual({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
 })
 
 it('closes a settled SDK query proactively and reports completion only after it closes', async () => {

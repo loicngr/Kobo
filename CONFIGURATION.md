@@ -1285,6 +1285,12 @@ agents, and 30 minutes for tools (including background Bash, workflow and MCP
 jobs). A compaction has a separate absolute 10-minute limit. Waiting for your
 answer or permission pauses the inactivity watchdog.
 
+Non-empty streaming text, reasoning, tool-argument JSON and signature fragments
+count as activity even when they are not displayed in chat. Empty deltas and
+neutral metadata do not reset inactivity, and child output cannot postpone a
+settled parent's closure. The inactivity limit measures silence, not total time
+spent generating a large plan or file.
+
 Watchdog notices remain in conversation history, but do not display a red error
 banner. Other failures retain their banners. Watchdog shutdown requests both
 cancellation and closure of the SDK transport. Kōbō still requires confirmed
