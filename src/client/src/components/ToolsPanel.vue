@@ -298,14 +298,14 @@ function runSetupScript() {
           type: 'negative',
           message: data.error ?? t('tools.setupScriptFailed'),
           position: 'top',
-          timeout: 6000,
+          timeout: 0,
         })
       } else {
         $q.notify({ type: 'positive', message: t('tools.setupScriptSuccess'), position: 'top', timeout: 3000 })
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : t('tools.setupScriptFailed')
-      $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+      $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 0 })
     } finally {
       running.value = false
     }
@@ -319,11 +319,11 @@ async function openEditor() {
     const res = await apiFetchResponseForStatus(`/api/workspaces/${workspaceId.value}/open-editor`, { method: 'POST' })
     if (!res.ok) {
       const data = await res.json()
-      $q.notify({ type: 'negative', message: data.error ?? t('git.openEditorFailed'), position: 'top', timeout: 6000 })
+      $q.notify({ type: 'negative', message: data.error ?? t('git.openEditorFailed'), position: 'top', timeout: 0 })
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : t('git.openEditorFailed')
-    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 0 })
   } finally {
     openingEditor.value = false
   }
@@ -342,12 +342,12 @@ async function openTerminal() {
         type: 'negative',
         message: data.error ?? t('tools.openTerminalFailed'),
         position: 'top',
-        timeout: 6000,
+        timeout: 0,
       })
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : t('tools.openTerminalFailed')
-    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 0 })
   } finally {
     openingTerminal.value = false
   }
@@ -366,12 +366,12 @@ async function openFileManager() {
         type: 'negative',
         message: data.error ?? t('tools.openFileManagerFailed'),
         position: 'top',
-        timeout: 6000,
+        timeout: 0,
       })
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : t('tools.openFileManagerFailed')
-    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 0 })
   } finally {
     openingFileManager.value = false
   }
@@ -392,14 +392,14 @@ async function startCiFix() {
         type: 'negative',
         message: data.error ?? t('tools.fixCiFailed'),
         position: 'top',
-        timeout: 6000,
+        timeout: 0,
       })
       return
     }
     $q.notify({ type: 'positive', message: t('tools.fixCiLaunched'), position: 'top', timeout: 3000 })
   } catch (err) {
     const msg = err instanceof Error ? err.message : t('tools.fixCiFailed')
-    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 0 })
   } finally {
     fixingCi.value = false
   }
@@ -420,7 +420,7 @@ async function startReview(payload: StartReviewRequest) {
         type: 'negative',
         message: data.error ?? t('review.failed'),
         position: 'top',
-        timeout: 6000,
+        timeout: 0,
       })
       return
     }
@@ -428,7 +428,7 @@ async function startReview(payload: StartReviewRequest) {
     reviewDialogOpen.value = false
   } catch (err) {
     const msg = err instanceof Error ? err.message : t('review.failed')
-    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 0 })
   } finally {
     startingReview.value = false
   }

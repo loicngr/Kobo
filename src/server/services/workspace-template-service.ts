@@ -3,6 +3,7 @@ import { nanoid } from 'nanoid'
 import { getDb } from '../db/index.js'
 import { writeJsonFileAtomically } from '../utils/atomic-json-file.js'
 import { getWorkspaceTemplatesPath } from '../utils/paths.js'
+import { getGlobalSettings } from './settings-service.js'
 import type { AgentPermissionMode } from './workspace-service.js'
 
 /**
@@ -30,6 +31,7 @@ export interface WorkspacePreset {
   description?: string
   tasks?: string[]
   acceptanceCriteria?: string[]
+  tags?: string[]
 }
 
 export interface WorkspaceTemplate {
@@ -83,6 +85,16 @@ export function sanitizePreset(input: unknown): WorkspacePreset {
   }
   for (const key of LIST_KEYS) {
     if (Array.isArray(raw[key])) preset[key] = raw[key].filter((v): v is string => typeof v === 'string')
+  }
+  if (Array.isArray(raw.tags)) {
+    preset.tags = [
+      ...new Set(
+        raw.tags
+          .filter((tag): tag is string => typeof tag === 'string')
+          .map((tag) => tag.trim())
+          .filter((tag) => tag.length > 0 && tag.length <= 50),
+      ),
+    ]
   }
   if (
     typeof raw.agentPermissionMode === 'string' &&
@@ -151,7 +163,31 @@ function writeFile(templates: WorkspaceTemplate[]): void {
 }
 
 export function listWorkspaceTemplates(): WorkspaceTemplate[] {
-  return readFile()
+  return readFile().map((template) => ({ ...template, preset: sanitizeTemplatePreset(template.preset) }))
+}
+
+/** Guard writes from stale clients as well as reads of hand-edited/older files. */
+function sanitizeTemplatePreset(input: unknown): WorkspacePreset {
+  const preset = sanitizePreset(input)
+  if (preset.tags !== undefined) {
+    const allowed = new Set(getGlobalSettings().tags)
+    preset.tags = preset.tags.filter((tag) => allowed.has(tag))
+  }
+  return preset
+}
+
+/** Called before persisting a changed catalogue; a corrupt file aborts deletion. */
+export function pruneWorkspaceTemplateTags(allowedTags: readonly string[]): void {
+  const allowed = new Set(allowedTags)
+  let changed = false
+  const templates = readFile().map((template) => {
+    if (template.preset.tags === undefined) return template
+    const tags = template.preset.tags.filter((tag) => allowed.has(tag))
+    if (tags.length === template.preset.tags.length) return template
+    changed = true
+    return { ...template, preset: { ...template.preset, tags }, updatedAt: new Date().toISOString() }
+  })
+  if (changed) writeFile(templates)
 }
 
 /** Throws `Invalid template name`, `already exists` or `Too many templates`. */
@@ -171,7 +207,7 @@ export function createWorkspaceTemplate(input: { name: string; preset: unknown }
     name,
     createdAt: now,
     updatedAt: now,
-    preset: sanitizePreset(input.preset),
+    preset: sanitizeTemplatePreset(input.preset),
   }
   writeFile([...templates, template])
   return template
@@ -197,7 +233,7 @@ export function updateWorkspaceTemplate(
   const updated: WorkspaceTemplate = {
     ...current,
     name,
-    preset: updates.preset !== undefined ? sanitizePreset(updates.preset) : current.preset,
+    preset: sanitizeTemplatePreset(updates.preset !== undefined ? updates.preset : current.preset),
     updatedAt: new Date().toISOString(),
   }
   templates[index] = updated

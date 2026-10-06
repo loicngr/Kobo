@@ -158,8 +158,6 @@ export interface RetryableErrorOptions {
   /** Required for the same reason `retryLabel` is: an internal English default
    *  would be a user-visible string no locale file can reach. */
   dismissLabel: string
-  /** Milliseconds. Defaults to 0 (stays until dismissed). */
-  timeout?: number
 }
 
 /**
@@ -186,7 +184,7 @@ export function notifyRetryableError(message: string, options: RetryableErrorOpt
     position: 'top',
     multiLine: true,
     message,
-    timeout: options.timeout ?? 0,
+    timeout: 0,
     actions,
   })
 }

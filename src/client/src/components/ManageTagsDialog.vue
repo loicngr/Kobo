@@ -84,7 +84,7 @@ async function save() {
     await workspaceStore.setWorkspaceTags(props.workspace.id, selected.value)
     emit('update:modelValue', false)
   } catch (err) {
-    $q.notify({ type: 'negative', message: String(err), position: 'top', timeout: 4000 })
+    $q.notify({ type: 'negative', message: String(err), position: 'top', timeout: 0 })
   } finally {
     saving.value = false
   }

@@ -187,12 +187,43 @@ export async function initializeMcp(mcpProcess: ChildProcess): Promise<void> {
 
 /** Send a JSON-RPC tools/call request and return the raw result (30s timeout). */
 export async function callMcpTool(mcpProcess: ChildProcess, toolName: string, args: object): Promise<unknown> {
+  return requestMcp(mcpProcess, 'tools/call', { name: toolName, arguments: args }, `callMcpTool('${toolName}')`)
+}
+
+/** Discover direct tools, including paginated servers, without executing them. */
+export async function listMcpToolNames(mcpProcess: ChildProcess): Promise<string[]> {
+  const names: string[] = []
+  const cursors = new Set<string>()
+  let cursor: string | undefined
+  for (let page = 0; page < 100; page++) {
+    const raw = await requestMcp(mcpProcess, 'tools/list', cursor ? { cursor } : {}, 'listMcpToolNames')
+    if (!raw || typeof raw !== 'object' || !('tools' in raw) || !Array.isArray(raw.tools)) {
+      throw new Error('Invalid MCP tool catalogue')
+    }
+    for (const tool of raw.tools) {
+      if (!tool || typeof tool !== 'object' || typeof tool.name !== 'string') {
+        throw new Error('Invalid MCP tool catalogue')
+      }
+      names.push(tool.name)
+    }
+    const next = 'nextCursor' in raw ? raw.nextCursor : undefined
+    if (next === undefined) return names
+    if (typeof next !== 'string' || !next || cursors.has(next)) {
+      throw new Error('Invalid MCP tool catalogue pagination')
+    }
+    cursors.add(next)
+    cursor = next
+  }
+  throw new Error('MCP tool catalogue pagination limit exceeded')
+}
+
+async function requestMcp(mcpProcess: ChildProcess, method: string, params: object, label: string): Promise<unknown> {
   const id = nextRpcId()
   const request = JSON.stringify({
     jsonrpc: '2.0',
     id,
-    method: 'tools/call',
-    params: { name: toolName, arguments: args },
+    method,
+    params,
   })
 
   return new Promise((resolve, reject) => {
@@ -207,7 +238,7 @@ export async function callMcpTool(mcpProcess: ChildProcess, toolName: string, ar
       mcpProcess.stdout?.removeListener('data', onData)
       mcpProcess.stdout?.removeListener('error', onError)
       stopMcpProcess(mcpProcess)
-      reject(new Error(`callMcpTool('${toolName}') timed out after 30s`))
+      reject(new Error(`${label} timed out after 30s`))
     }, 30_000)
 
     const onData = (chunk: Buffer | string) => {

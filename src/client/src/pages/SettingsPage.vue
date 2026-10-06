@@ -4312,7 +4312,7 @@ async function exportConfig() {
     URL.revokeObjectURL(url)
     $q.notify({ type: 'positive', message: t('settings.exportSuccess'), position: 'top', timeout: 3000 })
   } catch (err) {
-    $q.notify({ type: 'negative', message: String(err), position: 'top', timeout: 4000 })
+    $q.notify({ type: 'negative', message: String(err), position: 'top', timeout: 0 })
   }
 }
 
@@ -4348,7 +4348,7 @@ async function onImportFile(event: Event) {
         syncGlobalForm()
         $q.notify({ type: 'positive', message: t('settings.importSuccess'), position: 'top', timeout: 3000 })
       } catch (err) {
-        $q.notify({ type: 'negative', message: String(err), position: 'top', timeout: 5000 })
+        $q.notify({ type: 'negative', message: String(err), position: 'top', timeout: 0 })
       }
     })
   } finally {

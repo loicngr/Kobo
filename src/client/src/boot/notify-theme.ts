@@ -1,4 +1,5 @@
 import { Notify } from 'quasar'
+import { ERROR_NOTIFICATION_DEFAULTS } from 'src/utils/notification-timeout'
 import { defineBoot } from '#q-app'
 
 /**
@@ -14,6 +15,7 @@ import { defineBoot } from '#q-app'
  */
 export default defineBoot(() => {
   Notify.registerType('negative', {
+    ...ERROR_NOTIFICATION_DEFAULTS,
     color: 'kobo-danger',
     textColor: 'kobo-ink',
     icon: 'error',

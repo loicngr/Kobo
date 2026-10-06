@@ -24,6 +24,9 @@ import * as agent from '../server/services/agent/orchestrator.js'
 import { deliverWorkspaceMessage } from '../server/services/workspace-message-service.js'
 
 let directory: string
+// These integration tests cold-start Node + tsx + the MCP server. Give both
+// subprocess tests the same bounded allowance under the full CI worker load.
+const STDIO_TEST_TIMEOUT_MS = 15_000
 const app = new Hono().route('/api/mcp', mcp)
 app.post('/api/workspaces/:id/stop', (c) => c.json({ token: c.req.header('X-Kobo-Token') ?? null }))
 beforeEach(() => {
@@ -69,48 +72,52 @@ it('supports initialization, discovery and tool calls through the SDK HTTP clien
   }
 })
 
-it('exposes the dialogue tools through the existing global stdio server', async () => {
-  const listener = serve({ fetch: app.fetch, hostname: '127.0.0.1', port: 0 })
-  if (!listener.listening) await new Promise<void>((resolve) => listener.once('listening', resolve))
-  const address = listener.address()
-  if (!address || typeof address === 'string') throw new Error('Missing test listener address')
-  const client = new Client({ name: 'Agent 工房 🤖', version: '1' })
-  try {
-    await client.connect(
-      new StdioClientTransport({
-        command: process.execPath,
-        args: ['--import', 'tsx', 'src/mcp-server/kobo-tasks-server.ts'],
-        env: {
-          PATH: process.env.PATH ?? '',
-          KOBO_HOME: directory,
-          KOBO_WORKSPACE_ID: '',
-          KOBO_DB_PATH: getDb().name,
-          KOBO_BACKEND_URL: `http://127.0.0.1:${address.port}`,
-          KOBO_NETWORK_TOKEN: 'test-token',
-        },
-        stderr: 'pipe',
-      }),
-    )
-    expect((await client.listTools()).tools.map((tool) => tool.name)).toContain('read_workspace_messages')
-    const result = await client.callTool({ name: 'get_workspace', arguments: { workspace_id: 'b' } })
-    expect(result.isError).not.toBe(true)
-    expect(JSON.parse((result.content as { text: string }[])[0].text)).toMatchObject({ workspace: { id: 'b' } })
-    const sent = await client.callTool({
-      name: 'send_workspace_message',
-      arguments: { workspace_id: 'b', content: 'hello' },
-    })
-    expect(sent.isError).not.toBe(true)
-    expect(deliverWorkspaceMessage).toHaveBeenCalledWith(
-      'b',
-      expect.objectContaining({ source: { kind: 'mcp', clientName: 'Agent 工房 🤖', transport: 'stdio' } }),
-    )
-    const stopped = await client.callTool({ name: 'stop_workspace', arguments: { workspace_id: 'b' } })
-    expect(JSON.parse((stopped.content as { text: string }[])[0].text)).toMatchObject({ token: 'test-token' })
-  } finally {
-    await client.close()
-    await new Promise<void>((resolve, reject) => listener.close((error) => (error ? reject(error) : resolve())))
-  }
-}, 15_000)
+it(
+  'exposes the dialogue tools through the existing global stdio server',
+  async () => {
+    const listener = serve({ fetch: app.fetch, hostname: '127.0.0.1', port: 0 })
+    if (!listener.listening) await new Promise<void>((resolve) => listener.once('listening', resolve))
+    const address = listener.address()
+    if (!address || typeof address === 'string') throw new Error('Missing test listener address')
+    const client = new Client({ name: 'Agent 工房 🤖', version: '1' })
+    try {
+      await client.connect(
+        new StdioClientTransport({
+          command: process.execPath,
+          args: ['--import', 'tsx', 'src/mcp-server/kobo-tasks-server.ts'],
+          env: {
+            PATH: process.env.PATH ?? '',
+            KOBO_HOME: directory,
+            KOBO_WORKSPACE_ID: '',
+            KOBO_DB_PATH: getDb().name,
+            KOBO_BACKEND_URL: `http://127.0.0.1:${address.port}`,
+            KOBO_NETWORK_TOKEN: 'test-token',
+          },
+          stderr: 'pipe',
+        }),
+      )
+      expect((await client.listTools()).tools.map((tool) => tool.name)).toContain('read_workspace_messages')
+      const result = await client.callTool({ name: 'get_workspace', arguments: { workspace_id: 'b' } })
+      expect(result.isError).not.toBe(true)
+      expect(JSON.parse((result.content as { text: string }[])[0].text)).toMatchObject({ workspace: { id: 'b' } })
+      const sent = await client.callTool({
+        name: 'send_workspace_message',
+        arguments: { workspace_id: 'b', content: 'hello' },
+      })
+      expect(sent.isError).not.toBe(true)
+      expect(deliverWorkspaceMessage).toHaveBeenCalledWith(
+        'b',
+        expect.objectContaining({ source: { kind: 'mcp', clientName: 'Agent 工房 🤖', transport: 'stdio' } }),
+      )
+      const stopped = await client.callTool({ name: 'stop_workspace', arguments: { workspace_id: 'b' } })
+      expect(JSON.parse((stopped.content as { text: string }[])[0].text)).toMatchObject({ token: 'test-token' })
+    } finally {
+      await client.close()
+      await new Promise<void>((resolve, reject) => listener.close((error) => (error ? reject(error) : resolve())))
+    }
+  },
+  STDIO_TEST_TIMEOUT_MS,
+)
 
 it('rejects oversized MCP requests before tool dispatch', async () => {
   const response = await app.request('/api/mcp', {
@@ -242,50 +249,54 @@ it('reads streamed and legacy replies, filters sessions and advances past non-me
   ).toMatchObject({ messages: [{ text: 'new reply' }], nextCursor: 'new' })
 })
 
-it('limits a handoff-generation MCP to reading and submitting its backend-bound report', async () => {
-  let posted: unknown
-  const handoffApp = new Hono()
-  handoffApp.post('/api/workspaces/:id/session-handoffs/:handoffId/report', async (c) => {
-    posted = { workspace: c.req.param('id'), handoff: c.req.param('handoffId'), body: await c.req.json() }
-    return c.json({ accepted: true })
-  })
-  const listener = serve({ fetch: handoffApp.fetch, hostname: '127.0.0.1', port: 0 })
-  if (!listener.listening) await new Promise<void>((resolve) => listener.once('listening', resolve))
-  const address = listener.address()
-  if (!address || typeof address === 'string') throw new Error('Missing listener')
-  const client = new Client({ name: 'handoff-test', version: '1' })
-  try {
-    await client.connect(
-      new StdioClientTransport({
-        command: process.execPath,
-        args: ['--import', 'tsx', 'src/mcp-server/kobo-tasks-server.ts'],
-        env: {
-          PATH: process.env.PATH ?? '',
-          KOBO_DB_PATH: join(directory, 'test.db'),
-          KOBO_WORKSPACE_ID: 'a',
-          KOBO_BACKEND_URL: `http://127.0.0.1:${address.port}`,
-          KOBO_HANDOFF_ID: 'transfer-1',
-          KOBO_HANDOFF_TOKEN: 'bound-token',
-        },
-      }),
-    )
-    const { tools } = await client.listTools()
-    expect(tools.map((tool) => tool.name)).toContain('submit_session_handoff')
-    expect(tools.map((tool) => tool.name)).not.toContain('mark_task_done')
-    const blocked = await client.callTool({ name: 'create_task', arguments: { title: 'Do not mutate' } })
-    expect(blocked.isError).toBe(true)
-    const result = await client.callTool({
-      name: 'submit_session_handoff',
-      arguments: { report: '# Report', token: 'caller-spoof' },
+it(
+  'limits a handoff-generation MCP to reading and submitting its backend-bound report',
+  async () => {
+    let posted: unknown
+    const handoffApp = new Hono()
+    handoffApp.post('/api/workspaces/:id/session-handoffs/:handoffId/report', async (c) => {
+      posted = { workspace: c.req.param('id'), handoff: c.req.param('handoffId'), body: await c.req.json() }
+      return c.json({ accepted: true })
     })
-    expect(result.isError).not.toBe(true)
-    expect(posted).toEqual({
-      workspace: 'a',
-      handoff: 'transfer-1',
-      body: { token: 'bound-token', report: '# Report' },
-    })
-  } finally {
-    await client.close()
-    await new Promise<void>((resolve, reject) => listener.close((error) => (error ? reject(error) : resolve())))
-  }
-})
+    const listener = serve({ fetch: handoffApp.fetch, hostname: '127.0.0.1', port: 0 })
+    if (!listener.listening) await new Promise<void>((resolve) => listener.once('listening', resolve))
+    const address = listener.address()
+    if (!address || typeof address === 'string') throw new Error('Missing listener')
+    const client = new Client({ name: 'handoff-test', version: '1' })
+    try {
+      await client.connect(
+        new StdioClientTransport({
+          command: process.execPath,
+          args: ['--import', 'tsx', 'src/mcp-server/kobo-tasks-server.ts'],
+          env: {
+            PATH: process.env.PATH ?? '',
+            KOBO_DB_PATH: join(directory, 'test.db'),
+            KOBO_WORKSPACE_ID: 'a',
+            KOBO_BACKEND_URL: `http://127.0.0.1:${address.port}`,
+            KOBO_HANDOFF_ID: 'transfer-1',
+            KOBO_HANDOFF_TOKEN: 'bound-token',
+          },
+        }),
+      )
+      const { tools } = await client.listTools()
+      expect(tools.map((tool) => tool.name)).toContain('submit_session_handoff')
+      expect(tools.map((tool) => tool.name)).not.toContain('mark_task_done')
+      const blocked = await client.callTool({ name: 'create_task', arguments: { title: 'Do not mutate' } })
+      expect(blocked.isError).toBe(true)
+      const result = await client.callTool({
+        name: 'submit_session_handoff',
+        arguments: { report: '# Report', token: 'caller-spoof' },
+      })
+      expect(result.isError).not.toBe(true)
+      expect(posted).toEqual({
+        workspace: 'a',
+        handoff: 'transfer-1',
+        body: { token: 'bound-token', report: '# Report' },
+      })
+    } finally {
+      await client.close()
+      await new Promise<void>((resolve, reject) => listener.close((error) => (error ? reject(error) : resolve())))
+    }
+  },
+  STDIO_TEST_TIMEOUT_MS,
+)

@@ -148,7 +148,7 @@ function notifyStopError(err: unknown): void {
     type: 'negative',
     message: t('subagents.stopFailed', { error: message }),
     position: 'top',
-    timeout: 4000,
+    timeout: 0,
   })
 }
 

@@ -599,7 +599,7 @@ async function handleStart() {
     await store.startWorkspace(store.selectedWorkspaceId)
   } catch (e) {
     const msg = e instanceof Error ? e.message : t('workspacePage.startFailed')
-    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 0 })
   } finally {
     starting.value = false
   }
@@ -617,7 +617,7 @@ async function handleUnarchive() {
     $q.notify({ type: 'positive', message: t('workspacePage.unarchived'), position: 'top', timeout: 3000 })
   } catch (e) {
     const msg = e instanceof Error ? e.message : t('workspacePage.unarchiveFailed')
-    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 0 })
   } finally {
     unarchiving.value = false
   }
@@ -631,7 +631,7 @@ async function handleInterrupt() {
     $q.notify({ type: 'info', message: t('workspacePage.interrupted'), position: 'top', timeout: 3000 })
   } catch (e) {
     const msg = e instanceof Error ? e.message : t('workspacePage.interruptFailed')
-    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 0 })
   } finally {
     interrupting.value = false
   }
@@ -644,7 +644,7 @@ async function handleStop() {
     await store.stopWorkspace(store.selectedWorkspaceId)
   } catch (e) {
     const msg = e instanceof Error ? e.message : t('workspacePage.stopFailed')
-    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 0 })
   } finally {
     stopping.value = false
   }
@@ -863,7 +863,7 @@ async function handleCreateSession() {
       type: 'negative',
       message: serverMsg ?? t('workspacePage.createSessionFailed'),
       position: 'top',
-      timeout: 6000,
+      timeout: 0,
     })
   } finally {
     creatingSession.value = false

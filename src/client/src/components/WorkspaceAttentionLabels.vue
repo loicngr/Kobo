@@ -118,14 +118,14 @@ async function onFixCi() {
         type: 'negative',
         message: data.error ?? t('tools.fixCiFailed'),
         position: 'top',
-        timeout: 6000,
+        timeout: 0,
       })
       return
     }
     $q.notify({ type: 'positive', message: t('tools.fixCiLaunched'), position: 'top', timeout: 3000 })
   } catch (err) {
     const msg = err instanceof Error ? err.message : t('tools.fixCiFailed')
-    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 0 })
   } finally {
     fixingCi.value = false
   }

@@ -783,6 +783,7 @@ import type { BranchCommit, ForgeInfo, GitStats, Workspace } from 'src/stores/wo
 import { type PushResult, useWorkspaceStore, WorkspaceActionError } from 'src/stores/workspace'
 import { copyToClipboard } from 'src/utils/clipboard'
 import { needsScrollableOutput } from 'src/utils/git-output'
+import { pushFailureNotification } from 'src/utils/git-push-error'
 import { DEFAULT_TOAST_TIMEOUT_MS } from 'src/utils/notification-timeout'
 import { notifyRetryableError } from 'src/utils/notifications'
 import { computed, onActivated, onBeforeUnmount, onMounted, ref, watch } from 'vue'
@@ -980,7 +981,7 @@ async function abortSourceChange() {
     loadGitStats()
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'Abort failed'
-    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 0 })
   } finally {
     sourceChangeAborting.value = false
   }
@@ -1329,7 +1330,7 @@ function openRenameBranchDialog() {
           : e instanceof Error
             ? e.message
             : t('git.renameBranchFailed')
-      $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+      $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 0 })
     } finally {
       renamingBranch.value = false
     }
@@ -1480,7 +1481,7 @@ async function commitChangesDirectly() {
       type: 'negative',
       message: err instanceof Error ? err.message : t('git.commitFailed'),
       position: 'top',
-      timeout: 6000,
+      timeout: 0,
     })
   } finally {
     committingDirect.value = false
@@ -1505,7 +1506,7 @@ async function commitWithAgent() {
       type: 'negative',
       message: err instanceof Error ? err.message : t('git.commitFailed'),
       position: 'top',
-      timeout: 6000,
+      timeout: 0,
     })
   } finally {
     committingWithAgent.value = false
@@ -1541,7 +1542,7 @@ async function dirtyCommit() {
     retryDirtyOperation()
   } catch (e) {
     const msg = e instanceof Error ? e.message : t('git.commitFailed')
-    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 0 })
   } finally {
     dirtyBusy.value = false
   }
@@ -1568,7 +1569,7 @@ function dirtyDiscard() {
       retryDirtyOperation()
     } catch (e) {
       const msg = e instanceof Error ? e.message : t('git.discardFailed')
-      $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+      $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 0 })
     } finally {
       dirtyBusy.value = false
     }
@@ -1650,7 +1651,7 @@ async function continueGitOperation() {
     loadGitStats()
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'Continue failed'
-    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 0 })
   } finally {
     conflictContinuing.value = false
   }
@@ -1676,7 +1677,7 @@ async function resolveWithAgent() {
     conflictOperation.value = null
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'Handoff failed'
-    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 0 })
   } finally {
     conflictResolving.value = false
   }
@@ -1710,12 +1711,16 @@ function notifyPushFailure(e: unknown) {
       type: 'warning',
       message: t('git.pushBlockedByOperation', { operation: e.operation ?? conflictOperation.value ?? 'rebase' }),
       position: 'top',
-      timeout: 6000,
+      timeout: 0,
+      closeBtn: t('common.close'),
     })
     return
   }
-  const msg = e instanceof Error ? e.message : 'Push failed'
-  $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+  $q.notify(
+    pushFailureNotification(e, t, handleForcePush, (message) => {
+      $q.dialog({ title: t('common.details'), message, dark: true })
+    }),
+  )
 }
 
 async function runPush(force: boolean) {
@@ -1772,7 +1777,7 @@ async function runPull(opts?: { autostash?: boolean }) {
   } catch (e) {
     console.error('[GitPanel] pull failed:', e)
     const msg = e instanceof Error ? e.message : t('git.pullFailed')
-    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 0 })
   } finally {
     pulling.value = false
   }
@@ -1857,7 +1862,7 @@ function handleChangePrBase() {
         e instanceof Error
           ? e.message
           : t('git.changePrBaseFailed', { request: forge.value.capabilities.requestTermShort })
-      $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+      $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 0 })
     } finally {
       changingBase.value = false
     }
@@ -1896,7 +1901,7 @@ function handleMergeRequest() {
       }
     } catch (e) {
       const message = e instanceof Error ? e.message : t('git.mergeRequestFailed', { request })
-      $q.notify({ type: 'negative', message, position: 'top', timeout: 6000 })
+      $q.notify({ type: 'negative', message, position: 'top', timeout: 0 })
     } finally {
       mergingRequest.value = false
     }
@@ -2001,7 +2006,7 @@ async function handleChangeSourceBranch() {
         ) {
           openSourceChangeErrorDialog(msg, data.ongoingOperation)
         } else {
-          $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+          $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 0 })
         }
         return
       }
@@ -2020,7 +2025,7 @@ async function handleChangeSourceBranch() {
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Failed'
-      $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+      $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 0 })
     } finally {
       dismissLoader()
       changingSource.value = false
@@ -2062,7 +2067,7 @@ async function handleOpenPr() {
       return
     }
     const msg = e instanceof Error ? e.message : 'Open PR failed'
-    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 0 })
   } finally {
     openingPr.value = false
   }

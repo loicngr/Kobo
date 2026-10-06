@@ -1432,6 +1432,11 @@ export default {
   'git.push': 'Push',
   'git.forcePush': 'Force push',
   'git.forcePushToggle': 'Force push (--force-with-lease)',
+  'git.pushRejectedHistory':
+    'Push rejected: the local and remote branches have different histories. After rebasing published commits, use Force push with confirmation. Otherwise, fetch and integrate the remote changes before trying again.',
+  'git.pushRejectedLease':
+    'Force push rejected: the remote branch has changed since your last fetch. Fetch and review those changes before trying again.',
+  'git.pushFailed': 'Could not push the branch. Open the details to see why.',
   'git.pushBlockedByOperation': 'Finish or abort the current {operation} first',
   'git.pushUpToDate': 'Nothing to push: the branch is already up to date on origin',
   'git.forcePushHint':

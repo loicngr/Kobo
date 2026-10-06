@@ -14,7 +14,6 @@ import WhipOverlay from 'src/components/WhipOverlay.vue'
 import { useSettingsStore } from 'src/stores/settings'
 import { useWebSocketStore } from 'src/stores/websocket'
 import { useWorkspaceStore } from 'src/stores/workspace'
-import { DEFAULT_TOAST_TIMEOUT_MS } from 'src/utils/notification-timeout'
 import { createWhipCrackCoordinator, type WhipCrackCoordinator } from 'src/utils/whip-crack'
 import { detectWhipShortcutPlatform, matchesWhipShortcut } from 'src/utils/whip-shortcut'
 import { isBusyStatus } from 'src/utils/workspace-status'
@@ -99,7 +98,7 @@ function activate(): void {
         type: 'negative',
         message: t('whip.dispatchFailed'),
         position: 'top',
-        timeout: DEFAULT_TOAST_TIMEOUT_MS,
+        timeout: 0,
       })
     },
   })

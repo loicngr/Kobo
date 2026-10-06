@@ -927,7 +927,7 @@ export const useWebSocketStore = defineStore('websocket', {
             if (pending) workspaceStore.removeActivityItem(wid, pending.id)
             if (sessionId) workspaceStore.queueMessage(wid, content, sessionId)
           }
-          Notify.create({ type: 'negative', message, position: 'top', timeout: 6000 })
+          Notify.create({ type: 'negative', message, position: 'top', timeout: 0 })
           break
         }
 
@@ -1552,7 +1552,7 @@ export const useWebSocketStore = defineStore('websocket', {
           const p = payload as { prNumber?: number; prUrl?: string }
           const prNumber = p.prNumber ?? 0
           const presentation = {
-            'pr:ci-failed': { key: 'toast.prCiFailed', type: 'negative', timeout: 4000 },
+            'pr:ci-failed': { key: 'toast.prCiFailed', type: 'negative', timeout: 0 },
             'pr:ci-recovered': { key: 'toast.prCiRecovered', type: 'positive', timeout: 5000 },
             'pr:merge-conflict': {
               key: 'toast.prMergeConflict',

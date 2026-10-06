@@ -8,7 +8,6 @@ import en from '../i18n/en'
 import { useSettingsStore } from '../stores/settings'
 import { useWebSocketStore } from '../stores/websocket'
 import { useWorkspaceStore } from '../stores/workspace'
-import { DEFAULT_TOAST_TIMEOUT_MS } from '../utils/notification-timeout'
 import { createWhipCrackCoordinator } from '../utils/whip-crack'
 
 const doubles = vi.hoisted(() => ({
@@ -474,7 +473,7 @@ describe('WorkspaceWhipControl', () => {
       type: 'negative',
       message: 'Unable to send the whip message',
       position: 'top',
-      timeout: DEFAULT_TOAST_TIMEOUT_MS,
+      timeout: 0,
     })
     expect(wrapper.getComponent(WhipOverlayStub).props()).toMatchObject({
       soundEnabled: true,

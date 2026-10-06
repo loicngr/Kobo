@@ -33,6 +33,7 @@ export interface WorkspacePreset {
   description?: string
   tasks?: string[]
   acceptanceCriteria?: string[]
+  tags?: string[]
 }
 
 /** The slice of the create form a preset can describe. Plain values, no refs. */
@@ -52,6 +53,7 @@ export interface PresetFormState {
   description: string
   tasks: string[]
   acceptanceCriteria: string[]
+  tags: string[]
 }
 
 const STRING_FIELDS = [
@@ -77,6 +79,8 @@ export function capturePreset(form: PresetFormState): WorkspacePreset {
   preset.autoLoop = form.autoLoop
   preset.autoLoopSessionMode = form.autoLoopSessionMode
   preset.skipSetupScript = form.skipSetupScript
+  // Unlike omitted legacy tags, [] explicitly restores an untagged form.
+  preset.tags = [...form.tags]
   if (form.tasks.length > 0) preset.tasks = [...form.tasks]
   if (form.acceptanceCriteria.length > 0) preset.acceptanceCriteria = [...form.acceptanceCriteria]
   return preset
@@ -84,7 +88,12 @@ export function capturePreset(form: PresetFormState): WorkspacePreset {
 
 /** A new form state where only the keys present in the preset changed. */
 export function applyPreset(form: PresetFormState, preset: WorkspacePreset): PresetFormState {
-  const next: PresetFormState = { ...form, tasks: [...form.tasks], acceptanceCriteria: [...form.acceptanceCriteria] }
+  const next: PresetFormState = {
+    ...form,
+    tags: [...form.tags],
+    tasks: [...form.tasks],
+    acceptanceCriteria: [...form.acceptanceCriteria],
+  }
   for (const key of STRING_FIELDS) {
     const value = preset[key]
     if (typeof value === 'string' && value.trim()) next[key] = value
@@ -95,5 +104,6 @@ export function applyPreset(form: PresetFormState, preset: WorkspacePreset): Pre
   if (preset.skipSetupScript !== undefined) next.skipSetupScript = preset.skipSetupScript
   if (preset.tasks !== undefined) next.tasks = [...preset.tasks]
   if (preset.acceptanceCriteria !== undefined) next.acceptanceCriteria = [...preset.acceptanceCriteria]
+  if (preset.tags !== undefined) next.tags = [...preset.tags]
   return next
 }

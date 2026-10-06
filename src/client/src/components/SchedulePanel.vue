@@ -368,7 +368,7 @@ async function cancelWakeup(): Promise<void> {
   try {
     await apiFetchOk(`/api/workspaces/${props.workspaceId}/pending-wakeup`, { method: 'DELETE' })
   } catch (err) {
-    $q.notify({ type: 'negative', message: String(err), position: 'top', timeout: 4000 })
+    $q.notify({ type: 'negative', message: String(err), position: 'top', timeout: 0 })
   }
 }
 
@@ -376,7 +376,7 @@ async function onCancelCron(id: string): Promise<void> {
   try {
     await store.cancelCron(props.workspaceId, id)
   } catch (err) {
-    $q.notify({ type: 'negative', message: String(err), position: 'top', timeout: 4000 })
+    $q.notify({ type: 'negative', message: String(err), position: 'top', timeout: 0 })
   }
 }
 
@@ -425,7 +425,7 @@ async function onCreateCron(): Promise<void> {
       type: 'negative',
       message: String(err instanceof Error ? err.message : err),
       position: 'top',
-      timeout: 5000,
+      timeout: 0,
     })
   } finally {
     creatingCron.value = false
@@ -454,7 +454,7 @@ async function onScheduleWakeup(): Promise<void> {
       type: 'negative',
       message: String(err instanceof Error ? err.message : err),
       position: 'top',
-      timeout: 5000,
+      timeout: 0,
     })
   } finally {
     creatingWakeup.value = false

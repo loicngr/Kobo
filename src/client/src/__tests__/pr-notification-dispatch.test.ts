@@ -63,14 +63,14 @@ describe('PR notification WebSocket dispatch', () => {
     expect(notify).toHaveBeenCalledWith(expect.any(String), undefined, 'w1', undefined, 1, false)
   })
 
-  it('expires the CI-failure toast after four seconds', () => {
+  it('keeps the CI-failure toast visible until dismissed', () => {
     useWebSocketStore()._routeMessage({
       type: 'pr:ci-failed',
       workspaceId: 'w1',
       payload: { prNumber: 42 },
     })
 
-    expect(Notify.create).toHaveBeenCalledWith(expect.objectContaining({ timeout: 4000 }))
+    expect(Notify.create).toHaveBeenCalledWith(expect.objectContaining({ timeout: 0 }))
   })
 
   it('keeps workspace and dismiss actions on CI-failure toasts', () => {

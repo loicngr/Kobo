@@ -112,6 +112,17 @@ describe('selectLastAgentError', () => {
     {
       kind: 'error',
       category: 'other',
+      message: 'Session force-ended: background subagents stopped reporting activity (watchdog).',
+    },
+    ...['subagent_stall_timeout', 'background_task_stall_timeout', 'compaction_stall_timeout'].map((code) => ({
+      kind: 'error' as const,
+      category: 'other' as const,
+      code,
+      message: 'Watchdog stopped the session',
+    })),
+    {
+      kind: 'error',
+      category: 'other',
       code: 'result_drain_timeout',
       message: 'Session stream closed after its result',
     },
@@ -140,7 +151,7 @@ describe('selectLastAgentError', () => {
   })
 
   it.each([
-    'Session force-ended: background subagents stopped reporting activity (watchdog).',
+    'Unexpected background agent failure (watchdog adapter)',
     'Agent process died unexpectedly',
     'Unexpected watchdog configuration error',
   ])('still shows a banner for other watchdog or process failures: %s', (message) => {

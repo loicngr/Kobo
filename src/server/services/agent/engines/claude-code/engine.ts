@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import {
   type CanUseTool,
   type McpStdioServerConfig,
@@ -52,8 +53,7 @@ export const CLAUDE_STREAM_IDLE_TIMEOUT_MS = 120_000
  * stream is still reaped once this longer ceiling elapses.
  */
 export const CLAUDE_TOOL_IDLE_TIMEOUT_MS = 30 * 60_000
-/** Ceiling on a context compaction: past this, assume it wedged and let the
- *  liveness deadline take over instead of pausing forever. */
+/** Absolute ceiling on a context compaction, independent of tool idle time. */
 export const COMPACTION_STALL_TIMEOUT_MS = 10 * 60_000
 // Safety net for a subagent whose terminal `task_notification` carries a
 // status outside the mapper's known-terminal set (SDK schema drift) — it
@@ -105,7 +105,7 @@ class ClaudeInputStream implements AsyncIterable<SDKUserMessage> {
   private waiting?: () => void
   private closed = false
   private queuedForcedMessages = 0
-  private yieldedMessages = 0
+  private readonly unansweredMessages = new Set<string>()
 
   constructor(initialPrompt: string) {
     this.messages = [{ message: this.toUserMessage(initialPrompt), forced: false }]
@@ -130,16 +130,41 @@ class ClaudeInputStream implements AsyncIterable<SDKUserMessage> {
     wake?.()
   }
 
-  hasUnansweredInput(completedResponses: number): boolean {
-    return this.queuedForcedMessages > 0 || this.yieldedMessages > completedResponses
+  hasUnansweredInput(): boolean {
+    return this.queuedForcedMessages > 0 || this.unansweredMessages.size > 0
+  }
+
+  acknowledgeResult(result: { user_message_uuid?: string; user_message_uuids?: string[] }): void {
+    // One Claude turn can consume several queued prompts. A result counts
+    // turns, not messages: only retire the sends explicitly covered by it.
+    const ids = [...(result.user_message_uuids ?? []), ...(result.user_message_uuid ? [result.user_message_uuid] : [])]
+    if (result.user_message_uuids !== undefined || result.user_message_uuid !== undefined) {
+      for (const id of ids) this.unansweredMessages.delete(id)
+    } else {
+      // A legacy result can acknowledge an already delivered input, never a
+      // future one (e.g. an interrupted turn's result on resume).
+      const oldest = this.unansweredMessages.values().next().value
+      if (oldest) this.unansweredMessages.delete(oldest)
+    }
+    const wake = this.waiting
+    this.waiting = undefined
+    wake?.()
   }
 
   async *[Symbol.asyncIterator](): AsyncGenerator<SDKUserMessage, void, undefined> {
     while (!this.closed || this.messages.length > 0) {
+      // The SDK echoes at most 64 consumed UUIDs per result. Backpressure
+      // prevents losing correlation without guessing which inputs were read.
+      if (!this.closed && this.unansweredMessages.size >= 64) {
+        await new Promise<void>((resolve) => {
+          this.waiting = resolve
+        })
+        continue
+      }
       const next = this.messages.shift()
       if (next) {
         if (next.forced) this.queuedForcedMessages--
-        this.yieldedMessages++
+        this.unansweredMessages.add(next.message.uuid!)
         yield next.message
         continue
       }
@@ -150,7 +175,7 @@ class ClaudeInputStream implements AsyncIterable<SDKUserMessage> {
   }
 
   private toUserMessage(text: string): SDKUserMessage {
-    return { type: 'user', message: { role: 'user', content: text }, parent_tool_use_id: null }
+    return { type: 'user', uuid: randomUUID(), message: { role: 'user', content: text }, parent_tool_use_id: null }
   }
 }
 
@@ -256,6 +281,8 @@ export function createClaudeCodeEngine(): AgentEngine {
           const onAbort = (): void => {
             if (pendingResolvers.get(toolCallId) === resolver) {
               pendingResolvers.delete(toolCallId)
+              reevaluateLivenessPause()
+              if (settlementPending) armContinuationGrace(RESULT_CONTINUATION_GRACE_MS)
               const abortError = new Error('Pending user input aborted')
               abortError.name = 'AbortError'
               reject(abortError)
@@ -353,6 +380,25 @@ export function createClaudeCodeEngine(): AgentEngine {
 
       const inputStream = new ClaudeInputStream(effectivePrompt)
       const q = query({ prompt: inputStream, options: sdkOptions })
+      let queryCloseRequested = false
+      const terminateQuery = (): void => {
+        if (queryCloseRequested) return
+        queryCloseRequested = true
+        inputStream.close()
+        abortController.abort()
+        turnLiveness.stop()
+        clearContinuationGrace()
+        clearResultDrainWatchdog()
+        clearSubagentStallWatchdog()
+        clearCompactionStallTimer()
+        // Abort alone can leave the SDK iterator parked. close() explicitly
+        // tears down its transport/process. Ownership still waits for closed.
+        try {
+          q.close?.()
+        } catch (error) {
+          console.warn('[claude-engine] SDK transport close failed:', error)
+        }
+      }
       // Best-effort SDK stop of one background task; failures are ignored.
       const requestStopTask = (taskId: string): void => {
         try {
@@ -406,7 +452,9 @@ export function createClaudeCodeEngine(): AgentEngine {
           completedResponses === turnCompletedEmittedForResponse ||
           activeSubagentTaskIds.size > 0 ||
           pendingResolvers.size > 0 ||
-          inputStream.hasUnansweredInput(completedResponses)
+          isCompacting ||
+          pendingToolCallIds.size > 0 ||
+          inputStream.hasUnansweredInput()
         ) {
           return
         }
@@ -418,6 +466,7 @@ export function createClaudeCodeEngine(): AgentEngine {
       // catch block) never both emit `session:ended` for the same run.
       let sessionEndedEmitted = false
       let isCompacting = false
+      let settlementPending = false
       const emitSessionEnded = (
         reason: 'completed' | 'error' | 'killed' | 'watchdog',
         exitCode: number | null,
@@ -439,7 +488,7 @@ export function createClaudeCodeEngine(): AgentEngine {
       // its task notification and an automatic continuation turn.
       let resultDrainTimer: ReturnType<typeof setTimeout> | undefined
       // D2 — one shared liveness module for both engines. Armed before the
-      // first SDK message, re-armed on EVERY message, suspended while a human
+      // first SDK message, re-armed on meaningful progress, suspended while a human
       // decision or a background subagent is outstanding, stopped in `finally`.
       const turnLiveness = createTurnLiveness({
         timeoutMs: CLAUDE_STREAM_IDLE_TIMEOUT_MS,
@@ -462,7 +511,7 @@ export function createClaudeCodeEngine(): AgentEngine {
             })
             emitSessionEnded('watchdog', null)
           }
-          abortController.abort()
+          terminateQuery()
         },
       })
       // The single source of truth for "should the idle deadline be paused
@@ -480,9 +529,8 @@ export function createClaudeCodeEngine(): AgentEngine {
       // Backstop for a compaction that never reports completion (stuck
       // `session:compacting` with `active: true` forever): `isCompacting`
       // pauses `turnLiveness` indefinitely, and a wedged-but-alive generator
-      // never trips `isAlive()`'s own sweep either. Past this ceiling, assume
-      // it wedged and resume the liveness deadline so the existing tool-aware
-      // / short deadline can reap it, mirroring `armSubagentStallWatchdog`.
+      // never trips `isAlive()`'s own sweep either. End it at the absolute
+      // ceiling instead of adding another tool-aware idle window afterward.
       let compactionStallTimer: ReturnType<typeof setTimeout> | undefined
       const clearCompactionStallTimer = (): void => {
         if (!compactionStallTimer) return
@@ -490,16 +538,23 @@ export function createClaudeCodeEngine(): AgentEngine {
         compactionStallTimer = undefined
       }
       const armCompactionStallTimer = (): void => {
-        clearCompactionStallTimer()
+        if (compactionStallTimer) return
         compactionStallTimer = setTimeout(() => {
           compactionStallTimer = undefined
           if (!isCompacting) return
           console.warn(
-            `[claude-engine] Compaction still reported active ${COMPACTION_STALL_TIMEOUT_MS}ms after it started — resuming the liveness deadline.`,
+            `[claude-engine] Compaction still reported active ${COMPACTION_STALL_TIMEOUT_MS}ms after it started — closing the session.`,
           )
           isCompacting = false
           safeEmit({ kind: 'session:compacting', active: false })
-          reevaluateLivenessPause()
+          safeEmit({
+            kind: 'error',
+            category: 'other',
+            code: 'compaction_stall_timeout',
+            message: 'Session force-ended: context compaction stopped reporting completion (watchdog).',
+          })
+          emitSessionEnded('watchdog', null)
+          terminateQuery()
         }, COMPACTION_STALL_TIMEOUT_MS)
         compactionStallTimer.unref?.()
       }
@@ -520,7 +575,7 @@ export function createClaudeCodeEngine(): AgentEngine {
             })
             emitSessionEnded('watchdog', null)
           }
-          abortController.abort()
+          terminateQuery()
         }, RESULT_DRAIN_TIMEOUT_MS)
         resultDrainTimer.unref?.()
       }
@@ -547,7 +602,8 @@ export function createClaudeCodeEngine(): AgentEngine {
             activeSubagentTaskIds.size > 0 ||
             pendingResolvers.size > 0 ||
             pendingToolCallIds.size > 0 ||
-            inputStream.hasUnansweredInput(completedResponses)
+            isCompacting ||
+            inputStream.hasUnansweredInput()
           )
             return
           // Settled only now: a result the CLI follows up on (e.g. a resumed
@@ -574,20 +630,27 @@ export function createClaudeCodeEngine(): AgentEngine {
       const armSubagentStallWatchdog = (): void => {
         clearSubagentStallWatchdog()
         if (pendingResolvers.size > 0 || activeSubagentTaskIds.size === 0) return
+        const hasAgent = [...activeSubagentTaskIds].some((id) =>
+          isSubagentTask({ taskType: mapperState.taskTypes.get(id) }),
+        )
+        // Shell/workflow/MCP jobs do not emit agent progress during a long
+        // command. Give them the same silence allowance as foreground tools.
+        const timeoutMs = hasAgent ? SUBAGENT_STALL_TIMEOUT_MS : CLAUDE_TOOL_IDLE_TIMEOUT_MS
         subagentStallTimer = setTimeout(() => {
           subagentStallTimer = undefined
           if (pendingResolvers.size > 0 || activeSubagentTaskIds.size === 0) return
-          console.warn(
-            `[claude-engine] No subagent activity for ${SUBAGENT_STALL_TIMEOUT_MS}ms — forcing session:ended`,
-          )
+          console.warn(`[claude-engine] No background activity for ${timeoutMs}ms — forcing session:ended`)
           safeEmit({
             kind: 'error',
             category: 'other',
-            message: 'Session force-ended: background subagents stopped reporting activity (watchdog).',
+            message: hasAgent
+              ? 'Session force-ended: background subagents stopped reporting activity (watchdog).'
+              : 'Session force-ended: background tools stopped reporting activity (watchdog).',
+            code: hasAgent ? 'subagent_stall_timeout' : 'background_task_stall_timeout',
           })
           emitSessionEnded('watchdog', null)
-          abortController.abort()
-        }, SUBAGENT_STALL_TIMEOUT_MS)
+          terminateQuery()
+        }, timeoutMs)
         subagentStallTimer.unref?.()
       }
 
@@ -596,21 +659,30 @@ export function createClaudeCodeEngine(): AgentEngine {
         turnLiveness.start()
         try {
           for await (const msg of q as AsyncIterable<SDKMessage>) {
+            const events = mapSdkMessage(msg, mapperState)
+            const isForeground = !('parent_tool_use_id' in msg && msg.parent_tool_use_id != null)
+            const foregroundProgress =
+              isForeground &&
+              events.some(
+                (ev) =>
+                  ev.kind === 'message:text' ||
+                  ev.kind === 'message:thinking' ||
+                  ev.kind === 'tool:call' ||
+                  ev.kind === 'tool:result',
+              )
             // A parent continuation owns the foreground again. Background
             // progress notifications alone do not end the between-turn wait.
-            if (msg.type === 'assistant' || msg.type === 'user' || msg.type === 'stream_event') {
+            if (foregroundProgress) {
               waitingForBackground = false
+              settlementPending = false
               clearContinuationGrace()
+              clearResultDrainWatchdog()
             } else if (msg.type === 'system' && (msg as { subtype?: string }).subtype === 'init') {
               // A new run starts on this stream (e.g. after a resumed turn's empty result).
               clearContinuationGrace()
+              settlementPending = false
+              clearResultDrainWatchdog()
             }
-            // This SDK message proves that any drain condition armed by a
-            // *previous* message is no longer current. A drain armed while
-            // processing this message remains active if the generator then
-            // goes silent.
-            clearResultDrainWatchdog()
-            const events = mapSdkMessage(msg, mapperState)
             for (const ev of events) {
               if (ev.kind === 'subagent:progress') trackSubagentProgress(ev)
             }
@@ -631,15 +703,23 @@ export function createClaudeCodeEngine(): AgentEngine {
               armSubagentStallWatchdog()
             for (const ev of events) {
               if (ev.kind === 'session:compacting') {
+                const wasCompacting = isCompacting
                 isCompacting = ev.active
-                if (ev.active) armCompactionStallTimer()
-                else clearCompactionStallTimer()
+                if (ev.active) {
+                  clearContinuationGrace()
+                  clearResultDrainWatchdog()
+                  armCompactionStallTimer()
+                } else {
+                  clearCompactionStallTimer()
+                  if (wasCompacting && settlementPending) armContinuationGrace(RESULT_CONTINUATION_GRACE_MS)
+                }
               }
               // Older SDKs can emit only compact_boundary, without a trailing
               // status update. This boundary marks compaction as complete.
               else if (ev.kind === 'session:compacted') {
                 isCompacting = false
                 clearCompactionStallTimer()
+                if (settlementPending) armContinuationGrace(RESULT_CONTINUATION_GRACE_MS)
               }
             }
             // Actual foreground output proves work resumed even if the SDK
@@ -657,18 +737,14 @@ export function createClaudeCodeEngine(): AgentEngine {
               safeEmit({ kind: 'session:compacting', active: false })
             }
             for (const ev of events) {
-              if (ev.kind === 'tool:call') pendingToolCallIds.add(ev.toolCallId)
-              else if (ev.kind === 'tool:result') pendingToolCallIds.delete(ev.toolCallId)
+              if (isForeground && ev.kind === 'tool:call') pendingToolCallIds.add(ev.toolCallId)
+              else if (isForeground && ev.kind === 'tool:result') pendingToolCallIds.delete(ev.toolCallId)
             }
             // After a settled result, the last background completion drains
             // the stream only if the parent does not continue (see
             // BACKGROUND_CONTINUATION_GRACE_MS): its continuation still needs
             // the input for permission requests.
-            if (
-              subagentStallTimer &&
-              activeSubagentTaskIds.size === 0 &&
-              !inputStream.hasUnansweredInput(completedResponses)
-            ) {
+            if (subagentStallTimer && activeSubagentTaskIds.size === 0 && !inputStream.hasUnansweredInput()) {
               clearSubagentStallWatchdog()
               armContinuationGrace(BACKGROUND_CONTINUATION_GRACE_MS)
             }
@@ -676,9 +752,14 @@ export function createClaudeCodeEngine(): AgentEngine {
               if (ev.kind === 'session:started') discoveredSessionId = ev.engineSessionId
               safeEmit(ev)
             }
-            // Any SDK message is proof of life — re-arm on EVERY message, not
-            // only on a text-without-tool-call one.
-            turnLiveness.activity()
+            // Transport metadata is not forward progress. In particular a
+            // stream of trailing notifications must not defeat shutdown.
+            if (
+              foregroundProgress ||
+              msg.type === 'result' ||
+              events.some((ev) => ev.kind === 'subagent:progress' && !ev.ambient)
+            )
+              turnLiveness.activity()
             // A background subagent or a pending permission card can stay
             // legitimately quiet for minutes; their own dedicated watchdogs
             // own those windows, so suspend the turn deadline meanwhile.
@@ -690,11 +771,14 @@ export function createClaudeCodeEngine(): AgentEngine {
             reevaluateLivenessPause()
             if ((msg as { type?: string }).type === 'result') {
               waitingForBackground = false
+              settlementPending = true
               clearContinuationGrace()
               pendingToolCallIds.clear()
+              turnLiveness.setTimeoutMs(CLAUDE_STREAM_IDLE_TIMEOUT_MS)
               completedResponses++
+              inputStream.acknowledgeResult(msg as { user_message_uuid?: string; user_message_uuids?: string[] })
               // A queued forced message starts the next response on this same SDK stream.
-              if (!inputStream.hasUnansweredInput(completedResponses)) {
+              if (!inputStream.hasUnansweredInput()) {
                 if (activeSubagentTaskIds.size === 0) {
                   clearSubagentStallWatchdog()
                   armContinuationGrace(RESULT_CONTINUATION_GRACE_MS)
@@ -774,7 +858,8 @@ export function createClaudeCodeEngine(): AgentEngine {
           return iteratorRunning
         },
         sendMessage(text: string) {
-          if (!iteratorRunning) throw new Error(`Claude ${AGENT_NO_LONGER_RUNNING_TEXT}`)
+          if (!iteratorRunning || queryCloseRequested || sessionEndedEmitted)
+            throw new Error(`Claude ${AGENT_NO_LONGER_RUNNING_TEXT}`)
           inputStream.send(text)
           armSubagentStallWatchdog()
         },
@@ -788,7 +873,7 @@ export function createClaudeCodeEngine(): AgentEngine {
             pendingToolCallIds.size > 0 ||
             pendingResolvers.size > 0 ||
             isCompacting ||
-            inputStream.hasUnansweredInput(completedResponses)
+            inputStream.hasUnansweredInput()
           )
             return false
           inputStream.send(text)
@@ -847,7 +932,7 @@ export function createClaudeCodeEngine(): AgentEngine {
           }
         },
         async stop() {
-          abortController.abort()
+          terminateQuery()
           try {
             await iteratorPromise
           } catch {

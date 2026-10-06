@@ -303,7 +303,7 @@ async function handleInterrupt() {
     $q.notify({ type: 'info', message: t('workspacePage.interrupted'), position: 'top', timeout: 3000 })
   } catch (e) {
     const msg = e instanceof Error ? e.message : t('workspacePage.interruptFailed')
-    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 0 })
   } finally {
     interrupting.value = false
   }
@@ -497,7 +497,7 @@ function forceQueuedMessage() {
   forcingQueue.value = true
   if (!wsStore.sendChatMessage(props.workspaceId, queued.content, queued.sessionId, undefined, true)) {
     forcingQueue.value = false
-    $q.notify({ type: 'negative', message: t('network.login.unreachable'), position: 'top', timeout: 6000 })
+    $q.notify({ type: 'negative', message: t('network.login.unreachable'), position: 'top', timeout: 0 })
   }
 }
 
@@ -766,7 +766,7 @@ async function sendMessageNow() {
   const koboCmd = KOBO_COMMANDS[text]
   if (koboCmd) {
     if (!wsStore.sendChatMessage(workspaceId, koboCmd.prompt, store.selectedSessionId ?? undefined)) {
-      $q.notify({ type: 'negative', message: t('network.login.unreachable'), position: 'top', timeout: 6000 })
+      $q.notify({ type: 'negative', message: t('network.login.unreachable'), position: 'top', timeout: 0 })
       return
     }
     store.markRead(workspaceId)
@@ -825,7 +825,7 @@ async function sendMessageNow() {
         type: 'negative',
         message: serverMsg ?? t('workspacePage.startFailed'),
         position: 'top',
-        timeout: 6000,
+        timeout: 0,
       })
       return
     }
@@ -839,7 +839,7 @@ async function sendMessageNow() {
   const requiresWebSocket = session?.status !== 'idle' && session?.status !== 'completed' && session?.status !== 'error'
   if (requiresWebSocket && !wsStore.isConnected()) {
     restoreDraft()
-    $q.notify({ type: 'negative', message: t('network.login.unreachable'), position: 'top', timeout: 6000 })
+    $q.notify({ type: 'negative', message: t('network.login.unreachable'), position: 'top', timeout: 0 })
     return
   }
 
@@ -873,7 +873,7 @@ async function sendMessageNow() {
       type: 'negative',
       message: serverMsg ?? t('workspacePage.startFailed'),
       position: 'top',
-      timeout: 6000,
+      timeout: 0,
     })
   }
 
@@ -923,7 +923,7 @@ async function startVoiceCapture() {
       $q.notify({ type: 'info', message: t('voice.maxDurationReached'), position: 'top', timeout: 3500 })
     }, MAX_RECORDING_MS)
   } catch {
-    $q.notify({ type: 'negative', message: t('voice.errorMicPermission'), position: 'top', timeout: 5000 })
+    $q.notify({ type: 'negative', message: t('voice.errorMicPermission'), position: 'top', timeout: 0 })
   }
 }
 
@@ -971,7 +971,7 @@ async function stopVoiceCapture() {
       LANGUAGE_INVALID: 'voice.errorLanguageInvalid',
       TRANSCRIPTION_TIMEOUT: 'voice.errorTranscription',
     }
-    $q.notify({ type: 'negative', message: t(map[code] ?? 'voice.errorTranscription'), position: 'top', timeout: 5000 })
+    $q.notify({ type: 'negative', message: t(map[code] ?? 'voice.errorTranscription'), position: 'top', timeout: 0 })
   } finally {
     mediaRecorderRef.value = null
     chunksRef.value = []

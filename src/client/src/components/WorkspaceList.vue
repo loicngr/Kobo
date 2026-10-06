@@ -959,7 +959,7 @@ function openDeleteDialog(ws: Workspace, event: Event) {
  */
 function notifyActionError(err: unknown, fallbackKey: string): void {
   const message = err instanceof Error && err.message ? err.message : t(fallbackKey)
-  $q.notify({ type: 'negative', message, position: 'top', timeout: DEFAULT_TOAST_TIMEOUT_MS })
+  $q.notify({ type: 'negative', message, position: 'top', timeout: 0 })
 }
 
 async function confirmDelete() {
@@ -1119,7 +1119,7 @@ function onPurgeWorktreeClick(ws: Workspace, event: Event) {
   }).onOk(async () => {
     const result = await store.purgeWorktree(ws.id)
     if (!result.ok) {
-      $q.notify({ type: 'negative', message: result.error, position: 'top', timeout: 6000 })
+      $q.notify({ type: 'negative', message: result.error, position: 'top', timeout: 0 })
       return
     }
     if (result.warnings.length === 0) {
@@ -1228,7 +1228,7 @@ function renameWorkspace(ws: Workspace) {
       await store.renameWorkspace(ws.id, trimmed)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+      $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 0 })
     }
   })
 }
@@ -1253,7 +1253,7 @@ function editDescription(ws: Workspace) {
       await store.updateWorkspaceDescription(ws.id, next)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+      $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 0 })
     }
   })
 }
@@ -1279,18 +1279,18 @@ async function openInFileManager(ws: Workspace) {
         type: 'negative',
         message: data.error ?? t('tools.openFileManagerFailed'),
         position: 'top',
-        timeout: 6000,
+        timeout: 0,
       })
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : t('tools.openFileManagerFailed')
-    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 0 })
   }
 }
 
 function onToggleFavorite(ws: Workspace) {
   void store.toggleFavorite(ws.id).catch((err) => {
-    $q.notify({ type: 'negative', message: String(err), position: 'top', timeout: 4000 })
+    $q.notify({ type: 'negative', message: String(err), position: 'top', timeout: 0 })
   })
 }
 

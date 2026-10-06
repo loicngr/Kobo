@@ -38,6 +38,7 @@ import {
   FRESH_MODEL_BY_ENGINE,
 } from './settings-defaults.js'
 import { AGNOSTIC_PROMPTS } from './skill-suite-prompts.js'
+import { pruneWorkspaceTemplateTags } from './workspace-template-service.js'
 
 export const STANDARD_GIT_CONVENTIONS = `Follow the repository's existing Git conventions and the user's instructions.
 Work locally by default. Commit, push, publish comments or open pull requests only when explicitly authorized.
@@ -1805,6 +1806,7 @@ export function importConfigBundle(bundle: ConfigBundle): void {
   for (const key of SECRET_GLOBAL_KEYS) {
     migrated.global[key] = current.global[key]
   }
+  pruneWorkspaceTemplateTags(migrated.global.tags)
   writeSettings(migrated, { backup: true })
 }
 
@@ -2136,6 +2138,7 @@ export function updateGlobalSettings(input: Partial<GlobalSettings>): GlobalSett
     filtered.worktreesPath = validateWorktreesPath(filtered.worktreesPath, { allowEmpty: false })
     ensureGlobalWorktreesRootExists(filtered.worktreesPath)
   }
+  if (filtered.tags !== undefined) pruneWorkspaceTemplateTags(filtered.tags)
   settings.global = { ...settings.global, ...filtered }
   writeSettings(settings, { backup: true })
   return settings.global

@@ -1457,6 +1457,11 @@ export default {
   'git.push': 'Push',
   'git.forcePush': 'Force push',
   'git.forcePushToggle': 'Force push (--force-with-lease)',
+  'git.pushRejectedHistory':
+    'Push abgelehnt: Lokaler und entfernter Branch haben unterschiedliche Historien. Nach einem Rebase veröffentlichter Commits verwenden Sie Force push mit Bestätigung. Andernfalls holen Sie die entfernten Änderungen und integrieren sie vor einem erneuten Versuch.',
+  'git.pushRejectedLease':
+    'Force push abgelehnt: Der entfernte Branch hat sich seit dem letzten Fetch geändert. Holen und prüfen Sie diese Änderungen vor einem erneuten Versuch.',
+  'git.pushFailed': 'Der Branch konnte nicht gepusht werden. Öffnen Sie die Details zur Ursache.',
   'git.pushBlockedByOperation': 'Zuerst die laufende {operation}-Operation abschließen oder abbrechen',
   'git.pushUpToDate': 'Nichts zu pushen: der Branch ist auf origin bereits aktuell',
   'git.forcePushHint':

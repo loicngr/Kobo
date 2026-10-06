@@ -1,6 +1,7 @@
 import {
   callMcpTool,
   initializeMcp,
+  listMcpToolNames,
   readClaudeMcpEntry,
   spawnMcpProcess,
   unwrapMcpResult,
@@ -46,7 +47,9 @@ export async function testSentryConnection(): Promise<IntegrationTestResult> {
   const mcpProcess = spawnMcpProcess(config.command, config.args, config.env)
   try {
     await initializeMcp(mcpProcess)
-    await callMcpTool(mcpProcess, 'whoami', {})
+    // whoami is not exposed by all Sentry MCP servers. Organization discovery
+    // verifies authenticated read access without requiring an issue or mutating it.
+    await callMcpTool(mcpProcess, 'find_organizations', {})
     return {
       ok: true,
       durationMs: Date.now() - startedAt,
@@ -272,7 +275,15 @@ export async function assignSentryIssueToSelf(issueUrl: string): Promise<{
 
     await initializeMcp(mcpProcess)
 
-    const whoamiRaw = await callMcpTool(mcpProcess, 'whoami', {})
+    const tools = await listMcpToolNames(mcpProcess)
+    if (!tools.includes('whoami') && !tools.includes('execute_sentry_tool')) {
+      return { assigned: false, reason: 'Sentry MCP does not expose a current-user lookup tool' }
+    }
+    // Current Sentry servers expose identity through the tool catalogue;
+    // older servers still provide whoami directly. Never retry the write.
+    const whoamiRaw = tools.includes('whoami')
+      ? await callMcpTool(mcpProcess, 'whoami', {})
+      : await callMcpTool(mcpProcess, 'execute_sentry_tool', { name: 'whoami', arguments: {} })
     const whoami = unwrapMcpResult(whoamiRaw)
     const userId = extractSentryUserId(whoami)
     if (!userId) {

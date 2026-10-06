@@ -4,6 +4,13 @@ import path from 'node:path'
 import Database from 'better-sqlite3'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { initSchema } from '../server/db/schema.js'
+import {
+  _setSettingsPath,
+  exportConfigBundle,
+  getGlobalSettings,
+  importConfigBundle,
+  updateGlobalSettings,
+} from '../server/services/settings-service.js'
 
 // Same pattern as templates-service.test.ts: point the path helper at a tmp file.
 let tmpFile = ''
@@ -27,6 +34,7 @@ let tmpDir = ''
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kobo-ws-templates-'))
   tmpFile = path.join(tmpDir, 'workspace-templates.json')
+  _setSettingsPath(path.join(tmpDir, 'settings.json'))
 })
 
 afterEach(() => {
@@ -71,6 +79,68 @@ describe('sanitizePreset', () => {
 })
 
 describe('workspace templates CRUD', () => {
+  it('persists only registered tags, deduplicates them, and preserves an explicit empty selection', () => {
+    updateGlobalSettings({ tags: ['bug', 'api'] })
+    const created = createWorkspaceTemplate({ name: 'Tagged', preset: { tags: ['bug', 'api', 'bug', 'deleted', 3] } })
+    expect(created.preset).toEqual({ tags: ['bug', 'api'] })
+    expect(listWorkspaceTemplates()[0].preset).toEqual({ tags: ['bug', 'api'] })
+    expect(updateWorkspaceTemplate(created.id, { preset: { tags: [] } })?.preset).toEqual({ tags: [] })
+  })
+
+  it('removes deleted tags from every persisted template, without changing other fields or reviving them later', () => {
+    updateGlobalSettings({ tags: ['bug', 'api'] })
+    const a = createWorkspaceTemplate({ name: 'A', preset: { tags: ['bug', 'api'], model: 'm' } })
+    createWorkspaceTemplate({ name: 'B', preset: { tags: ['bug'] } })
+    const legacy = createWorkspaceTemplate({ name: 'Legacy', preset: { model: 'legacy' } })
+    updateGlobalSettings({ tags: ['api'] })
+    const persisted = JSON.parse(fs.readFileSync(tmpFile, 'utf8')).templates
+    expect(persisted[0]).toMatchObject({ id: a.id, preset: { tags: ['api'], model: 'm' } })
+    expect(persisted[1].preset).toEqual({ tags: [] })
+    expect(persisted[2]).toEqual(legacy)
+    updateGlobalSettings({ tags: ['bug', 'api'] })
+    expect(listWorkspaceTemplates()[0].preset.tags).toEqual(['api'])
+    expect(listWorkspaceTemplates()[1].preset.tags).toEqual([])
+  })
+
+  it('prevents a stale client from reintroducing removed tags', () => {
+    updateGlobalSettings({ tags: ['bug'] })
+    const created = createWorkspaceTemplate({ name: 'A', preset: { tags: ['bug'] } })
+    updateGlobalSettings({ tags: [] })
+    expect(updateWorkspaceTemplate(created.id, { preset: { tags: ['bug'] } })?.preset).toEqual({ tags: [] })
+    expect(createWorkspaceTemplate({ name: 'Stale', preset: { tags: ['bug'] } }).preset).toEqual({ tags: [] })
+  })
+
+  it('does not erase corrupt template data or delete catalogue tags when cleanup fails', () => {
+    updateGlobalSettings({ tags: ['bug'] })
+    fs.writeFileSync(tmpFile, '{broken')
+    expect(() => updateGlobalSettings({ tags: [] })).toThrow(/workspace-templates/)
+    expect(fs.readFileSync(tmpFile, 'utf8')).toBe('{broken')
+    expect(getGlobalSettings().tags).toEqual(['bug'])
+  })
+
+  it('also cleans templates when importing a catalogue without the old tags', () => {
+    updateGlobalSettings({ tags: ['bug', 'api'] })
+    createWorkspaceTemplate({ name: 'A', preset: { tags: ['bug', 'api'], tasks: ['Keep task'] } })
+    const bundle = exportConfigBundle([])
+    bundle.settings.global.tags = ['api']
+    importConfigBundle(bundle)
+    expect(JSON.parse(fs.readFileSync(tmpFile, 'utf8')).templates[0].preset).toEqual({
+      tags: ['api'],
+      tasks: ['Keep task'],
+    })
+  })
+
+  it('filters obsolete tags on read and rename of an older file', () => {
+    updateGlobalSettings({ tags: ['api'] })
+    const template = createWorkspaceTemplate({ name: 'Old', preset: { tags: ['api'] } })
+    fs.writeFileSync(
+      tmpFile,
+      JSON.stringify({ version: 1, templates: [{ ...template, preset: { tags: ['removed', 'api'] } }] }),
+    )
+    expect(listWorkspaceTemplates()[0].preset.tags).toEqual(['api'])
+    expect(updateWorkspaceTemplate(template.id, { name: 'Renamed' })?.preset.tags).toEqual(['api'])
+  })
+
   it('starts empty when the file does not exist', () => {
     expect(listWorkspaceTemplates()).toEqual([])
   })

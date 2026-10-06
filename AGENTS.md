@@ -197,6 +197,15 @@ Every feature that touches the schema:
 
 ## WebSocket protocol
 
+Claude streaming input is correlated by per-message UUIDs. A result can cover
+several prompts through `user_message_uuids` (messages folded into one turn),
+not one result per sent message. Retire only the matching yielded inputs;
+locally queued or unacknowledged messages still block `turn:completed` and
+input closure. UUID-less legacy results retain a conservative one-input
+fallback for already yielded inputs only; a result never credits a future send.
+Backpressure caps unacknowledged yielded inputs at 64, matching the SDK's result
+UUID list bound. Keep the inactivity watchdog for genuinely unanswered work.
+
 Claude SDK `task_*` messages cover agents **and** background jobs. Preserve `task_type` by task/tool identity across progress and terminal messages, which often omit it. The existing `subagent:progress` envelope also carries this lifecycle metadata for compatibility; `local_bash`, `local_workflow` and `mcp_task` must be excluded from agent cards, busy-agent counts, chat agent-name resolution and the selective stop-subagents action. Keep tracking these jobs for engine liveness and whole-session interruption. Legacy/unknown classifications and Codex agents remain supported; never classify from a description or from the agent's last tool (`Bash` can be a real agent's current action).
 
 ### External MCP dialogue and update checks
@@ -220,8 +229,10 @@ Clients subscribe to individual workspace ids. The server sends `WsEvent` object
 Agent engines emit a normalized `AgentEvent` union, carried by `agent:event`. Common outer types include `user:message`, `task:updated`, `devserver:status`, `workspace:status`, `workspace:archived`, `workspace:unarchived`, and `sync:response`. Legacy `agent:output` rows remain supported through content migration. Keep the backend union in `services/agent/engines/types.ts` and its client mirror in `client/src/types/agent-event.ts` synchronized.
 
 Error events may carry a stable `code`. Claude's post-result drain timeout uses
-`result_drain_timeout` and its stream inactivity timeout uses `stream_idle_timeout`:
-keep both in the chat but exclude them from `AgentErrorBanner`. The selector also
+`result_drain_timeout` and its stream inactivity timeout uses `stream_idle_timeout`.
+Background agents, background tools, and compaction use `subagent_stall_timeout`,
+`background_task_stall_timeout`, and `compaction_stall_timeout`, respectively:
+keep these notices in the chat but exclude them from `AgentErrorBanner`. The selector also
 recognizes their exact legacy messages for persisted history. Other errors keep
 their banners. A `session:ended` with reason `watchdog` leaves a manual workspace
 `idle`, unless accompanied by a nonzero exit code. Preserve the watchdog end reason
@@ -256,7 +267,7 @@ See the "Notion integration" section of the README for the end-user setup guide.
 
 Two engines live under `src/server/services/agent/engines/`, both implementing the `AgentEngine` contract in `types.ts`:
 
-**Claude Code** (`claude-code/`): consumes the `@anthropic-ai/claude-agent-sdk` async iterator. The SDK manages the Claude runtime; Kōbō does not launch a separate `claude` CLI command. Authentication reuses the user's Claude login or `ANTHROPIC_API_KEY`. The engine arms a **15 s result-drain watchdog** when the SDK emits its `result` message: if the async iterator does not close cleanly within the window, `session:ended` is force-emitted so the orchestrator and auto-loop never hang on a stuck generator. The watchdog is idempotent via a `sessionEndedEmitted` guard and the timer is cleared in `finally`.
+**Claude Code** (`claude-code/`): consumes the `@anthropic-ai/claude-agent-sdk` async iterator. The SDK manages the Claude runtime; Kōbō does not launch a separate `claude` CLI command. Authentication reuses the user's Claude login or `ANTHROPIC_API_KEY`. A settled result gets a **3 s continuation grace**, then a **15 s result-drain watchdog**. Trailing metadata and child output must not cancel the parent's drain/grace. Silence is bounded at **2 minutes** without tools, **30 minutes** for foreground tools and background shell/workflow/MCP jobs, and **10 minutes** for agents. Compaction has an absolute **10-minute** ceiling; repeated status messages cannot extend it. Human questions/permissions pause inactivity; resolution AND SDK cancellation re-evaluate that pause. Watchdogs request abort plus SDK `query.close()`; neither is proof of closure: controller ownership is released only when `EngineProcess.closed` confirms it. Never fake closure or allow a second writer if the SDK ignores termination. End emission is idempotent and timers are cleared on termination and in `finally`.
 
 **OpenAI Codex** (`codex/`): uses the **`codex app-server` JSON-RPC protocol** (line-delimited JSON over stdio with a long-lived `codex` subprocess). The engine layers are:
 - `jsonrpc/transport.ts` + `jsonrpc/peer.ts`: generic JSON-RPC 2.0 stdio peer (request correlation, notifications, server-initiated requests)
@@ -437,6 +448,14 @@ One task, two engines, two sibling worktrees. `POST /api/workspaces` accepts a `
 `computeDueReminders` holds the interval arithmetic as a near-pure function over an injected `Map<id, {firstSeenAt, remindersSent}>`, so it is unit-tested without a timer or a DB. Two rules it encodes: a workspace that leaves `awaiting-user` is dropped from the map (answering resets the clock), and a tick that finds itself several intervals behind sends **one** reminder, not one per missed interval. State is in-memory only, like the pr-watcher's caches: a restart restarts the clock.
 
 ### Workspace templates and duplication
+
+Workspace template presets include optional `tags`. New form captures always
+store the selection (including `[]`); legacy omission preserves the current
+form selection. Server reads/writes filter tags against the current global
+catalogue. Catalogue updates and config imports prune saved template references
+before saving settings, so removed tags cannot reappear when re-added later.
+Only affected presets are rewritten; existing workspace tags are untouched.
+A corrupt template file aborts catalogue cleanup without replacing that file.
 
 `workspace-template-service.ts` persists named presets of the create form in `<KOBO_HOME>/workspace-templates.json` (same JSON pattern as `templates.json`, no SQLite migration). `sanitizePreset` keeps known keys with the right type and drops the rest, so a hand-edited file degrades to unset fields rather than errors. `presetFromWorkspace(id)` derives the same shape from an existing workspace (tasks as titles, statuses dropped); `GET /api/workspaces/:id/preset` exposes it read-only and "Duplicate" opens `/create?from=<id>` with it. On the client, `utils/workspace-preset.ts` (`capturePreset` / `applyPreset`, pure, round-trip tested) is the single bridge between the form and a preset; the create page applies the engine first and waits a tick so its engine watchers normalise model / effort / permission mode before the preset's values land. See [CONFIGURATION.md → Workspace templates and duplication](CONFIGURATION.md#workspace-templates-and-duplication).
 

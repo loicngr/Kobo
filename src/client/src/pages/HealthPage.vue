@@ -437,7 +437,7 @@ async function refresh() {
     if (!res.ok) throw await apiResponseError(res)
     report.value = (await res.json()) as HealthReport
   } catch (err) {
-    $q.notify({ type: 'negative', message: String(err), position: 'top', timeout: 4000 })
+    $q.notify({ type: 'negative', message: String(err), position: 'top', timeout: 0 })
   } finally {
     loading.value = false
   }

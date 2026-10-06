@@ -623,7 +623,7 @@ original agent automatically; review output already recorded remains available.
 
 A template is a named preset of the create-workspace form: project (optional),
 source branch, branch type, engine, model, reasoning effort, permission mode,
-auto-loop settings, description, tasks and acceptance criteria. The workspace
+auto-loop settings, description, tasks, acceptance criteria and tags. The workspace
 name and working branch are never part of it - they are derived at each
 creation - and neither are Notion / Sentry / PR URLs, which are one-off
 context.
@@ -638,6 +638,14 @@ existing name asks before overwriting. Templates are managed (rename, delete,
 inspect) in **Settings → Workspace templates**; to edit one, load it on the
 create page, adjust, and save it again under the same name.
 
+Templates save the selected tags, including an explicit empty selection. Older
+templates without a tags field leave the current selection unchanged. Removing
+a tag from the global catalogue also removes it from every saved workspace
+template (including catalogue changes through configuration import). Other
+template fields and tags on existing workspaces are preserved. Stale clients
+cannot save removed tags back into templates. If the template file is corrupt,
+the catalogue change is refused and the file is preserved for recovery.
+
 **Duplicate**, in a workspace's context menu, opens the create page prefilled
 from that workspace - its settings, description, tasks and criteria (all reset
 to "to do") - with the name suffixed "(copy)". Nothing is created until you
@@ -647,8 +655,8 @@ brainstorm effort nor "skip setup script", which are creation-time choices.
 Archived workspaces can be duplicated too.
 
 Templates live in `<KOBO_HOME>/workspace-templates.json` (100 at most). A
-corrupt file is read as empty and reported in the server log, and is only
-rewritten by the next save.
+corrupt file produces an error and is preserved; restore a valid file before
+saving templates or changing the tag catalogue.
 
 ## Auto-purge worktree on PR merged
 
@@ -1261,6 +1269,23 @@ claude /login
 Kōbō talks to the embedded [`@anthropic-ai/claude-agent-sdk`](https://github.com/anthropics/claude-agent-sdk-typescript), which reuses the same login. The `claude` CLI is **not** required at runtime; you only need it for `/login`, `mcp add`, and other one-off setup commands. As a fallback you can export `ANTHROPIC_API_KEY` instead.
 
 The model selector is populated from [`src/shared/models.ts`](./src/shared/models.ts), also used by backend validation. This checkout includes Fable 5.1, Mythos 5, Opus 5, Opus 4.8, Sonnet 5 and older variants. Pick the default in **Settings → Agents**. Catalogue entries describe what Kōbō offers; provider access still depends on your account. `auto` leaves model selection to the runtime.
+
+#### Session watchdogs
+
+Kōbō distinguishes a finished response from a fully closed SDK session. Once a
+response is settled, it allows 3 seconds for continuation, then 15 seconds for
+SDK cleanup. Metadata alone cannot extend this cleanup deadline.
+
+Silence limits are 2 minutes without a pending tool, 10 minutes for background
+agents, and 30 minutes for tools (including background Bash, workflow and MCP
+jobs). A compaction has a separate absolute 10-minute limit. Waiting for your
+answer or permission pauses the inactivity watchdog.
+
+Watchdog notices remain in conversation history, but do not display a red error
+banner. Other failures retain their banners. Watchdog shutdown requests both
+cancellation and closure of the SDK transport. Kōbō still requires confirmed
+closure before another agent can write in the same workspace; a runtime that
+refuses to stop is not treated as safely terminated.
 
 ### OpenAI Codex
 

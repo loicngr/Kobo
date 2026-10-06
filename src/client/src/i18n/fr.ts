@@ -1457,6 +1457,11 @@ export default {
   'git.push': 'Push',
   'git.forcePush': 'Force push',
   'git.forcePushToggle': 'Force push (--force-with-lease)',
+  'git.pushRejectedHistory':
+    'Push refusé : la branche locale et la branche distante ont des historiques différents. Après un rebase de commits déjà publiés, utilisez « Force push » avec confirmation. Sinon, récupérez et intégrez les changements distants avant de réessayer.',
+  'git.pushRejectedLease':
+    'Push forcé refusé : la branche distante a changé depuis votre dernière récupération. Récupérez et vérifiez ces changements avant de réessayer.',
+  'git.pushFailed': 'Impossible de pousser la branche. Ouvrez les détails pour connaître la cause.',
   'git.pushBlockedByOperation': "Terminez ou abandonnez d'abord l'opération {operation} en cours",
   'git.pushUpToDate': 'Rien à pousser : la branche est déjà à jour sur origin',
   'git.forcePushHint':

@@ -56,26 +56,42 @@ describe('AgentErrorBanner.vue — characterisation', () => {
     expect(wrapper.find('.q-banner-stub').exists()).toBe(false)
   })
 
-  it.each(['result_drain_timeout', 'stream_idle_timeout'])(
-    'omits %s live and after replay without hiding another failure',
-    async (code) => {
-      const stream = useAgentStreamStore()
-      const wrapper = mountBanner('ws-drain')
-      stream.append('ws-drain', {
-        kind: 'error',
-        category: 'other',
-        code,
-        message: 'Watchdog closed the stream',
-      })
-      await wrapper.vm.$nextTick()
-      expect(wrapper.find('.q-banner-stub').exists()).toBe(false)
-      wrapper.unmount()
-      const replayed = mountBanner('ws-drain')
-      expect(replayed.find('.q-banner-stub').exists()).toBe(false)
-      stream.append('ws-drain', { kind: 'error', category: 'resume_failed', message: 'Session cannot be resumed' })
-      await replayed.vm.$nextTick()
-      expect(replayed.text()).toContain('Session cannot be resumed')
-      replayed.unmount()
-    },
-  )
+  it.each([
+    'result_drain_timeout',
+    'stream_idle_timeout',
+    'subagent_stall_timeout',
+    'compaction_stall_timeout',
+    'background_task_stall_timeout',
+  ])('omits %s live and after replay without hiding another failure', async (code) => {
+    const stream = useAgentStreamStore()
+    const wrapper = mountBanner('ws-drain')
+    stream.append('ws-drain', {
+      kind: 'error',
+      category: 'other',
+      code,
+      message: 'Watchdog closed the stream',
+    })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('.q-banner-stub').exists()).toBe(false)
+    wrapper.unmount()
+    const replayed = mountBanner('ws-drain')
+    expect(replayed.find('.q-banner-stub').exists()).toBe(false)
+    stream.append('ws-drain', { kind: 'error', category: 'resume_failed', message: 'Session cannot be resumed' })
+    await replayed.vm.$nextTick()
+    expect(replayed.text()).toContain('Session cannot be resumed')
+    replayed.unmount()
+  })
+
+  it('hides the exact legacy subagent watchdog notice but keeps its history', () => {
+    const stream = useAgentStreamStore()
+    stream.append('legacy', {
+      kind: 'error',
+      category: 'other',
+      message: 'Session force-ended: background subagents stopped reporting activity (watchdog).',
+    })
+    const wrapper = mountBanner('legacy')
+    expect(wrapper.find('.q-banner-stub').exists()).toBe(false)
+    wrapper.unmount()
+    expect(mountBanner('legacy').find('.q-banner-stub').exists()).toBe(false)
+  })
 })

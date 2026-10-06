@@ -1304,7 +1304,7 @@ async function startCreateVoiceCapture() {
       $q.notify({ type: 'info', message: t('voice.maxDurationReached'), position: 'top', timeout: 3500 })
     }, CREATE_VOICE_MAX_MS)
   } catch {
-    $q.notify({ type: 'negative', message: t('voice.errorMicPermission'), position: 'top', timeout: 5000 })
+    $q.notify({ type: 'negative', message: t('voice.errorMicPermission'), position: 'top', timeout: 0 })
   }
 }
 
@@ -1346,7 +1346,7 @@ async function stopCreateVoiceCapture() {
       LANGUAGE_INVALID: 'voice.errorLanguageInvalid',
       TRANSCRIPTION_TIMEOUT: 'voice.errorTranscription',
     }
-    $q.notify({ type: 'negative', message: t(map[code] ?? 'voice.errorTranscription'), position: 'top', timeout: 5000 })
+    $q.notify({ type: 'negative', message: t(map[code] ?? 'voice.errorTranscription'), position: 'top', timeout: 0 })
   } finally {
     createVoiceRecorderRef.value = null
     createVoiceChunksRef.value = []
@@ -1646,6 +1646,7 @@ function presetFormState(): PresetFormState {
     description: description.value,
     tasks: manualTasks.value,
     acceptanceCriteria: manualCriteria.value,
+    tags: workspaceTags.value,
   }
 }
 
@@ -1698,6 +1699,7 @@ async function applyPresetToForm(preset: WorkspacePreset): Promise<void> {
   description.value = next.description
   manualTasks.value = next.tasks
   manualCriteria.value = next.acceptanceCriteria
+  workspaceTags.value = next.tags.filter((tag) => createTagOptions.value.includes(tag))
   // The engine watcher ran at the nextTick above, BEFORE these writes: clamp
   // a stale model id or an unsupported permission mode / effort now.
   normaliseForEngine()

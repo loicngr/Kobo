@@ -1450,6 +1450,11 @@ export default {
   'git.push': 'Push',
   'git.forcePush': 'Force push',
   'git.forcePushToggle': 'Force push (--force-with-lease)',
+  'git.pushRejectedHistory':
+    'Push rechazado: las ramas local y remota tienen historiales distintos. Después de un rebase de commits publicados, use Force push con confirmación. En otro caso, obtenga e integre los cambios remotos antes de reintentarlo.',
+  'git.pushRejectedLease':
+    'Force push rechazado: la rama remota cambió desde la última descarga. Obtenga y revise esos cambios antes de reintentarlo.',
+  'git.pushFailed': 'No se pudo enviar la rama. Abra los detalles para ver la causa.',
   'git.pushBlockedByOperation': 'Primero termina o aborta la operación {operation} en curso',
   'git.pushUpToDate': 'Nada que enviar: la rama ya está actualizada en origin',
   'git.forcePushHint':

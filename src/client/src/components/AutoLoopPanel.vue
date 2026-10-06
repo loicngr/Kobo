@@ -90,7 +90,7 @@ async function onStart() {
   try {
     await store.enableAutoLoop(ws.value.id)
   } catch (err) {
-    $q.notify({ type: 'negative', message: String(err), position: 'top', timeout: 4000 })
+    $q.notify({ type: 'negative', message: String(err), position: 'top', timeout: 0 })
   }
 }
 
@@ -99,7 +99,7 @@ async function onStop() {
   try {
     await store.disableAutoLoop(ws.value.id)
   } catch (err) {
-    $q.notify({ type: 'negative', message: String(err), position: 'top', timeout: 4000 })
+    $q.notify({ type: 'negative', message: String(err), position: 'top', timeout: 0 })
   }
 }
 
@@ -120,7 +120,7 @@ function onForceReady() {
     try {
       await store.forceAutoLoopReady(ws.value.id)
     } catch (err) {
-      $q.notify({ type: 'negative', message: String(err), position: 'top', timeout: 4000 })
+      $q.notify({ type: 'negative', message: String(err), position: 'top', timeout: 0 })
     }
   })
 }

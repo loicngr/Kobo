@@ -17,9 +17,16 @@ const form: PresetFormState = {
   description: 'Do the thing',
   tasks: ['a', 'b'],
   acceptanceCriteria: ['c'],
+  tags: ['bug', 'api'],
 }
 
 describe('capturePreset', () => {
+  it('captures an empty tag selection and copies selected tags', () => {
+    expect(capturePreset({ ...form, tags: [] }).tags).toEqual([])
+    const preset = capturePreset(form)
+    expect(preset.tags).toEqual(['bug', 'api'])
+    expect(preset.tags).not.toBe(form.tags)
+  })
   it('captures every field of the form, and nothing the form does not know', () => {
     expect(capturePreset(form)).toEqual(form)
   })
@@ -34,6 +41,15 @@ describe('capturePreset', () => {
 })
 
 describe('applyPreset', () => {
+  it('replaces tags, preserves legacy omissions, and permits clearing them', () => {
+    const preset = { tags: ['api'] }
+    const next = applyPreset(form, preset)
+    expect(next.tags).toEqual(['api'])
+    expect(next.tags).not.toBe(preset.tags)
+    expect(applyPreset(form, {}).tags).toEqual(form.tags)
+    expect(applyPreset(form, {}).tags).not.toBe(form.tags)
+    expect(applyPreset(form, { tags: [] }).tags).toEqual([])
+  })
   it('changes only the keys the preset carries', () => {
     const next = applyPreset(form, { engine: 'codex', model: 'gpt' })
     expect(next).toEqual({ ...form, engine: 'codex', model: 'gpt' })

@@ -74,7 +74,7 @@ async function onCancel(): Promise<void> {
     await store.cancelQuotaBackoff(props.workspaceId)
     $q.notify({ type: 'info', message: t('quotaBackoff.cancelled'), position: 'top', timeout: 4000 })
   } catch (err) {
-    $q.notify({ type: 'negative', message: String(err), position: 'top', timeout: 4000 })
+    $q.notify({ type: 'negative', message: String(err), position: 'top', timeout: 0 })
   } finally {
     cancelling.value = false
   }
@@ -86,7 +86,7 @@ async function onResume(): Promise<void> {
   try {
     await store.resumeQuotaBackoffNow(props.workspaceId)
   } catch (err) {
-    $q.notify({ type: 'negative', message: String(err), position: 'top', timeout: 4000 })
+    $q.notify({ type: 'negative', message: String(err), position: 'top', timeout: 0 })
   } finally {
     resuming.value = false
   }
