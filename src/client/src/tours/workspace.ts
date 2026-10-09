@@ -51,6 +51,13 @@ export const workspaceTour: TourDefinition = {
       when: () => anchorPresent('ws-actions'),
       gate: 'dom',
     },
+    {
+      id: 'ws-review-return',
+      anchor: 'ws-review-return',
+      i18nKey: 'tours.workspace.reviewReturn',
+      when: () => anchorPresent('ws-review-return'),
+      gate: 'dom',
+    },
     { id: 'ws-status', anchor: 'ws-status', i18nKey: 'tours.workspace.status' },
     tabStep('git', 'tours.workspace.git'),
     tabStep('tasks', 'tours.workspace.tasks'),
@@ -78,6 +85,24 @@ export const workspaceTour: TourDefinition = {
           const link = document.querySelector<HTMLElement>('[data-tour="ws-memory-settings"]')
           if (link) {
             link.scrollIntoView({ block: 'center' })
+            return
+          }
+          await new Promise((resolve) => setTimeout(resolve, 50))
+        }
+      },
+    },
+    {
+      id: 'ws-final-review',
+      anchor: 'ws-final-review',
+      i18nKey: 'tours.workspace.finalReview',
+      when: () => !!useWorkspaceStore().selectedWorkspaceId,
+      clickTarget: 'ws-tabnav-tools',
+      beforeShow: async () => {
+        if (!(await openRightTab('ws-tabnav-tools', 'ws-tab-tools'))) return
+        for (let attempt = 0; attempt < 40; attempt++) {
+          const settings = document.querySelector<HTMLElement>('[data-tour="ws-final-review"]')
+          if (settings) {
+            settings.scrollIntoView({ block: 'center' })
             return
           }
           await new Promise((resolve) => setTimeout(resolve, 50))

@@ -5,6 +5,7 @@ import { ChatDeliveryTracker } from 'src/services/chat-delivery'
 import { disposeTerminalEntry } from 'src/services/terminal-registry'
 import { getWorkspaceQueueHost } from 'src/services/workspace-queue-bridge'
 import { useAgentStreamStore } from 'src/stores/agent-stream'
+import { useAutoLoopReviewStore } from 'src/stores/auto-loop-review'
 import { useSessionHandoffStore } from 'src/stores/session-handoff'
 import { type GlobalSettings, useSettingsStore } from 'src/stores/settings'
 import { useUpdateStore } from 'src/stores/update'
@@ -16,6 +17,8 @@ import { openNetworkLogin } from 'src/utils/network-login-bus'
 import { resolveNotificationSoundOverride } from 'src/utils/notification-sounds'
 import { DEFAULT_TOAST_TIMEOUT_MS } from 'src/utils/notification-timeout'
 import { notify } from 'src/utils/notifications'
+import type { AutoLoopFinalReviewStatus } from '../../../shared/auto-loop-review'
+import type { ReviewReturnStatus } from '../../../shared/review-return'
 import type { SessionHandoff } from '../../../shared/session-handoff'
 import { parseMessageSource } from '../utils/message-source'
 import type { DevServerStatus } from './dev-server'
@@ -616,6 +619,7 @@ export const useWebSocketStore = defineStore('websocket', {
       if (workspaceStore.selectedWorkspaceId) handoffWorkspaces.add(workspaceStore.selectedWorkspaceId)
       await Promise.allSettled([
         workspaceStore.fetchAutoLoopStates(),
+        useAutoLoopReviewStore().refreshKnown(),
         ...[...handoffWorkspaces].map((id) => handoffs.refresh(id)),
         ...[...queuedWorkspaces].map((id) => workspaceStore.fetchAutoLoopMessages(id)),
         ...[...tracked].map((id) => devServers.fetchStatus(id)),
@@ -1501,6 +1505,7 @@ export const useWebSocketStore = defineStore('websocket', {
         }
 
         case 'workspace:deleted': {
+          if (wid) useAutoLoopReviewStore().forget(wid)
           workspaceStore.invalidateWorkspaceLifecycleReads(wid)
           // Deletion is permanent — unlike archive/worktree-purge (both
           // reversible), so this is its own case rather than being folded
@@ -1681,6 +1686,21 @@ export const useWebSocketStore = defineStore('websocket', {
           break
         }
 
+        case 'review:return-status': {
+          if (wid)
+            useAutoLoopReviewStore().setReturn(wid, (msg.payload ?? null) as unknown as ReviewReturnStatus | null)
+          break
+        }
+        case 'autoloop:final-review': {
+          if (!wid) break
+          const review = payload as unknown as AutoLoopFinalReviewStatus
+          useAutoLoopReviewStore().setFinalReview(wid, review)
+          const status = workspaceStore.autoLoopStates[wid]
+          if (status) {
+            status.finalReview = review
+          }
+          break
+        }
         case 'autoloop:messages': {
           if (wid) void workspaceStore.fetchAutoLoopMessages(wid).catch(() => {})
           break

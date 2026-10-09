@@ -116,7 +116,8 @@ src/
 | `tasks` | workspace sub-items: title, status, `is_acceptance_criterion`, sort_order; CASCADE DELETE on workspace |
 | `agent_sessions` | agent-engine sessions: pid where applicable, engine session id, status, timestamps, model, and name |
 | `ws_events` | persisted WebSocket events for replay on reconnect: type, payload, session_id, created_at |
-| `pending_review_returns` | one-shot return from a review to its original session and LLM configuration (migration v44) |
+| `pending_review_returns` | durable review-to-source return, original LLM configuration and dispatch phase (v44, extended v52) |
+| `auto_loop_final_reviews` | configured final reviewer, review/correction cycle, scoped verdict and progress tracking (v52) |
 | `pending_wakeups` | one-row-per-workspace scheduler for the `schedule_wakeup` MCP tool: target_at (ISO UTC), prompt, reason; CASCADE DELETE on workspace |
 | `pending_quota_backoffs` | persisted quota retries and their attempt counts |
 | `pending_crons` | recurring workspace schedules and their next run |
@@ -367,11 +368,33 @@ Resume selection is scoped to the target engine; never pass a reviewer's native
 conversation id to the original engine, even after cancellation or restart.
 The report reassembles text deltas/final snapshots, is bounded to 24,000 characters,
 and links back to the complete review session through the conversation tool.
-The receiving agent is asked to summarize and await instructions before fixes.
-The intent is consumed before delivery, preventing repeated ends from sending twice.
-Errors restore settings without automatically resuming; explicit stop cancels the
-return. Startup restores interrupted-review settings without replaying a possibly
-already-delivered handoff. Preserve these guards and the auto-loop interception.
+For a manual review, the receiving agent summarizes and awaits instructions before fixes.
+The durable phase tracks `reviewing`, `ready`, `dispatching`, `unknown` and `blocked`.
+Client disconnect and server shutdown preserve the original session, configurations,
+review prompt and completed return prompt. Startup resumes an interrupted reviewer
+or a known-unsent return after admission and confirmed runtime closure. Claim the
+return before dispatch; confirm it only once the engine accepts the initial input.
+Claude's session initialization is insufficient: wait for a foreground acknowledgement
+correlated with the initial message UUID (`EngineProcess.initialPromptAccepted`).
+Codex's readiness follows the accepted `turn.start` response.
+An interrupted dispatch becomes `unknown`, with explicit retry/cancel controls;
+never automatically resend a possibly delivered summary. Explicit user stop cancels
+the continuation. Errors retain recoverable intent and restore original settings.
+
+`auto_loop_final_reviews` (migration v52) adds an optional final gate configured
+before execution. Each pass starts a separate Plan review session with its own
+engine/model/effort/instructions. Only the active reviewer capability may submit
+the structured `kobo__submit_final_review` verdict. Findings become work tasks,
+invalidate finalization, and return to the exact original working session for
+automatic corrections under its original permissions. Repeat verification and a
+fresh review until zero findings, then summarize in the source session before
+completion. The source must come from the actual loop controller/ending writer, including
+adoption of an already-running session; never infer it from UI selection. A
+reviewer resume failure invalidates only its own native conversation, preserving
+other source sessions. Confirmed capacity release wakes manual durable returns
+as well as auto-loops. Preserve the loop's admission, quota, stop and stagnation safeguards;
+prose alone cannot clear the gate. Persist this gate and manual review returns
+across restart without allowing a second writer.
 `workspace:configuration` is ephemeral and updates all four LLM settings across tabs.
 
 ### Delete confirmation

@@ -39,6 +39,7 @@ import {
   getAvailableSkills,
   reconcileOrphanSessions,
   restoreRetryCountsFromDb,
+  resumePendingReviewReturns,
   setBackendPort,
   startAgent,
   startWatchdog,
@@ -295,6 +296,7 @@ const server = serve(
     quotaBackoffService.restoreOnBoot((workspaceId, pending) =>
       autoLoopService.onQuotaBackoffExpired(workspaceId, pending),
     )
+    resumePendingReviewReturns()
     autoLoopService.rehydrate()
     wakeupService.rehydrate()
     cronService.restoreOnBoot()

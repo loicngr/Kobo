@@ -19,7 +19,7 @@ Kōbō (工房, "workshop") turns *one agent, one terminal* into a real workflow
 |---|---|
 | **🗂️ Isolated worktrees, two engines** | Every workspace is its own git worktree and branch — parallel sessions never collide. Pick Claude Code or OpenAI Codex per workspace, and [continue in a fresh session](#fresh-sessions-and-llm-handoffs) with the same LLM or a different model/engine, preserving the worktree and mission history. |
 | **💬 Live chat, real diff review** | Streaming responses, inline Edit/Write diffs, a reasoning panel, and a Monaco diff viewer with **inline file editing**, conflict resolution, and one-click `Sync` / `Push` / `Open PR` / `Merge`. |
-| **🔁 Auto-loop, cron, wakeups** | Turn an agent loose on the task list: it works through tasks, retries on rate limits, and stops itself when there's nothing left, progress stalls, or it needs you. Cron schedules and one-shot wakeups keep workspaces moving on their own timeline. |
+| **🔁 Auto-loop, cron, wakeups** | Turn an agent loose on the task list: it works through tasks, retries on rate limits, and stops itself when there's nothing left, progress stalls, or it needs you. An optional [independent final review](CONFIGURATION.md#final-review-for-auto-loop) returns findings to the original session for automatic correction and repeats until none remain, with durable recovery after restart. Cron schedules and one-shot wakeups keep workspaces moving on their own timeline. |
 | **🔀 Create from a PR/MR, or from a ticket** | Pick an open pull/merge request from GitHub, GitLab, or Bitbucket and Kōbō resolves every local conflict for you before spinning up the workspace. Or start straight from a Notion page or a Sentry issue URL. |
 
 ## Quick start

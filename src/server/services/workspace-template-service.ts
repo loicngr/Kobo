@@ -1,8 +1,10 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { nanoid } from 'nanoid'
+import type { AutoLoopReviewConfiguration } from '../../shared/auto-loop-review.js'
 import { getDb } from '../db/index.js'
 import { writeJsonFileAtomically } from '../utils/atomic-json-file.js'
 import { getWorkspaceTemplatesPath } from '../utils/paths.js'
+import { getFinalReviewStatus, parseFinalReviewConfiguration } from './auto-loop-final-review-service.js'
 import { getGlobalSettings } from './settings-service.js'
 import type { AgentPermissionMode } from './workspace-service.js'
 
@@ -23,6 +25,7 @@ export interface WorkspacePreset {
   model?: string
   reasoningEffort?: string
   agentPermissionMode?: AgentPermissionMode
+  autoLoopFinalReview?: AutoLoopReviewConfiguration | null
   autoLoop?: boolean
   autoLoopSessionMode?: 'per_task' | 'continuous'
   brainstormModel?: string
@@ -77,6 +80,13 @@ export function sanitizePreset(input: unknown): WorkspacePreset {
   if (typeof input !== 'object' || input === null || Array.isArray(input)) return {}
   const raw = input as Record<string, unknown>
   const preset: WorkspacePreset = {}
+  if (raw.autoLoopFinalReview !== undefined) {
+    try {
+      preset.autoLoopFinalReview = parseFinalReviewConfiguration(raw.autoLoopFinalReview)
+    } catch {
+      /* Unsupported saved configuration is omitted. */
+    }
+  }
   for (const key of STRING_KEYS) {
     if (typeof raw[key] === 'string') preset[key] = raw[key]
   }
@@ -294,6 +304,7 @@ export function presetFromWorkspace(workspaceId: string): WorkspacePreset | null
     model: row.model,
     reasoningEffort: row.reasoning_effort,
     autoLoop: row.auto_loop === 1,
+    autoLoopFinalReview: getFinalReviewStatus(workspaceId).configuration,
     ...(row.brainstorm_model ? { brainstormModel: row.brainstorm_model } : {}),
     ...(row.description ? { description: row.description } : {}),
     tasks: tasks.filter((t) => t.is_acceptance_criterion !== 1).map((t) => t.title),

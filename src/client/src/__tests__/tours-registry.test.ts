@@ -69,9 +69,11 @@ describe('tours registry', () => {
     const gated = [
       'settings-mcp',
       'create-brainstorm',
+      'create-final-review',
       'create-comparison',
       'ws-selectors',
       'ws-sessions',
+      'ws-review-return',
       'ws-actions',
       'ws-tab-subagents',
       'pr-actions',
@@ -112,7 +114,7 @@ describe('tours registry', () => {
 })
 
 describe('create tour', () => {
-  it('follows the form top to bottom, brainstorm last since it needs auto-loop on', () => {
+  it('follows the form top to bottom, with optional auto-loop settings last', () => {
     expect(createTour.steps.map((s) => s.id)).toEqual([
       'create-template',
       'create-mission',
@@ -121,25 +123,29 @@ describe('create tour', () => {
       'create-autoloop',
       'create-comparison',
       'create-brainstorm',
+      'create-final-review',
     ])
   })
 })
 
 describe('workspace tour', () => {
-  it('waits for the lazy memory link before scrolling it into view', async () => {
+  it.each([
+    ['ws-memory-settings', 'ws-tab-memory'],
+    ['ws-final-review', 'ws-tab-tools'],
+  ])('waits for the lazy %s anchor before scrolling it into view', async (stepId, panelAnchor) => {
     setActivePinia(createPinia())
     vi.useFakeTimers()
     const panel = document.createElement('div')
-    panel.dataset.tour = 'ws-tab-memory'
+    panel.dataset.tour = panelAnchor
     panel.getClientRects = () => [{}] as unknown as DOMRectList
     panel.getBoundingClientRect = () => ({ top: 0, left: 0, right: 200, bottom: 200 }) as DOMRect
     document.body.append(panel)
     try {
-      const step = workspaceTour.steps.find((step) => step.id === 'ws-memory-settings')!
+      const step = workspaceTour.steps.find((step) => step.id === stepId)!
       const preparing = step.beforeShow!()
       await vi.advanceTimersByTimeAsync(100)
       const link = document.createElement('a')
-      link.dataset.tour = 'ws-memory-settings'
+      link.dataset.tour = stepId
       link.scrollIntoView = vi.fn()
       panel.append(link)
       await vi.advanceTimersByTimeAsync(100)

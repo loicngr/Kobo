@@ -6,6 +6,7 @@ import {
   buildE2eIterationBlock,
   buildFinalizationIterationBlock,
 } from '../../shared/auto-loop-prompts.js'
+import type { AutoLoopFinalReviewStatus } from '../../shared/auto-loop-review.js'
 import type { AutoLoopRuntime } from '../../shared/auto-loop-types.js'
 import type { AutomaticAdmissionReason, AutomaticAdmissionStatus } from '../../shared/automatic-admission.js'
 import type { MessageSource } from '../../shared/workspace-message-types.js'
@@ -14,6 +15,7 @@ import { slugifyProjectName } from '../utils/project-slug.js'
 import { deferUntilWorkspaceAvailable, isWorkspaceLifecycleBusy } from '../utils/workspace-lifecycle-guard.js'
 import { resolveWorkspaceWorktreePath } from '../utils/worktree-paths.js'
 import * as orchestrator from './agent/orchestrator.js'
+import * as finalReview from './auto-loop-final-review-service.js'
 import {
   bindLoopMessages,
   claimLoopMessages,
@@ -27,6 +29,7 @@ import { getRuntime, setRuntime } from './auto-loop-state-service.js'
 import * as cleanupScriptService from './cleanup-script-service.js'
 import * as lifecycleHookService from './lifecycle-hook-service.js'
 import * as quotaBackoffService from './quota-backoff-service.js'
+import { getReviewReturn } from './review-return-service.js'
 import * as settingsService from './settings-service.js'
 import { getSuitePrompts } from './skill-suite-prompts.js'
 import { invalidateTaskFinalization } from './task-mutations.js'
@@ -34,6 +37,7 @@ import { emit, emitEphemeral } from './websocket-service.js'
 import { createTask, listTasks, type Task, updateWorkspaceStatus } from './workspace-service.js'
 
 export interface AutoLoopStatus extends AutoLoopRuntime {
+  finalReview?: AutoLoopFinalReviewStatus
   retry_at: string | null
 
   auto_loop: boolean
@@ -97,6 +101,7 @@ export function getStatus(workspaceId: string): AutoLoopStatus {
   const pending = quotaBackoffService.getPending(workspaceId)
   return {
     ...runtime,
+    finalReview: finalReview.getFinalReviewStatus(workspaceId),
     state: !row?.auto_loop
       ? runtime.state === 'completed'
         ? 'completed'
@@ -203,12 +208,15 @@ export function enable(workspaceId: string): void {
   const db = getDb()
   db.prepare('UPDATE workspaces SET auto_loop = 1, no_progress_streak = 0 WHERE id = ?').run(workspaceId)
   orchestrator.resetAutoLoopRetries(workspaceId)
+  finalReview.resumeFinalReview(workspaceId)
   db.prepare('DELETE FROM auto_loop_progress WHERE workspace_id=?').run(workspaceId)
+  const activeSessionId = orchestrator.getActiveSessionId(workspaceId)
   setRuntime(workspaceId, {
     state: 'waiting',
     reason: null,
     diagnostic_attempts: 0,
     phase: row.auto_loop_ready ? 'execution' : 'grooming',
+    ...(activeSessionId ? { current_session_id: activeSessionId } : {}),
   })
   emitEphemeral(workspaceId, 'autoloop:enabled', {})
 
@@ -227,6 +235,12 @@ export function disable(workspaceId: string, reason: DisableReason): void {
   if (reason === 'error' || reason === 'stall' || reason === 'awaiting-clarification') {
     block(workspaceId, reason)
     return
+  }
+  if (reason !== 'completed') {
+    const pendingReview = getReviewReturn(workspaceId)
+    if (pendingReview && finalReview.isAutoLoopReview(workspaceId, pendingReview.reviewSessionId))
+      orchestrator.cancelReviewReturn(workspaceId)
+    finalReview.cancelAutoLoopFinalReview(workspaceId, reason)
   }
   const db = getDb()
   quotaBackoffService.cancel(workspaceId, 'completed')
@@ -276,10 +290,14 @@ export function onSessionEnded(
   reason: 'completed' | 'error' | 'killed' | 'watchdog',
   taskProgressDelta: number,
   instructionIntake = false,
+  sessionId?: string,
 ): void {
   const row = getRow(workspaceId)
   if (!row) return
   if (row.auto_loop !== 1) return
+  // The initial writer can have been launched outside spawnNextIteration.
+  // Capture the actual completed writer before the final-review gate runs.
+  if (sessionId) setRuntime(workspaceId, { current_session_id: sessionId })
   const settledInstructions = settleLoopMessages(
     workspaceId,
     getRuntime(workspaceId).current_session_id,
@@ -312,6 +330,7 @@ export function onSessionEnded(
   }
 
   if (getRuntime(workspaceId).state === 'blocked') return
+  finalReview.onFinalReviewCorrectionEnded(workspaceId, reason, sessionId)
   if (row.auto_loop_ready === 1 && countPendingTasks(workspaceId) === 0 && listLoopMessages(workspaceId).length === 0) {
     spawnNextIteration(workspaceId)
     return
@@ -533,15 +552,30 @@ function spawnNextIteration(workspaceId: string, opts: { throwOnStartAgentError?
     block(workspaceId, 'message-delivery-unknown')
     return
   }
+  if (getReviewReturn(workspaceId)) {
+    orchestrator.resumePendingReviewReturns(workspaceId)
+    return
+  }
   const grooming = row.auto_loop_ready !== 1
   if (listLoopMessages(workspaceId).some((m) => m.state === 'pending')) invalidateTaskFinalization(getDb(), workspaceId)
   if (!grooming) ensureFinalVerification(workspaceId)
   const task = grooming ? null : pickNextTask(workspaceId)
   const pendingInstructions = listLoopMessages(workspaceId).filter((m) => m.state === 'pending')
-  if (!grooming && !task && pendingInstructions.length === 0) {
+  const summaryContinuation = finalReview.getFinalReviewSummaryContinuation(workspaceId)
+  if (!grooming && !task && pendingInstructions.length === 0 && !summaryContinuation) {
+    if (finalReview.advanceFinalReview(workspaceId)) return
     disable(workspaceId, 'completed')
     return
   }
+  finalReview.invalidateCompletedFinalReview(workspaceId)
+  const correctionSession = finalReview.getFinalReviewCorrectionSession(workspaceId)
+  const correctionModel = correctionSession
+    ? (
+        getDb()
+          .prepare('SELECT model FROM agent_sessions WHERE id=? AND workspace_id=?')
+          .get(correctionSession, workspaceId) as { model: string | null } | undefined
+      )?.model
+    : undefined
   const runtime = getRuntime(workspaceId)
   const diagnostic = row.no_progress_streak >= NO_PROGRESS_STALL_THRESHOLD && runtime.diagnostic_attempts === 0
   const iterationNumber = runtime.iteration + 1
@@ -582,6 +616,7 @@ ${AUTO_LOOP_HARD_RULES}`
 Three iterations produced no task progress. Read recent workspace events, explain the blocker, and try a different approach or decompose the task. Never mark unfinished or unverified work done. If intervention is required, state the precise action needed.
 ${prompt}`
   prompt += `\n${AUTO_LOOP_ITERATION_RULES}`
+  if (summaryContinuation && !task) prompt = summaryContinuation
 
   const globalSettings = settingsService.getGlobalSettings()
   const projectSlug = globalSettings.worktreesPrefixByProject
@@ -593,7 +628,7 @@ ${prompt}`
   const storedMode = row.agent_permission_mode
   const agentPermissionMode =
     storedMode === 'bypass' || storedMode === 'strict' || storedMode === 'interactive' ? storedMode : 'plan'
-  if (!grooming && agentPermissionMode === 'plan') {
+  if (!grooming && !summaryContinuation && agentPermissionMode === 'plan') {
     const message =
       'Execution requires an explicit permission choice. Change this workspace from Plan to an execution mode (strict, interactive where supported, or bypass), then resume auto-loop. Permissions were not changed.'
     block(workspaceId, message)
@@ -620,16 +655,16 @@ ${prompt}`
       workspaceId,
       worktreePath,
       prompt,
-      row.model,
+      correctionModel ?? row.model,
       // resume=false spawns a fresh session per iteration (default); resume=true
       // (auto_loop_session_mode='continuous') resumes the workspace's last
       // session so the agent keeps full context across tasks. When there is no
       // prior session to resume (e.g. the very first iteration), orchestrator's
       // resolveSessionForResume gracefully falls back to a fresh session — no
       // special-casing needed here.
-      grooming || continuousSession,
+      grooming || continuousSession || !!correctionSession,
       agentPermissionMode,
-      undefined,
+      correctionSession,
       row.reasoning_effort,
     )
     agentSessionId = agent.agentSessionId
@@ -710,7 +745,8 @@ export function onQuotaBackoffExpired(workspaceId: string, pending?: quotaBackof
   const row = getRow(workspaceId)
   if (!row) return
   if (row.archived_at !== null) return
-  if (row.auto_loop !== 1) return
+  const pendingReview = getReviewReturn(workspaceId)
+  if (row.auto_loop !== 1 && !pendingReview) return
   if (row.status !== 'quota') return
   if (pendingQuotaStops.has(workspaceId) || orchestrator.isShuttingDown() || isWorkspaceLifecycleBusy(workspaceId)) {
     deferQuotaRetry(workspaceId, pending)
@@ -718,7 +754,11 @@ export function onQuotaBackoffExpired(workspaceId: string, pending?: quotaBackof
   }
   if (orchestrator.hasController(workspaceId)) {
     pendingQuotaStops.add(workspaceId)
-    const stopped = orchestrator.stopAgentAndWait(workspaceId, undefined, 'replacement')
+    const stopped = orchestrator.stopAgentAndWait(
+      workspaceId,
+      undefined,
+      pendingReview ? 'review-recovery' : 'replacement',
+    )
     // The timer already consumed its row. Persist recovery immediately, after the
     // technical stop's synchronous cancellation, so shutdown/crash during the await loses no intent.
     deferQuotaRetry(workspaceId, pending)
@@ -726,14 +766,21 @@ export function onQuotaBackoffExpired(workspaceId: string, pending?: quotaBackof
       .then((outcome) => {
         // Stop, archive, or a manual replacement may have superseded this retry while we awaited the engine.
         const current = getRow(workspaceId)
-        if (!current || current.archived_at || !current.auto_loop || current.status !== 'quota') return
+        if (
+          !current ||
+          current.archived_at ||
+          (!current.auto_loop && !getReviewReturn(workspaceId)) ||
+          current.status !== 'quota'
+        )
+          return
         if (outcome === 'timeout' || outcome === 'failed' || orchestrator.isShuttingDown()) {
           deferQuotaRetry(workspaceId, pending)
           return
         }
         updateWorkspaceStatus(workspaceId, 'idle')
         quotaBackoffService.cancel(workspaceId, 'completed')
-        spawnNextIteration(workspaceId)
+        if (getReviewReturn(workspaceId)) orchestrator.resumePendingReviewReturns(workspaceId)
+        else spawnNextIteration(workspaceId)
       })
       .catch((err) => {
         console.error(`[auto-loop] quota controller stop failed for '${workspaceId}':`, err)
@@ -746,7 +793,8 @@ export function onQuotaBackoffExpired(workspaceId: string, pending?: quotaBackof
   // when a slot frees, even if no agent can start at this instant.
   updateWorkspaceStatus(workspaceId, 'idle')
   emitEphemeral(workspaceId, 'agent:quota-backoff-cancelled', { reason: 'completed' })
-  spawnNextIteration(workspaceId)
+  if (getReviewReturn(workspaceId)) orchestrator.resumePendingReviewReturns(workspaceId)
+  else spawnNextIteration(workspaceId)
 }
 
 /**

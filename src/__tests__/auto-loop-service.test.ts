@@ -16,7 +16,17 @@ vi.mock('../server/services/agent/orchestrator.js', () => ({
   runningAgentCount: vi.fn(() => 0),
   isShuttingDown: vi.fn(() => false),
   resetAutoLoopRetries: vi.fn(),
+  getAgentStatus: vi.fn(() => 'running'),
+  getActiveSessionId: vi.fn(),
+  resumePendingReviewReturns: vi.fn(),
+  cancelReviewReturn: vi.fn(),
 }))
+
+vi.mock('../server/services/review-service.js', async (original) => ({
+  ...(await original<typeof import('../server/services/review-service.js')>()),
+  startWorkspaceReview: vi.fn(async () => ({ ok: true, messageSent: true, newSession: true })),
+}))
+vi.mock('../server/services/cleanup-script-service.js', () => ({ onAutoLoopCompleted: vi.fn() }))
 
 vi.mock('../server/services/lifecycle-hook-service.js', () => ({
   onAutoLoopDisabled: vi.fn(async () => {}),
@@ -1225,6 +1235,124 @@ describe('auto-loop-service', () => {
       const worktreePathArg = (calls[calls.length - 1] as unknown[])[1] as string
       expect(worktreePathArg).not.toContain('sekur')
       expect(worktreePathArg).toBe(expectedWorktreeDir)
+    })
+  })
+  describe('final review cycle', () => {
+    async function prepareFinalReview() {
+      const svc = await import('../server/services/auto-loop-service.js')
+      const finalReview = await import('../server/services/auto-loop-final-review-service.js')
+      const workspace = await import('../server/services/workspace-service.js')
+      const review = await import('../server/services/review-service.js')
+      const orch = await import('../server/services/agent/orchestrator.js')
+      const { getDb } = await import('../server/db/index.js')
+      const { setRuntime } = await import('../server/services/auto-loop-state-service.js')
+      const source = workspace.createIdleSession(wsId).id
+      getDb()
+        .prepare(
+          "UPDATE agent_sessions SET engine_session_id='original-native',model='custom-session-model' WHERE id=?",
+        )
+        .run(source)
+      const final = workspace.createTask(wsId, { title: '[FINAL] Verify everything' })
+      getDb().prepare("UPDATE tasks SET status='done',verification='{}' WHERE id=?").run(final.id)
+      getDb().prepare('UPDATE workspaces SET auto_loop=1,auto_loop_ready=1 WHERE id=?').run(wsId)
+      setRuntime(wsId, { current_session_id: source })
+      finalReview.configureFinalReview(wsId, {
+        engine: 'claude-code',
+        model: 'auto',
+        reasoningEffort: 'auto',
+        additionalInstructions: '',
+      })
+      vi.mocked(review.startWorkspaceReview).mockImplementation(async () => {
+        const session = workspace.createIdleSession(wsId)
+        finalReview.bindReviewSession(wsId, session.id, source)
+        return { ok: true, messageSent: true, newSession: true }
+      })
+      vi.mocked(orch.getActiveSessionId).mockImplementation(
+        () => finalReview.getFinalReviewStatus(wsId).reviewSessionId ?? undefined,
+      )
+      return { svc, finalReview, workspace, review, orch, getDb, source, final }
+    }
+    it('runs findings, verified fixes in the exact source, a fresh clean review, then cleanup', async () => {
+      const { svc, finalReview, workspace, review, orch, source, final } = await prepareFinalReview()
+      const cleanup = await import('../server/services/cleanup-script-service.js')
+      svc.onSessionEnded(wsId, 'completed', 1, false, source)
+      await new Promise((resolve) => setImmediate(resolve))
+      expect(review.startWorkspaceReview).toHaveBeenCalledTimes(1)
+      const first = finalReview.getFinalReviewStatus(wsId).reviewSessionId!
+      const token = finalReview.getAutoLoopReviewLaunch(wsId, first)!.mcpEnv.KOBO_FINAL_REVIEW_TOKEN
+      finalReview.submitFinalReviewReport(wsId, first, token, {
+        summary: 'Two issues',
+        findings: [
+          { severity: 'important', file: 'a.ts', description: 'Bug A', recommendation: 'Fix A' },
+          { severity: 'minor', file: 'b.ts', description: 'Bug B', recommendation: 'Fix B' },
+        ],
+      })
+      finalReview.prepareAutoLoopReviewReturn(wsId, first)
+      expect(workspace.getTask(final.id, wsId)?.status).toBe('pending')
+      const proof = { method: 'test', summary: 'Verified', checks: [{ name: 'regression', status: 'passed' as const }] }
+      const findings = workspace.listTasks(wsId).filter((t) => t.role !== 'finalization')
+      workspace.updateTask(findings[0].id, { status: 'done', verification: proof })
+      svc.onSessionEnded(wsId, 'completed', 1, false, source)
+      await new Promise((resolve) => setImmediate(resolve))
+      expect(orch.startAgent).toHaveBeenLastCalledWith(
+        wsId,
+        expect.any(String),
+        expect.stringContaining(findings[1].id),
+        'custom-session-model',
+        true,
+        expect.any(String),
+        source,
+        expect.any(String),
+      )
+      expect(cleanup.onAutoLoopCompleted).not.toHaveBeenCalled()
+      workspace.updateTask(findings[1].id, { status: 'done', verification: proof })
+      workspace.updateTask(final.id, { status: 'done', verification: proof })
+      svc.onSessionEnded(wsId, 'completed', 1, false, source)
+      await new Promise((resolve) => setImmediate(resolve))
+      expect(review.startWorkspaceReview).toHaveBeenCalledTimes(2)
+      const second = finalReview.getFinalReviewStatus(wsId).reviewSessionId!
+      expect(second).not.toBe(first)
+      finalReview.submitFinalReviewReport(
+        wsId,
+        second,
+        finalReview.getAutoLoopReviewLaunch(wsId, second)!.mcpEnv.KOBO_FINAL_REVIEW_TOKEN,
+        { summary: 'All clear', findings: [] },
+      )
+      finalReview.prepareAutoLoopReviewReturn(wsId, second)
+      expect(svc.getStatus(wsId).auto_loop).toBe(true)
+      svc.onSessionEnded(wsId, 'completed', 0, false, source)
+      expect(svc.getStatus(wsId)).toMatchObject({
+        auto_loop: false,
+        state: 'completed',
+        finalReview: { state: 'completed', cycle: 2, findingsCount: 0 },
+      })
+      expect(cleanup.onAutoLoopCompleted).toHaveBeenCalledExactlyOnceWith(wsId)
+    })
+    it('resumes the original clean-summary turn after server restart instead of starting another reviewer', async () => {
+      const { svc, finalReview, review, orch, source } = await prepareFinalReview()
+      svc.onSessionEnded(wsId, 'completed', 1, false, source)
+      await new Promise((resolve) => setImmediate(resolve))
+      const session = finalReview.getFinalReviewStatus(wsId).reviewSessionId!
+      finalReview.submitFinalReviewReport(
+        wsId,
+        session,
+        finalReview.getAutoLoopReviewLaunch(wsId, session)!.mcpEnv.KOBO_FINAL_REVIEW_TOKEN,
+        { summary: 'All clear', findings: [] },
+      )
+      finalReview.prepareAutoLoopReviewReturn(wsId, session)
+      svc.rehydrate()
+      expect(review.startWorkspaceReview).toHaveBeenCalledTimes(1)
+      expect(orch.startAgent).toHaveBeenLastCalledWith(
+        wsId,
+        expect.any(String),
+        expect.stringContaining('summary'),
+        'custom-session-model',
+        true,
+        expect.any(String),
+        source,
+        expect.any(String),
+      )
+      expect(svc.getStatus(wsId).auto_loop).toBe(true)
     })
   })
 })

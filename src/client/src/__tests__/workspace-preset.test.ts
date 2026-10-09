@@ -41,6 +41,23 @@ describe('capturePreset', () => {
 })
 
 describe('applyPreset', () => {
+  it('round-trips final review settings and distinguishes disabling from legacy omission', () => {
+    const configuration = {
+      engine: 'codex',
+      model: 'auto',
+      reasoningEffort: 'high',
+      additionalInstructions: 'Check migrations',
+    }
+    const configured = { ...form, autoLoopFinalReview: configuration }
+    const preset = capturePreset(configured)
+    const restored = applyPreset(form, preset)
+    expect(restored.autoLoopFinalReview).toEqual(configuration)
+    expect(restored.autoLoopFinalReview).not.toBe(configuration)
+    expect(applyPreset(configured, {}).autoLoopFinalReview).toEqual(configuration)
+    expect(
+      applyPreset(configured, capturePreset({ ...form, autoLoopFinalReview: null })).autoLoopFinalReview,
+    ).toBeNull()
+  })
   it('replaces tags, preserves legacy omissions, and permits clearing them', () => {
     const preset = { tags: ['api'] }
     const next = applyPreset(form, preset)

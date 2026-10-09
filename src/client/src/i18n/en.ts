@@ -1,4 +1,33 @@
 export default {
+  'autoLoop.finalReview.title': 'Final review settings',
+  'autoLoop.finalReview.description':
+    'After all tasks and final checks, a separate reviewer checks the changes. The final working session fixes the findings, then a fresh review runs until no findings remain.',
+  'autoLoop.finalReview.enabled': 'Automatic final review',
+  'autoLoop.finalReview.configure': 'Configure reviewer',
+  'autoLoop.finalReview.save': 'Save review settings',
+  'autoLoop.finalReview.hint':
+    'Fresh read-only review, then return to the final working session to fix findings. Settings are saved with this workspace.',
+  'autoLoop.finalReview.loadFailed': 'Could not load final review settings.',
+  'autoLoop.finalReview.saveFailed': 'Could not save final review settings.',
+  'autoLoop.finalReview.cycle': 'Review cycle {count}',
+  'autoLoop.finalReview.findings': '{count} findings',
+  'autoLoop.finalReview.disabled': 'Disabled',
+  'autoLoop.finalReview.pending': 'Final review scheduled',
+  'autoLoop.finalReview.reviewing': 'Final review in progress',
+  'autoLoop.finalReview.fixing': 'Fixing review findings',
+  'autoLoop.finalReview.completed': 'Final review passed',
+  'autoLoop.finalReview.blocked': 'Final review needs attention',
+  'reviewReturn.title': 'Review return',
+  'reviewReturn.reviewing': 'Review in progress. The return to the original session is saved.',
+  'reviewReturn.ready': 'Review complete. Returning to the original session.',
+  'reviewReturn.dispatching': 'Sending the review summary to the original session.',
+  'reviewReturn.unknown':
+    'The server stopped before delivery was confirmed. The original session may already have received the summary.',
+  'reviewReturn.blocked': 'The return to the original session needs attention.',
+  'reviewReturn.retry': 'Retry return',
+  'reviewReturn.cancel': 'Cancel return',
+  'reviewReturn.retryUnknown': 'Retry delivery (may send the summary twice)',
+  'reviewReturn.actionFailed': 'Could not update the review return.',
   'memory.panel.contextsHint': 'What was sent to the LLM for this conversation.',
   'memory.panel.entriesHint': 'Persistent notes you can edit or reuse.',
   'memory.panel.proposalsHint': 'Agent suggestions awaiting your approval or rejection.',
@@ -1167,7 +1196,17 @@ export default {
   'tours.create.brainstorm.description':
     'Run the first brainstorming session on a different model, then switch back for the iterations.',
   'tours.create.autoloop.title': 'Auto-loop',
-  'tours.create.autoloop.description': 'Let the agent chain sessions until every task is done, or it stalls.',
+  'tours.create.autoloop.description':
+    'Let the agent complete the tasks and final checks. An optional independent final review repeats after corrections until there are no findings; stalled work pauses for attention.',
+  'tours.create.finalReview.title': 'Configure the final review',
+  'tours.create.finalReview.description':
+    'Choose the reviewer engine, model, reasoning effort and instructions in advance. The review runs in a separate read-only session; the original agent fixes findings and repeats the review until none remain.',
+  'tours.workspace.finalReview.title': 'Final review and corrections',
+  'tours.workspace.finalReview.description':
+    'Configure the optional final reviewer here, before it starts. Once tasks and final checks pass, a separate session reviews the work. Findings return to the original session for automatic corrections and another review. Closing Kōbō preserves the cycle.',
+  'tours.workspace.reviewReturn.title': 'Return from a review',
+  'tours.workspace.reviewReturn.description':
+    'The summary returns to the original session, even after restarting Kōbō. If delivery is uncertain, inspect that conversation before Retry; Cancel abandons the return. Manual reviews wait for your instructions before fixes; auto-loop reviews correct findings automatically.',
   'tours.create.comparison.title': 'Compare two engines',
   'tours.create.comparison.description':
     'Create two sibling workspaces on the same task and compare their commits, tasks and activity.',

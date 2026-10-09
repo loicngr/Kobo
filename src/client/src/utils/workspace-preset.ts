@@ -13,6 +13,7 @@
  */
 
 import type { AgentPermissionMode } from 'src/constants/permissionModes'
+import type { AutoLoopReviewConfiguration } from '../../../shared/auto-loop-review'
 
 export type { AgentPermissionMode }
 
@@ -27,6 +28,7 @@ export interface WorkspacePreset {
   agentPermissionMode?: AgentPermissionMode
   autoLoop?: boolean
   autoLoopSessionMode?: 'per_task' | 'continuous'
+  autoLoopFinalReview?: AutoLoopReviewConfiguration | null
   brainstormModel?: string
   brainstormReasoningEffort?: string
   skipSetupScript?: boolean
@@ -47,6 +49,7 @@ export interface PresetFormState {
   agentPermissionMode: AgentPermissionMode
   autoLoop: boolean
   autoLoopSessionMode: 'per_task' | 'continuous'
+  autoLoopFinalReview?: AutoLoopReviewConfiguration | null
   brainstormModel: string
   brainstormReasoningEffort: string
   skipSetupScript: boolean
@@ -78,6 +81,8 @@ export function capturePreset(form: PresetFormState): WorkspacePreset {
   preset.agentPermissionMode = form.agentPermissionMode
   preset.autoLoop = form.autoLoop
   preset.autoLoopSessionMode = form.autoLoopSessionMode
+  if (form.autoLoopFinalReview !== undefined)
+    preset.autoLoopFinalReview = form.autoLoopFinalReview ? { ...form.autoLoopFinalReview } : null
   preset.skipSetupScript = form.skipSetupScript
   // Unlike omitted legacy tags, [] explicitly restores an untagged form.
   preset.tags = [...form.tags]
@@ -101,6 +106,8 @@ export function applyPreset(form: PresetFormState, preset: WorkspacePreset): Pre
   if (preset.agentPermissionMode !== undefined) next.agentPermissionMode = preset.agentPermissionMode
   if (preset.autoLoop !== undefined) next.autoLoop = preset.autoLoop
   if (preset.autoLoopSessionMode !== undefined) next.autoLoopSessionMode = preset.autoLoopSessionMode
+  if (preset.autoLoopFinalReview !== undefined)
+    next.autoLoopFinalReview = preset.autoLoopFinalReview ? { ...preset.autoLoopFinalReview } : null
   if (preset.skipSetupScript !== undefined) next.skipSetupScript = preset.skipSetupScript
   if (preset.tasks !== undefined) next.tasks = [...preset.tasks]
   if (preset.acceptanceCriteria !== undefined) next.acceptanceCriteria = [...preset.acceptanceCriteria]

@@ -1,4 +1,5 @@
 import type { ReviewConfiguration } from '../../shared/review.js'
+import type { ReviewReturnStatus } from '../../shared/review-return.js'
 import { getDb } from '../db/index.js'
 import { emitEphemeral } from './websocket-service.js'
 import { updateWorkspaceEngineConfiguration } from './workspace-service.js'
@@ -9,7 +10,13 @@ export interface ReviewReturn {
   originalSessionId: string
   original: ReviewConfiguration & { sessionModel?: string }
   review: ReviewConfiguration
+  phase?: ReviewReturnPhase
+  reviewPrompt?: string | null
+  returnPrompt?: string | null
+  error?: string | null
 }
+
+export type ReviewReturnPhase = 'reviewing' | 'ready' | 'dispatching' | 'unknown' | 'blocked'
 
 interface ReviewReturnRow {
   workspace_id: string
@@ -17,13 +24,17 @@ interface ReviewReturnRow {
   original_session_id: string
   original_configuration: string
   review_configuration: string
+  phase: ReviewReturnPhase
+  review_prompt: string | null
+  return_prompt: string | null
+  last_error: string | null
 }
 
 export function registerReviewReturn(pending: ReviewReturn): void {
   getDb()
     .prepare(`INSERT INTO pending_review_returns
-    (workspace_id, review_session_id, original_session_id, original_configuration, review_configuration, created_at)
-    VALUES (?, ?, ?, ?, ?, ?)`)
+    (workspace_id, review_session_id, original_session_id, original_configuration, review_configuration, created_at, review_prompt)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`)
     .run(
       pending.workspaceId,
       pending.reviewSessionId,
@@ -31,7 +42,9 @@ export function registerReviewReturn(pending: ReviewReturn): void {
       JSON.stringify(pending.original),
       JSON.stringify(pending.review),
       new Date().toISOString(),
+      pending.reviewPrompt ?? null,
     )
+  emitEphemeral(pending.workspaceId, 'review:return-status', getReviewReturnStatus(pending.workspaceId))
 }
 
 export function getReviewReturn(workspaceId: string, reviewSessionId?: string): ReviewReturn | null {
@@ -45,15 +58,23 @@ export function getReviewReturn(workspaceId: string, reviewSessionId?: string): 
     originalSessionId: row.original_session_id,
     original: JSON.parse(row.original_configuration) as ReviewConfiguration,
     review: JSON.parse(row.review_configuration) as ReviewConfiguration,
+    phase: row.phase,
+    reviewPrompt: row.review_prompt,
+    returnPrompt: row.return_prompt,
+    error: row.last_error,
   }
 }
 
-/** Consume before dispatch: a repeated end or a restart must never send twice. */
-export function restoreReviewConfiguration(workspaceId: string, reviewSessionId?: string): ReviewReturn | null {
+/** Restore initial settings; cancellation removes intent, suspension preserves it. */
+export function restoreReviewConfiguration(
+  workspaceId: string,
+  reviewSessionId?: string,
+  preserve = false,
+): ReviewReturn | null {
   const pending = getReviewReturn(workspaceId, reviewSessionId)
   if (!pending) return null
   getDb().transaction(() => {
-    getDb().prepare('DELETE FROM pending_review_returns WHERE workspace_id = ?').run(workspaceId)
+    if (!preserve) getDb().prepare('DELETE FROM pending_review_returns WHERE workspace_id = ?').run(workspaceId)
     const original = pending.original
     updateWorkspaceEngineConfiguration(
       workspaceId,
@@ -64,15 +85,72 @@ export function restoreReviewConfiguration(workspaceId: string, reviewSessionId?
     )
   })()
   emitEphemeral(workspaceId, 'workspace:configuration', pending.original)
+  if (!preserve) emitEphemeral(workspaceId, 'review:return-status', null)
   return pending
 }
 
-/** On restart, restore settings but do not replay a possibly delivered handoff. */
+/** Restore user settings without discarding an unfinished review/return. */
 export function reconcileReviewReturns(): void {
-  const rows = getDb().prepare('SELECT workspace_id FROM pending_review_returns').all() as Array<{
-    workspace_id: string
-  }>
-  for (const row of rows) restoreReviewConfiguration(row.workspace_id)
+  for (const pending of listReviewReturns()) {
+    if (pending.phase === 'dispatching')
+      setReviewReturnPhase(
+        pending.workspaceId,
+        'unknown',
+        'The server stopped while sending the review report. Check the original session before retrying to avoid duplicate delivery.',
+      )
+    restoreReviewConfiguration(pending.workspaceId, undefined, true)
+  }
+}
+
+export function getReviewReturnStatus(workspaceId: string): ReviewReturnStatus | null {
+  const pending = getReviewReturn(workspaceId)
+  return pending
+    ? {
+        reviewSessionId: pending.reviewSessionId,
+        originalSessionId: pending.originalSessionId,
+        phase: pending.phase ?? 'reviewing',
+        error: pending.error ?? null,
+      }
+    : null
+}
+
+export function listReviewReturns(): ReviewReturn[] {
+  return (getDb().prepare('SELECT workspace_id FROM pending_review_returns').all() as Array<{ workspace_id: string }>)
+    .map((row) => getReviewReturn(row.workspace_id))
+    .filter((row): row is ReviewReturn => row !== null)
+}
+
+export function setReviewReturnPhase(
+  workspaceId: string,
+  phase: ReviewReturnPhase,
+  error: string | null = null,
+  prompt?: string,
+): void {
+  getDb()
+    .prepare(
+      'UPDATE pending_review_returns SET phase = ?, last_error = ?, return_prompt = COALESCE(?, return_prompt) WHERE workspace_id = ?',
+    )
+    .run(phase, error, prompt ?? null, workspaceId)
+  emitEphemeral(workspaceId, 'review:return-status', getReviewReturnStatus(workspaceId))
+}
+
+/** Claim the known-unsent report before any asynchronous engine dispatch. */
+export function claimReviewReturn(workspaceId: string): boolean {
+  const claimed =
+    getDb()
+      .prepare(
+        "UPDATE pending_review_returns SET phase = 'dispatching', last_error = NULL WHERE workspace_id = ? AND phase = 'ready'",
+      )
+      .run(workspaceId).changes === 1
+  if (claimed) emitEphemeral(workspaceId, 'review:return-status', getReviewReturnStatus(workspaceId))
+  return claimed
+}
+
+export function completeReviewReturn(workspaceId: string): void {
+  const removed = getDb()
+    .prepare("DELETE FROM pending_review_returns WHERE workspace_id = ? AND phase = 'dispatching'")
+    .run(workspaceId).changes
+  if (removed) emitEphemeral(workspaceId, 'review:return-status', null)
 }
 
 /** Reassemble the last assistant message, handling deltas and final snapshots. */

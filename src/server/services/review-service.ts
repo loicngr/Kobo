@@ -1,18 +1,21 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { type ReviewConfiguration, reviewConfigurationChanged, type StartReviewRequest } from '../../shared/review.js'
+import { getDb } from '../db/index.js'
 import { assertAgentStopped } from '../utils/agent-stop-result.js'
 import * as gitOps from '../utils/git-ops.js'
 import { assertWorkspaceLifecycleAvailable } from '../utils/workspace-lifecycle-guard.js'
 import { listEngines } from './agent/engines/registry.js'
 import * as agentManager from './agent/orchestrator.js'
+import { bindReviewSession, getFinalReviewSourceSession } from './auto-loop-final-review-service.js'
+import { canStartAutomatically } from './auto-loop-service.js'
+import { beginReviewLaunch, finishReviewLaunch } from './review-launch-runtime.js'
 import { getReviewReturn, registerReviewReturn, restoreReviewConfiguration } from './review-return-service.js'
 import { getActiveReviewTemplate, renderReviewTemplate } from './review-template-service.js'
 import * as wsService from './websocket-service.js'
 import * as workspaceService from './workspace-service.js'
 
 const execFileAsync = promisify(execFile)
-const launching = new Set<string>()
 
 export class ReviewRequestError extends Error {
   constructor(
@@ -20,6 +23,12 @@ export class ReviewRequestError extends Error {
     readonly status: 400 | 404 | 409,
   ) {
     super(message)
+  }
+}
+
+export class ReviewAdmissionDeferred extends Error {
+  constructor() {
+    super('Automatic review is waiting for agent capacity')
   }
 }
 
@@ -44,7 +53,11 @@ export function parseReviewRequest(input: unknown): StartReviewRequest {
   return body as StartReviewRequest
 }
 
-function resolveConfiguration(workspace: ReviewConfiguration, body: StartReviewRequest): ReviewConfiguration {
+function resolveConfiguration(
+  workspace: ReviewConfiguration,
+  body: StartReviewRequest,
+  allowCustomModel = false,
+): ReviewConfiguration {
   const engineId = body.engine ?? workspace.engine
   const engine = listEngines().find((e) => e.id === engineId)
   if (!engine) throw new ReviewRequestError(`Unknown engine '${engineId}'`, 400)
@@ -58,6 +71,7 @@ function resolveConfiguration(workspace: ReviewConfiguration, body: StartReviewR
   }
   // Preserve an existing custom model when unchanged; reject incompatible selections.
   if (
+    !allowCustomModel &&
     (changedEngine || config.model !== workspace.model) &&
     !engine.capabilities.models.some((m) => m.id === config.model)
   )
@@ -86,20 +100,27 @@ function configure(id: string, config: ReviewConfiguration): void {
   wsService.emitEphemeral(id, 'workspace:configuration', config)
 }
 
-export async function startWorkspaceReview(id: string, input: unknown) {
-  if (launching.has(id)) throw new ReviewRequestError('A review is already being started for this workspace', 409)
-  launching.add(id)
+export async function startWorkspaceReview(
+  id: string,
+  input: unknown,
+  internal?: { autoLoopFinalReview: true; shouldLaunch?: () => boolean },
+) {
+  const launch = beginReviewLaunch(id)
+  if (!launch) throw new ReviewRequestError('A review is already being started for this workspace', 409)
   try {
     const workspace = workspaceService.getWorkspace(id)
     if (!workspace) throw new ReviewRequestError(`Workspace '${id}' not found`, 404)
     const body = parseReviewRequest(input)
-    const configuration = resolveConfiguration(workspace, body)
+    const configuration = resolveConfiguration(workspace, body, internal?.autoLoopFinalReview)
     assertWorkspaceLifecycleAvailable(id)
     if (workspace.archivedAt || workspace.worktreePurgedAt)
       throw new ReviewRequestError('Restore the workspace before starting a review', 409)
     if (getReviewReturn(id))
       throw new ReviewRequestError('A review with an automatic return is already in progress', 409)
-    const originalSession = workspaceService.getActiveSession(id)
+    const sourceSessionId = internal?.autoLoopFinalReview ? getFinalReviewSourceSession(id) : null
+    const originalSession = internal?.autoLoopFinalReview
+      ? workspaceService.listSessions(id).find((session) => session.id === sourceSessionId)
+      : workspaceService.getActiveSession(id)
     const changed = reviewConfigurationChanged(workspace, configuration)
     const differsFromSession =
       !!originalSession &&
@@ -157,20 +178,35 @@ export async function startWorkspaceReview(id: string, input: unknown) {
         '\n\nFinish with a standalone summary of your review findings, including severity, file/line references, recommended fixes and any remaining uncertainty. This final message will be handed back to the original agent session. Do not rely on earlier messages to explain your findings.'
 
     assertWorkspaceLifecycleAvailable(id)
+    if (launch.cancelled) throw new ReviewRequestError('Review launch was cancelled', 409)
     const current = workspaceService.getWorkspace(id)
     if (!current || current.archivedAt || current.worktreePurgedAt || current.status === 'compacting')
       throw new ReviewRequestError('The workspace is no longer available for a review', 409)
     if (reviewConfigurationChanged(current, workspace))
       throw new ReviewRequestError('The workspace configuration changed; reopen the review dialog', 409)
-    if (body.returnToSession && workspaceService.getActiveSession(id)?.id !== originalSession?.id)
+    if (
+      body.returnToSession &&
+      (internal?.autoLoopFinalReview ? getFinalReviewSourceSession(id) : workspaceService.getActiveSession(id)?.id) !==
+        originalSession?.id
+    )
       throw new ReviewRequestError('The current session changed; reopen the review dialog', 409)
+    if (internal?.autoLoopFinalReview && (!current.autoLoop || internal.shouldLaunch?.() === false))
+      throw new ReviewRequestError('Final review was cancelled before launch', 409)
     let emitSessionId: string
     if (newSession) {
       assertAgentStopped(await agentManager.stopAgentAndWait(id, undefined, 'replacement'))
       assertWorkspaceLifecycleAvailable(id)
+      if (launch.cancelled) throw new ReviewRequestError('Review launch was cancelled', 409)
+      if (
+        internal?.autoLoopFinalReview &&
+        (!workspaceService.getWorkspace(id)?.autoLoop || internal.shouldLaunch?.() === false)
+      )
+        throw new ReviewRequestError('Final review was cancelled before launch', 409)
       if (agentManager.getAgentStatus(id))
         throw new ReviewRequestError('Another agent has started in this workspace', 409)
+      if (internal?.autoLoopFinalReview && !canStartAutomatically(id)) throw new ReviewAdmissionDeferred()
       let pendingSessionId: string | undefined
+      let reviewLaunch: { mcpEnv: Record<string, string>; promptSuffix: string } | null = null
       try {
         if (body.returnToSession && originalSession) {
           pendingSessionId = workspaceService.createIdleSession(id).id
@@ -186,10 +222,18 @@ export async function startWorkspaceReview(id: string, input: unknown) {
               agentPermissionMode: workspace.agentPermissionMode,
             },
             review: configuration,
+            reviewPrompt: rendered,
           })
         }
+        if (internal?.autoLoopFinalReview && pendingSessionId && originalSession) {
+          reviewLaunch = bindReviewSession(id, pendingSessionId, originalSession.id)
+          rendered += reviewLaunch.promptSuffix
+          getDb()
+            .prepare('UPDATE pending_review_returns SET review_prompt = ? WHERE workspace_id = ?')
+            .run(rendered, id)
+        }
         if (changed) configure(id, configuration)
-        const agent = agentManager.startAgent(
+        const startArgs: Parameters<typeof agentManager.startAgent> = [
           id,
           worktreePath,
           rendered,
@@ -198,7 +242,12 @@ export async function startWorkspaceReview(id: string, input: unknown) {
           configuration.agentPermissionMode,
           pendingSessionId,
           configuration.reasoningEffort,
-        )
+        ]
+        if (reviewLaunch) {
+          startArgs[8] = undefined
+          startArgs[9] = { mcpEnv: reviewLaunch.mcpEnv }
+        }
+        const agent = agentManager.startAgent(...startArgs)
         workspaceService.updateWorkspaceStatus(id, 'executing')
         emitSessionId = agent.agentSessionId
       } catch (err) {
@@ -231,6 +280,6 @@ export async function startWorkspaceReview(id: string, input: unknown) {
     wsService.emit(id, 'user:message', { content: rendered, sender: 'user' }, emitSessionId)
     return { ok: true, messageSent: true, newSession }
   } finally {
-    launching.delete(id)
+    finishReviewLaunch(id)
   }
 }

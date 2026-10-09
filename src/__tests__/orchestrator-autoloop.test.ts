@@ -132,7 +132,7 @@ describe('orchestrator auto-loop integration', () => {
       exitCode: 0,
     })
 
-    expect(autoLoop.onSessionEnded).toHaveBeenCalledWith(wsId, 'completed', 1, false)
+    expect(autoLoop.onSessionEnded).toHaveBeenCalledWith(wsId, 'completed', 1, false, 'sess-1')
   })
 
   it('session:ended without prior session:started falls back to delta=0', async () => {
@@ -146,7 +146,7 @@ describe('orchestrator auto-loop integration', () => {
       exitCode: 0,
     })
 
-    expect(autoLoop.onSessionEnded).toHaveBeenCalledWith(wsId, 'completed', 0, false)
+    expect(autoLoop.onSessionEnded).toHaveBeenCalledWith(wsId, 'completed', 0, false, 'sess-1')
   })
 
   it('uses the persisted baseline when session:started was lost during a restart', async () => {
@@ -178,7 +178,7 @@ describe('orchestrator auto-loop integration', () => {
       exitCode: 0,
     })
 
-    expect(autoLoop.onSessionEnded).toHaveBeenCalledWith(wsId, 'completed', 1, false)
+    expect(autoLoop.onSessionEnded).toHaveBeenCalledWith(wsId, 'completed', 1, false, 'persisted-session')
     expect(
       db.prepare('SELECT task_progress_baseline FROM agent_sessions WHERE id = ?').get('persisted-session'),
     ).toEqual({ task_progress_baseline: null })
@@ -252,8 +252,8 @@ describe('orchestrator auto-loop integration', () => {
       reason: 'completed',
       exitCode: 0,
     })
-    expect(autoLoop.onSessionEnded).toHaveBeenNthCalledWith(1, wsId, 'completed', 0, false)
-    expect(autoLoop.onSessionEnded).toHaveBeenNthCalledWith(2, wsId, 'completed', 0, false)
+    expect(autoLoop.onSessionEnded).toHaveBeenNthCalledWith(1, wsId, 'completed', 0, false, 'sess-1')
+    expect(autoLoop.onSessionEnded).toHaveBeenNthCalledWith(2, wsId, 'completed', 0, false, 'sess-2')
   })
 
   // Regression for C1: the internal cleanup that removes the controller from
@@ -380,7 +380,7 @@ describe('orchestrator auto-loop integration', () => {
     emitters[1]?.({ kind: 'session:ended', reason: 'error', exitCode: 1 })
 
     expect(autoLoop.onSessionEnded).toHaveBeenCalledOnce()
-    expect(autoLoop.onSessionEnded).toHaveBeenCalledWith(wsId, 'completed', 1, false)
+    expect(autoLoop.onSessionEnded).toHaveBeenCalledWith(wsId, 'completed', 1, false, replacement.agentSessionId)
     expect(cleanupScript.onSessionEnded).toHaveBeenCalledOnce()
     const rows = (await import('../server/db/index.js'))
       .getDb()
@@ -891,7 +891,7 @@ describe('resume_failed error handling', () => {
     })
     orch.__test__.handleEvent(wsId, 'sess-1', { kind: 'session:ended', reason: 'error', exitCode: 1 })
 
-    expect(autoLoop.onSessionEnded).toHaveBeenCalledWith(wsId, 'completed', expect.any(Number), false)
+    expect(autoLoop.onSessionEnded).toHaveBeenCalledWith(wsId, 'completed', expect.any(Number), false, 'sess-1')
   })
 
   it('sets workspace status to completed (not error) after resume_failed', async () => {
@@ -913,13 +913,12 @@ describe('resume_failed error handling', () => {
     expect(ws?.status).toBe('completed')
   })
 
-  it('clears every stale engine_session_id for the current workspace so the next resume starts fresh', async () => {
+  it('clears only the failed session conversation and preserves other sessions', async () => {
     const orch = await import('../server/services/agent/orchestrator.js')
     const db = (await import('../server/db/index.js')).getDb()
     await setWorkspaceExecuting(wsId)
 
-    // Seed two stale engine session ids: the current failure and an older row
-    // that must not be selected by the next resume fallback.
+    // A failed resume says nothing about the validity of another conversation.
     db.prepare(
       "INSERT INTO agent_sessions (id, workspace_id, pid, status, engine_session_id, started_at) VALUES ('sess-old', ?, null, 'error', 'stale-old', datetime('now', '-1 day'))",
     ).run(wsId)
@@ -937,6 +936,6 @@ describe('resume_failed error handling', () => {
     const rows = db
       .prepare('SELECT engine_session_id FROM agent_sessions WHERE workspace_id = ? ORDER BY id')
       .all(wsId) as Array<{ engine_session_id: string | null }>
-    expect(rows).toEqual([{ engine_session_id: null }, { engine_session_id: null }])
+    expect(rows).toEqual([{ engine_session_id: null }, { engine_session_id: 'stale-old' }])
   })
 })

@@ -949,3 +949,124 @@ it('starts fresh when the actual running model differs from unchanged workspace 
   expect(agentManager.sendMessageForFallback).not.toHaveBeenCalled()
   expect(workspaceService.updateWorkspaceEngineConfiguration).not.toHaveBeenCalled()
 })
+
+it.each(['fetch', 'stop'])('cancels a manual review stopped during %s preparation', async (stage) => {
+  const { cancelReviewLaunch } = await import('../server/services/review-launch-runtime.js')
+  vi.mocked(workspaceService.getActiveSession).mockReturnValue({
+    ...fakeSession,
+    engineSessionId: 'original-native',
+    engine: fakeWorkspace.engine,
+  } as never)
+  if (stage === 'fetch')
+    vi.mocked(gitOps.fetchSourceBranchOrThrowAsync).mockImplementationOnce(async () => {
+      cancelReviewLaunch('ws-1')
+    })
+  else
+    vi.mocked(agentManager.stopAgentAndWait).mockImplementationOnce(async () => {
+      cancelReviewLaunch('ws-1')
+      return 'stopped'
+    })
+  const response = await app.request('/api/workspaces/ws-1/start-review', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ returnToSession: true }),
+  })
+  expect(response.status).toBe(409)
+  expect(agentManager.startAgent).not.toHaveBeenCalled()
+  expect(reviewReturns.registerReviewReturn).not.toHaveBeenCalled()
+})
+
+it.each(['before-stop', 'after-stop'])(
+  'does not revive final review disabled %s even after re-enabling auto-loop',
+  async (stage) => {
+    const finalReview = await import('../server/services/auto-loop-final-review-service.js')
+    const { startWorkspaceReview } = await import('../server/services/review-service.js')
+    const source = vi.spyOn(finalReview, 'getFinalReviewSourceSession').mockReturnValue('final-writer')
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ ...fakeWorkspace, autoLoop: true })
+    vi.mocked(workspaceService.listSessions).mockReturnValue([
+      { ...fakeSession, id: 'final-writer', engineSessionId: 'writer-native', engine: fakeWorkspace.engine },
+    ] as never)
+    let allowed = stage !== 'before-stop'
+    if (stage === 'after-stop')
+      vi.mocked(agentManager.stopAgentAndWait).mockImplementationOnce(async () => {
+        allowed = false
+        return 'stopped'
+      })
+    try {
+      await expect(
+        startWorkspaceReview(
+          'ws-1',
+          { returnToSession: true },
+          { autoLoopFinalReview: true, shouldLaunch: () => allowed },
+        ),
+      ).rejects.toThrow('cancelled')
+      expect(agentManager.startAgent).not.toHaveBeenCalled()
+      expect(reviewReturns.registerReviewReturn).not.toHaveBeenCalled()
+    } finally {
+      source.mockRestore()
+    }
+  },
+)
+
+it('returns a final review to the loop writer independently of the selected UI session', async () => {
+  const loops = await import('../server/services/auto-loop-service.js')
+  const admission = vi.spyOn(loops, 'canStartAutomatically').mockReturnValue(true)
+  const finalReview = await import('../server/services/auto-loop-final-review-service.js')
+  const { startWorkspaceReview } = await import('../server/services/review-service.js')
+  const source = vi.spyOn(finalReview, 'getFinalReviewSourceSession').mockReturnValue('final-writer')
+  const bind = vi.spyOn(finalReview, 'bindReviewSession').mockReturnValue({
+    mcpEnv: { KOBO_FINAL_REVIEW_TOKEN: 'scoped-token' },
+    promptSuffix: ' Submit the structured report.',
+  })
+  vi.mocked(workspaceService.getWorkspace).mockReturnValue({ ...fakeWorkspace, autoLoop: true })
+  vi.mocked(workspaceService.listSessions).mockReturnValue([
+    { ...fakeSession, id: 'final-writer', engineSessionId: 'writer-native', engine: fakeWorkspace.engine },
+  ] as never)
+  vi.mocked(workspaceService.getActiveSession).mockReturnValue({ ...fakeSession, id: 'ui-selected-other' } as never)
+  vi.mocked(workspaceService.createIdleSession).mockReturnValue({ ...fakeSession, id: 'review-session' } as never)
+  try {
+    await startWorkspaceReview('ws-1', { returnToSession: true }, { autoLoopFinalReview: true })
+    expect(reviewReturns.registerReviewReturn).toHaveBeenCalledWith(
+      expect.objectContaining({ originalSessionId: 'final-writer', reviewSessionId: 'review-session' }),
+    )
+    expect(bind).toHaveBeenCalledWith('ws-1', 'review-session', 'final-writer')
+    expect(agentManager.startAgent).toHaveBeenCalledWith(
+      'ws-1',
+      fakeWorkspace.worktreePath,
+      expect.stringContaining('structured report'),
+      fakeWorkspace.model,
+      false,
+      'plan',
+      'review-session',
+      'auto',
+      undefined,
+      { mcpEnv: { KOBO_FINAL_REVIEW_TOKEN: 'scoped-token' } },
+    )
+  } finally {
+    source.mockRestore()
+    bind.mockRestore()
+    admission.mockRestore()
+  }
+})
+
+it('defers final review when another workspace fills capacity during git preparation', async () => {
+  const loops = await import('../server/services/auto-loop-service.js')
+  const finalReview = await import('../server/services/auto-loop-final-review-service.js')
+  const { startWorkspaceReview } = await import('../server/services/review-service.js')
+  const admission = vi.spyOn(loops, 'canStartAutomatically').mockReturnValue(false)
+  const source = vi.spyOn(finalReview, 'getFinalReviewSourceSession').mockReturnValue('final-writer')
+  vi.mocked(workspaceService.getWorkspace).mockReturnValue({ ...fakeWorkspace, autoLoop: true })
+  vi.mocked(workspaceService.listSessions).mockReturnValue([
+    { ...fakeSession, id: 'final-writer', engineSessionId: 'writer-native', engine: fakeWorkspace.engine },
+  ] as never)
+  try {
+    await expect(
+      startWorkspaceReview('ws-1', { returnToSession: true }, { autoLoopFinalReview: true }),
+    ).rejects.toThrow('capacity')
+    expect(agentManager.startAgent).not.toHaveBeenCalled()
+    expect(reviewReturns.registerReviewReturn).not.toHaveBeenCalled()
+  } finally {
+    source.mockRestore()
+    admission.mockRestore()
+  }
+})

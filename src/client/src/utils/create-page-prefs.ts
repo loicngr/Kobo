@@ -1,9 +1,12 @@
+import type { AutoLoopReviewConfiguration } from '../../../shared/auto-loop-review'
+
 const STORAGE_KEY = 'kobo:create-page-prefs'
 
 export interface CreatePagePrefs {
   projectPath?: string
   autoLoop?: boolean
   autoLoopSessionMode?: 'per_task' | 'continuous'
+  autoLoopFinalReview?: AutoLoopReviewConfiguration | null
   brainstormModel?: string
   reasoningEffortByModel?: Record<string, string>
 }
@@ -36,6 +39,24 @@ export function loadCreatePagePrefs(): CreatePagePrefs {
   }
   if (typeof raw.brainstormModel === 'string' && raw.brainstormModel.length > 0) {
     out.brainstormModel = raw.brainstormModel
+  }
+  const review = raw.autoLoopFinalReview
+  if (review === null) out.autoLoopFinalReview = null
+  else if (
+    isPlainObject(review) &&
+    (review.engine === 'claude-code' || review.engine === 'codex') &&
+    typeof review.model === 'string' &&
+    review.model.trim() &&
+    typeof review.reasoningEffort === 'string' &&
+    review.reasoningEffort.trim() &&
+    typeof review.additionalInstructions === 'string'
+  ) {
+    out.autoLoopFinalReview = {
+      engine: review.engine,
+      model: review.model,
+      reasoningEffort: review.reasoningEffort,
+      additionalInstructions: review.additionalInstructions,
+    }
   }
   if (isPlainObject(raw.reasoningEffortByModel)) {
     const entries = Object.entries(raw.reasoningEffortByModel).filter(

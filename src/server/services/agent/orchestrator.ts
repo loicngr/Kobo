@@ -14,6 +14,13 @@ import {
   getSkillsPath,
 } from '../../utils/paths.js'
 import { assertWorkspaceLifecycleAvailable, workspaceLifecycleReason } from '../../utils/workspace-lifecycle-guard.js'
+import {
+  cancelAutoLoopFinalReview,
+  getAutoLoopReviewLaunch,
+  isAutoLoopReview,
+  prepareAutoLoopReviewReturn,
+  retryAutoLoopReviewReturn,
+} from '../auto-loop-final-review-service.js'
 import { listLoopMessages, settleLoopMessages } from '../auto-loop-message-service.js'
 import * as autoLoopService from '../auto-loop-service.js'
 import * as cleanupScriptService from '../cleanup-script-service.js'
@@ -34,7 +41,16 @@ import {
   markMemoryContextSubmitted,
 } from '../memory-context-service.js'
 import * as quotaBackoffService from '../quota-backoff-service.js'
-import { buildReviewReturnPrompt, getReviewReturn, restoreReviewConfiguration } from '../review-return-service.js'
+import { cancelReviewLaunch } from '../review-launch-runtime.js'
+import {
+  buildReviewReturnPrompt,
+  claimReviewReturn,
+  completeReviewReturn,
+  getReviewReturn,
+  listReviewReturns,
+  restoreReviewConfiguration,
+  setReviewReturnPhase,
+} from '../review-return-service.js'
 import { activateSession, SESSION_RECENCY_ORDER } from '../session-activity-service.js'
 import { requestHandoffStop, suspendHandoffTransfers } from '../session-handoff-runtime.js'
 import { getEffectiveSettings, getGlobalSettings } from '../settings-service.js'
@@ -45,6 +61,7 @@ import * as permissionPolicyService from '../workspace-permission-policy-service
 import {
   getWorkspace as getWs,
   markWorkspaceUnread,
+  updateWorkspaceEngineConfiguration,
   updateWorkspaceStatus,
   type WorkspaceStatus,
 } from '../workspace-service.js'
@@ -134,6 +151,7 @@ function notifyCapacityAvailable(stoppedWorkspaceId: string): void {
     stoppedCapacityOwners.clear()
     if (shuttingDown) return
     try {
+      resumePendingReviewReturns()
       autoLoopService.resumeWaitingWorkspaces(excluded)
     } catch (err) {
       console.error('[orchestrator] capacity resume failed:', err)
@@ -685,11 +703,13 @@ function resolveSessionForResume(
   } else {
     lastSession = db
       .prepare(
-        `SELECT id, engine_session_id, engine FROM agent_sessions WHERE workspace_id = ? AND COALESCE(engine, 'claude-code') = ? AND engine_session_id IS NOT NULL AND activation_order >= 0 ORDER BY ${SESSION_RECENCY_ORDER} LIMIT 1`,
+        `SELECT id, engine_session_id, engine FROM agent_sessions WHERE workspace_id = ? AND COALESCE(engine, 'claude-code') = ? AND activation_order >= 0 ORDER BY ${SESSION_RECENCY_ORDER} LIMIT 1`,
       )
       .get(workspaceId, engineId) as AgentSessionRow | undefined
   }
 
+  // A failed latest conversation must start fresh, not silently fall back to
+  // an older, unrelated conversation whose native ID is still valid.
   // A workspace can now contain conversations from multiple engines. The
   // unscoped in-memory ID may belong to the reviewer, so only trust its DB row.
   const engineSessionId = lastSession?.engine_session_id
@@ -980,6 +1000,21 @@ function handleEvent(
   if (sourceController && !terminalAfterClose) {
     if (ev.kind === 'session:ended') {
       if (pendingTerminalControllers.has(sourceController) || finalizedControllers.has(sourceController)) return
+      if (
+        controllers.get(workspaceId) === sourceController &&
+        getReviewReturn(workspaceId, agentSessionId) &&
+        ev.reason === 'completed' &&
+        (ev.exitCode === 0 || ev.exitCode === null)
+      ) {
+        setReviewReturnPhase(
+          workspaceId,
+          'ready',
+          null,
+          isAutoLoopReview(workspaceId, agentSessionId)
+            ? undefined
+            : buildReviewReturnPrompt(workspaceId, agentSessionId),
+        )
+      }
       // Real engines may announce their logical result before their writer
       // exits. Delay all terminal effects, including review return and quota
       // retries, until SessionController confirms closure.
@@ -1228,7 +1263,7 @@ function handleEvent(
   const returningReview =
     (ev.kind === 'error' || ev.kind === 'session:ended') && !!getReviewReturn(workspaceId, agentSessionId)
   const quotaError = ev.kind === 'error' && (ev.category === 'quota' || /\b429\b/.test(ev.message))
-  if (quotaError && !sourceControllerIsStopping && !returningReview && !transferring) {
+  if (quotaError && !sourceControllerIsStopping && !transferring) {
     void handleQuota(workspaceId, agentSessionId)
   }
   if (
@@ -1245,7 +1280,7 @@ function handleEvent(
   }
   if (ev.kind === 'error' && ev.category === 'resume_failed') {
     rememberResumeFailed(workspaceId, agentSessionId)
-    clearStaleEngineSessionId(workspaceId)
+    clearStaleEngineSessionId(workspaceId, agentSessionId)
   }
   if (ev.kind === 'session:ended') {
     if (sourceIsSuperseded && sourceController) {
@@ -1342,39 +1377,31 @@ function handleEvent(
     const progressDelta = consumeMonotoneTaskProgress(workspaceId, snapshot)
 
     if (returningReview) {
-      const pending = restoreReviewConfiguration(workspaceId, agentSessionId)
-      const workspace = getWs(workspaceId)
-      if (
-        pending &&
-        workspace &&
-        !shuttingDown &&
-        !workspace.archivedAt &&
-        !workspace.worktreePurgedAt &&
-        autoLoopService.getStatus(workspaceId).state !== 'blocked' &&
-        (ev.reason === 'completed' || ev.reason === 'watchdog') &&
-        (ev.exitCode === null || ev.exitCode === 0)
-      ) {
-        try {
-          const prompt = buildReviewReturnPrompt(workspaceId, agentSessionId)
-          const original = pending.original
-          startAgent(
+      const pending = getReviewReturn(workspaceId, agentSessionId)
+      if (pending && sourceController?.stopCause !== 'shutdown' && sourceController?.stopCause !== 'review-recovery') {
+        if (quotaBackoffService.getPending(workspaceId)) {
+          setReviewReturnPhase(workspaceId, 'reviewing')
+          notifyCapacityAvailable(workspaceId)
+          return
+        }
+        if ((ev.reason === 'completed' || ev.reason === 'watchdog') && (ev.exitCode === null || ev.exitCode === 0)) {
+          try {
+            const prompt =
+              prepareAutoLoopReviewReturn(workspaceId, agentSessionId) ??
+              buildReviewReturnPrompt(workspaceId, agentSessionId)
+            setReviewReturnPhase(workspaceId, 'ready', null, prompt)
+            resumePendingReviewReturns(workspaceId)
+          } catch (error) {
+            restoreReviewConfiguration(workspaceId, agentSessionId, true)
+            setReviewReturnPhase(workspaceId, 'blocked', error instanceof Error ? error.message : String(error))
+          }
+        } else {
+          restoreReviewConfiguration(workspaceId, agentSessionId, true)
+          setReviewReturnPhase(
             workspaceId,
-            workspace.worktreePath,
-            prompt,
-            original.sessionModel ?? original.model,
-            true,
-            original.agentPermissionMode,
-            pending.originalSessionId,
-            original.reasoningEffort,
+            'blocked',
+            'The review ended before completion. Retry the review or cancel the return.',
           )
-          updateWorkspaceStatus(workspaceId, 'executing')
-          emit(workspaceId, 'user:message', { content: prompt, sender: 'system-prompt' }, pending.originalSessionId)
-        } catch (err) {
-          routeEvent(workspaceId, agentSessionId, {
-            kind: 'error',
-            category: 'other',
-            message: `Could not return to the original session: ${err instanceof Error ? err.message : String(err)}`,
-          })
         }
       }
       notifyCapacityAvailable(workspaceId)
@@ -1394,7 +1421,10 @@ function handleEvent(
     // disable() clears it, and the cleanup hook needs to know whether this was
     // a mid-loop session (never cleans) or a standalone one.
     const wasAutoLoop = autoLoopService.getStatus(workspaceId).auto_loop
-    autoLoopService.onSessionEnded(workspaceId, effectiveReason, progressDelta, instructionIntake)
+    // Durable manual reviews also wait for capacity. Wake them before admitting
+    // another auto-loop iteration now that this controller has actually closed.
+    resumePendingReviewReturns()
+    autoLoopService.onSessionEnded(workspaceId, effectiveReason, progressDelta, instructionIntake, agentSessionId)
     // A slot just freed. Any auto-loop workspace parked on the concurrency
     // limit has no session of its own to bring it back; this one does it.
     autoLoopService.resumeWaitingWorkspaces()
@@ -1603,6 +1633,7 @@ export interface AgentLaunchOptions {
   mcpEnv?: Record<string, string>
   /** Generation turns must not settle instructions or advance loop progress. */
   handoffGeneration?: boolean
+  requireInputAcceptance?: boolean
   onStarted?: () => void
   onError?: (message: string) => void
   onEnded?: (event: Extract<AgentEvent, { kind: 'session:ended' }>) => void
@@ -1626,6 +1657,124 @@ function revokeControllerMemoryCapability(controller: SessionController): void {
   if (!token) return
   revokeMemoryCapability(token)
   controllerMemoryCapabilities.delete(controller)
+}
+
+const reviewReturnDispatchOwners = new Map<string, symbol>()
+
+/** Resume durable review work only after the previous runtime has closed and admission allows it. */
+export function resumePendingReviewReturns(onlyWorkspaceId?: string): void {
+  if (shuttingDown) return
+  for (const pending of listReviewReturns()) {
+    const id = pending.workspaceId
+    if (onlyWorkspaceId && onlyWorkspaceId !== id) continue
+    if (pending.phase === 'unknown' || pending.phase === 'blocked' || pending.phase === 'dispatching') continue
+    const workspace = getWs(id)
+    if (!workspace || !autoLoopService.canStartAutomatically(id)) continue
+    try {
+      if (pending.phase === 'ready') {
+        const originalSession = getDb()
+          .prepare('SELECT engine_session_id, engine FROM agent_sessions WHERE id = ? AND workspace_id = ?')
+          .get(pending.originalSessionId, id) as { engine_session_id: string | null; engine: string | null } | undefined
+        if (
+          !originalSession?.engine_session_id ||
+          (originalSession.engine && originalSession.engine !== pending.original.engine)
+        )
+          throw new Error('The original session cannot be resumed. Cancel the return and inspect the review report.')
+        const prompt =
+          pending.returnPrompt ??
+          prepareAutoLoopReviewReturn(id, pending.reviewSessionId) ??
+          buildReviewReturnPrompt(id, pending.reviewSessionId)
+        setReviewReturnPhase(id, 'ready', null, prompt)
+        restoreReviewConfiguration(id, undefined, true)
+        const dispatchOwner = Symbol('review-return')
+        reviewReturnDispatchOwners.set(id, dispatchOwner)
+        startAgent(
+          id,
+          workspace.worktreePath,
+          prompt,
+          pending.original.sessionModel ?? pending.original.model,
+          true,
+          pending.original.agentPermissionMode,
+          pending.originalSessionId,
+          pending.original.reasoningEffort,
+          () => {
+            if (!claimReviewReturn(id)) throw new Error('The review return is already being dispatched')
+          },
+          {
+            requireInputAcceptance: true,
+            onStarted: () => {
+              if (reviewReturnDispatchOwners.get(id) !== dispatchOwner) return
+              reviewReturnDispatchOwners.delete(id)
+              completeReviewReturn(id)
+              if (!controllers.has(id) && !getReviewReturn(id)) autoLoopService.resumeWaitingWorkspaces()
+            },
+            onError: (message) => {
+              if (reviewReturnDispatchOwners.get(id) === dispatchOwner) setReviewReturnPhase(id, 'unknown', message)
+            },
+          },
+        )
+        updateWorkspaceStatus(id, 'executing')
+        emit(id, 'user:message', { content: prompt, sender: 'system-prompt' }, pending.originalSessionId)
+      } else {
+        const session = getDb()
+          .prepare('SELECT engine_session_id FROM agent_sessions WHERE id = ? AND workspace_id = ?')
+          .get(pending.reviewSessionId, id) as { engine_session_id: string | null } | undefined
+        if (!session) throw new Error('The review session no longer exists')
+        const extra = getAutoLoopReviewLaunch(id, pending.reviewSessionId)
+        const prompt = session.engine_session_id
+          ? 'Kōbō was restarted during this read-only review. Continue the review in this same session and finish with a standalone findings summary. Do not change files or ask questions.' +
+            (extra?.promptSuffix ?? '')
+          : pending.reviewPrompt
+        if (!prompt)
+          throw new Error(
+            'The review was interrupted before its native session was saved and has no durable launch prompt. Cancel and launch a new review.',
+          )
+        updateWorkspaceEngineConfiguration(
+          id,
+          pending.review.engine,
+          pending.review.model,
+          pending.review.reasoningEffort,
+          'plan',
+        )
+        emitEphemeral(id, 'workspace:configuration', { ...pending.review, agentPermissionMode: 'plan' })
+        startAgent(
+          id,
+          workspace.worktreePath,
+          prompt,
+          pending.review.model,
+          !!session.engine_session_id,
+          'plan',
+          pending.reviewSessionId,
+          pending.review.reasoningEffort,
+          undefined,
+          { mcpEnv: extra?.mcpEnv },
+        )
+        updateWorkspaceStatus(id, 'executing')
+        emit(id, 'user:message', { content: prompt, sender: 'system-prompt' }, pending.reviewSessionId)
+      }
+    } catch (error) {
+      restoreReviewConfiguration(id, undefined, true)
+      setReviewReturnPhase(id, 'blocked', error instanceof Error ? error.message : String(error))
+    }
+  }
+}
+
+export function retryReviewReturn(workspaceId: string): void {
+  if (getAgentStatus(workspaceId)) throw new Error('Stop the active agent before retrying the review return')
+  const pending = getReviewReturn(workspaceId)
+  if (!pending) throw new Error('No review return is pending')
+  if (isAutoLoopReview(workspaceId, pending.reviewSessionId))
+    retryAutoLoopReviewReturn(workspaceId, !pending.returnPrompt)
+  setReviewReturnPhase(workspaceId, pending.returnPrompt ? 'ready' : 'reviewing')
+  resumePendingReviewReturns(workspaceId)
+}
+
+export function cancelReviewReturn(workspaceId: string): void {
+  reviewReturnDispatchOwners.delete(workspaceId)
+  cancelReviewLaunch(workspaceId)
+  cancelAutoLoopFinalReview(workspaceId, 'review-return-cancelled')
+  if (!getReviewReturn(workspaceId)) return
+  restoreReviewConfiguration(workspaceId)
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -1840,8 +1989,6 @@ export function startAgent(
           () => markMemoryContextFailed(contextId),
         )
       }
-      if (launch?.onStarted && ready) await ready
-      if (controller.status !== 'stopping') launch?.onStarted?.()
       const pid = controller.pid
       if (pid !== undefined) {
         try {
@@ -1851,6 +1998,16 @@ export function startAgent(
           console.error('[orchestrator] Failed to update pid:', err)
         }
       }
+      if (launch?.onStarted && ready) await ready
+      if (launch?.requireInputAcceptance && controller.engineProcess?.initialPromptAccepted) {
+        try {
+          await controller.engineProcess.initialPromptAccepted
+        } catch (error) {
+          launch.onError?.(error instanceof Error ? error.message : String(error))
+          return
+        }
+      }
+      if (controller.status !== 'stopping') launch?.onStarted?.()
     })
     .catch((err) => {
       revokeControllerMemoryCapability(controller)
@@ -1948,7 +2105,7 @@ export type { StopAgentOutcome } from '../../utils/agent-stop-result.js'
 async function stopController(workspaceId: string, ctrl: SessionController, cause: StopCause = 'user'): Promise<void> {
   revokeControllerMemoryCapability(ctrl)
   ctrl.stopCause = cause
-  restoreReviewConfiguration(workspaceId, ctrl.agentSessionId)
+  restoreReviewConfiguration(workspaceId, ctrl.agentSessionId, cause === 'shutdown' || cause === 'review-recovery')
   preCompactionStatus.delete(ctrl)
 
   // Normalize the state synchronously so callers (archive, delete, manual
@@ -2027,6 +2184,7 @@ export async function stopAgentAndWait(
   /** Only `user` disables auto-loop; technical stops preserve its persisted intent. */
   cause: StopCause = 'user',
 ): Promise<StopAgentOutcome> {
+  if (['user', 'delete', 'purge', 'archive'].includes(cause)) cancelReviewReturn(workspaceId)
   const finishHandoffStop = ['user', 'delete', 'purge', 'archive'].includes(cause)
     ? requestHandoffStop(workspaceId)
     : undefined
@@ -2631,14 +2789,16 @@ export function forgetRateLimitInfo(workspaceId: string): void {
 }
 
 /**
- * Null out every engine_session_id for the workspace and clear its cache.
- * This runs only while the failing session owns the workspace, ensuring a
- * future resume cannot fall back to an older stale engine session.
+ * Invalidate only the failed session. Other conversations (especially a
+ * pending review's source) remain valid and must stay explicitly resumable.
  */
-function clearStaleEngineSessionId(workspaceId: string): void {
+function clearStaleEngineSessionId(workspaceId: string, agentSessionId: string): void {
   try {
     const db = getDb()
-    db.prepare('UPDATE agent_sessions SET engine_session_id = NULL WHERE workspace_id = ?').run(workspaceId)
+    db.prepare('UPDATE agent_sessions SET engine_session_id = NULL WHERE workspace_id = ? AND id = ?').run(
+      workspaceId,
+      agentSessionId,
+    )
     sessionIds.delete(workspaceId)
   } catch (err) {
     console.error('[orchestrator] Failed to clear stale engine session ID:', err)

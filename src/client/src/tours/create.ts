@@ -29,5 +29,15 @@ export const createTour: TourDefinition = {
       when: () => anchorPresent('create-brainstorm'),
       gate: 'dom',
     },
+    {
+      id: 'create-final-review',
+      anchor: 'create-final-review',
+      i18nKey: 'tours.create.finalReview',
+      when: () => anchorPresent('create-final-review'),
+      gate: 'dom',
+      beforeShow: async () => {
+        document.querySelector<HTMLElement>('[data-tour="create-final-review"]')?.scrollIntoView({ block: 'center' })
+      },
+    },
   ],
 }

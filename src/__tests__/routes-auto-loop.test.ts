@@ -22,6 +22,7 @@ vi.mock('../server/services/agent/orchestrator.js', () => ({
   stopAgentAndWait: vi.fn().mockResolvedValue('not-running'),
   sendMessage: vi.fn(),
   hasController: vi.fn(() => false),
+  getActiveSessionId: vi.fn(),
   runningAgentCount: vi.fn(() => 0),
   isShuttingDown: vi.fn(() => false),
   resetAutoLoopRetries: vi.fn(),
@@ -524,5 +525,62 @@ describe('durable auto-loop instruction API', () => {
     expect(getDb().prepare('SELECT content FROM auto_loop_messages WHERE workspace_id=?').get(wsId)).toEqual({
       content: 'first',
     })
+  })
+})
+
+describe('final review configuration routes', () => {
+  const configuration = {
+    engine: 'claude-code',
+    model: 'auto',
+    reasoningEffort: 'auto',
+    additionalInstructions: 'Check every requirement',
+  }
+  const endpoint = () => `/api/workspaces/${wsId}/auto-loop/final-review`
+  it('saves settings without launching and returns them in bulk loop state', async () => {
+    const patch = await app.request(endpoint(), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ configuration }),
+    })
+    expect(patch.status).toBe(200)
+    expect(await patch.json()).toMatchObject({ configuration, state: 'pending', cycle: 0 })
+    const snapshot = await app.request(`/api/workspaces/${wsId}/auto-loop`)
+    expect(await snapshot.json()).toMatchObject({ finalReview: { configuration, state: 'pending' } })
+    const orch = await import('../server/services/agent/orchestrator.js')
+    expect(orch.startAgent).not.toHaveBeenCalled()
+    const clear = await app.request(endpoint(), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ configuration: null }),
+    })
+    expect(await clear.json()).toMatchObject({ configuration: null, state: 'disabled' })
+  })
+  it('validates body, engine, effort and workspace identity', async () => {
+    for (const body of [
+      {},
+      { configuration: [] },
+      { configuration: { ...configuration, engine: 'unknown' } },
+      { configuration: { ...configuration, reasoningEffort: 'unknown' } },
+    ]) {
+      expect(
+        (
+          await app.request(endpoint(), {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          })
+        ).status,
+      ).toBe(400)
+    }
+    expect((await app.request('/api/workspaces/missing/auto-loop/final-review')).status).toBe(404)
+    expect(
+      (
+        await app.request(`${endpoint()}/report`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId: 'fake', token: 'fake', report: { summary: 'clear', findings: [] } }),
+        })
+      ).status,
+    ).toBe(409)
   })
 })

@@ -2,8 +2,8 @@
   <q-dialog :model-value="modelValue" :persistent="loading" @update:model-value="emit('update:modelValue', $event)">
     <q-card class="review-card text-kobo-1">
       <q-card-section>
-        <div class="text-h6">{{ $t('review.title') }}</div>
-        <div class="text-body2 text-kobo-2 q-mt-xs">{{ $t('review.subtitle') }}</div>
+        <div class="text-h6">{{ $t(scheduled ? 'autoLoop.finalReview.title' : 'review.title') }}</div>
+        <div class="text-body2 text-kobo-2 q-mt-xs">{{ $t(scheduled ? 'autoLoop.finalReview.description' : 'review.subtitle') }}</div>
       </q-card-section>
 
       <q-separator dark />
@@ -48,7 +48,7 @@
         />
       </q-card-section>
 
-      <q-card-section class="q-pt-none">
+      <q-card-section v-if="!scheduled" class="q-pt-none">
         <q-toggle v-model="newSession" :disable="loading || forceNewSession" :label="$t('review.newSession')" color="primary" dark />
         <div class="text-caption text-kobo-3 q-mt-xs">{{ $t(forceNewSession ? 'review.newSessionRequired' : 'review.newSessionHint') }}</div>
         <template v-if="newSession">
@@ -62,7 +62,7 @@
         <q-btn
           no-caps
           color="primary"
-          :label="$t('review.start')"
+          :label="$t(scheduled ? 'autoLoop.finalReview.save' : 'review.start')"
           :loading="loading"
           :disable="!workspace || loading"
           @click="submit"
@@ -79,6 +79,7 @@ import { PERMISSION_MODES_BY_ENGINE } from 'src/constants/permissionModes'
 import { useSettingsStore } from 'src/stores/settings'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import type { AutoLoopReviewConfiguration } from '../../../shared/auto-loop-review'
 import { type ReviewConfiguration, reviewConfigurationChanged, type StartReviewRequest } from '../../../shared/review'
 
 const props = defineProps<{
@@ -87,6 +88,8 @@ const props = defineProps<{
   workspace: (ReviewConfiguration & { id: string }) | null
   canReturnToSession: boolean
   currentSession?: { engine?: string | null; model?: string | null } | null
+  mode?: 'immediate' | 'auto-loop'
+  scheduledConfiguration?: AutoLoopReviewConfiguration | null
 }>()
 const emit = defineEmits<{
   (e: 'update:modelValue', v: boolean): void
@@ -94,6 +97,7 @@ const emit = defineEmits<{
 }>()
 const { t } = useI18n()
 const settings = useSettingsStore()
+const scheduled = computed(() => props.mode === 'auto-loop')
 const additionalInstructions = ref('')
 const requestedNewSession = ref(false)
 const returnToSession = ref(false)
@@ -104,7 +108,7 @@ const agentPermissionMode = ref<ReviewConfiguration['agentPermissionMode']>('byp
 // A review that returns to the original session always runs read-only (the
 // server enforces it too); the user's choice is kept for when the return is off.
 const effectivePermissionMode = computed<ReviewConfiguration['agentPermissionMode']>(() =>
-  returnToSession.value ? 'plan' : agentPermissionMode.value,
+  scheduled.value || returnToSession.value ? 'plan' : agentPermissionMode.value,
 )
 const configuration = computed<ReviewConfiguration>(() => ({
   engine: engine.value,
@@ -115,6 +119,7 @@ const configuration = computed<ReviewConfiguration>(() => ({
 const forceNewSession = computed(() => {
   const current = props.currentSession
   return (
+    scheduled.value ||
     returnToSession.value ||
     (!!props.workspace && reviewConfigurationChanged(configuration.value, props.workspace)) ||
     (!!current?.engine && current.engine !== engine.value) ||
@@ -139,6 +144,9 @@ const modelOptions = computed(() => {
   // Existing custom models remain usable without adding them to the global catalogue.
   if (props.workspace?.engine === engine.value && !options.some((o) => o.value === props.workspace?.model))
     options.push({ value: props.workspace.model, label: props.workspace.model })
+  const saved = props.scheduledConfiguration
+  if (saved?.engine === engine.value && !options.some((o) => o.value === saved.model))
+    options.push({ value: saved.model, label: saved.model })
   return options
 })
 const effortOptions = computed(() =>
@@ -170,14 +178,20 @@ watch(
   [() => props.modelValue, () => props.workspace?.id],
   ([open]) => {
     if (!open) return
-    additionalInstructions.value = ''
+    const saved = scheduled.value ? props.scheduledConfiguration : null
+    additionalInstructions.value = saved?.additionalInstructions ?? ''
     requestedNewSession.value = false
-    returnToSession.value = false
+    returnToSession.value = scheduled.value
     if (props.workspace) {
       engine.value = props.workspace.engine
       model.value = props.workspace.model
       reasoningEffort.value = props.workspace.reasoningEffort
       agentPermissionMode.value = props.workspace.agentPermissionMode
+    }
+    if (saved) {
+      engine.value = saved.engine
+      model.value = saved.model
+      reasoningEffort.value = saved.reasoningEffort
     }
   },
   { immediate: true },
@@ -185,7 +199,7 @@ watch(
 watch(
   () => props.canReturnToSession,
   (allowed) => {
-    if (!allowed) returnToSession.value = false
+    if (!allowed && !scheduled.value) returnToSession.value = false
   },
 )
 function cancel() {
@@ -197,7 +211,7 @@ function submit() {
     ...configuration.value,
     additionalInstructions: additionalInstructions.value,
     newSession: newSession.value,
-    returnToSession: returnToSession.value && props.canReturnToSession,
+    returnToSession: scheduled.value || (returnToSession.value && props.canReturnToSession),
   })
 }
 </script>

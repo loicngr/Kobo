@@ -1,4 +1,33 @@
 export default {
+  'autoLoop.finalReview.title': 'Configurar la review final',
+  'autoLoop.finalReview.description':
+    'Tras todas las tareas y verificaciones finales, una sesión separada revisa los cambios. La última sesión de trabajo corrige los hallazgos y se repite la review hasta que no quede ninguno.',
+  'autoLoop.finalReview.enabled': 'Review final automática',
+  'autoLoop.finalReview.configure': 'Configurar reviewer',
+  'autoLoop.finalReview.save': 'Guardar configuración',
+  'autoLoop.finalReview.hint':
+    'Nueva sesión de review de solo lectura y regreso a la última sesión de trabajo para corregir hallazgos. La configuración se guarda con este workspace.',
+  'autoLoop.finalReview.loadFailed': 'No se pudo cargar la configuración de la review final.',
+  'autoLoop.finalReview.saveFailed': 'No se pudo guardar la configuración de la review final.',
+  'autoLoop.finalReview.cycle': 'Ciclo de review {count}',
+  'autoLoop.finalReview.findings': '{count} hallazgos',
+  'autoLoop.finalReview.disabled': 'Desactivada',
+  'autoLoop.finalReview.pending': 'Review final programada',
+  'autoLoop.finalReview.reviewing': 'Review final en curso',
+  'autoLoop.finalReview.fixing': 'Corrigiendo hallazgos',
+  'autoLoop.finalReview.completed': 'Review final aprobada',
+  'autoLoop.finalReview.blocked': 'La review final requiere atención',
+  'reviewReturn.title': 'Regreso de la review',
+  'reviewReturn.reviewing': 'Review en curso. El regreso a la sesión original está guardado.',
+  'reviewReturn.ready': 'Review terminada. Regresando a la sesión original.',
+  'reviewReturn.dispatching': 'Enviando el resumen de review a la sesión original.',
+  'reviewReturn.unknown':
+    'El servidor se detuvo antes de confirmar la entrega. La sesión original podría haber recibido ya el resumen.',
+  'reviewReturn.blocked': 'El regreso a la sesión original requiere atención.',
+  'reviewReturn.retry': 'Reintentar regreso',
+  'reviewReturn.cancel': 'Cancelar regreso',
+  'reviewReturn.retryUnknown': 'Reintentar entrega (puede duplicar el resumen)',
+  'reviewReturn.actionFailed': 'No se pudo actualizar el regreso de la review.',
   'memory.panel.contextsHint': 'Lo que se envió al LLM para esta conversación.',
   'memory.panel.entriesHint': 'Notas persistentes que puedes editar o reutilizar.',
   'memory.panel.proposalsHint': 'Sugerencias de los agentes para aprobar o rechazar.',
@@ -1178,7 +1207,16 @@ export default {
     'Ejecuta la primera sesión de brainstorming en otro modelo y vuelve al principal para las iteraciones.',
   'tours.create.autoloop.title': 'Auto-loop',
   'tours.create.autoloop.description':
-    'Deja que el agente encadene sesiones hasta terminar todas las tareas, o hasta que se estanque.',
+    'El agente completa las tareas y las verificaciones finales. Una review final independiente opcional se repite tras las correcciones hasta que no queden hallazgos; si no hay progreso, el bucle se pausa.',
+  'tours.create.finalReview.title': 'Configurar la review final',
+  'tours.create.finalReview.description':
+    'Elige de antemano el motor, el modelo, el esfuerzo y las instrucciones del reviewer. La review se ejecuta en una sesión separada de solo lectura; el agente original corrige los hallazgos y la review se repite hasta que no quede ninguno.',
+  'tours.workspace.finalReview.title': 'Review final y correcciones',
+  'tours.workspace.finalReview.description':
+    'Configura aquí el reviewer final opcional antes de iniciarlo. Tras las tareas y las verificaciones finales, una sesión separada revisa el trabajo. Los hallazgos vuelven a la sesión original para corregirlos automáticamente y repetir la review. Cerrar Kōbō conserva el ciclo.',
+  'tours.workspace.reviewReturn.title': 'Volver de una review',
+  'tours.workspace.reviewReturn.description':
+    'El resumen vuelve a la sesión original incluso tras reiniciar Kōbō. Si la entrega es incierta, consulta esa conversación antes de Reintentar; Cancelar abandona el retorno. Las reviews manuales esperan tus instrucciones antes de corregir; auto-loop corrige automáticamente.',
   'tours.create.comparison.title': 'Comparar dos motores',
   'tours.create.comparison.description':
     'Crea dos workspaces gemelos sobre la misma tarea y compara sus commits, tareas y actividad.',

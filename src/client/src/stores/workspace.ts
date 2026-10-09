@@ -4,6 +4,7 @@ import { disposeTerminalEntry } from 'src/services/terminal-registry'
 import { getWorkspaceQueueHost } from 'src/services/workspace-queue-bridge'
 import { apiFetch, apiFetchOk, apiFetchResponse, apiFetchResponseForStatus, apiResponseError } from 'src/utils/api'
 import { isAbortError } from 'src/utils/latest-request'
+import type { AutoLoopFinalReviewStatus, AutoLoopReviewConfiguration } from '../../../shared/auto-loop-review'
 import type { AutoLoopRuntime, QueuedAutoLoopMessage } from '../../../shared/auto-loop-types'
 import { isSubagentTask } from '../../../shared/subagent-classification'
 import type { WorkflowPolicy } from '../../../shared/workflow-policy'
@@ -11,6 +12,7 @@ import type { ProviderId, UsageSnapshot } from '../types/usage'
 import { hasPrAttention } from '../utils/pr-status'
 import { isBusyStatus } from '../utils/workspace-status'
 import { useAgentStreamStore } from './agent-stream'
+import { useAutoLoopReviewStore } from './auto-loop-review'
 import { useWebSocketStore } from './websocket'
 
 export interface Workspace {
@@ -128,6 +130,7 @@ export interface CreateWorkspaceInput {
   tags?: string[]
   autoLoop?: boolean
   autoLoopSessionMode?: 'per_task' | 'continuous'
+  autoLoopFinalReview?: AutoLoopReviewConfiguration | null
   // Client-generated channel id the caller subscribed to (via
   // websocketStore.subscribeChannel) *before* this call, so it can receive
   // `workspace:create-progress` / `workspace:create-failed` beats for a
@@ -328,6 +331,7 @@ export type PendingItem =
   | { kind: 'permission'; agentSessionId: string | null; toolCallId: string; toolName: string; toolInput: unknown }
 
 export interface AutoLoopStatus extends Partial<AutoLoopRuntime> {
+  finalReview?: AutoLoopFinalReviewStatus
   retry_at?: string | null
   auto_loop: boolean
   auto_loop_ready: boolean
@@ -1952,11 +1956,20 @@ export const useWorkspaceStore = defineStore('workspace', {
 
     async fetchAutoLoopStates(): Promise<void> {
       const version = ++this.autoLoopSnapshotVersion
+      const reviews = useAutoLoopReviewStore()
+      const reviewSnapshots = { ...reviews.finalReviews }
       try {
         const res = await apiFetchResponse('/api/workspaces/auto-loop-states', { cache: 'no-store' })
         if (!res.ok) return
         const data = (await res.json()) as Record<string, AutoLoopStatus>
-        if (version === this.autoLoopSnapshotVersion) this.autoLoopStates = data
+        if (version === this.autoLoopSnapshotVersion) {
+          for (const [id, status] of Object.entries(data)) {
+            // Keep newer review events without discarding the rest of this snapshot.
+            if (reviews.finalReviews[id] !== reviewSnapshots[id] && reviews.finalReviews[id])
+              status.finalReview = reviews.finalReviews[id]
+          }
+          this.autoLoopStates = data
+        }
       } catch (err) {
         console.error('[workspace-store] fetchAutoLoopStates failed:', err)
       }

@@ -758,7 +758,13 @@ it('handles a target that finishes before its start promise settles as a normal 
   })
   f.service.createSessionHandoff(f.workspace.id, f.request)
   await vi.waitFor(() => expect(f.service.getCurrentSessionHandoff(f.workspace.id)?.state).toBe('completed'))
-  expect(ended).toHaveBeenCalledWith(f.workspace.id, 'completed', expect.any(Number), false)
+  expect(ended).toHaveBeenCalledWith(
+    f.workspace.id,
+    'completed',
+    expect.any(Number),
+    false,
+    f.service.getCurrentSessionHandoff(f.workspace.id)?.targetSessionId,
+  )
   expect(f.ws.getWorkspace(f.workspace.id)?.status).toBe('completed')
 })
 

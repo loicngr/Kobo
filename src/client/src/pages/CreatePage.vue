@@ -929,6 +929,12 @@
                   />
                 </div>
               </div>
+              <AutoLoopFinalReviewSettings
+                data-tour="create-final-review"
+                v-model="autoLoopFinalReview"
+                :workspace="{ id: 'create', engine: selectedEngineId, model, reasoningEffort, agentPermissionMode }"
+                :disabled="submitting"
+              />
             </q-card-section>
           </transition>
         </q-card>
@@ -998,6 +1004,7 @@
 <script setup lang="ts">
 import type { QInput } from 'quasar'
 import { useQuasar } from 'quasar'
+import AutoLoopFinalReviewSettings from 'src/components/AutoLoopFinalReviewSettings.vue'
 import CreationAttachments from 'src/components/CreationAttachments.vue'
 import DrawerToggleButton from 'src/components/DrawerToggleButton.vue'
 import PrCheckoutStepper from 'src/components/PrCheckoutStepper.vue'
@@ -1028,6 +1035,7 @@ import { applyPreset, capturePreset, type PresetFormState, type WorkspacePreset 
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
+import type { AutoLoopReviewConfiguration } from '../../../shared/auto-loop-review'
 import type { WorkflowPolicy } from '../../../shared/workflow-policy'
 
 /**
@@ -1617,6 +1625,7 @@ function toggleNotion() {
 const useSentry = ref(false)
 const autoLoop = ref(false)
 const autoLoopSessionMode = ref<'per_task' | 'continuous'>('per_task')
+const autoLoopFinalReview = ref<AutoLoopReviewConfiguration | null>(null)
 // NOTE: auto-loop no longer mutates `agentPermissionMode` directly. Doing so
 // used to permanently clobber the user's stored preference (e.g. 'plan')
 // with 'bypass' the moment auto-loop was enabled, so turning auto-loop back
@@ -1640,6 +1649,7 @@ function presetFormState(): PresetFormState {
     agentPermissionMode: agentPermissionMode.value,
     autoLoop: autoLoop.value,
     autoLoopSessionMode: autoLoopSessionMode.value,
+    autoLoopFinalReview: autoLoopFinalReview.value,
     brainstormModel: brainstormModel.value,
     brainstormReasoningEffort: brainstormReasoningEffort.value,
     skipSetupScript: skipSetupScript.value,
@@ -1695,6 +1705,7 @@ async function applyPresetToForm(preset: WorkspacePreset): Promise<void> {
   agentPermissionMode.value = next.agentPermissionMode
   autoLoop.value = next.autoLoop
   autoLoopSessionMode.value = next.autoLoopSessionMode
+  autoLoopFinalReview.value = next.autoLoopFinalReview ?? null
   skipSetupScript.value = next.skipSetupScript
   description.value = next.description
   manualTasks.value = next.tasks
@@ -2169,6 +2180,7 @@ onMounted(async () => {
   // restored when it's still a known project — a stale path silently falls
   // back to empty rather than re-displaying a dead value.
   const prefs = loadCreatePagePrefs()
+  autoLoopFinalReview.value = prefs.autoLoopFinalReview ?? null
   reasoningEffortByModel.value = prefs.reasoningEffortByModel ?? {}
   if (prefs.autoLoop === true) {
     autoLoop.value = true
@@ -2543,6 +2555,7 @@ async function handleCreate() {
     projectPath: projectPath.value.trim(),
     autoLoop: autoLoop.value,
     autoLoopSessionMode: autoLoopSessionMode.value,
+    autoLoopFinalReview: autoLoopFinalReview.value,
     ...(autoLoop.value ? { brainstormModel: brainstormModel.value } : {}),
     reasoningEffortByModel: { ...reasoningEffortByModel.value, [model.value]: reasoningEffort.value },
   })
@@ -2642,6 +2655,7 @@ async function createOneWorkspace(
         ? {
             autoLoop: true,
             autoLoopSessionMode: autoLoopSessionMode.value,
+            autoLoopFinalReview: autoLoopFinalReview.value,
             // In a comparison the brainstorm pickers are disabled: each engine
             // brainstorms on the model and effort of its own block, so the two
             // halves start from the same footing and no id from A's catalogue

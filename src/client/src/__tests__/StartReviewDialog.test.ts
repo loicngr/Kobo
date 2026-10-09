@@ -14,7 +14,7 @@ const workspace = {
   agentPermissionMode: 'bypass' as const,
 }
 beforeEach(() => setActivePinia(createPinia()))
-function mountDialog() {
+function mountDialog(props: Record<string, unknown> = {}) {
   const stubs = Object.fromEntries(
     ['dialog', 'card', 'card-section', 'card-actions', 'separator', 'input', 'toggle', 'select', 'btn'].map((tag) => [
       `q-${tag}`,
@@ -29,10 +29,51 @@ function mountDialog() {
     ]),
   )
   return shallowMount(StartReviewDialog, {
-    props: { modelValue: true, loading: false, workspace, canReturnToSession: true },
+    props: { modelValue: true, loading: false, workspace, canReturnToSession: true, ...props },
     global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs },
   })
 }
+
+it('configures a scheduled final review without launching or offering to disable its return', async () => {
+  const view = mountDialog({ mode: 'auto-loop' })
+  expect(view.findAllComponents({ name: 'QToggle' })).toHaveLength(0)
+  const permissions = view.findAllComponents({ name: 'QSelect' })[3]!
+  expect(permissions.props()).toMatchObject({ modelValue: 'plan', disable: true })
+  expect(view.findAllComponents({ name: 'QBtn' }).at(-1)!.props('label')).toBe('Save review settings')
+  await view.findAllComponents({ name: 'QBtn' }).at(-1)!.trigger('click')
+  expect(view.emitted('submit')?.[0]?.[0]).toMatchObject({
+    newSession: true,
+    returnToSession: true,
+    agentPermissionMode: 'plan',
+  })
+  view.unmount()
+})
+
+it('restores all preconfigured final review fields without resetting them on a workspace refresh', async () => {
+  const scheduledConfiguration = {
+    engine: 'codex',
+    model: 'gpt-6.1-sol',
+    reasoningEffort: 'xhigh',
+    additionalInstructions: 'Check migrations and restarts',
+  }
+  const view = mountDialog({ mode: 'auto-loop', scheduledConfiguration })
+  expect(view.findAllComponents({ name: 'QSelect' }).map((s) => s.props('modelValue'))).toEqual([
+    'codex',
+    'gpt-6.1-sol',
+    'xhigh',
+    'plan',
+  ])
+  expect(view.findComponent({ name: 'QInput' }).props('modelValue')).toBe(scheduledConfiguration.additionalInstructions)
+  view.findComponent({ name: 'QInput' }).vm.$emit('update:modelValue', 'Edited locally')
+  await view.setProps({ workspace: { ...workspace } })
+  expect(view.findComponent({ name: 'QInput' }).props('modelValue')).toBe('Edited locally')
+  await view.findAllComponents({ name: 'QBtn' }).at(-1)!.trigger('click')
+  expect(view.emitted('submit')?.[0]?.[0]).toMatchObject({
+    ...scheduledConfiguration,
+    additionalInstructions: 'Edited locally',
+  })
+  view.unmount()
+})
 
 it('starts with the workspace configuration and keeps the current session by default', async () => {
   const view = mountDialog()

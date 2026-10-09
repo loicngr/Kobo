@@ -1,8 +1,9 @@
 import type Database from 'better-sqlite3'
+import { initAutoLoopFinalReviewSchema } from './auto-loop-final-review-schema.js'
 import { initAutoLoopSchema } from './auto-loop-schema.js'
 import { initMcpMessageSchema } from './mcp-message-schema.js'
 import { migrateMemorySchema } from './memory-schema.js'
-import { initReviewReturnSchema } from './review-return-schema.js'
+import { initReviewReturnSchema, migrateDurableReviewReturns } from './review-return-schema.js'
 import { initSchema } from './schema.js'
 import { initSearchSchema } from './search-schema.js'
 import { initSessionHandoffSchema } from './session-handoff-schema.js'
@@ -824,6 +825,14 @@ export const migrations: Migration[] = [
     version: 51,
     name: 'persistent-memory-schema',
     migrate: migrateMemorySchema,
+  },
+  {
+    version: 52,
+    name: 'durable-final-reviews',
+    migrate(db) {
+      migrateDurableReviewReturns(db)
+      initAutoLoopFinalReviewSchema(db)
+    },
   },
 ]
 

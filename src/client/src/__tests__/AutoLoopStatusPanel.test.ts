@@ -2,6 +2,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, expect, it, vi } from 'vitest'
 import { reactive } from 'vue'
 import { createI18n } from 'vue-i18n'
+import type { AutoLoopFinalReviewStatus } from '../../../shared/auto-loop-review'
 import type { AutoLoopRuntime, QueuedAutoLoopMessage } from '../../../shared/auto-loop-types'
 import AutoLoopChip from '../components/AutoLoopChip.vue'
 import AutoLoopStatusPanel from '../components/AutoLoopStatusPanel.vue'
@@ -16,6 +17,7 @@ const store = reactive({
       retry_at?: string | null
       tasks_done: number
       tasks_total: number
+      finalReview?: AutoLoopFinalReviewStatus
     }
   >,
   autoLoopMessages: {} as Record<string, QueuedAutoLoopMessage[]>,
@@ -67,6 +69,22 @@ beforeEach(() => {
     },
   }
   store.autoLoopMessages = { 'ws-1': [] }
+})
+
+it('shows the final review cycle and remaining findings', async () => {
+  store.autoLoopStates['ws-1']!.finalReview = {
+    configuration: { engine: 'codex', model: 'auto', reasoningEffort: 'high', additionalInstructions: '' },
+    state: 'fixing',
+    cycle: 2,
+    findingsCount: 3,
+    reason: null,
+    reviewSessionId: 'review',
+    originalSessionId: 'original',
+  }
+  const view = mount(AutoLoopStatusPanel, { props: { workspaceId: 'ws-1' }, global })
+  expect(view.text()).toContain('Review cycle 2')
+  expect(view.text()).toContain('3 findings')
+  view.unmount()
 })
 
 it('shows the waiting phase, iteration and scheduled retry without offering a premature resume', async () => {

@@ -30,6 +30,8 @@ import {
 import { callMemoryTool, isMemoryOutputSuppressed } from './memory-client.js'
 import { callWorkspaceDialogueTool } from './workspace-dialogue-client.js'
 
+const finalReviewToken = process.env.KOBO_FINAL_REVIEW_TOKEN
+const finalReviewSessionId = process.env.KOBO_FINAL_REVIEW_SESSION_ID
 const handoffId = process.env.KOBO_HANDOFF_ID
 const handoffToken = process.env.KOBO_HANDOFF_TOKEN
 const workspaceId = process.env.KOBO_WORKSPACE_ID
@@ -184,6 +186,34 @@ const TASK_ORDER_PROPERTIES = {
 }
 
 const WORKSPACE_SCOPED_TOOLS: Tool[] = [
+  {
+    name: 'submit_final_review',
+    description:
+      'Submit the final structured verdict for this backend-owned auto-loop review, then end your turn. Include all actionable findings; use an empty findings array only when the entire mission is clear.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        summary: { type: 'string', minLength: 1, maxLength: 12000 },
+        findings: {
+          type: 'array',
+          maxItems: 100,
+          items: {
+            type: 'object',
+            properties: {
+              severity: { type: 'string', enum: ['critical', 'important', 'minor'] },
+              file: { type: 'string', minLength: 1, maxLength: 1000 },
+              line: { type: 'integer', minimum: 1 },
+              description: { type: 'string', minLength: 1, maxLength: 4000 },
+              recommendation: { type: 'string', minLength: 1, maxLength: 4000 },
+            },
+            required: ['severity', 'file', 'description', 'recommendation'],
+          },
+        },
+      },
+      required: ['summary', 'findings'],
+    },
+    annotations: { destructiveHint: false, openWorldHint: false },
+  },
   {
     name: 'submit_session_handoff',
     description:
@@ -718,7 +748,9 @@ function availableTools(): Tool[] {
   return tools.filter((tool) =>
     handoffId && handoffToken
       ? tool.name === 'submit_session_handoff' || tool.annotations?.readOnlyHint === true
-      : tool.name !== 'submit_session_handoff',
+      : finalReviewToken && finalReviewSessionId
+        ? tool.name === 'submit_final_review' || tool.annotations?.readOnlyHint === true
+        : tool.name !== 'submit_session_handoff' && tool.name !== 'submit_final_review',
   )
 }
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: availableTools() }))
@@ -757,6 +789,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 
   try {
+    if (finalReviewToken && finalReviewSessionId && !availableTools().some((tool) => tool.name === name))
+      return fail('This is a read-only final review. Only read tools and submit_final_review are available.')
+    if (name === 'submit_final_review') {
+      if (!workspaceId || !finalReviewToken || !finalReviewSessionId)
+        return fail('No final review is active for this MCP invocation.')
+      return ok(
+        await backendRequest('POST', `/api/workspaces/${workspaceId}/auto-loop/final-review/report`, {
+          token: finalReviewToken,
+          sessionId: finalReviewSessionId,
+          report: a,
+        }),
+      )
+    }
     if (handoffId && handoffToken && !availableTools().some((tool) => tool.name === name))
       return fail(
         'This turn is reserved for a handoff report. Only read tools and submit_session_handoff are available.',

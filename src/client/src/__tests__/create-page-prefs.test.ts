@@ -11,6 +11,26 @@ describe('create-page-prefs', () => {
   })
 
   describe('loadCreatePagePrefs', () => {
+    it('retains final review settings and an explicit disabled choice', () => {
+      const autoLoopFinalReview = {
+        engine: 'codex',
+        model: 'auto',
+        reasoningEffort: 'high',
+        additionalInstructions: 'Check migrations',
+      }
+      saveCreatePagePrefs({ autoLoopFinalReview })
+      expect(loadCreatePagePrefs().autoLoopFinalReview).toEqual(autoLoopFinalReview)
+      saveCreatePagePrefs({ autoLoopFinalReview: null })
+      expect(loadCreatePagePrefs().autoLoopFinalReview).toBeNull()
+    })
+
+    it('ignores incomplete final review settings from browser storage', () => {
+      localStorage.setItem(
+        'kobo:create-page-prefs',
+        JSON.stringify({ autoLoop: true, autoLoopFinalReview: { engine: 'codex' } }),
+      )
+      expect(loadCreatePagePrefs()).toEqual({ autoLoop: true })
+    })
     it('returns {} when storage is empty', () => {
       expect(loadCreatePagePrefs()).toEqual({})
     })

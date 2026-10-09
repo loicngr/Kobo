@@ -1,6 +1,7 @@
 import { execFile as execFileCb, execFileSync, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import { nanoid } from 'nanoid'
+import type { AutoLoopReviewConfiguration } from '../../shared/auto-loop-review.js'
 import type { HandoffDecision } from '../../shared/session-handoff.js'
 import {
   isWorkflowPolicy,
@@ -8,6 +9,8 @@ import {
   WORKFLOW_ACTIONS,
   type WorkflowPolicy,
 } from '../../shared/workflow-policy.js'
+import * as finalReviewService from '../services/auto-loop-final-review-service.js'
+import { getReviewReturnStatus } from '../services/review-return-service.js'
 import { getSearchIndexStatus, searchEvents } from '../services/search-service.js'
 import {
   createSessionHandoff,
@@ -560,6 +563,7 @@ interface CreateWorkspaceBody {
   description?: string
   agentPermissionMode?: 'plan' | 'bypass' | 'strict' | 'interactive'
   engine?: string
+  autoLoopFinalReview?: AutoLoopReviewConfiguration | null
   autoLoop?: boolean
   autoLoopSessionMode?: 'per_task' | 'continuous'
   worktreePath?: string
@@ -596,6 +600,14 @@ app.post('/', migrationGuard, creationBodyLimit, async (c) => {
   let setupScriptConfigured = false
   try {
     const { body, attachments } = await readWorkspaceCreationRequest<CreateWorkspaceBody>(c.req.raw)
+
+    if (body.autoLoopFinalReview !== undefined) {
+      try {
+        finalReviewService.parseFinalReviewConfiguration(body.autoLoopFinalReview)
+      } catch (error) {
+        return c.json({ error: error instanceof Error ? error.message : 'Invalid final review configuration' }, 400)
+      }
+    }
 
     if (body.workflowPolicy !== undefined && !isWorkflowPolicy(body.workflowPolicy))
       return c.json({ error: 'Invalid workflowPolicy' }, 400)
@@ -975,6 +987,8 @@ app.post('/', migrationGuard, creationBodyLimit, async (c) => {
         ...(useReusedWorktree ? {} : { worktreesPath: globalSettings.worktreesPath }),
       })
       createdWorkspace = workspace
+      if (body.autoLoopFinalReview !== undefined)
+        finalReviewService.configureFinalReview(workspace.id, body.autoLoopFinalReview)
 
       // Enable auto-loop before starting the initial brainstorming session so
       // its model override is available when selecting that session's model.
@@ -1944,6 +1958,57 @@ app.get('/auto-loop-states', (c) => {
 
 app.route('/', autoLoopMessagesRoutes)
 
+app.get('/:id/auto-loop/final-review', (c) => {
+  const id = c.req.param('id')
+  if (!workspaceService.getWorkspace(id)) return c.json({ error: 'Workspace not found' }, 404)
+  return c.json(finalReviewService.getFinalReviewStatus(id))
+})
+app.patch('/:id/auto-loop/final-review', migrationGuard, async (c) => {
+  try {
+    const body = await c.req.json()
+    return c.json(finalReviewService.configureFinalReview(c.req.param('id'), body?.configuration))
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : 'Invalid request' },
+      error instanceof ReviewRequestError ? error.status : 400,
+    )
+  }
+})
+app.post('/:id/auto-loop/final-review/report', migrationGuard, async (c) => {
+  try {
+    const body = await c.req.json()
+    return c.json(
+      finalReviewService.submitFinalReviewReport(c.req.param('id'), body.sessionId, body.token, body.report),
+    )
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : 'Invalid review report' },
+      error instanceof ReviewRequestError ? error.status : 400,
+    )
+  }
+})
+app.get('/:id/review-return', (c) => {
+  const id = c.req.param('id')
+  if (!workspaceService.getWorkspace(id)) return c.json({ error: 'Workspace not found' }, 404)
+  return c.json(getReviewReturnStatus(id))
+})
+app.post('/:id/review-return/retry', migrationGuard, (c) => {
+  try {
+    agentManager.retryReviewReturn(c.req.param('id'))
+    return c.json(getReviewReturnStatus(c.req.param('id')))
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : 'Review recovery failed' }, 409)
+  }
+})
+app.post('/:id/review-return/cancel', migrationGuard, (c) => {
+  try {
+    agentManager.cancelReviewReturn(c.req.param('id'))
+    return c.json({ ok: true })
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : 'Review cancellation failed' }, 409)
+  }
+})
+
 // GET /api/workspaces/:id/auto-loop — current auto-loop status for one workspace.
 // Admission inspection never changes deadlines, pending schedules or lifecycle state.
 app.get('/:id/automatic-admission', (c) => {
@@ -2216,7 +2281,10 @@ app.delete('/:id/sessions/:sessionId', migrationGuard, (c) => {
     return c.json({ ok: true, workspace: workspaceService.getWorkspace(workspaceId) })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, message.includes('active session') ? 409 : 500)
+    return c.json(
+      { error: message },
+      message.includes('active session') || err instanceof workspaceService.ReviewSessionInUseError ? 409 : 500,
+    )
   }
 })
 

@@ -56,3 +56,48 @@ describe('claude-code engine - read-only review session', () => {
     }
   })
 })
+
+it('permits only the scoped final-review report tool while preserving read-only denials', async () => {
+  for (const scoped of [false, true]) {
+    await createClaudeCodeEngine().start(
+      {
+        workspaceId: 'w-final-review',
+        workingDir: '/tmp',
+        prompt: 'review',
+        agentPermissionMode: 'plan',
+        readOnly: true,
+        backendUrl: 'http://localhost:3000',
+        koboHome: '/tmp/kobo',
+        settings: {} as never,
+        mcpServers: scoped
+          ? [
+              {
+                name: 'kobo-tasks',
+                command: 'node',
+                args: [],
+                env: { KOBO_FINAL_REVIEW_TOKEN: 'scoped-token', KOBO_FINAL_REVIEW_SESSION_ID: 'review-session' },
+              },
+            ]
+          : [],
+      },
+      () => {},
+    )
+    try {
+      const ctx = { signal: new AbortController().signal, toolUseID: 'report' }
+      expect(
+        await capturedCanUseTool!('mcp__kobo-tasks__submit_final_review', { summary: 'clear', findings: [] }, ctx),
+      ).toMatchObject({ behavior: scoped ? 'allow' : 'deny' })
+      for (const name of [
+        'mcp__other__submit_final_review',
+        'mcp__kobo-tasks__mark_task_done',
+        'Edit',
+        'AskUserQuestion',
+        'ExitPlanMode',
+      ]) {
+        expect(await capturedCanUseTool!(name, {}, ctx)).toMatchObject({ behavior: 'deny' })
+      }
+    } finally {
+      releaseStream?.()
+    }
+  }
+})

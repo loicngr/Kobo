@@ -107,9 +107,20 @@ class ClaudeInputStream implements AsyncIterable<SDKUserMessage> {
   private closed = false
   private queuedForcedMessages = 0
   private readonly unansweredMessages = new Set<string>()
+  private readonly initialUuid: string
+  private initialYielded = false
+  private acceptInitial!: () => void
+  private rejectInitial!: (error: Error) => void
+  readonly initialPromptAccepted = new Promise<void>((resolve, reject) => {
+    this.acceptInitial = resolve
+    this.rejectInitial = reject
+  })
 
   constructor(initialPrompt: string) {
-    this.messages = [{ message: this.toUserMessage(initialPrompt), forced: false }]
+    const initial = this.toUserMessage(initialPrompt)
+    this.initialUuid = initial.uuid!
+    this.messages = [{ message: initial, forced: false }]
+    void this.initialPromptAccepted.catch(() => {})
   }
 
   send(text: string): void {
@@ -125,6 +136,7 @@ class ClaudeInputStream implements AsyncIterable<SDKUserMessage> {
   }
 
   close(): void {
+    this.rejectInitial(new Error('Claude ended before confirming consumption of the initial prompt'))
     this.closed = true
     const wake = this.waiting
     this.waiting = undefined
@@ -133,6 +145,16 @@ class ClaudeInputStream implements AsyncIterable<SDKUserMessage> {
 
   hasUnansweredInput(): boolean {
     return this.queuedForcedMessages > 0 || this.unansweredMessages.size > 0
+  }
+
+  /** Only provider-correlated foreground frames acknowledge this new prompt, never init/history/children. */
+  acknowledgeInitialInput(message: SDKMessage): void {
+    if (!this.initialYielded || ('parent_tool_use_id' in message && message.parent_tool_use_id != null)) return
+    if (!['assistant', 'stream_event', 'result', 'user'].includes(message.type)) return
+    const frame = message as { type: string; uuid?: string; user_message_uuid?: string; user_message_uuids?: string[] }
+    const ids = [...(frame.user_message_uuids ?? []), ...(frame.user_message_uuid ? [frame.user_message_uuid] : [])]
+    if (frame.type === 'user' && frame.uuid) ids.push(frame.uuid)
+    if (ids.includes(this.initialUuid)) this.acceptInitial()
   }
 
   acknowledgeResult(result: { user_message_uuid?: string; user_message_uuids?: string[] }): void {
@@ -166,6 +188,7 @@ class ClaudeInputStream implements AsyncIterable<SDKUserMessage> {
       if (next) {
         if (next.forced) this.queuedForcedMessages--
         this.unansweredMessages.add(next.message.uuid!)
+        if (next.message.uuid === this.initialUuid) this.initialYielded = true
         yield next.message
         continue
       }
@@ -266,6 +289,18 @@ export function createClaudeCodeEngine(): AgentEngine {
         // would approve ExitPlanMode and then every edit. Anything that needs a
         // permission, a question included, is refused outright instead.
         if (options.readOnly) {
+          // This capability-scoped report changes orchestration metadata only.
+          // The backend validates its token and current reviewer session again.
+          if (
+            toolName === 'mcp__kobo-tasks__submit_final_review' &&
+            options.mcpServers?.some(
+              (server) =>
+                server.name === 'kobo-tasks' &&
+                server.env.KOBO_FINAL_REVIEW_TOKEN &&
+                server.env.KOBO_FINAL_REVIEW_SESSION_ID,
+            )
+          )
+            return Promise.resolve<PermissionResult>({ behavior: 'allow', updatedInput: input })
           return Promise.resolve<PermissionResult>({
             behavior: 'deny',
             message:
@@ -720,6 +755,7 @@ export function createClaudeCodeEngine(): AgentEngine {
         turnLiveness.start()
         try {
           for await (const msg of q as AsyncIterable<SDKMessage>) {
+            inputStream.acknowledgeInitialInput(msg)
             const events = mapSdkMessage(msg, mapperState)
             const isForeground = !('parent_tool_use_id' in msg && msg.parent_tool_use_id != null)
             const streamingContent = hasStreamingContent(msg)
@@ -913,6 +949,7 @@ export function createClaudeCodeEngine(): AgentEngine {
 
       const engineProcess: EngineProcess = {
         ready,
+        initialPromptAccepted: inputStream.initialPromptAccepted,
         closed: iteratorPromise.then(() => runtimeClosed),
         get pid() {
           return undefined

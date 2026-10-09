@@ -1257,6 +1257,8 @@ export function renameSession(sessionId: string, workspaceId: string, name: stri
   return row ? mapSession(row) : null
 }
 
+export class ReviewSessionInUseError extends Error {}
+
 /** Delete a stopped session and only the persisted conversation attached to it. */
 export function deleteSession(sessionId: string, workspaceId: string): boolean {
   const db = getDb()
@@ -1264,6 +1266,19 @@ export function deleteSession(sessionId: string, workspaceId: string): boolean {
     .prepare('SELECT status, engine FROM agent_sessions WHERE id = ? AND workspace_id = ?')
     .get(sessionId, workspaceId) as { status: string; engine: string | null } | undefined
   if (!session) return false
+  const pendingReview = db
+    .prepare(
+      `SELECT 1 FROM pending_review_returns WHERE workspace_id=? AND (original_session_id=? OR review_session_id=?)`,
+    )
+    .get(workspaceId, sessionId, sessionId)
+  const pendingFinalReview = db
+    .prepare(`SELECT 1 FROM auto_loop_final_reviews r JOIN workspaces w ON w.id=r.workspace_id
+    WHERE r.workspace_id=? AND w.auto_loop=1 AND r.state IN ('reviewing','fixing','blocked') AND (r.original_session_id=? OR r.review_session_id=?)`)
+    .get(workspaceId, sessionId, sessionId)
+  if (pendingReview || pendingFinalReview)
+    throw new ReviewSessionInUseError(
+      'This session is required by a pending review. Cancel the review return or stop auto-loop before deleting it.',
+    )
   if (session.status === 'running') {
     throw new Error(`Cannot delete active session '${sessionId}'`)
   }

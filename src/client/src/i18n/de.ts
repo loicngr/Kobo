@@ -1,4 +1,33 @@
 export default {
+  'autoLoop.finalReview.title': 'Abschließende Review konfigurieren',
+  'autoLoop.finalReview.description':
+    'Nach allen Aufgaben und Abschlussprüfungen prüft eine separate Sitzung die Änderungen. Die letzte Arbeitssitzung behebt die Befunde; neue Reviews folgen, bis keine Befunde mehr vorliegen.',
+  'autoLoop.finalReview.enabled': 'Automatische abschließende Review',
+  'autoLoop.finalReview.configure': 'Reviewer konfigurieren',
+  'autoLoop.finalReview.save': 'Review-Einstellungen speichern',
+  'autoLoop.finalReview.hint':
+    'Neue schreibgeschützte Review-Sitzung, danach Rückkehr zur letzten Arbeitssitzung für Korrekturen. Einstellungen werden mit diesem Workspace gespeichert.',
+  'autoLoop.finalReview.loadFailed': 'Review-Einstellungen konnten nicht geladen werden.',
+  'autoLoop.finalReview.saveFailed': 'Review-Einstellungen konnten nicht gespeichert werden.',
+  'autoLoop.finalReview.cycle': 'Review-Zyklus {count}',
+  'autoLoop.finalReview.findings': '{count} Befunde',
+  'autoLoop.finalReview.disabled': 'Deaktiviert',
+  'autoLoop.finalReview.pending': 'Abschließende Review geplant',
+  'autoLoop.finalReview.reviewing': 'Abschließende Review läuft',
+  'autoLoop.finalReview.fixing': 'Review-Befunde beheben',
+  'autoLoop.finalReview.completed': 'Abschließende Review bestanden',
+  'autoLoop.finalReview.blocked': 'Abschließende Review benötigt Aufmerksamkeit',
+  'reviewReturn.title': 'Rückkehr aus der Review',
+  'reviewReturn.reviewing': 'Review läuft. Die Rückkehr zur ursprünglichen Sitzung ist gespeichert.',
+  'reviewReturn.ready': 'Review abgeschlossen. Rückkehr zur ursprünglichen Sitzung.',
+  'reviewReturn.dispatching': 'Review-Zusammenfassung wird an die ursprüngliche Sitzung gesendet.',
+  'reviewReturn.unknown':
+    'Der Server wurde vor der Zustellbestätigung beendet. Die ursprüngliche Sitzung hat die Zusammenfassung möglicherweise bereits erhalten.',
+  'reviewReturn.blocked': 'Die Rückkehr zur ursprünglichen Sitzung benötigt Aufmerksamkeit.',
+  'reviewReturn.retry': 'Rückkehr erneut versuchen',
+  'reviewReturn.cancel': 'Rückkehr abbrechen',
+  'reviewReturn.retryUnknown': 'Erneut senden (möglicherweise doppelte Zustellung)',
+  'reviewReturn.actionFailed': 'Die Review-Rückkehr konnte nicht aktualisiert werden.',
   'memory.panel.contextsHint': 'Was dem LLM für dieses Gespräch übermittelt wurde.',
   'memory.panel.entriesHint': 'Dauerhafte Notizen zum Bearbeiten oder Wiederverwenden.',
   'memory.panel.proposalsHint': 'Vorschläge der Agenten zum Genehmigen oder Ablehnen.',
@@ -1185,7 +1214,16 @@ export default {
     'Führe die erste Brainstorming-Session auf einem anderen Modell aus und wechsle für die Iterationen zurück.',
   'tours.create.autoloop.title': 'Auto-Loop',
   'tours.create.autoloop.description':
-    'Lass den Agenten Sessions aneinanderreihen, bis alle Aufgaben erledigt sind oder er stagniert.',
+    'Der Agent erledigt Aufgaben und Abschlussprüfungen. Eine optionale unabhängige Abschlussreview wird nach Korrekturen wiederholt, bis keine Findings mehr vorliegen; bei Stillstand pausiert die Schleife.',
+  'tours.create.finalReview.title': 'Abschlussreview konfigurieren',
+  'tours.create.finalReview.description':
+    'Wähle Engine, Modell, Denkaufwand und Anweisungen für den Reviewer im Voraus. Die Review läuft in einer separaten schreibgeschützten Sitzung. Der ursprüngliche Agent korrigiert Findings; die Review wiederholt sich, bis keine mehr übrig sind.',
+  'tours.workspace.finalReview.title': 'Abschlussreview und Korrekturen',
+  'tours.workspace.finalReview.description':
+    'Konfiguriere hier den optionalen Abschlussreviewer vor dem Start. Nach Aufgaben und Abschlussprüfungen prüft eine separate Sitzung die Arbeit. Findings gehen zur automatischen Korrektur und erneuten Review an die ursprüngliche Sitzung zurück. Der Zyklus bleibt beim Schließen von Kōbō erhalten.',
+  'tours.workspace.reviewReturn.title': 'Rückkehr aus einer Review',
+  'tours.workspace.reviewReturn.description':
+    'Die Zusammenfassung kehrt auch nach einem Neustart von Kōbō zur ursprünglichen Sitzung zurück. Prüfe bei unklarer Zustellung vor einem erneuten Versuch den Verlauf; Abbrechen verwirft die Rückkehr. Manuelle Reviews warten vor Korrekturen auf deine Anweisung, Auto-loop korrigiert automatisch.',
   'tours.create.comparison.title': 'Zwei Engines vergleichen',
   'tours.create.comparison.description':
     'Erstelle zwei Geschwister-Workspaces für dieselbe Aufgabe und vergleiche Commits, Aufgaben und Aktivität.',

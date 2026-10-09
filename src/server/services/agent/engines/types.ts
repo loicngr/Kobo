@@ -39,6 +39,8 @@ export type PendingUserInputResponse =
 export interface EngineProcess {
   /** Resolves once the initial native conversation/turn is accepted; rejects on launch failure. */
   readonly ready?: Promise<void>
+  /** Optional stronger receipt when initialization does not prove that the initial prompt was consumed. */
+  readonly initialPromptAccepted?: Promise<void>
   readonly pid: number | undefined
   readonly engineSessionId: string | undefined
   /**

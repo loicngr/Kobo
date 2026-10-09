@@ -67,6 +67,44 @@ function workspaceFixture(status = 'executing'): Workspace {
 describe('websocket dispatch — AgentEvent side-effects to workspace store', () => {
   beforeEach(() => setActivePinia(createPinia()))
 
+  it('routes durable review status and clears it with a null payload', async () => {
+    const { useWebSocketStore } = await import('../stores/websocket.js')
+    const { useAutoLoopReviewStore } = await import('../stores/auto-loop-review.js')
+    const status = { reviewSessionId: 'review', originalSessionId: 'original', phase: 'unknown', error: null }
+    const socket = useWebSocketStore()
+    socket._routeMessage({ type: 'review:return-status', workspaceId: 'w1', payload: status })
+    expect(useAutoLoopReviewStore().returns.w1).toEqual(status)
+    socket._routeMessage(JSON.parse('{"type":"review:return-status","workspaceId":"w1","payload":null}'))
+    expect(useAutoLoopReviewStore().returns.w1).toBeNull()
+  })
+
+  it('routes final review updates into the configuration and chat state', async () => {
+    const { useWebSocketStore } = await import('../stores/websocket.js')
+    const { useAutoLoopReviewStore } = await import('../stores/auto-loop-review.js')
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const store = useWorkspaceStore()
+    store.autoLoopStates.w1 = {
+      auto_loop: true,
+      auto_loop_ready: true,
+      no_progress_streak: 0,
+      tasks_done: 1,
+      tasks_total: 1,
+      crons_count: 0,
+    }
+    const status = {
+      configuration: { engine: 'codex', model: 'auto', reasoningEffort: 'high', additionalInstructions: '' },
+      state: 'reviewing',
+      cycle: 2,
+      findingsCount: null,
+      reason: null,
+      reviewSessionId: 'review',
+      originalSessionId: 'original',
+    }
+    useWebSocketStore()._routeMessage({ type: 'autoloop:final-review', workspaceId: 'w1', payload: status })
+    expect(useAutoLoopReviewStore().finalReviews.w1).toEqual(status)
+    expect(store.autoLoopStates.w1.finalReview).toEqual(status)
+  })
+
   it('routes global release checks without a workspace subscription or activity item', async () => {
     const { useWebSocketStore } = await import('../stores/websocket.js')
     const { useUpdateStore } = await import('../stores/update.js')

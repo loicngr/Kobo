@@ -300,3 +300,56 @@ it(
   },
   STDIO_TEST_TIMEOUT_MS,
 )
+
+it(
+  'limits a final-review MCP to reads and submits only its bound session capability',
+  async () => {
+    let posted: unknown
+    const reportApp = new Hono()
+    reportApp.post('/api/workspaces/:id/auto-loop/final-review/report', async (c) => {
+      posted = { workspace: c.req.param('id'), body: await c.req.json() }
+      return c.json({ ok: true })
+    })
+    const listener = serve({ fetch: reportApp.fetch, hostname: '127.0.0.1', port: 0 })
+    if (!listener.listening) await new Promise<void>((resolve) => listener.once('listening', resolve))
+    const address = listener.address()
+    if (!address || typeof address === 'string') throw new Error('Missing listener')
+    const client = new Client({ name: 'final-review-test', version: '1' })
+    try {
+      await client.connect(
+        new StdioClientTransport({
+          command: process.execPath,
+          args: ['--import', 'tsx', 'src/mcp-server/kobo-tasks-server.ts'],
+          env: {
+            PATH: process.env.PATH ?? '',
+            KOBO_DB_PATH: join(directory, 'test.db'),
+            KOBO_WORKSPACE_ID: 'a',
+            KOBO_BACKEND_URL: `http://127.0.0.1:${address.port}`,
+            KOBO_FINAL_REVIEW_TOKEN: 'bound-token',
+            KOBO_FINAL_REVIEW_SESSION_ID: 'review-session',
+          },
+        }),
+      )
+      const { tools } = await client.listTools()
+      expect(tools.map((t) => t.name)).toContain('submit_final_review')
+      expect(tools.map((t) => t.name)).toContain('list_tasks')
+      for (const mutation of [
+        'mark_task_done',
+        'set_auto_loop',
+        'send_workspace_message',
+        'remember',
+        'submit_session_handoff',
+      ]) {
+        expect(tools.map((t) => t.name)).not.toContain(mutation)
+        expect((await client.callTool({ name: mutation, arguments: {} })).isError).toBe(true)
+      }
+      const report = { summary: 'All clear', findings: [], token: 'caller-spoof', sessionId: 'wrong-session' }
+      expect((await client.callTool({ name: 'submit_final_review', arguments: report })).isError).not.toBe(true)
+      expect(posted).toEqual({ workspace: 'a', body: { token: 'bound-token', sessionId: 'review-session', report } })
+    } finally {
+      await client.close()
+      await new Promise<void>((resolve, reject) => listener.close((error) => (error ? reject(error) : resolve())))
+    }
+  },
+  STDIO_TEST_TIMEOUT_MS,
+)

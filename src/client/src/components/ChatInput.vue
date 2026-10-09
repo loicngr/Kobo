@@ -83,6 +83,7 @@
     </div>
 
     <AutoLoopStatusPanel :workspace-id="workspaceId" />
+    <ReviewReturnStatusPanel :workspace-id="workspaceId" />
 
     <div v-if="isHandoffBlocking" class="row items-center q-pa-xs q-px-sm text-caption text-kobo-2" role="status">
       {{ $t(handoffs.isActive(workspaceId) ? 'handoff.progress' : 'handoff.blocked') }}
@@ -252,6 +253,7 @@ import type { QInput } from 'quasar'
 import { useQuasar } from 'quasar'
 import AutoLoopStatusPanel from 'src/components/AutoLoopStatusPanel.vue'
 import QuotaFooter from 'src/components/QuotaFooter.vue'
+import ReviewReturnStatusPanel from 'src/components/ReviewReturnStatusPanel.vue'
 import SlashSuggestionsPopup from 'src/components/SlashSuggestionsPopup.vue'
 import { useChatAttachments } from 'src/composables/use-chat-attachments'
 import { useFileMention } from 'src/composables/use-file-mention'

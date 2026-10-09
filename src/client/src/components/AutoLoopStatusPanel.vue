@@ -27,6 +27,11 @@
         />
       </div>
     </div>
+    <p v-if="status?.finalReview?.configuration" class="auto-loop-panel__detail" role="status">
+      {{ t(`autoLoop.finalReview.${status.finalReview.state}`) }}
+      <span v-if="status.finalReview.cycle"> · {{ t('autoLoop.finalReview.cycle', { count: status.finalReview.cycle }) }}</span>
+      <span v-if="status.finalReview.findingsCount !== null"> · {{ t('autoLoop.finalReview.findings', { count: status.finalReview.findingsCount }) }}</span>
+    </p>
     <p v-if="reason" class="auto-loop-panel__detail">{{ reason }}</p>
     <p v-if="status?.retry_at" class="auto-loop-panel__detail">
       {{ t('autoLoop.retryAt') }} <time :datetime="status.retry_at">{{ retryAt }}</time>

@@ -1,5 +1,16 @@
 <template>
   <div class="column q-gutter-sm q-pa-sm">
+    <AutoLoopFinalReviewSettings
+      data-tour="ws-final-review"
+      v-if="ws" :model-value="finalReview?.configuration ?? null" :workspace="ws"
+      :loading="savingReview || loadingReview"
+      :disabled="isArchived || !!reviewError || finalReview?.state === 'reviewing' || finalReview?.state === 'fixing'"
+      @update:model-value="saveReview"
+    />
+    <div v-if="reviewError" role="alert" class="text-caption text-negative">
+      {{ reviewError }}
+      <q-btn flat dense no-caps :label="t('common.retry')" @click="loadReview" />
+    </div>
     <q-btn
       v-if="isOn"
       dense
@@ -57,19 +68,62 @@
 
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
+import AutoLoopFinalReviewSettings from 'src/components/AutoLoopFinalReviewSettings.vue'
+import { useAutoLoopReviewStore } from 'src/stores/auto-loop-review'
 import { useWebSocketStore } from 'src/stores/websocket'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { sendPrepAutoloop } from 'src/utils/kobo-commands'
 import { isBusyStatus } from 'src/utils/workspace-status'
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import type { AutoLoopReviewConfiguration } from '../../../shared/auto-loop-review'
 
 const { t } = useI18n()
 const $q = useQuasar()
 const store = useWorkspaceStore()
 const wsStore = useWebSocketStore()
+const reviews = useAutoLoopReviewStore()
+const savingReview = ref(false)
+const loadingReview = ref(false)
+const reviewError = ref('')
 
 const ws = computed(() => store.selectedWorkspace)
+const finalReview = computed(() => (ws.value ? reviews.finalReviews[ws.value.id] : undefined))
+watch(
+  () => ws.value?.id,
+  () => {
+    void loadReview()
+  },
+  { immediate: true },
+)
+async function loadReview() {
+  const id = ws.value?.id
+  reviewError.value = ''
+  savingReview.value = false
+  if (!id) return
+  loadingReview.value = true
+  try {
+    await reviews.fetchFinalReview(id)
+  } catch (err) {
+    if (ws.value?.id === id)
+      reviewError.value = err instanceof Error ? err.message : t('autoLoop.finalReview.loadFailed')
+  } finally {
+    if (ws.value?.id === id) loadingReview.value = false
+  }
+}
+async function saveReview(configuration: AutoLoopReviewConfiguration | null) {
+  const id = ws.value?.id
+  if (!id || savingReview.value) return
+  savingReview.value = true
+  try {
+    await reviews.saveFinalReview(id, configuration)
+  } catch (err) {
+    if (ws.value?.id === id)
+      reviewError.value = err instanceof Error ? err.message : t('autoLoop.finalReview.saveFailed')
+  } finally {
+    if (ws.value?.id === id) savingReview.value = false
+  }
+}
 const status = computed(() => (ws.value ? (store.autoLoopStates[ws.value.id] ?? null) : null))
 const hasTasks = computed(() => store.tasks.length > 0)
 const isReady = computed(() => !!status.value?.auto_loop_ready)
@@ -78,7 +132,9 @@ const canEnable = computed(() => isReady.value && hasTasks.value)
 const isAgentBusy = computed(() => isBusyStatus(ws.value?.status))
 const isArchived = computed(() => Boolean(ws.value?.archivedAt))
 
-const startDisabled = computed(() => !canEnable.value || isArchived.value)
+const startDisabled = computed(
+  () => !canEnable.value || isArchived.value || savingReview.value || loadingReview.value || !!reviewError.value,
+)
 const startTooltip = computed(() => {
   if (!isReady.value) return t('autoLoop.notReady')
   if (!hasTasks.value) return t('autoLoop.noTasks')

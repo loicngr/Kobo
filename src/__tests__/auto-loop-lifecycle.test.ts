@@ -13,6 +13,7 @@ vi.mock('../server/services/websocket-service.js', () => ({
 vi.mock('../server/services/agent/orchestrator.js', () => ({
   startAgent: vi.fn(() => ({ agentSessionId: 'mock-agent-session-id' })),
   hasController: vi.fn(() => false),
+  getActiveSessionId: vi.fn(),
   runningAgentCount: vi.fn(() => 0),
   isShuttingDown: vi.fn(() => false),
   resetAutoLoopRetries: vi.fn(),

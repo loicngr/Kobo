@@ -1,4 +1,33 @@
 export default {
+  'autoLoop.finalReview.title': 'Réglages de la review finale',
+  'autoLoop.finalReview.description':
+    'Après toutes les tâches et les vérifications finales, une session séparée revoit les changements. La dernière session de travail corrige les findings, puis une nouvelle review démarre jusqu’à ce qu’il n’en reste aucun.',
+  'autoLoop.finalReview.enabled': 'Review finale automatique',
+  'autoLoop.finalReview.configure': 'Configurer le reviewer',
+  'autoLoop.finalReview.save': 'Enregistrer les réglages',
+  'autoLoop.finalReview.hint':
+    'Review dans une nouvelle session en lecture seule, puis retour à la dernière session de travail pour corriger les findings. Les réglages sont enregistrés avec ce workspace.',
+  'autoLoop.finalReview.loadFailed': 'Impossible de charger les réglages de la review finale.',
+  'autoLoop.finalReview.saveFailed': 'Impossible d’enregistrer les réglages de la review finale.',
+  'autoLoop.finalReview.cycle': 'Cycle de review {count}',
+  'autoLoop.finalReview.findings': '{count} findings',
+  'autoLoop.finalReview.disabled': 'Désactivée',
+  'autoLoop.finalReview.pending': 'Review finale prévue',
+  'autoLoop.finalReview.reviewing': 'Review finale en cours',
+  'autoLoop.finalReview.fixing': 'Correction des findings',
+  'autoLoop.finalReview.completed': 'Review finale validée',
+  'autoLoop.finalReview.blocked': 'Review finale à débloquer',
+  'reviewReturn.title': 'Retour de review',
+  'reviewReturn.reviewing': 'Review en cours. Le retour à la session d’origine est enregistré.',
+  'reviewReturn.ready': 'Review terminée. Retour à la session d’origine.',
+  'reviewReturn.dispatching': 'Envoi du résumé de review à la session d’origine.',
+  'reviewReturn.unknown':
+    'Le serveur s’est arrêté avant de confirmer la remise. La session d’origine a peut-être déjà reçu le résumé.',
+  'reviewReturn.blocked': 'Le retour à la session d’origine nécessite une intervention.',
+  'reviewReturn.retry': 'Réessayer le retour',
+  'reviewReturn.cancel': 'Annuler le retour',
+  'reviewReturn.retryUnknown': 'Réessayer la remise (risque de doublon)',
+  'reviewReturn.actionFailed': 'Impossible de modifier le retour de review.',
   'memory.panel.contextsHint': 'Ce qui a été transmis au LLM pour cette conversation.',
   'memory.panel.entriesHint': 'Les notes persistantes que vous pouvez modifier ou réutiliser.',
   'memory.panel.proposalsHint': 'Les ajouts suggérés par les agents, à approuver ou refuser.',
@@ -1181,7 +1210,16 @@ export default {
     'Lancez la première session de brainstorming sur un autre modèle, puis revenez au modèle principal pour les itérations.',
   'tours.create.autoloop.title': 'Auto-loop',
   'tours.create.autoloop.description':
-    "Laissez l'agent enchaîner les sessions jusqu'à ce que toutes les tâches soient faites, ou qu'il stagne.",
+    'Laissez l’agent terminer les tâches et les vérifications finales. Une review finale indépendante peut ensuite se répéter après correction jusqu’à zéro finding ; un blocage suspend la boucle.',
+  'tours.create.finalReview.title': 'Configurer la review finale',
+  'tours.create.finalReview.description':
+    'Choisissez à l’avance le moteur, le modèle, l’effort et les instructions du reviewer. La review tourne dans une session séparée en lecture seule ; l’agent d’origine corrige les findings, puis la review recommence jusqu’à ce qu’il n’en reste aucun.',
+  'tours.workspace.finalReview.title': 'Review finale et corrections',
+  'tours.workspace.finalReview.description':
+    'Configurez ici le reviewer final optionnel avant son lancement. Après les tâches et les vérifications finales, une session séparée examine le travail. Les findings reviennent dans la session d’origine pour correction automatique et nouvelle review. Fermer Kōbō préserve ce cycle.',
+  'tours.workspace.reviewReturn.title': 'Retour de review',
+  'tours.workspace.reviewReturn.description':
+    'Le résumé revient dans la session d’origine, même après redémarrage de Kōbō. Si la livraison est incertaine, consultez cette conversation avant Réessayer ; Annuler abandonne le retour. Une review manuelle attend vos instructions avant de corriger ; l’auto-loop corrige automatiquement.',
   'tours.create.comparison.title': 'Comparer deux moteurs',
   'tours.create.comparison.description':
     'Créez deux workspaces jumeaux sur la même tâche et comparez leurs commits, tâches et activité.',

@@ -58,8 +58,8 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 51', () => {
-    expect(SCHEMA_VERSION).toBe(51)
+  it('exporte SCHEMA_VERSION = 52', () => {
+    expect(SCHEMA_VERSION).toBe(52)
   })
 
   it('migration v33 records and backfills the engine on agent sessions', () => {
@@ -2628,7 +2628,7 @@ describe('persistent memory schema migration v51', () => {
     const beforeUpgrade = memoryObjects(old)
     expect(beforeUpgrade.objects).toEqual([])
     expect(getMigrationHistory(old).at(-1)?.version).toBe(50)
-    expect(getPendingMigrations(old)).toEqual([51])
+    expect(getPendingMigrations(old)).toEqual([51, 52])
 
     runMigrations(old)
     migrations.find((entry) => entry.version === 51)!.migrate(old)
@@ -2653,7 +2653,7 @@ describe('persistent memory schema migration v51', () => {
       payload: '{"text":"keep event"}',
     })
     expect(getMigrationHistory(old).filter((entry) => entry.version === 51)).toHaveLength(1)
-    expect(getMigrationHistory(old).at(-1)?.version).toBe(51)
+    expect(getMigrationHistory(old).at(-1)?.version).toBe(SCHEMA_VERSION)
     expect(
       (old.prepare('PRAGMA table_info(memory_contexts)').all() as Array<{ name: string }>).map(({ name }) => name),
     ).toContain('budget_context_id')
@@ -2747,5 +2747,56 @@ describe('persistent memory schema migration v51', () => {
     })
     expect(() => addBudget.run('budget-duplicate', 'fresh-thread-one')).toThrow()
     db.close()
+  })
+})
+
+describe('durable final reviews v52', () => {
+  it('preserves v51 sessions and pending returns and converges with fresh installs', () => {
+    const old = new Database(':memory:')
+    initSchema(old)
+    old.exec(`DROP TABLE auto_loop_final_reviews;
+      DROP TABLE pending_review_returns;
+      CREATE TABLE pending_review_returns (
+        workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+        review_session_id TEXT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
+        original_session_id TEXT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
+        original_configuration TEXT NOT NULL, review_configuration TEXT NOT NULL, created_at TEXT NOT NULL);
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+      INSERT INTO schema_migrations VALUES(1,'init-schema','v51');
+      INSERT INTO workspaces (id,name,project_path,source_branch,working_branch,created_at,updated_at) VALUES('w','Keep','/repo','main','feature','a','b');
+      INSERT INTO agent_sessions (id,workspace_id,status,started_at) VALUES('original','w','completed','a'),('review','w','running','b');
+      INSERT INTO pending_review_returns VALUES('w','review','original','{"engine":"codex"}','{"engine":"claude-code"}','c');`)
+    for (const migration of migrations.filter((m) => m.version <= 51))
+      old.prepare('INSERT INTO schema_migrations VALUES(?,?,?)').run(migration.version, migration.name, 'v51')
+    expect(getPendingMigrations(old)).toEqual([52])
+    runMigrations(old)
+    migrations.find((m) => m.version === 52)!.migrate(old)
+    expect(old.prepare('SELECT * FROM pending_review_returns').get()).toEqual({
+      workspace_id: 'w',
+      review_session_id: 'review',
+      original_session_id: 'original',
+      original_configuration: '{"engine":"codex"}',
+      review_configuration: '{"engine":"claude-code"}',
+      created_at: 'c',
+      phase: 'reviewing',
+      review_prompt: null,
+      return_prompt: null,
+      last_error: null,
+    })
+    expect(old.prepare('SELECT name FROM workspaces').get()).toEqual({ name: 'Keep' })
+    expect(old.prepare('SELECT COUNT(*) AS n FROM agent_sessions').get()).toEqual({ n: 2 })
+    expect(getMigrationHistory(old).at(-1)?.version).toBe(SCHEMA_VERSION)
+    const fresh = new Database(':memory:')
+    initSchema(fresh)
+    for (const table of ['pending_review_returns', 'auto_loop_final_reviews']) {
+      expect(old.prepare(`PRAGMA table_info(${table})`).all()).toEqual(
+        fresh.prepare(`PRAGMA table_info(${table})`).all(),
+      )
+      expect(old.prepare(`PRAGMA foreign_key_list(${table})`).all()).toEqual(
+        fresh.prepare(`PRAGMA foreign_key_list(${table})`).all(),
+      )
+    }
+    old.close()
+    fresh.close()
   })
 })

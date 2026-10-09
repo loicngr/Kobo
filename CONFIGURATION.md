@@ -615,9 +615,33 @@ receiving agent summarizes the findings and waits for your instructions before
 applying fixes. The complete review remains in its own session history.
 
 With the option off, subsequent conversation continues with the review LLM.
-When automatic return is enabled, stopping the review cancels it. If the review
-fails or Kobo restarts during it, the original settings are restored without launching the
-original agent automatically; review output already recorded remains available.
+Closing the browser or shutting down Kōbō preserves the automatic return. After a
+server restart, Kōbō resumes the interrupted review and returns its summary to the
+original conversation when capacity and quotas permit. A completed review waiting
+to return keeps its summary. Explicitly stopping the agent cancels the return.
+
+If the server stops during summary delivery and cannot confirm whether it arrived,
+the chat displays a pending return with **Retry** and **Cancel**. Inspect the original
+conversation before retrying: it may already contain that summary. A failed review
+also keeps a recoverable return instead of silently losing it.
+
+### Final review for auto-loop
+
+Enable **Final review** in the creation form or the workspace's Auto-loop panel.
+Configure the reviewer engine, model, reasoning effort and additional instructions
+in advance. Workspace templates and remembered creation preferences retain these
+settings. Each review uses a separate session in Plan mode and returns to the exact
+working session with its original LLM settings and permissions.
+
+After all work and final checks pass, Kōbō launches the reviewer. Its structured
+findings become tasks for the original agent to correct automatically. The agent
+verifies the corrections and completes final checks, then Kōbō launches a fresh
+review. This cycle continues until a review reports zero findings; the original
+session receives the result before auto-loop completes. Repeated unchanged findings
+trigger a diagnostic and bounded further attempts, then block for attention.
+Closing the client or restarting the server preserves this cycle as well as the
+return. A manual review outside auto-loop still summarizes and waits for your
+instructions before applying fixes.
 
 ## Workspace templates and duplication
 
@@ -1984,7 +2008,7 @@ and across Unicode normalization boundaries.
 
 ## Auto-loop completion and recovery
 
-Auto-loop remains enabled while work is unfinished. Its panel distinguishes grooming, execution and final verification from waiting, blocked, completed and stopped states. All todos and acceptance criteria must be complete, followed by a successful final verification. The final check runs again after task changes or new instructions. Empty custom finalization settings use the built-in final check.
+Auto-loop remains enabled while work is unfinished. Its panel distinguishes grooming, execution and final verification from waiting, blocked, completed and stopped states. All todos and acceptance criteria must be complete, followed by a successful final verification. The final check runs again after task changes or new instructions. Empty custom finalization settings use the built-in final check. With [Final review](#final-review-for-auto-loop) configured, completion also requires an independent review with zero findings and the summary returned to the original session. Review findings reopen work and final verification before another review.
 
 Completing an auto-loop task through MCP or HTTP requires structured verification: a non-empty `method`, `summary`, and `checks` array with named checks whose `status` is `passed`. A required test that could not run stays open (`not_run`); writing test source alone is insufficient. These are results reported by the agent, not independently executed by Kōbō.
 

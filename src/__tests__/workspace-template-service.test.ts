@@ -47,6 +47,7 @@ describe('sanitizePreset', () => {
       engine: 'codex',
       model: 'gpt',
       autoLoop: true,
+
       tasks: ['a', 'b'],
       acceptanceCriteria: ['c'],
       agentPermissionMode: 'plan',
@@ -281,6 +282,7 @@ describe('presetFromWorkspace', () => {
     const id = await createFixtureWorkspace()
 
     expect(presetFromWorkspace(id)).toEqual({
+      autoLoopFinalReview: null,
       projectPath: '/tmp/p',
       sourceBranch: 'develop',
       branchType: 'fix',

@@ -162,6 +162,32 @@ conversation tools are described separately. The registration schemas in
 | `cron_list` | None | List this workspace's schedules. |
 | `cron_delete` | `id` | Cancel one of this workspace's schedules. |
 
+### Final auto-loop review
+
+`submit_final_review` (shown to agents as `kobo__submit_final_review`) is available
+only in the separate final-review session launched by Kōbō. It is not an external
+HTTP/global-stdio conversation tool or a general task-completion tool. Kōbō binds
+its capability to the active reviewer; the agent cannot select another workspace
+or session. Plan/read-only reviewers can submit this verdict without permission to
+modify files or tasks.
+
+Arguments: `summary` (non-empty, at most 12,000 characters) and `findings` (at most
+100 items). Each finding requires `severity` (`critical`, `important`, or `minor`),
+`file` (at most 1,000 characters), `description` and `recommendation` (each at most
+4,000 characters), with an optional positive integer `line`. The complete
+serialized verdict is capped at 60,000 characters. Include every actionable
+finding; use `findings: []` only when the entire mission and its acceptance
+criteria are clear. A prose-only report does not satisfy this completion gate.
+
+Submit one final verdict, then end the turn. Repeating an identical verdict is
+safe; replacing an already accepted verdict with different findings is refused.
+Kōbō turns findings into tasks, returns them to the original working session for
+automatic correction and final verification, and launches a fresh review. With no
+findings, the original session receives the result before the loop completes.
+This review/return state survives a client disconnect or server restart. An
+uncertain return delivery requires explicit retry/cancel in Kōbō; the reviewer
+must not try to bypass that decision. See [final review configuration](../../CONFIGURATION.md#final-review-for-auto-loop).
+
 ### Documents, context and history
 
 | Tool | Input | Purpose |

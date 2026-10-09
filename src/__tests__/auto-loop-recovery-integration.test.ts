@@ -338,12 +338,12 @@ describe('auto-loop recovery integration', () => {
     const statuses = ['pending', 'in_progress', 'pending', 'in_progress', 'done']
     const expected = [0, 1, 0, 0, 1]
     for (let n = 0; n < statuses.length; n++) {
-      orch.startAgent(id, '/tmp', 'work')
+      const session = orch.startAgent(id, '/tmp', 'work')
       await flush()
       db.prepare('UPDATE tasks SET status=?,updated_at=? WHERE id=?').run(statuses[n], `updated-${n}`, task.id)
       emitter({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
       await flush()
-      expect(spy).toHaveBeenLastCalledWith(id, 'completed', expected[n], false)
+      expect(spy).toHaveBeenLastCalledWith(id, 'completed', expected[n], false, session.agentSessionId)
     }
   })
   it('honors a known quota reset several days away', async () => {
