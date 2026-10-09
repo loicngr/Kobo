@@ -19,6 +19,12 @@
           :label="t('autoLoop.stop')" :disable="busy" :loading="pendingAction === 'stop'"
           @click="runAction('stop', (id) => store.disableAutoLoop(id))"
         />
+        <q-btn
+          v-if="canDismiss"
+          flat dense no-caps size="sm" data-test="loop-dismiss"
+          :label="t('common.dismiss')" :disable="busy"
+          @click="dismiss"
+        />
       </div>
     </div>
     <p v-if="reason" class="auto-loop-panel__detail">{{ reason }}</p>
@@ -69,6 +75,8 @@ const store = useWorkspaceStore()
 const { t, te, locale } = useI18n()
 const pendingAction = ref<string | null>(null)
 const error = ref('')
+const dismissedRun = ref<string | null>(null)
+const dismissalKey = computed(() => `kobo:dismissed-auto-loop:${props.workspaceId}`)
 const status = computed(() => store.autoLoopStates[props.workspaceId])
 const state = computed(() => status.value?.state ?? (status.value?.auto_loop ? 'active' : 'stopped'))
 const messages = computed(() =>
@@ -76,14 +84,20 @@ const messages = computed(() =>
 )
 const hasUnknown = computed(() => messages.value.some((message) => message.state === 'unknown'))
 const busy = computed(() => pendingAction.value !== null)
+const terminal = computed(() => state.value === 'completed' || state.value === 'stopped')
+const canDismiss = computed(() => terminal.value && !status.value?.auto_loop && messages.value.length === 0)
+const runSignature = computed(() =>
+  JSON.stringify([state.value, status.value?.iteration ?? 0, status.value?.current_session_id ?? null]),
+)
+// Queue fetches also run for manual workspaces; an error alone is not loop activity.
 const visible = computed(() =>
   Boolean(
-    status.value?.auto_loop ||
-      state.value === 'blocked' ||
-      state.value === 'completed' ||
-      status.value?.iteration ||
-      messages.value.length ||
-      error.value,
+    !(canDismiss.value && dismissedRun.value === runSignature.value) &&
+      (status.value?.auto_loop ||
+        state.value === 'blocked' ||
+        state.value === 'completed' ||
+        status.value?.iteration ||
+        messages.value.length),
   ),
 )
 const reason = computed(() => {
@@ -102,6 +116,11 @@ const retryAt = computed(() => {
 watch(
   () => props.workspaceId,
   async (id) => {
+    try {
+      dismissedRun.value = localStorage.getItem(dismissalKey.value)
+    } catch {
+      dismissedRun.value = null
+    }
     error.value = ''
     pendingAction.value = null
     if (!id) return
@@ -113,6 +132,30 @@ watch(
   },
   { immediate: true },
 )
+
+watch(
+  [() => props.workspaceId, () => status.value?.auto_loop, terminal],
+  () => {
+    if (!status.value || (!status.value.auto_loop && terminal.value)) return
+    dismissedRun.value = null
+    try {
+      localStorage.removeItem(dismissalKey.value)
+    } catch {
+      // Keep the panel usable when browser storage is unavailable.
+    }
+  },
+  { immediate: true },
+)
+
+function dismiss(): void {
+  if (!canDismiss.value || busy.value) return
+  dismissedRun.value = runSignature.value
+  try {
+    localStorage.setItem(dismissalKey.value, dismissedRun.value)
+  } catch {
+    // The dismissal still applies for the current view.
+  }
+}
 
 async function runAction(action: string, run: (id: string) => Promise<void>): Promise<void> {
   if (busy.value || !props.workspaceId) return
