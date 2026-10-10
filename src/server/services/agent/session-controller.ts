@@ -123,11 +123,14 @@ export class SessionController {
     this._status = 'running'
   }
 
-  async sendMessage(content: string): Promise<void> {
+  async sendMessage(content: string, beforeDispatch?: () => void): Promise<void> {
     if (!this._startPromise) throw new Error('SessionController not started')
     await this._startPromise
     if (this._status === 'stopping') throw new Error('SessionController is stopping')
     if (!this._engineProcess) throw new Error('SessionController not started')
+    // Startup may have yielded while the workspace's delivery mode changed.
+    // Validate immediately before handing the message to the engine.
+    beforeDispatch?.()
     await this._engineProcess.sendMessage(content)
   }
 

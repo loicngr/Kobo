@@ -404,6 +404,7 @@ vi.mock('node:fs', async () => {
     openSync: vi.fn().mockReturnValue(101),
     closeSync: vi.fn(),
     existsSync: vi.fn().mockReturnValue(false),
+    statSync: vi.fn().mockReturnValue({ dev: 1, ino: 1, isDirectory: () => true }),
     readFileSync: vi.fn().mockReturnValue(''),
     appendFileSync: vi.fn(),
   }
@@ -1191,7 +1192,11 @@ describe('POST /api/workspaces', () => {
     // module-wide default of `false` for their own `resolveUniqueBranchAndPath`
     // disk checks (see branch-resolver.ts).
     vi.mocked(fs.existsSync).mockReturnValueOnce(true)
-    vi.mocked(execFileSync).mockReturnValueOnce('/tmp/project/.git').mockReturnValueOnce('feature/reused')
+    vi.mocked(execFileSync)
+      .mockReturnValueOnce('/tmp/project/.git')
+      .mockReturnValueOnce('feature/reused')
+      .mockReturnValueOnce('/tmp/project/.git')
+      .mockReturnValueOnce('feature/reused')
     vi.mocked(agentManager.startAgent).mockImplementationOnce(() => {
       throw new Error('claude: command not found')
     })
@@ -1511,6 +1516,8 @@ describe('POST /api/workspaces', () => {
     // test's fixtures (fs/git mocked so the reuse validation passes).
     vi.mocked(fs.existsSync).mockReturnValue(true)
     vi.mocked(execFileSync)
+      .mockImplementationOnce(() => '/tmp/project/.git\n' as never)
+      .mockImplementationOnce(() => 'feature/derived\n' as never)
       .mockImplementationOnce(() => '/tmp/project/.git\n' as never)
       .mockImplementationOnce(() => 'feature/derived\n' as never)
     vi.mocked(getDb).mockReturnValue({
@@ -3578,6 +3585,26 @@ describe('POST /api/workspaces/:id/subagents/stop', () => {
 })
 
 describe('DELETE /api/workspaces/:id', () => {
+  it('refuses stale branch confirmation before stopping or deleting anything', async () => {
+    vi.mocked(workspaceService.getWorkspace)
+      .mockReturnValueOnce(fakeWorkspace)
+      .mockReturnValueOnce({ ...fakeWorkspace, workingBranch: 'feature/changed' })
+    const res = await app.request('/api/workspaces/ws-1', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        confirmationBranch: fakeWorkspace.workingBranch,
+        deleteLocalBranch: true,
+        deleteRemoteBranch: true,
+      }),
+    })
+    expect(res.status).toBe(409)
+    expect(await res.json()).toMatchObject({ code: 'branch-confirmation-mismatch' })
+    expect(agentManager.stopAgentAndWait).not.toHaveBeenCalled()
+    expect(workspaceService.deleteWorkspace).not.toHaveBeenCalled()
+    expect(gitOps.deleteRemoteBranchAsync).not.toHaveBeenCalled()
+  })
+
   it('deletes workspace with full cleanup', async () => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
 
@@ -6265,6 +6292,8 @@ describe('POST /api/workspaces — reuse existing worktree', () => {
     vi.mocked(execFileSync)
       .mockImplementationOnce(() => '/tmp/project/.git\n' as never)
       .mockImplementationOnce(() => 'feature/derived\n' as never)
+      .mockImplementationOnce(() => '/tmp/project/.git\n' as never)
+      .mockImplementationOnce(() => 'feature/derived\n' as never)
     // No existing row — happy path
     vi.mocked(getDb).mockReturnValue({
       prepare: vi.fn().mockReturnValue({
@@ -6370,6 +6399,8 @@ describe('POST /api/workspaces — PR context extraction', () => {
       vi.mocked(execFileSync)
         .mockImplementationOnce(() => '/repo/.git\n' as never)
         .mockImplementationOnce(() => 'feature/derived\n' as never)
+        .mockImplementationOnce(() => '/repo/.git\n' as never)
+        .mockImplementationOnce(() => 'feature/derived\n' as never)
       vi.mocked(getDb).mockReturnValue({
         prepare: vi.fn().mockReturnValue({
           run: vi.fn(),
@@ -6450,6 +6481,8 @@ describe('POST /api/workspaces — PR context extraction', () => {
     vi.mocked(execFileSync)
       .mockImplementationOnce(() => '/repo/.git\n' as never)
       .mockImplementationOnce(() => 'feature/derived\n' as never)
+      .mockImplementationOnce(() => '/repo/.git\n' as never)
+      .mockImplementationOnce(() => 'feature/derived\n' as never)
     vi.mocked(getDb).mockReturnValue({
       prepare: vi.fn().mockReturnValue({
         run: vi.fn(),
@@ -6509,6 +6542,8 @@ describe('POST /api/workspaces — PR context extraction', () => {
   it('does not let a PR title override an already-named workspace', async () => {
     vi.mocked(fs.existsSync).mockReturnValue(true)
     vi.mocked(execFileSync)
+      .mockImplementationOnce(() => '/repo/.git\n' as never)
+      .mockImplementationOnce(() => 'feature/derived\n' as never)
       .mockImplementationOnce(() => '/repo/.git\n' as never)
       .mockImplementationOnce(() => 'feature/derived\n' as never)
     vi.mocked(getDb).mockReturnValue({
@@ -6581,6 +6616,8 @@ describe('POST /api/workspaces — PR context extraction', () => {
   it('persists prUrl on the created workspace', async () => {
     vi.mocked(fs.existsSync).mockReturnValue(true)
     vi.mocked(execFileSync)
+      .mockImplementationOnce(() => '/repo/.git\n' as never)
+      .mockImplementationOnce(() => 'feature/derived\n' as never)
       .mockImplementationOnce(() => '/repo/.git\n' as never)
       .mockImplementationOnce(() => 'feature/derived\n' as never)
     vi.mocked(getDb).mockReturnValue({

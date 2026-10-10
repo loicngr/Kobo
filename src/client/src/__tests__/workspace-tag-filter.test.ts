@@ -2,6 +2,13 @@ import { describe, expect, it } from 'vitest'
 import { collectTags, matchesTags, parseTagFilter } from '../utils/workspace-tag-filter'
 
 describe('collectTags', () => {
+  it('includes configured tags with zero usage and preserves assigned tags outside the catalogue', () => {
+    expect(collectTags([{ tags: ['docs', 'legacy', 'docs'] }], ['bug', 'docs', 'bug'])).toEqual([
+      { tag: 'bug', count: 0 },
+      { tag: 'docs', count: 1 },
+      { tag: 'legacy', count: 1 },
+    ])
+  })
   it('lists distinct tags alphabetically, counted once per workspace', () => {
     expect(
       collectTags([{ tags: ['docs', 'back'] }, { tags: ['docs', 'docs'] }, { tags: [] }, { tags: ['Api'] }]),

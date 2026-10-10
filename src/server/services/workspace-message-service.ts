@@ -36,6 +36,10 @@ export async function deliverWorkspaceMessage(
     if (message.delivery === 'next_iteration') {
       if (!message.clientMessageId) throw new Error('clientMessageId is required for queued delivery')
       const acceptedBefore = hasLoopMessage(workspaceId, message.clientMessageId)
+      if (!acceptedBefore) {
+        if (!workspace.autoLoop) throw new Error('Auto-loop is not enabled')
+        hooks?.beforeDispatch?.()
+      }
       if (!autoLoop.queueInstruction(workspaceId, message.content, message.clientMessageId, message.source))
         throw new Error('Auto-loop is not enabled')
       if (!acceptedBefore) receipt.accept()

@@ -7,6 +7,7 @@ import { initReviewReturnSchema, migrateDurableReviewReturns } from './review-re
 import { initSchema } from './schema.js'
 import { initSearchSchema } from './search-schema.js'
 import { initSessionHandoffSchema } from './session-handoff-schema.js'
+import { initWorkspaceMessageBatchSchema } from './workspace-message-batch-schema.js'
 
 // ── Migration registry ────────────────────────────────────────────────────────
 // Each entry describes a single schema upgrade step.
@@ -834,6 +835,7 @@ export const migrations: Migration[] = [
       initAutoLoopFinalReviewSchema(db)
     },
   },
+  { version: 53, name: 'workspace-group-message-receipts', migrate: initWorkspaceMessageBatchSchema },
 ]
 
 /** Current schema version — always equals the highest migration version. */

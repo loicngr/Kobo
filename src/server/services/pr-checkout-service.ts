@@ -336,6 +336,8 @@ export async function applyBranchStrategy(
   if (strategy === 'keep') return { strategy, backupBranch: null }
 
   if (strategy === 'fast-forward') {
+    // A caller cannot turn fast-forward into a silent reset of local commits.
+    await readGitAsync(repoPath, ['merge-base', '--is-ancestor', branch, remoteRef])
     await runGitAsync(repoPath, ['branch', '--force', branch, remoteRef])
     return { strategy, backupBranch: null }
   }
@@ -431,6 +433,8 @@ export interface ResolvePrCheckoutResult {
   workingBranch: string
   sourceBranch: string
   applied: AppliedAction[]
+  /** Identity captured under the repository lock; absent for reused checkouts. */
+  createdWorktree?: { device: number; inode: number; head: string }
 }
 
 /** The repository moved between diagnosis and resolution. */
@@ -488,6 +492,12 @@ function resolvePrCheckoutLocked(
       input.workspaces ?? [],
     )
     if ((await computeFingerprint(fresh)) !== input.fingerprint) throw new StaleDiagnosisError(fresh)
+
+    if (
+      input.decisions.divergence === 'fast-forward' &&
+      (fresh.branch.state === 'ahead' || fresh.branch.state === 'diverged')
+    )
+      throw new Error('Fast-forward cannot discard local commits. Keep, rebase or explicitly reset the branch.')
 
     if (
       (fresh.worktree.state === 'orphan' || fresh.worktree.state === 'attached') &&
@@ -598,7 +608,16 @@ function resolvePrCheckoutLocked(
     //    realignment from step 4 (if any) is NOT undone here — a `reset-hard`
     //    strategy already left its own `kobo-backup/<branch>-<ts>` safety net,
     //    and fast-forward/rebase are non-destructive by construction.
+    let createdWorktree: ResolvePrCheckoutResult['createdWorktree']
     try {
+      if (created) {
+        const stat = fs.lstatSync(worktreePath)
+        createdWorktree = {
+          device: stat.dev,
+          inode: stat.ino,
+          head: await runGitAsync(worktreePath, ['rev-parse', 'HEAD']),
+        }
+      }
       input.afterWorktreeHook?.()
     } catch (err) {
       if (created) {
@@ -616,7 +635,13 @@ function resolvePrCheckoutLocked(
       throw err
     }
 
-    return { worktreePath, workingBranch: input.headBranch, sourceBranch: input.baseBranch, applied }
+    return {
+      worktreePath,
+      workingBranch: input.headBranch,
+      sourceBranch: input.baseBranch,
+      applied,
+      ...(createdWorktree ? { createdWorktree } : {}),
+    }
   })
 }
 

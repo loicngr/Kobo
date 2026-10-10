@@ -502,6 +502,18 @@ Two consequences worth knowing:
 - However far behind the loop falls (a laptop waking from sleep, say), it sends
   **one** reminder per pass, not one per missed interval.
 
+## Group workspace messages
+
+Use **Group message** in the workspace drawer to send the same instruction to several workspaces. Combine tags and workspace statuses, review the named recipient list, and deselect individual workspaces before sending. Selected tags match any tag; selected statuses match any status; both filter groups must match. Enable **Only workspaces with a running development server** to further restrict the list to server status `running`; starting, stopping, stopped, unknown and failed servers are excluded. This filter updates with received server status changes. Empty filters include all non-archived, non-purged workspaces. Both the group-message tag selector and the sidebar tag filter include the saved global tag catalogue plus tags already assigned to workspaces. Unused catalogue tags remain visible (with a zero count in the sidebar); assign a tag through a workspace menu before using it to target that workspace.
+
+Auto-loop recipients receive a durable instruction for their next iteration, without stopping the loop. Other recipients use normal chat delivery, which can resume an inactive agent. Normal chat restrictions still apply: pending human questions, compaction and lifecycle operations are not bypassed. The delivery mode is fixed when submitted; a subsequent auto-loop mode change rejects that recipient rather than silently switching modes.
+
+Each batch accepts up to 200 recipients and 100,000 characters of plain text. Delivery runs on the server with at most three attempts in flight. Results distinguish sent, queued for auto-loop, rejected, not sent and uncertain delivery. **Queued** means saved for an upcoming iteration, not already processed by the agent. Failures do not stop delivery to the other recipients.
+
+Closing the dialog or disconnecting the browser does not cancel an accepted batch. The browser tab retains the request ID and original payload across reloads to recover its receipt, independently of other tabs. **Check this delivery** reuses that request and cannot duplicate accepted deliveries. After a server restart, unstarted recipients become **Not sent**, and interrupted attempts become **Delivery uncertain**; they are never resent automatically. Inspect the affected workspace's chat before creating a new message for an uncertain result.
+
+The same feature is available through internal/global stdio and external HTTP MCP; see the [MCP guide](src/mcp-server/README.md). Batch receipts retain recipient names, IDs, modes and outcomes independently of workspace deletion. The batch table stores a content fingerprint, not the message body; accepted messages retain normal workspace chat history.
+
 ## Attachments in the creation description
 
 On the create page, paste or drop files into the mission description, or use
@@ -827,7 +839,7 @@ The setting lives in `settings.json` under `global` and has no UI control yet:
 
 ## External LLM access through MCP
 
-An external MCP client can connect to `http://127.0.0.1:3000/api/mcp` using Streamable HTTP (use your backend's configured port). It can discover workspaces, read their conversations, send messages to their agents and answer pending questions. The existing global stdio MCP server exposes these conversation tools too.
+An external MCP client can connect to `http://127.0.0.1:3000/api/mcp` using Streamable HTTP (use your backend's configured port). It can create workspaces with the same options as the form, diagnose and check out existing PRs, discover workspaces, read their conversations, send messages and answer pending questions. Workspace-bound stdio, global stdio and HTTP share the creation contract, including brainstorm settings, final auto-loop review, workflow policy, imports, existing worktrees, comparison grouping and inline attachments. All three transports also expose archive, disk-space purge, permanent deletion with explicit branch confirmation, unarchive and recovery of purged worktrees. See the [creation and PR guide](src/mcp-server/README.md#create_workspace) for fields, explicit checkout decisions and timeout/retry behavior.
 
 Remote HTTP clients follow the [network access](#network-access) settings and supply the Kōbō token as `Authorization: Bearer <token>` or `X-Kobo-Token`. The endpoint uses the same Host/Origin and reverse-proxy policy as the rest of the backend. No network setting is changed automatically.
 

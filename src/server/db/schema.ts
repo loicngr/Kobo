@@ -6,6 +6,7 @@ import { initMemorySchema } from './memory-schema.js'
 import { initReviewReturnSchema } from './review-return-schema.js'
 import { initSearchSchema } from './search-schema.js'
 import { initSessionHandoffSchema } from './session-handoff-schema.js'
+import { initWorkspaceMessageBatchSchema } from './workspace-message-batch-schema.js'
 
 /** Create all tables and indexes for a fresh install. Not used for upgrades -- see migrations.ts. */
 export function initSchema(db: Database.Database): void {
@@ -242,4 +243,5 @@ export function initSchema(db: Database.Database): void {
   initAutoLoopFinalReviewSchema(db)
   initSessionHandoffSchema(db)
   initMemorySchema(db)
+  initWorkspaceMessageBatchSchema(db)
 }

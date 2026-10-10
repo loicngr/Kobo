@@ -150,6 +150,11 @@
 
     <q-separator dark />
 
+    <div class="q-px-md q-py-xs">
+      <q-btn flat dense no-caps icon="campaign" class="full-width" color="kobo-2"
+        :label="$t('groupMessage.title')" :aria-label="$t('groupMessage.title')" data-tour="group-message" @click="groupMessageOpen = true" />
+    </div>
+
     <!-- Scrollable groups -->
     <div
       class="col overflow-auto"
@@ -694,6 +699,8 @@
     </q-card>
   </q-dialog>
 
+  <WorkspaceGroupMessageDialog v-model="groupMessageOpen" :workspaces="store.workspaces" />
+
   <ManageTagsDialog
     v-if="tagsDialogWorkspace"
     v-model="tagsDialogOpen"
@@ -707,6 +714,7 @@ import ActivityDigest from 'src/components/ActivityDigest.vue'
 import HelpMenu from 'src/components/HelpMenu.vue'
 import ManageTagsDialog from 'src/components/ManageTagsDialog.vue'
 import WorkspaceCard from 'src/components/WorkspaceCard.vue'
+import WorkspaceGroupMessageDialog from 'src/components/WorkspaceGroupMessageDialog.vue'
 import WorkspaceSortMenu from 'src/components/WorkspaceSortMenu.vue'
 import WorkspaceTagFilterMenu from 'src/components/WorkspaceTagFilterMenu.vue'
 import { useIsMobile } from 'src/composables/use-is-mobile'
@@ -788,8 +796,8 @@ watch(searchQuery, (v) => localStorage.setItem(SEARCH_QUERY_KEY, v))
 const favoritesOnly = ref<boolean>(localStorage.getItem('kobo:favorites-filter') === '1')
 watch(favoritesOnly, (v) => localStorage.setItem('kobo:favorites-filter', v ? '1' : '0'))
 
-// Tag filter (OR), remembered like the favourites filter. Tags nobody carries
-// any more are dropped so a stale selection never empties the drawer.
+// Tag filter (OR), remembered like the favourites filter. Drop selections only
+// when they are absent from both the catalogue and all workspaces.
 const TAG_FILTER_KEY = 'kobo:tag-filter'
 const tagFilter = ref<string[]>(parseTagFilter(localStorage.getItem(TAG_FILTER_KEY)))
 watch(tagFilter, (tags) => {
@@ -799,13 +807,12 @@ watch(tagFilter, (tags) => {
     // Filtering still works for this session when storage is unavailable.
   }
 })
-const availableTags = computed(() => collectTags([...store.workspaces, ...store.archived]))
+const availableTags = computed(() => collectTags([...store.workspaces, ...store.archived], settingsStore.global.tags))
 watch(
-  availableTags,
-  (tags) => {
-    // Live then archived workspaces load on mount: until both are there, a
-    // tag may just not be loaded yet, so keep the remembered selection.
-    if (!store.archivedLoaded) return
+  [availableTags, () => store.archivedLoaded, () => settingsStore.loaded],
+  ([tags]) => {
+    // Wait for both the workspace lists and catalogue before pruning selections.
+    if (!store.archivedLoaded || !settingsStore.loaded) return
     const known = new Set(tags.map((entry) => entry.tag))
     if (tagFilter.value.some((tag) => !known.has(tag)))
       tagFilter.value = tagFilter.value.filter((tag) => known.has(tag))
@@ -822,6 +829,7 @@ const passesFilters = (w: Workspace) =>
 const searchArchived = ref<boolean>(localStorage.getItem('kobo:search-archived') === '1')
 watch(searchArchived, (v) => localStorage.setItem('kobo:search-archived', v ? '1' : '0'))
 
+const groupMessageOpen = ref(false)
 const tagsDialogOpen = ref(false)
 const tagsDialogWorkspace = ref<Workspace | null>(null)
 function onManageTags(ws: Workspace) {

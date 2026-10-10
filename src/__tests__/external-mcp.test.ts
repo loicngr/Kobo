@@ -281,6 +281,8 @@ it(
       const { tools } = await client.listTools()
       expect(tools.map((tool) => tool.name)).toContain('submit_session_handoff')
       expect(tools.map((tool) => tool.name)).not.toContain('mark_task_done')
+      expect(tools.map((tool) => tool.name)).not.toContain('create_workspace')
+      expect((await client.callTool({ name: 'create_workspace', arguments: {} })).isError).toBe(true)
       const blocked = await client.callTool({ name: 'create_task', arguments: { title: 'Do not mutate' } })
       expect(blocked.isError).toBe(true)
       const result = await client.callTool({
@@ -336,6 +338,12 @@ it(
       for (const mutation of [
         'mark_task_done',
         'set_auto_loop',
+        'create_workspace',
+        'archive_workspace',
+        'purge_workspace_worktree',
+        'delete_workspace',
+        'restore_workspace',
+        'unarchive_workspace',
         'send_workspace_message',
         'remember',
         'submit_session_handoff',

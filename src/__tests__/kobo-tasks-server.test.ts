@@ -48,6 +48,8 @@ import { closeDb, getDb } from '../server/db/index.js'
 import { runMigrations } from '../server/db/migrations.js'
 import { initSchema } from '../server/db/schema.js'
 import { MASKED_SECRET } from '../shared/consts.js'
+import { WORKSPACE_CREATION_TOOLS } from '../shared/workspace-creation-tools.js'
+import { WORKSPACE_LIFECYCLE_TOOLS } from '../shared/workspace-lifecycle-tools.js'
 
 describe('MCP tasks server handlers', () => {
   let tmpDir: string
@@ -911,26 +913,28 @@ describe('MCP server tool registration — global workspace tools', () => {
   it('exposes list_workspaces, create_workspace, archive_workspace, stop_workspace with the right schemas', () => {
     const src = readServerSource()
     expect(src).toMatch(/name:\s*['"]list_workspaces['"]/)
-    expect(src).toMatch(/name:\s*['"]create_workspace['"]/)
-    expect(src).toMatch(/name:\s*['"]archive_workspace['"]/)
+    expect(WORKSPACE_CREATION_TOOLS.map((tool) => tool.name)).toEqual(['create_workspace', 'diagnose_workspace_pr'])
+    expect(WORKSPACE_LIFECYCLE_TOOLS.map((tool) => tool.name)).toContain('archive_workspace')
     expect(src).toMatch(/name:\s*['"]stop_workspace['"]/)
-    expect(src).toMatch(
-      /required:\s*\[['"]name['"]\s*,\s*['"]project_path['"]\s*,\s*['"]source_branch['"]\s*,\s*['"]working_branch['"]\]/,
-    )
+    expect(WORKSPACE_CREATION_TOOLS[0]?.inputSchema.required).toEqual(['name', 'project_path'])
   })
 
-  it('defines the 4 global tools inside GLOBAL_TOOLS, not WORKSPACE_SCOPED_TOOLS', () => {
+  it('includes shared creation tools in GLOBAL_TOOLS, not WORKSPACE_SCOPED_TOOLS', () => {
     const src = readServerSource()
     const globalBlockMatch = src.match(/const GLOBAL_TOOLS[\s\S]*?\n\]/)
     expect(globalBlockMatch).not.toBeNull()
     const globalBlock = globalBlockMatch?.[0] ?? ''
-    for (const toolName of ['list_workspaces', 'create_workspace', 'archive_workspace', 'stop_workspace']) {
+    expect(globalBlock).toContain('...WORKSPACE_CREATION_TOOLS')
+    expect(globalBlock).toContain('...WORKSPACE_LIFECYCLE_TOOLS')
+    for (const toolName of ['list_workspaces', 'stop_workspace']) {
       expect(globalBlock).toMatch(new RegExp(`name:\\s*['"]${toolName}['"]`))
     }
     const scopedBlockMatch = src.match(/const WORKSPACE_SCOPED_TOOLS[\s\S]*?\n\]\n\nconst GLOBAL_TOOLS/)
     expect(scopedBlockMatch).not.toBeNull()
     const scopedBlock = scopedBlockMatch?.[0] ?? ''
-    for (const toolName of ['list_workspaces', 'create_workspace', 'archive_workspace', 'stop_workspace']) {
+    expect(scopedBlock).not.toContain('...WORKSPACE_CREATION_TOOLS')
+    expect(scopedBlock).not.toContain('...WORKSPACE_LIFECYCLE_TOOLS')
+    for (const toolName of ['list_workspaces', 'stop_workspace']) {
       expect(scopedBlock).not.toMatch(new RegExp(`name:\\s*['"]${toolName}['"]`))
     }
   })
@@ -959,31 +963,19 @@ describe('MCP server tool registration — global workspace tools', () => {
 
   it('routes create_workspace/archive_workspace/stop_workspace through the backend HTTP API', () => {
     const src = readServerSource()
-    expect(src).toMatch(
-      /name === 'create_workspace'[\s\S]*?backendRequest\(\s*['"]POST['"]\s*,\s*['"]\/api\/workspaces['"]/,
-    )
-    expect(src).toMatch(
-      /name === 'archive_workspace'[\s\S]*?backendRequest\(\s*['"]POST['"]\s*,\s*`\/api\/workspaces\/\$\{[^}]+\}\/archive`/,
-    )
+    expect(src).toMatch(/isWorkspaceCreationTool\(name\)[\s\S]*?callWorkspaceDialogueTool\(/)
+    expect(src).toMatch(/isWorkspaceLifecycleTool\(name\)[\s\S]*?callWorkspaceDialogueTool\(/)
     expect(src).toMatch(
       /name === 'stop_workspace'[\s\S]*?backendRequest\(\s*['"]POST['"]\s*,\s*`\/api\/workspaces\/\$\{[^}]+\}\/stop`/,
     )
   })
 
-  it('create_workspace requires name, project_path, source_branch, working_branch', () => {
+  it('legacy stop_workspace requires workspace_id', () => {
     const src = readServerSource()
-    expect(src).toMatch(
-      /name === 'create_workspace'[\s\S]*?return fail\('name, project_path, source_branch, and working_branch parameters are required'\)/,
-    )
-  })
-
-  it('archive_workspace and stop_workspace require workspace_id', () => {
-    const src = readServerSource()
-    expect(src).toMatch(/name === 'archive_workspace'[\s\S]*?return fail\('workspace_id parameter is required'\)/)
     expect(src).toMatch(/name === 'stop_workspace'[\s\S]*?return fail\('workspace_id parameter is required'\)/)
   })
 
-  it('surfaces a clear "backend unreachable" message on network failure for the 3 mutating tools', () => {
+  it('surfaces a clear "backend unreachable" message on network failure for the legacy lifecycle tools', () => {
     const src = readServerSource()
     expect(src).toMatch(/function backendErrorMessage\(/)
     expect(src).toMatch(/Kōbō backend unreachable at \$\{backendUrl\}/)

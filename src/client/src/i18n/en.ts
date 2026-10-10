@@ -1,4 +1,42 @@
 export default {
+  'groupMessage.title': 'Group message',
+  'groupMessage.description': 'Send the same instruction to several workspaces.',
+  'groupMessage.devServerRunning': 'Only workspaces with a running development server',
+  'groupMessage.tags': 'Tags',
+  'groupMessage.statuses': 'Workspace statuses',
+  'groupMessage.filtersHint':
+    'At least one selected tag AND one selected status. Empty filters include all live workspaces.',
+  'groupMessage.selected': '{count} recipients selected',
+  'groupMessage.selectAll': 'Select all',
+  'groupMessage.selectNone': 'Select none',
+  'groupMessage.nextIteration': 'Next auto-loop iteration',
+  'groupMessage.immediate': 'Normal chat delivery',
+  'groupMessage.empty': 'No workspace matches these filters.',
+  'groupMessage.content': 'Message',
+  'groupMessage.deliveryHint':
+    'Auto-loops receive the instruction next iteration, without stopping. Other workspaces receive a chat message, resuming inactive agents when needed.',
+  'groupMessage.limit': 'Select at most 200 workspaces per message.',
+  'groupMessage.finished': 'Delivery results',
+  'groupMessage.inProgress': 'Sending group message',
+  'groupMessage.serverContinues':
+    'The server continues delivery if you close this window. Queued means saved for a future iteration, not yet processed.',
+  'groupMessage.unknownHint':
+    'Delivery is uncertain for some workspaces. Read their chat before sending another message.',
+  'groupMessage.retryHint':
+    'Your original recipients and message are saved. Retry checks or resumes this same request without duplicating accepted deliveries.',
+  'groupMessage.retry': 'Check this delivery',
+  'groupMessage.newMessage': 'New message',
+  'groupMessage.send': 'Send to {count} workspaces',
+  'groupMessage.state.pending': 'Pending',
+  'groupMessage.state.sending': 'Sending',
+  'groupMessage.state.sent': 'Sent',
+  'groupMessage.state.queued': 'Queued for auto-loop',
+  'groupMessage.state.rejected': 'Rejected',
+  'groupMessage.state.unknown': 'Delivery uncertain',
+  'groupMessage.state.not_sent': 'Not sent',
+  'tours.home.groupMessage.title': 'Message several workspaces',
+  'tours.home.groupMessage.description':
+    'Filter by tags, workspace statuses and running development servers, check the recipient list, and send one instruction. Auto-loops receive it next iteration. Each workspace has its own delivery result.',
   'autoLoop.finalReview.title': 'Final review settings',
   'autoLoop.finalReview.description':
     'After all tasks and final checks, a separate reviewer checks the changes. The final working session fixes the findings, then a fresh review runs until no findings remain.',
@@ -1973,7 +2011,7 @@ export default {
   'workspace.tagFilter': 'Filter by tags',
   'workspace.tagFilterActive': 'Filter by tags ({count} selected)',
   'workspace.tagFilterClear': 'Clear',
-  'workspace.tagFilterEmpty': 'No tags yet. Add some from a workspace menu.',
+  'workspace.tagFilterEmpty': 'No tags yet. Define them in Settings, then assign them from a workspace menu.',
   'workspace.searchArchivedToggle': 'Also search archived workspaces',
   'workspace.descriptionPlaceholder': 'Add a short description',
   'workspace.descriptionDialogHint': 'Plain text, 200 characters max. Leave empty to clear.',
@@ -2015,7 +2053,8 @@ export default {
   'settings.importConfirmMessage':
     'This will replace your current settings, templates and tags. Your MCP keys are preserved. Continue?',
   'settings.mcp.title': 'External LLM connections (MCP)',
-  'settings.mcp.hint': 'Connect an MCP client to read workspace conversations, send messages and answer questions.',
+  'settings.mcp.hint':
+    'Connect an MCP client to create, archive, purge, delete or restore workspaces, resume a PR and talk to your agents.',
   'settings.mcp.remoteDisabled': 'Remote connections require network access and a server restart after enabling it.',
   'settings.mcp.clientName': 'Client name (optional)',
   'settings.mcp.connection': 'Connection',
@@ -2035,7 +2074,7 @@ export default {
   'settings.mcp.copyFailed': 'Could not copy to the clipboard.',
   'tours.settings.mcp.title': 'Connect an external LLM',
   'tours.settings.mcp.description':
-    'Copy an HTTP or stdio configuration to let an external assistant communicate with your workspaces.',
+    'Copy an HTTP or stdio configuration to connect an external assistant. It can create a workspace with the form options, resume a PR, manage archiving, deletion or restoration, and communicate with your agents.',
   'settings.network.title': 'Network access',
   'settings.network.hint':
     'Control Kōbō from another device on your trusted LAN. Off = localhost only. On = reachable on your network, protected by a token. Restart Kōbō after toggling.',
@@ -2428,6 +2467,7 @@ export default {
   'prCheckout.divergence.behindHint': 'Your branch is {behind} commit(s) behind origin.',
   'prCheckout.divergence.aheadHint': 'Your branch has {ahead} unpushed commit(s).',
   'prCheckout.divergence.divergedHint': '{ahead} ahead, {behind} behind origin.',
+  'prCheckout.divergence.notFastForward': 'Fast-forward is unavailable: the branch contains local commits.',
   'prCheckout.divergence.fastForward': 'Fast-forward to origin',
   'prCheckout.divergence.rebase': 'Rebase onto origin',
   'prCheckout.divergence.resetHard': 'Reset to origin (a backup branch is created first)',

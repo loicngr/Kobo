@@ -22,6 +22,8 @@ Kōbō (工房, "workshop") turns *one agent, one terminal* into a real workflow
 | **🔁 Auto-loop, cron, wakeups** | Turn an agent loose on the task list: it works through tasks, retries on rate limits, and stops itself when there's nothing left, progress stalls, or it needs you. An optional [independent final review](CONFIGURATION.md#final-review-for-auto-loop) returns findings to the original session for automatic correction and repeats until none remain, with durable recovery after restart. Cron schedules and one-shot wakeups keep workspaces moving on their own timeline. |
 | **🔀 Create from a PR/MR, or from a ticket** | Pick an open pull/merge request from GitHub, GitLab, or Bitbucket and Kōbō resolves every local conflict for you before spinning up the workspace. Or start straight from a Notion page or a Sentry issue URL. |
 
+Use [group messages](CONFIGURATION.md#group-workspace-messages) to send one instruction to selected workspaces, filtered by tags and status, from the interface or MCP. Auto-loops receive it on their next iteration; each recipient has a durable delivery result.
+
 ## Quick start
 
 Requires Node.js ≥ 24.15, Git, Bash and your own Claude Code **or** Codex authentication. No skill plugin or ticket integration is required. Kōbō is a local, single-user tool; each user installs their own instance.
@@ -51,7 +53,7 @@ Kōbō's production build is an installable PWA — use your browser's **Install
 - **Attachments from the first prompt**: paste, drop or attach screenshots, Markdown, text files or PDFs to the creation description or workspace chat. Kōbō copies them into the worktree for the agent. See [creation attachments](./CONFIGURATION.md#attachments-in-the-creation-description) and [chat attachments](./CONFIGURATION.md#attachments-in-workspace-chat).
 
 - **Command palette & search**: `/` autocompletes skills and commands, `@` fuzzy-completes worktree file paths, `Ctrl+F` searches readable messages, `Ctrl+K` opens a command palette. The global search page deep-links to the same spot.
-- **MCP toolset (`kobo-tasks`)**: task/acceptance-criteria CRUD, dev server control, a unified `get_ticket` (Notion or Sentry), cross-workspace conversation search, per-session usage, and a `.ai/thoughts` decision log — see the [MCP guide](./src/mcp-server/README.md#tools). External MCP clients can also discover workspaces, read conversations, send messages, and answer questions through HTTP or global stdio.
+- **MCP toolset (`kobo-tasks`)**: task/acceptance-criteria CRUD, dev server control, a unified `get_ticket` (Notion or Sentry), cross-workspace conversation search, per-session usage, and a `.ai/thoughts` decision log — see the [MCP guide](./src/mcp-server/README.md#tools). Internal and external MCP clients can create fully configured workspaces, including final auto-loop review, attachments and checkout of an existing PR. HTTP and stdio clients can also archive, purge, delete or restore workspaces, read conversations, send messages, and answer questions.
 
   ![Sub-agents panel showing parallel tool calls](docs/assets/images/sub-agents-panel.png)
 - **Multi-forge Git panel**: GitHub (`gh`), GitLab (`glab`), or Bitbucket Community (`bkt`), auto-detected from the remote — `Open PR`, `Merge ready PR`, `Change PR base`, `Change source branch`, all from the UI.

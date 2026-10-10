@@ -1,4 +1,42 @@
 export default {
+  'groupMessage.title': 'Message groupé',
+  'groupMessage.description': 'Envoyer la même consigne à plusieurs workspaces.',
+  'groupMessage.devServerRunning': 'Uniquement les workspaces avec un serveur de développement lancé',
+  'groupMessage.tags': 'Tags',
+  'groupMessage.statuses': 'Statuts des workspaces',
+  'groupMessage.filtersHint':
+    'Au moins un tag sélectionné ET un statut sélectionné. Sans filtre, tous les workspaces non archivés sont inclus.',
+  'groupMessage.selected': '{count} destinataires sélectionnés',
+  'groupMessage.selectAll': 'Tout sélectionner',
+  'groupMessage.selectNone': 'Tout désélectionner',
+  'groupMessage.nextIteration': 'Prochaine itération auto-loop',
+  'groupMessage.immediate': 'Envoi dans le chat',
+  'groupMessage.empty': 'Aucun workspace ne correspond aux filtres.',
+  'groupMessage.content': 'Message',
+  'groupMessage.deliveryHint':
+    'Les auto-loops reçoivent la consigne à la prochaine itération, sans être arrêtées. Les autres workspaces reçoivent un message de chat, avec reprise des agents inactifs si nécessaire.',
+  'groupMessage.limit': 'Sélectionnez au maximum 200 workspaces par message.',
+  'groupMessage.finished': 'Résultats de l’envoi',
+  'groupMessage.inProgress': 'Envoi du message groupé',
+  'groupMessage.serverContinues':
+    'Le serveur continue l’envoi si vous fermez cette fenêtre. « En attente » signifie enregistré pour une prochaine itération, pas encore traité.',
+  'groupMessage.unknownHint':
+    'L’envoi est incertain pour certains workspaces. Consultez leur chat avant d’envoyer un nouveau message.',
+  'groupMessage.retryHint':
+    'Les destinataires et le message initiaux sont conservés. Vérifier reprend cette même demande sans dupliquer les envois acceptés.',
+  'groupMessage.retry': 'Vérifier cet envoi',
+  'groupMessage.newMessage': 'Nouveau message',
+  'groupMessage.send': 'Envoyer à {count} workspaces',
+  'groupMessage.state.pending': 'À envoyer',
+  'groupMessage.state.sending': 'Envoi en cours',
+  'groupMessage.state.sent': 'Envoyé',
+  'groupMessage.state.queued': 'En attente auto-loop',
+  'groupMessage.state.rejected': 'Refusé',
+  'groupMessage.state.unknown': 'Envoi incertain',
+  'groupMessage.state.not_sent': 'Non envoyé',
+  'tours.home.groupMessage.title': 'Écrire à plusieurs workspaces',
+  'tours.home.groupMessage.description':
+    'Filtrez par tags, statuts et serveurs de développement lancés, vérifiez les destinataires, puis envoyez une même consigne. Les auto-loops la reçoivent à la prochaine itération. Chaque workspace affiche son résultat d’envoi.',
   'autoLoop.finalReview.title': 'Réglages de la review finale',
   'autoLoop.finalReview.description':
     'Après toutes les tâches et les vérifications finales, une session séparée revoit les changements. La dernière session de travail corrige les findings, puis une nouvelle review démarre jusqu’à ce qu’il n’en reste aucun.',
@@ -2005,7 +2043,8 @@ export default {
   'workspace.tagFilter': 'Filtrer par tags',
   'workspace.tagFilterActive': 'Filtrer par tags ({count} sélectionné(s))',
   'workspace.tagFilterClear': 'Effacer',
-  'workspace.tagFilterEmpty': "Aucun tag pour l'instant. Ajoutez-en depuis le menu d'un workspace.",
+  'workspace.tagFilterEmpty':
+    "Aucun tag pour l'instant. Définissez-les dans les réglages, puis attribuez-les depuis le menu d'un workspace.",
   'workspace.searchArchivedToggle': 'Inclure les workspaces archivés dans la recherche',
   'workspace.descriptionPlaceholder': 'Ajouter une courte description',
   'workspace.descriptionDialogHint': 'Texte brut, 200 caractères maximum. Laisser vide pour effacer.',
@@ -2048,7 +2087,7 @@ export default {
     'Cela remplacera tes paramètres, templates et tags actuels. Tes clés MCP seront conservées. Continuer ?',
   'settings.mcp.title': 'Connexions des LLM externes (MCP)',
   'settings.mcp.hint':
-    'Connectez un client MCP pour lire les conversations, envoyer des messages et répondre aux questions des workspaces.',
+    'Connectez un client MCP pour créer, archiver, purger, supprimer ou restaurer des workspaces, reprendre une PR et dialoguer avec vos agents.',
   'settings.mcp.remoteDisabled':
     'Les connexions distantes nécessitent l’accès réseau et un redémarrage du serveur après son activation.',
   'settings.mcp.clientName': 'Nom du client (facultatif)',
@@ -2069,7 +2108,7 @@ export default {
   'settings.mcp.copyFailed': 'Impossible de copier dans le presse-papiers.',
   'tours.settings.mcp.title': 'Connecter un LLM externe',
   'tours.settings.mcp.description':
-    'Copiez une configuration HTTP ou stdio pour permettre à un assistant externe de communiquer avec vos workspaces.',
+    'Copiez une configuration HTTP ou stdio pour connecter un assistant externe. Il peut créer un workspace avec les options du formulaire, reprendre une PR, gérer son archivage, sa suppression ou sa restauration et communiquer avec vos agents.',
   'settings.network.title': 'Accès réseau',
   'settings.network.hint':
     'Pilote Kōbō depuis un autre appareil de ton LAN de confiance. Off = localhost uniquement. On = accessible sur ton réseau, protégé par un token. Redémarre Kōbō après bascule.',
@@ -2469,6 +2508,7 @@ export default {
   'prCheckout.divergence.behindHint': 'Votre branche a {behind} commit(s) de retard sur origin.',
   'prCheckout.divergence.aheadHint': 'Votre branche a {ahead} commit(s) non pushé(s).',
   'prCheckout.divergence.divergedHint': '{ahead} en avance, {behind} en retard sur origin.',
+  'prCheckout.divergence.notFastForward': 'Le fast-forward est impossible : la branche contient des commits locaux.',
   'prCheckout.divergence.fastForward': 'Fast-forward vers origin',
   'prCheckout.divergence.rebase': 'Rebase sur origin',
   'prCheckout.divergence.resetHard': "Réinitialiser sur origin (une branche de sauvegarde est créée d'abord)",

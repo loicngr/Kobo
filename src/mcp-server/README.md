@@ -2,7 +2,7 @@
 
 Standalone MCP (Model Context Protocol) server configured for each Claude Code or Codex agent running inside a workspace. Exposes workspace-scoped tools that the agent can invoke to interact with Kōbō state: tasks, settings, dev server, images, git, etc.
 
-Kōbō also exposes conversation tools to external MCP clients over HTTP and through the global stdio server.
+Kōbō also exposes workspace creation, PR checkout diagnosis and conversation tools to external MCP clients over HTTP and through the global stdio server.
 
 ## Connect an external LLM
 
@@ -365,7 +365,7 @@ List all images uploaded to the current workspace via Kōbō's chat paste/upload
 
 ### Global tools (workspace-less mode)
 
-These 4 management tools and the 6 [conversation tools](#conversation-tools) are always registered, regardless of whether `KOBO_WORKSPACE_ID` is set — they let a session that Kōbō did NOT spawn (e.g. a standalone terminal session) discover, manage and talk to workspaces instead of being bound to one. The HTTP endpoint exposes discovery and conversation only.
+These management tools and the 6 [conversation tools](#conversation-tools) are registered regardless of whether `KOBO_WORKSPACE_ID` is set. Workspace-bound stdio, global stdio and external HTTP share creation, PR diagnosis, archive, purge, deletion and restoration tools. The HTTP endpoint also exposes discovery, conversation and memory; `stop_workspace` remains a stdio tool. Restricted final-review and handoff sessions cannot call creation or lifecycle mutation tools.
 
 #### `list_workspaces`
 List Kōbō workspaces with id, title, status, and creation date. Reads the DB directly — works even when the Kōbō backend server isn't running.
@@ -378,25 +378,110 @@ List Kōbō workspaces with id, title, status, and creation date. Reads the DB d
 ---
 
 #### `create_workspace`
-Create a new workspace (git worktree + agent session), like the "Créer" button on the Create page. Requires the Kōbō backend server to be running and reachable at `KOBO_BACKEND_URL` — this API has no automatic branch-name derivation from the workspace name, unlike the UI.
+Create a workspace through the same backend handlers as the Create page, including worktree setup, imports, attachments, auto-loop and final review. The backend must be running. Inputs use snake_case; returned `Workspace` fields use the HTTP API's camelCase.
 
-**Input:**
-- `name`, `project_path`, `source_branch`, `working_branch` (string, required)
-- `model`, `reasoning_effort`, `engine`, `description` (string, optional)
-- `tasks`, `acceptance_criteria` (string[], optional)
-- `agent_permission_mode` (`plan | bypass | strict | interactive`, optional)
-- `auto_loop` (boolean, optional), `auto_loop_session_mode` (`per_task | continuous`, optional)
-- `skip_setup_script` (boolean, optional)
+| Inputs | Meaning |
+|---|---|
+| `name`, `project_path` | Required. Select a project configured in Kōbō. |
+| `source_branch`, `working_branch` | Required for ordinary creation; supply branch names explicitly. With `worktree_path`, only `source_branch` is required. With `pr_url`, canonical PR base/head branches are derived. |
+| `engine`, `model`, `reasoning_effort`, `agent_permission_mode` | Same engine and permissions as the form (`claude-code` / `codex`; `plan` / `bypass` / `strict` / `interactive`, subject to engine support). |
+| `description`, `tags`, `tasks`, `acceptance_criteria` | Description and arrays of strings. |
+| `auto_loop`, `auto_loop_session_mode` | Enable auto-loop; mode is `per_task` or `continuous`. |
+| `brainstorm_model`, `brainstorm_reasoning_effort` | Separate initial brainstorm configuration, on the workspace's engine. |
+| `auto_loop_final_review` | Reviewer `{engine, model, reasoning_effort, additional_instructions?}`; uses the same durable review/correction cycle as the form. |
+| `workflow_policy` | Optional `commit`, `push`, `publish`, each `manual` or `automatic`. |
+| `notion_url`, `notion_page_id`, `sentry_url` | `notion_url` or `sentry_url` imports ticket context using the enabled, configured integration. `notion_page_id` stores an optional identifier; it does not import content on its own. |
+| `pr_url`, `pr_checkout` | Resume a PR/MR through diagnosis and checkout; see below. |
+| `worktree_path`, `skip_setup_script` | Reuse an existing worktree or control the setup script. PR checkout skips setup by default; explicit `false` runs it. |
+| `comparison_id`, `creation_id` | Group separate creations for comparison; correlate creation progress. These are not idempotency keys. |
+| `attachments` | Up to 10 `{name, mime_type, data_base64}` files, 50 MiB decoded total. Same file types as the form; send inline base64, never a server file path. |
 
-**Output:** created `Workspace`
+For an engine comparison, create two workspaces with distinct working branches and the same `comparison_id`, configuring each engine separately. Selecting a saved form preset in an MCP client means sending its effective field values.
+
+Example with final review:
+
+```json
+{
+  "name": "Implement feature",
+  "project_path": "/home/me/project",
+  "source_branch": "develop",
+  "working_branch": "feature/example",
+  "engine": "codex",
+  "auto_loop": true,
+  "auto_loop_final_review": {
+    "engine": "claude-code",
+    "model": "opus",
+    "reasoning_effort": "high",
+    "additional_instructions": "Check regressions and tests"
+  },
+  "workflow_policy": { "commit": "manual", "push": "manual", "publish": "manual" }
+}
+```
+
+**Result:** a created `Workspace`, or `{created: false, requiresAction: true, report, pr, fingerprint, reason?}` when PR checkout needs decisions. Opening/unarchiving an existing workspace returns `{created: false, workspaceId, workspace}`. Cancellation returns `{created: false, cancelled: true, ...}`. Backend errors are MCP errors with `{error, status, stage, details}` so stale checkout reports remain available.
+
+If creation fails after PR checkout, Kōbō removes only the checkout created by that request when its directory, branch and HEAD are unchanged, it has no local or ignored files, and no workspace adopted it. The PR branch and earlier checkout decisions remain intact. Existing, modified or adopted checkouts are preserved. Errors include `details.checkoutRecovery` with the path, `removed` outcome and a reason when retained. An uncertain creation outcome preserves the checkout for inspection; do not retry automatically.
+
+Creation requests have no automatic retry or exactly-once guarantee. After a disconnect/timeout, inspect `list_workspaces` before trying again: checkout or creation may have completed. The stdio bridge allows up to 15 minutes for creation; external clients should configure their own request timeout for slow setup scripts. Ordinary MCP requests retain the 1 MiB envelope limit; creation allows base64 expansion of the 50 MiB upload limit plus 1 MiB metadata, including at the SDK HTTP and stdio transport boundaries.
+
+#### `diagnose_workspace_pr`
+
+**Input:** `{project_path, pr_url}`. Returns `{report, pr, fingerprint}` for the configured forge and the PR's local Git state. Creates no workspace and applies no checkout changes.
+
+1. Call `diagnose_workspace_pr` to inspect the PR. A clean PR can also be passed directly to `create_workspace` using only `name`, `project_path`, `pr_url` and the desired agent options.
+2. When checkout needs a choice, call `create_workspace` with the same PR and `pr_checkout: {fingerprint, decisions}`. Use the returned fingerprint, not a guessed value. Missing choices return `requiresAction`; stale state returns an error with the current report.
+3. Inspect the result before continuing. Existing workspaces can be opened or unarchived; use `restore_workspace` first for a purged checkout. No duplicate workspace is created automatically.
+
+`decisions` uses the existing checkout contract's camelCase keys: `existingWorkspace: "open"`, `archivedWorkspace: "unarchive"`, `orphanWorktree: "attach" | "create-elsewhere"`, `pathCollision: {worktreePath}`, `localChanges: "stash" | "commit" | "discard" | "keep"`, `ongoingOperation: "abort" | "cancel"`, `divergence: "fast-forward" | "rebase" | "reset-hard" | "keep"`. Destructive choices must be supplied explicitly. The backend rechecks Git state under its checkout lock before applying them. Forks, unavailable forge CLIs and other blockers are reported using the same rules as the form.
 
 ---
 
 #### `archive_workspace`
-Archive a workspace by id, like the "Archiver" action in the workspace context menu. Requires the backend to be running.
+Archive a workspace by id, like the "Archiver" action in the workspace context menu. Stops its processes and auto-loop, preserves checkout and history, and may run the configured archive script. Available on internal stdio, global stdio and external HTTP; requires the backend to be running.
 
 **Input:**
 - `workspace_id` (string, required) — from `list_workspaces`
+
+---
+
+#### `purge_workspace_worktree`
+
+Free disk space by removing a Kōbō-owned checkout and archiving the workspace. Conversation history and recovery metadata remain available; uncommitted files are not recoverable. External attached worktrees are protected.
+
+**Input:** `{workspace_id, confirm_purge: true}`.
+
+**Output:** `{workspace, warnings, outcome}` from the existing purge lifecycle. Inspect warnings and outcome: a failed removal does not mean disk space was freed.
+
+#### `delete_workspace`
+
+Permanently delete one workspace and its history, with the same branch options as the deletion dialog. Stops processes and removes its owned checkout; externally managed worktrees are preserved.
+
+**Input:**
+
+```json
+{
+  "workspace_id": "workspace-id",
+  "confirm_delete": true,
+  "confirmation_branch": "feature/example",
+  "delete_local_branch": true,
+  "delete_remote_branch": true
+}
+```
+
+Both branch flags default to `false`; remote deletion requires local deletion too, as in the form. `confirmation_branch` must match the current working branch for every deletion. The backend checks it again under the lifecycle lock before any teardown; branch rename and resynchronization are rejected while this operation is in progress. Bulk deletion through the reserved `archived` endpoint is not exposed.
+
+**Output:** `{ok: true, workspaceId, warnings: []}` after a clean 204 response, or the backend's `{ok: true, warnings}` when cleanup was incomplete. Preserve these warnings: deletion of the workspace record can succeed while branch or disk cleanup fails.
+
+#### `unarchive_workspace` and `restore_workspace`
+
+Both accept `{workspace_id}` and are available on all three MCP transports.
+
+- `unarchive_workspace` restores visibility when the checkout is still present, preserving the workspace's prior status. A purged checkout is refused; use `restore_workspace`.
+- `restore_workspace` checks or recreates the Kōbō-owned worktree using the existing recovery service, then unarchives the workspace. It preserves chat history, returns the final workspace with restoration outcome/source, and starts no agent or setup script. An already active, non-purged workspace is returned unchanged.
+
+Restoration reuses the saved Git recovery information and retains the existing ownership/path/conflict checks. A checkout deleted manually without purge metadata may return `not-purged`; a workspace whose database record and history were permanently deleted cannot be restored by these tools.
+
+Lifecycle errors preserve `{error, status, stage, details}`. No automatic mutation retries occur. A connection can close while an operation finishes, especially when an agent archives or deletes its own workspace; inspect current state before repeating a request.
 
 ---
 
@@ -440,3 +525,36 @@ Automatic mode means the agent deliberately calls `remember` when it has stable,
 - **Notifications**: `mark_task_done` hits `POST /tasks/:id/notify-done`, while `create_task` / `update_task` / `delete_task` hit `POST /tasks/notify-updated`. Both cause the backend to emit a `task:updated` WS event so the Vue UI refreshes.
 - **Workspace scoping**: every handler that touches tasks uses `WHERE workspace_id = ?` to prevent cross-workspace access, even if the LLM passes a task_id from another workspace.
 - **Error handling**: the MCP dispatcher wraps every tool call in a `try/catch` and returns `{ isError: true, content: [{ type: 'text', text: 'Error: ...' }] }` on failure. Handlers should throw with descriptive messages.
+
+### Group messages
+
+The UI, workspace-bound stdio, global stdio and external HTTP MCP share the same
+backend delivery service. The MCP exposes three tools:
+
+1. `preview_workspace_group_message`: select optional `tags`, `statuses`, and
+   `dev_server_running` (boolean, default false). Set it to true to keep only
+   workspaces with development server status `running`.
+   Tags match any selected tag, statuses match any selected status, and all enabled
+   filters intersect. Empty filters match all non-archived, non-purged workspaces.
+   Results include `workspaceId`, `name`, `tags`, `status`, and `delivery`, sorted
+   by workspace ID. Use `limit` (1–200, default 200) and `offset` (default 0),
+   checking `total` to paginate. Preview is live, not a reservation.
+2. `send_workspace_group_message`: supply a unique `request_id`, an explicit
+   `workspace_ids` list (1–200 distinct IDs), and `content` (up to 100,000
+   characters). Filters and wildcards cannot substitute for selected IDs.
+   Workspace-bound agents cannot include their own workspace. Manual targets
+   receive immediately; auto-loop targets queue for their next iteration.
+3. `get_workspace_group_message`: inspect the durable receipt using `request_id`.
+   Submission returns promptly; `complete` and each recipient's `state` track
+   delivery separately (`pending`, `sending`, `sent`, `queued`, `rejected`,
+   `unknown`, or `not_sent`). `queued` confirms enqueueing, not execution.
+
+Repeating the same request ID with the same content, recipients and MCP source
+returns its receipt without sending again. Reusing that ID with different input
+fails. Ineligible recipients fail individually without discarding other results.
+After a server interruption, undelivered recipients become `not_sent` and
+ambiguous dispatches become `unknown`; neither is automatically resent. Inspect
+workspace history before issuing another request for an uncertain recipient.
+MCP client name and HTTP/stdio provenance remain attached to delivered messages.
+Read-only final-review and handoff launches expose preview and receipt lookup,
+but cannot submit a group message.

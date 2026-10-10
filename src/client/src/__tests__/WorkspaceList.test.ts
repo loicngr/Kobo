@@ -65,6 +65,7 @@ beforeEach(() => {
     vi.spyOn(store, method).mockResolvedValue(undefined)
   }
   vi.spyOn(useSettingsStore(), 'fetchSettings').mockResolvedValue(undefined)
+  useSettingsStore().loaded = true
 })
 afterEach(() => {
   wrapper?.unmount()
@@ -177,4 +178,26 @@ it('keeps the remembered selection while no workspace is loaded yet', async () =
   wrapper = mountList()
   await flushPromises()
   expect(localStorage.getItem('kobo:tag-filter')).toBe('["docs"]')
+})
+
+it('offers catalogue tags and preserves a configured selection while settings are loading', async () => {
+  localStorage.setItem('kobo:tag-filter', JSON.stringify(['bug']))
+  const store = useWorkspaceStore()
+  store.workspaces = [makeWorkspace({ tags: [] })]
+  store.archivedLoaded = true
+  const settings = useSettingsStore()
+  settings.loaded = false
+  wrapper = mountList()
+  await flushPromises()
+  expect(localStorage.getItem('kobo:tag-filter')).toBe('["bug"]')
+  settings.global.tags = ['bug', 'feature']
+  settings.loaded = true
+  await flushPromises()
+  const menu = wrapper.findComponent({ name: 'WorkspaceTagFilterMenu' })
+  expect(menu.props('tags')).toEqual([
+    { tag: 'bug', count: 0 },
+    { tag: 'feature', count: 0 },
+  ])
+  expect(menu.props('modelValue')).toEqual(['bug'])
+  expect(wrapper.findAllComponents({ name: 'WorkspaceCard' })).toHaveLength(0)
 })

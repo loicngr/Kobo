@@ -4,8 +4,12 @@ export interface TagCount {
   count: number
 }
 
-export function collectTags(workspaces: readonly { tags: readonly string[] }[]): TagCount[] {
+export function collectTags(
+  workspaces: readonly { tags: readonly string[] }[],
+  catalog: readonly string[] = [],
+): TagCount[] {
   const counts = new Map<string, number>()
+  for (const tag of catalog) counts.set(tag, 0)
   for (const workspace of workspaces) {
     for (const tag of new Set(workspace.tags)) counts.set(tag, (counts.get(tag) ?? 0) + 1)
   }

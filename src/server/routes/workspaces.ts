@@ -152,8 +152,16 @@ app.use('/:id/*', async (c, next) => {
   await next()
 })
 
-// These handlers own teardown across awaits; purge/delete/restore own their guard in the service.
-for (const route of ['/:id/archive', '/:id/run-setup-script', '/:id/cancel-source-change', '/:id/rollback-file']) {
+// Branch/path mutations must also exclude teardown across awaits.
+// Purge/delete/restore own their guard in the service.
+for (const route of [
+  '/:id/archive',
+  '/:id/run-setup-script',
+  '/:id/cancel-source-change',
+  '/:id/rollback-file',
+  '/:id/rename-branch',
+  '/:id/resync-branch',
+]) {
   app.use(route, async (c, next) => {
     try {
       await withWorkspaceLifecycleGuard(c.req.param('id')!, next)
@@ -709,6 +717,7 @@ app.post('/', migrationGuard, creationBodyLimit, async (c) => {
     // the working branch from git itself — the body.workingBranch is ignored.
     let useReusedWorktree = false
     let reusedDerivedBranch: string | null = null
+    let reusedIdentity: { device: number; inode: number; gitDevice: number; gitInode: number } | null = null
     if (body.worktreePath) {
       currentStep = 'inspect-worktree'
       emitCreateProgress(creationId, currentStep)
@@ -741,6 +750,14 @@ app.post('/', migrationGuard, creationBodyLimit, async (c) => {
           return c.json({ error: failure, step: 'inspect-worktree' }, 422)
         }
         reusedDerivedBranch = branch
+        const directory = fs.statSync(body.worktreePath)
+        const gitEntry = fs.statSync(path.join(body.worktreePath, '.git'))
+        reusedIdentity = {
+          device: directory.dev,
+          inode: directory.ino,
+          gitDevice: gitEntry.dev,
+          gitInode: gitEntry.ino,
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         const failure = `Failed to inspect worktree: ${message}`
@@ -929,6 +946,43 @@ app.post('/', migrationGuard, creationBodyLimit, async (c) => {
     const creation = await withGitRepoLock(body.projectPath, async () => {
       let prospectiveWorktreePath: string
       if (useReusedWorktree) {
+        // Imports above may yield long enough for a failed PR creation to remove
+        // its checkout. Recheck the exact directory and branch under the same
+        // repository lock as compensation before any record/context files exist.
+        try {
+          const worktreePath = body.worktreePath as string
+          const directory = fs.statSync(worktreePath)
+          const gitEntry = fs.statSync(path.join(worktreePath, '.git'))
+          const commonDir = execFileSync(
+            'git',
+            ['-C', worktreePath, 'rev-parse', '--path-format=absolute', '--git-common-dir'],
+            {
+              encoding: 'utf-8',
+              timeout: 30_000,
+            },
+          ).trim()
+          const branch = execFileSync('git', ['-C', worktreePath, 'rev-parse', '--abbrev-ref', 'HEAD'], {
+            encoding: 'utf-8',
+            timeout: 30_000,
+          }).trim()
+          if (
+            !reusedIdentity ||
+            !directory.isDirectory() ||
+            directory.dev !== reusedIdentity.device ||
+            directory.ino !== reusedIdentity.inode ||
+            gitEntry.dev !== reusedIdentity.gitDevice ||
+            gitEntry.ino !== reusedIdentity.gitInode ||
+            realPathOrResolved(commonDir) !== realPathOrResolved(path.join(body.projectPath, '.git')) ||
+            branch !== reusedDerivedBranch
+          )
+            throw new Error(
+              'The worktree directory, repository or branch changed during creation; retry from a fresh diagnosis',
+            )
+        } catch (err) {
+          const failure = `Failed to revalidate worktree: ${err instanceof Error ? err.message : String(err)}`
+          emitCreateFailed(creationId, 'inspect-worktree', failure)
+          return c.json({ error: failure, step: 'inspect-worktree' }, 422)
+        }
         // Another attachment may have completed while this request waited for the lock.
         const existing = getDb().prepare('SELECT id FROM workspaces WHERE worktree_path = ?').get(body.worktreePath)
         if (existing) {
@@ -3555,6 +3609,15 @@ app.post('/:id/unarchive', migrationGuard, (c) => {
 
 type WorkspaceRow = NonNullable<ReturnType<typeof workspaceService.getWorkspace>>
 
+class WorkspaceBranchConfirmationError extends Error {
+  readonly code = 'branch-confirmation-mismatch'
+  constructor() {
+    super(
+      'The workspace branch changed or does not match confirmationBranch. Confirm its current branch before deleting.',
+    )
+  }
+}
+
 // Shared teardown for a single workspace: stops the agent, destroys the
 // terminal, removes the owned worktree, optionally deletes local/remote
 // branches, then deletes the DB row (cascades to tasks/sessions/events).
@@ -3563,11 +3626,18 @@ type WorkspaceRow = NonNullable<ReturnType<typeof workspaceService.getWorkspace>
 // list of user-facing warning messages (empty when everything was clean).
 async function deleteWorkspaceWithSideEffects(
   workspace: WorkspaceRow,
-  opts: { deleteLocalBranch?: boolean; deleteRemoteBranch?: boolean; removeWorktree?: boolean },
+  opts: {
+    deleteLocalBranch?: boolean
+    deleteRemoteBranch?: boolean
+    removeWorktree?: boolean
+    confirmationBranch?: string
+  },
 ): Promise<string[]> {
   return withWorkspaceLifecycleGuard(workspace.id, async () => {
     const current = workspaceService.getWorkspace(workspace.id)
     if (!current) throw new Error(`Workspace '${workspace.id}' not found`)
+    if (opts.confirmationBranch !== undefined && opts.confirmationBranch !== current.workingBranch)
+      throw new WorkspaceBranchConfirmationError()
     // A bulk deletion may have captured the list before restoration completed.
     if (workspace.archivedAt && !current.archivedAt) {
       throw new Error('Workspace was unarchived while deletion was pending. Retry from its current state.')
@@ -3723,6 +3793,7 @@ app.delete('/:id', migrationGuard, async (c) => {
       .json<{
         deleteLocalBranch?: boolean
         deleteRemoteBranch?: boolean
+        confirmationBranch?: string
       }>()
       .catch(() => ({}) as { deleteLocalBranch?: boolean; deleteRemoteBranch?: boolean })
 
@@ -3736,7 +3807,8 @@ app.delete('/:id', migrationGuard, async (c) => {
     }
     return c.json({ ok: true, warnings }, 200)
   } catch (err) {
-    if (err instanceof WorkspaceLifecycleBusyError) return c.json({ code: err.code, error: err.message }, 409)
+    if (err instanceof WorkspaceLifecycleBusyError || err instanceof WorkspaceBranchConfirmationError)
+      return c.json({ code: err.code, error: err.message }, 409)
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, workspaceErrorStatus(err))
   }

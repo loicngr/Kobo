@@ -35,6 +35,19 @@ describe('applyBranchStrategy', () => {
     expect(repo.git(['rev-parse', 'feat/s'])).toBe(repo.git(['rev-parse', 'origin/feat/s']))
   })
 
+  it.each(['ahead', 'diverged'])(
+    'preserves local commits when fast-forward is requested on a %s branch',
+    async (state) => {
+      branchBehindOrigin()
+      repo.git(['checkout', 'feat/s'])
+      if (state === 'ahead') repo.git(['merge', '--ff-only', 'origin/feat/s'])
+      repo.commit('local.txt', 'local\n', 'feat: unpublished')
+      repo.git(['checkout', 'main'])
+      const before = repo.git(['rev-parse', 'feat/s'])
+      await expect(applyBranchStrategy(repo.path, 'feat/s', 'fast-forward')).rejects.toThrow()
+      expect(repo.git(['rev-parse', 'feat/s'])).toBe(before)
+    },
+  )
   it('leaves the branch alone on keep', async () => {
     branchBehindOrigin()
     const before = repo.git(['rev-parse', 'feat/s'])

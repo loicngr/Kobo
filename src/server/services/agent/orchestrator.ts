@@ -2312,8 +2312,7 @@ export async function sendMessage(
     throw new Error(`Session '${expectedSessionId}' is not active for workspace '${workspaceId}'`)
   }
   wakeupService.cancel(workspaceId, 'user-message')
-  beforeDispatch?.()
-  await ctrl.sendMessage(content)
+  await ctrl.sendMessage(content, beforeDispatch)
 }
 
 /**

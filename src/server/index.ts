@@ -33,6 +33,7 @@ import soundsRouter from './routes/sounds.js'
 import templatesRouter from './routes/templates.js'
 import usageRoutes from './routes/usage.js'
 import voiceRouter from './routes/voice.js'
+import workspaceMessagesRouter from './routes/workspace-messages.js'
 import workspaceTemplatesRouter from './routes/workspace-templates.js'
 import workspacesRouter from './routes/workspaces.js'
 import {
@@ -84,6 +85,7 @@ import { startUpdateChecker, stopUpdateChecker } from './services/update-check-s
 import { startUsagePoller, stopUsagePoller } from './services/usage/index.js'
 import * as wakeupService from './services/wakeup-service.js'
 import { handleConnection, setMessageHandler } from './services/websocket-service.js'
+import { reconcileGroupMessageBatches, stopGroupMessageBatches } from './services/workspace-group-message-service.js'
 import { deliverWorkspaceMessage } from './services/workspace-message-service.js'
 import { getWorkspace } from './services/workspace-service.js'
 import { resolveRetentionConfig } from './services/ws-events-retention-service.js'
@@ -121,6 +123,7 @@ try {
 
 runMigrations(db)
 reconcileMessageRequests(db)
+reconcileGroupMessageBatches(db)
 reconcileMemoryContextsOnStartup()
 startSearchIndex()
 
@@ -200,6 +203,7 @@ app.get('/api/health', (c) => c.json({ status: 'ok', version: getPackageVersion(
 
 // Mount route sub-routers
 app.route('/api/workspaces', workspacesRouter)
+app.route('/api/workspace-messages', workspaceMessagesRouter)
 app.route('/api/mcp', mcpRouter)
 app.route('/api/memory', memoryRouter)
 app.route('/api/pull-requests', pullRequestsRouter)
@@ -507,6 +511,7 @@ async function gracefulShutdown(signal: string, exitCode = 0): Promise<void> {
   if (isShuttingDown) return
   isShuttingDown = true
   stopUpdateChecker()
+  const groupMessagesStopped = stopGroupMessageBatches()
 
   console.log(`\n[kobo] Received ${signal}, shutting down gracefully…`)
 
@@ -575,6 +580,7 @@ async function gracefulShutdown(signal: string, exitCode = 0): Promise<void> {
   } finally {
     try {
       const stopped = await Promise.allSettled([
+        groupMessagesStopped,
         stopWsEventsRetention(),
         stopSearchIndex(),
         dailyBackupScheduler.stop(),

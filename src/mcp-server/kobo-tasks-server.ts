@@ -5,7 +5,14 @@ import { CallToolRequestSchema, ListToolsRequestSchema, type Tool } from '@model
 import type Database from 'better-sqlite3'
 import { getDb } from '../server/db/index.js'
 import { EXTERNAL_MEMORY_TOOL_DEFINITIONS, isMemoryToolName, MEMORY_TOOL_DEFINITIONS } from '../shared/memory-tools.js'
+import {
+  isWorkspaceCreationTool,
+  MAX_MCP_CREATION_REQUEST_BYTES,
+  WORKSPACE_CREATION_TOOLS,
+} from '../shared/workspace-creation-tools.js'
 import { WORKSPACE_DIALOGUE_TOOLS } from '../shared/workspace-dialogue-tools.js'
+import { isWorkspaceGroupMessageTool, WORKSPACE_GROUP_MESSAGE_TOOLS } from '../shared/workspace-group-message-tools.js'
+import { isWorkspaceLifecycleTool, WORKSPACE_LIFECYCLE_TOOLS } from '../shared/workspace-lifecycle-tools.js'
 import {
   createTaskHandler,
   cronListHandler,
@@ -635,6 +642,9 @@ const WORKSPACE_SCOPED_TOOLS: Tool[] = [
 
 const GLOBAL_TOOLS: typeof WORKSPACE_SCOPED_TOOLS = [
   ...WORKSPACE_DIALOGUE_TOOLS,
+  ...WORKSPACE_CREATION_TOOLS,
+  ...WORKSPACE_LIFECYCLE_TOOLS,
+  ...WORKSPACE_GROUP_MESSAGE_TOOLS,
   ...EXTERNAL_MEMORY_TOOL_DEFINITIONS,
   {
     name: 'list_workspaces',
@@ -656,65 +666,6 @@ const GLOBAL_TOOLS: typeof WORKSPACE_SCOPED_TOOLS = [
       required: [],
     },
     annotations: { readOnlyHint: true, openWorldHint: false },
-  },
-  {
-    name: 'create_workspace',
-    description:
-      'Create a new Kōbō workspace (git worktree + agent session), like the "Créer" button on the Create page. Requires the Kōbō backend server to be running and reachable at KOBO_BACKEND_URL. name/project_path/source_branch/working_branch are mandatory — unlike the UI, this API does not auto-derive a branch name from the workspace name.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        name: { type: 'string', description: 'Workspace display name.' },
-        project_path: { type: 'string', description: 'Absolute path to the project on disk.' },
-        source_branch: { type: 'string', description: 'Branch to base the new worktree on (e.g. "develop").' },
-        working_branch: {
-          type: 'string',
-          description: 'New branch name for the worktree (e.g. "feature/my-thing").',
-        },
-        model: { type: 'string', description: 'Model id override (optional, defaults to project/global setting).' },
-        reasoning_effort: { type: 'string', description: 'Reasoning effort override (optional).' },
-        engine: { type: 'string', description: 'Agent engine id, e.g. "claude-code" or "codex" (optional).' },
-        description: { type: 'string', description: 'Task description / initial brainstorming prompt (optional).' },
-        tags: {
-          type: 'array',
-          items: { type: 'string' },
-          description: 'Workspace tags to assign at creation (optional).',
-        },
-        tasks: { type: 'array', items: { type: 'string' }, description: 'Initial manual task titles (optional).' },
-        acceptance_criteria: {
-          type: 'array',
-          items: { type: 'string' },
-          description: 'Initial manual acceptance criteria (optional).',
-        },
-        agent_permission_mode: {
-          type: 'string',
-          enum: ['plan', 'bypass', 'strict', 'interactive'],
-          description: 'Permission mode for the new session (optional).',
-        },
-        auto_loop: { type: 'boolean', description: 'Start the workspace in auto-loop mode (optional).' },
-        auto_loop_session_mode: {
-          type: 'string',
-          enum: ['per_task', 'continuous'],
-          description: "Auto-loop session mode when auto_loop is true (optional, default 'per_task').",
-        },
-        skip_setup_script: { type: 'boolean', description: "Skip the project's setup script (optional)." },
-      },
-      required: ['name', 'project_path', 'source_branch', 'working_branch'],
-    },
-    annotations: { destructiveHint: false, openWorldHint: false },
-  },
-  {
-    name: 'archive_workspace',
-    description:
-      'Archive a workspace by id, like the "Archiver" action in the workspace context menu. Requires the Kōbō backend server to be running.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        workspace_id: { type: 'string', description: 'Workspace id, from list_workspaces.' },
-      },
-      required: ['workspace_id'],
-    },
-    annotations: { destructiveHint: false, openWorldHint: false },
   },
   {
     name: 'stop_workspace',
@@ -845,8 +796,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           : {}),
       }
     }
-    if (WORKSPACE_DIALOGUE_TOOLS.some((tool) => tool.name === name)) {
-      if (workspaceId && a.workspace_id === workspaceId && name === 'send_workspace_message')
+    if (
+      isWorkspaceCreationTool(name) ||
+      isWorkspaceLifecycleTool(name) ||
+      isWorkspaceGroupMessageTool(name) ||
+      WORKSPACE_DIALOGUE_TOOLS.some((tool) => tool.name === name)
+    ) {
+      if (
+        workspaceId &&
+        ((a.workspace_id === workspaceId && name === 'send_workspace_message') ||
+          (name === 'send_workspace_group_message' &&
+            Array.isArray(a.workspace_ids) &&
+            a.workspace_ids.includes(workspaceId)))
+      )
         return fail('Use the normal conversation to communicate in your own workspace.')
       return await callWorkspaceDialogueTool(
         backendUrl,
@@ -1143,49 +1105,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       return ok(listWorkspacesHandler(db, { includeArchived, tag }))
     }
 
-    if (name === 'create_workspace') {
-      const workspaceName = a.name as string | undefined
-      const projectPath = a.project_path as string | undefined
-      const sourceBranch = a.source_branch as string | undefined
-      const workingBranch = a.working_branch as string | undefined
-      if (!workspaceName || !projectPath || !sourceBranch || !workingBranch) {
-        return fail('name, project_path, source_branch, and working_branch parameters are required')
-      }
-      try {
-        const created = await backendRequest('POST', '/api/workspaces', {
-          name: workspaceName,
-          projectPath,
-          sourceBranch,
-          workingBranch,
-          model: a.model as string | undefined,
-          reasoningEffort: a.reasoning_effort as string | undefined,
-          engine: a.engine as string | undefined,
-          description: a.description as string | undefined,
-          tags: a.tags as string[] | undefined,
-          tasks: a.tasks as string[] | undefined,
-          acceptanceCriteria: a.acceptance_criteria as string[] | undefined,
-          agentPermissionMode: a.agent_permission_mode as string | undefined,
-          autoLoop: a.auto_loop as boolean | undefined,
-          autoLoopSessionMode: a.auto_loop_session_mode as string | undefined,
-          skipSetupScript: a.skip_setup_script as boolean | undefined,
-        })
-        return ok(created)
-      } catch (err) {
-        return fail(backendErrorMessage(err))
-      }
-    }
-
-    if (name === 'archive_workspace') {
-      const targetId = a.workspace_id as string | undefined
-      if (!targetId) return fail('workspace_id parameter is required')
-      try {
-        const result = await backendRequest('POST', `/api/workspaces/${targetId}/archive`)
-        return ok(result)
-      } catch (err) {
-        return fail(backendErrorMessage(err))
-      }
-    }
-
     if (name === 'stop_workspace') {
       const targetId = a.workspace_id as string | undefined
       if (!targetId) return fail('workspace_id parameter is required')
@@ -1203,7 +1122,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 })
 
-const transport = new StdioServerTransport()
+const transport = new StdioServerTransport(process.stdin, process.stdout, {
+  // Include the JSON-lines delimiter in addition to the HTTP envelope budget.
+  maxBufferSize: MAX_MCP_CREATION_REQUEST_BYTES + 1,
+})
 server.connect(transport).catch((err) => {
   console.error('[kobo-tasks-server] Fatal:', err)
   process.exit(1)

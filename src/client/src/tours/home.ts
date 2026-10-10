@@ -38,6 +38,7 @@ export const homeTour: TourDefinition = {
     drawerStep('home-list', 'workspace-list', 'tours.home.list'),
     drawerStep('home-create', 'create-workspace', 'tours.home.create'),
     drawerStep('home-search', 'search', 'tours.home.search'),
+    drawerStep('home-group-message', 'group-message', 'tours.home.groupMessage'),
     drawerStep('home-dashboard', 'dashboard', 'tours.home.dashboard'),
     drawerStep('home-health', 'health', 'tours.home.health'),
     drawerStep('home-settings', 'settings', 'tours.home.settings'),

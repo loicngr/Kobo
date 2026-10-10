@@ -58,8 +58,8 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 52', () => {
-    expect(SCHEMA_VERSION).toBe(52)
+  it('exporte SCHEMA_VERSION = 53', () => {
+    expect(SCHEMA_VERSION).toBe(53)
   })
 
   it('migration v33 records and backfills the engine on agent sessions', () => {
@@ -2628,7 +2628,7 @@ describe('persistent memory schema migration v51', () => {
     const beforeUpgrade = memoryObjects(old)
     expect(beforeUpgrade.objects).toEqual([])
     expect(getMigrationHistory(old).at(-1)?.version).toBe(50)
-    expect(getPendingMigrations(old)).toEqual([51, 52])
+    expect(getPendingMigrations(old)).toEqual([51, 52, 53])
 
     runMigrations(old)
     migrations.find((entry) => entry.version === 51)!.migrate(old)
@@ -2768,7 +2768,7 @@ describe('durable final reviews v52', () => {
       INSERT INTO pending_review_returns VALUES('w','review','original','{"engine":"codex"}','{"engine":"claude-code"}','c');`)
     for (const migration of migrations.filter((m) => m.version <= 51))
       old.prepare('INSERT INTO schema_migrations VALUES(?,?,?)').run(migration.version, migration.name, 'v51')
-    expect(getPendingMigrations(old)).toEqual([52])
+    expect(getPendingMigrations(old)).toEqual([52, 53])
     runMigrations(old)
     migrations.find((m) => m.version === 52)!.migrate(old)
     expect(old.prepare('SELECT * FROM pending_review_returns').get()).toEqual({
@@ -2796,6 +2796,30 @@ describe('durable final reviews v52', () => {
         fresh.prepare(`PRAGMA foreign_key_list(${table})`).all(),
       )
     }
+    old.close()
+    fresh.close()
+  })
+})
+
+describe('group message receipts v53', () => {
+  it('upgrades v52 without losing workspaces and matches the fresh schema', () => {
+    const old = new Database(':memory:')
+    runMigrations(old)
+    old.exec('DROP TABLE workspace_message_batches; DELETE FROM schema_migrations WHERE version=53')
+    old
+      .prepare(
+        "INSERT INTO workspaces(id,name,project_path,source_branch,working_branch,created_at,updated_at) VALUES ('preserved','Preserved','/tmp','main','work','now','now')",
+      )
+      .run()
+    expect(getPendingMigrations(old)).toEqual([53])
+    runMigrations(old)
+    expect(old.prepare("SELECT name FROM workspaces WHERE id='preserved'").get()).toEqual({ name: 'Preserved' })
+    expect(getMigrationHistory(old).at(-1)?.version).toBe(SCHEMA_VERSION)
+    const fresh = new Database(':memory:')
+    initSchema(fresh)
+    expect(old.prepare('PRAGMA table_info(workspace_message_batches)').all()).toEqual(
+      fresh.prepare('PRAGMA table_info(workspace_message_batches)').all(),
+    )
     old.close()
     fresh.close()
   })
