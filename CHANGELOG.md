@@ -7,7 +7,6 @@ section — the in-app "What's new" dialog reads this file.
 ## 2.1.18
 
 - fix(tests): resolve deployment paths on macos
-- feat(kobo): add VPS tooling and touch drawer resizing
 
 ## 2.1.17
 
