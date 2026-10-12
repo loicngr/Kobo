@@ -21,6 +21,7 @@ import gitRouter from './routes/git.js'
 import healthRouter from './routes/health.js'
 import imagesRouter from './routes/images.js'
 import integrationsRouter from './routes/integrations.js'
+import maintenanceRouter from './routes/maintenance.js'
 import mcpRouter from './routes/mcp.js'
 import memoryRouter from './routes/memory.js'
 import { migrationRouter } from './routes/migration.js'
@@ -223,6 +224,7 @@ app.route('/api/workspaces', documentsRouter)
 app.route('/api/workspaces', exportRouter)
 app.route('/api/search', searchRouter)
 app.route('/api/health', healthRouter)
+app.route('/api/maintenance', maintenanceRouter)
 app.route('/api/engines', enginesRouter)
 app.route('/api/environment', environmentRouter)
 app.route('/api/integrations', integrationsRouter)

@@ -1,11 +1,11 @@
 <template>
   <div class="workspace-list row column full-height" data-tour="workspace-list">
     <!-- Header -->
-    <div class="row items-center no-wrap q-pl-md q-pr-xs q-py-sm">
-      <span class="text-caption text-uppercase text-weight-bold text-kobo-3 col ellipsis">
+    <div class="workspace-list-header row items-center q-pl-md q-pr-xs q-py-sm">
+      <span class="workspace-list-title text-caption text-uppercase text-weight-bold text-kobo-3 ellipsis">
         {{ $t('workspaceList.title') }}
       </span>
-      <div class="col items-center justify-end row no-wrap">
+      <div class="workspace-list-actions items-center justify-end row">
         <q-badge
             v-if="wsStore.connected"
             rounded
@@ -1408,6 +1408,27 @@ onBeforeUnmount(() => {
 .workspace-list {
   background-color: var(--kobo-bg-deep);
   overflow-x: hidden;
+}
+
+.workspace-list-header {
+  flex-shrink: 0;
+  width: 100%;
+  min-width: 0;
+  padding-right: var(--kobo-space-xl);
+}
+
+.workspace-list-title {
+  flex: 1 1 130px;
+  min-width: 0;
+}
+
+.workspace-list-actions {
+  max-width: 100%;
+  margin-left: auto;
+
+  > * {
+    flex-shrink: 0;
+  }
 }
 
 .wl-search {

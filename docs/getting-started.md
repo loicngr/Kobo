@@ -10,6 +10,8 @@ Kōbō is a local, single-user application that runs Claude Code or OpenAI Codex
 
 No skill plugin, forge CLI, Docker, Notion, Sentry or voice software is needed for a basic mission. A repository without a remote works; choose forge `none` to disable PR/MR features.
 
+For a remote installation, follow the [VPS and Docker guide](./deployment-vps.md) first: `kobo-install` guides a fresh installation behind existing Traefik and can configure a GitHub App bot. The same guide documents manual setup. The project picker browses the server/container filesystem: select a repository cloned there, not a folder on the PC running your browser. Authenticate the agent and forge tools inside the container too.
+
 ## Start
 
 ```bash
@@ -35,6 +37,13 @@ Open <http://localhost:3000>. The server binds to loopback by default. Do not ex
 New installations use manual commit, push and PR/MR publication preferences, disable audio and optional ticket integrations, and admit at most two concurrent unattended starts. Manual sessions can exceed that threshold. Agent workflow preferences are instructions; the engine permission mode supplies the actual sandbox and approval behavior.
 
 You can skip setup and reopen it from **Help → First-run setup**. Setup checks do not start a mission automatically.
+
+## Using a phone or tablet
+
+Open a side panel from the chat header. Drag its inner edge with a finger to
+adjust its width; drag the divider in the right panel to resize its two sections.
+Settings, Help and Create wrap onto additional lines in a narrow workspace panel.
+Tap the visible area outside a panel to close it.
 
 ## Optional features
 

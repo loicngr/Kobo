@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { acquireUpdateMaintenance, releaseUpdateMaintenance } from '../server/services/update-maintenance-service.js'
 import { executeWorkspaceCreationTool } from '../server/services/workspace-creation-mcp-service.js'
 import { validateWorkspaceCreationArguments } from '../shared/workspace-creation-tools.js'
 
@@ -24,6 +25,30 @@ function diagnosis(overrides = {}) {
 }
 const response = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status })
 describe('MCP workspace creation', () => {
+  afterEach(() => releaseUpdateMaintenance('mcp-create-test'))
+
+  it('rejects creation before PR diagnosis and checkout during update maintenance', async () => {
+    const dispatch = vi.fn()
+    expect(acquireUpdateMaintenance('mcp-create-test', () => true)).toBe('acquired')
+    await expect(executeWorkspaceCreationTool('create_workspace', prInput, dispatch)).rejects.toMatchObject({
+      status: 503,
+      stage: 'maintenance',
+    })
+    expect(dispatch).not.toHaveBeenCalled()
+  })
+
+  it('keeps one admission across the separate checkout and creation requests', async () => {
+    const dispatch = vi.fn(async (url: string) => {
+      expect(acquireUpdateMaintenance('mcp-create-test', () => true)).toBe('busy')
+      if (url.endsWith('/diagnose')) return response(diagnosis())
+      if (url.endsWith('/resolve')) return response({ worktreePath: '/trees/pr' })
+      return response({ id: 'new' })
+    })
+    await expect(executeWorkspaceCreationTool('create_workspace', prInput, dispatch)).resolves.toEqual({ id: 'new' })
+    expect(dispatch).toHaveBeenCalledTimes(3)
+    expect(acquireUpdateMaintenance('mcp-create-test', () => true)).toBe('acquired')
+  })
+
   it('validates a large canonical upload without overflowing the regexp stack', () => {
     expect(() =>
       validateWorkspaceCreationArguments('create_workspace', {

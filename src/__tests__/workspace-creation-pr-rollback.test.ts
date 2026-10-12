@@ -7,7 +7,9 @@ import prs from '../server/routes/pull-requests.js'
 import workspaces from '../server/routes/workspaces.js'
 import { getForgeProvider } from '../server/services/forge/registry.js'
 import * as notionService from '../server/services/notion-service.js'
+import * as rollbackService from '../server/services/pr-checkout-rollback-service.js'
 import { _setSettingsPath, updateGlobalSettings, upsertProject } from '../server/services/settings-service.js'
+import { acquireUpdateMaintenance, releaseUpdateMaintenance } from '../server/services/update-maintenance-service.js'
 import { executeWorkspaceCreationTool } from '../server/services/workspace-creation-mcp-service.js'
 import * as workspaceService from '../server/services/workspace-service.js'
 import { createWorkspace } from '../server/services/workspace-service.js'
@@ -51,6 +53,7 @@ describe('MCP PR checkout creation rollback', () => {
     })
   })
   afterEach(() => {
+    releaseUpdateMaintenance('rollback-test')
     vi.restoreAllMocks()
     closeDb()
     repo.cleanup()
@@ -66,6 +69,12 @@ describe('MCP PR checkout creation rollback', () => {
   }
 
   it('removes its fresh checkout when the real create route rejects a disabled Notion import', async () => {
+    const original = rollbackService.rollbackCreatedPrCheckout
+    vi.spyOn(rollbackService, 'rollbackCreatedPrCheckout').mockImplementationOnce(async (...args) => {
+      // Both HTTP dispatches have returned here: the outer MCP lease must still protect cleanup.
+      expect(acquireUpdateMaintenance('rollback-test', () => true)).toBe('busy')
+      return original(...args)
+    })
     const before = repo.git(['worktree', 'list', '--porcelain'])
     await expect(
       executeWorkspaceCreationTool(
@@ -83,6 +92,7 @@ describe('MCP PR checkout creation rollback', () => {
     expect(fs.existsSync(checkout)).toBe(false)
     expect(repo.git(['worktree', 'list', '--porcelain'])).toBe(before)
     expect(repo.git(['rev-parse', 'feature/pr'])).toBe(repo.git(['rev-parse', 'origin/feature/pr']))
+    expect(acquireUpdateMaintenance('rollback-test', () => true)).toBe('acquired')
   })
 
   it.each(['untracked', 'ignored', 'commit', 'adopted'])(

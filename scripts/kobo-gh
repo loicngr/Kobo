@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Explicit caller credentials take precedence over the configured GitHub App.
+set -euo pipefail
+if [[ -z "${GH_TOKEN:-}" && -z "${GITHUB_TOKEN:-}" ]]; then
+  GH_TOKEN="$(/usr/local/bin/kobo-github-app-token)"
+  [[ -n "$GH_TOKEN" ]] || exit 1
+  export GH_TOKEN
+fi
+exec /usr/bin/gh "$@"

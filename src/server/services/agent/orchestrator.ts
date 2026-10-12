@@ -54,6 +54,7 @@ import {
 import { activateSession, SESSION_RECENCY_ORDER } from '../session-activity-service.js'
 import { requestHandoffStop, suspendHandoffTransfers } from '../session-handoff-runtime.js'
 import { getEffectiveSettings, getGlobalSettings } from '../settings-service.js'
+import { isUpdateMaintenanceActive } from '../update-maintenance-service.js'
 import { refreshNow } from '../usage/poller.js'
 import * as wakeupService from '../wakeup-service.js'
 import { emit, emitEphemeral } from '../websocket-service.js'
@@ -141,7 +142,7 @@ let capacityTimer: ReturnType<typeof setTimeout> | undefined
 const stoppedCapacityOwners = new Set<string>()
 
 function notifyCapacityAvailable(stoppedWorkspaceId: string): void {
-  if (shuttingDown) return
+  if (isShuttingDown()) return
   stoppedCapacityOwners.add(stoppedWorkspaceId)
   if (capacityTimer) return
   // Let the stopping caller finish disabling/archiving before scheduling other work.
@@ -149,7 +150,7 @@ function notifyCapacityAvailable(stoppedWorkspaceId: string): void {
     capacityTimer = undefined
     const excluded = new Set(stoppedCapacityOwners)
     stoppedCapacityOwners.clear()
-    if (shuttingDown) return
+    if (isShuttingDown()) return
     try {
       resumePendingReviewReturns()
       autoLoopService.resumeWaitingWorkspaces(excluded)
@@ -1663,7 +1664,7 @@ const reviewReturnDispatchOwners = new Map<string, symbol>()
 
 /** Resume durable review work only after the previous runtime has closed and admission allows it. */
 export function resumePendingReviewReturns(onlyWorkspaceId?: string): void {
-  if (shuttingDown) return
+  if (isShuttingDown()) return
   for (const pending of listReviewReturns()) {
     const id = pending.workspaceId
     if (onlyWorkspaceId && onlyWorkspaceId !== id) continue
@@ -1797,6 +1798,7 @@ export function startAgent(
   beforeDispatch?: () => void,
   launch?: AgentLaunchOptions,
 ): StartAgentResult {
+  if (isUpdateMaintenanceActive()) throw new Error('Cannot start an agent during update maintenance')
   if (shuttingDown) throw new Error('Cannot start an agent while the server is shutting down')
   assertWorkspaceLifecycleAvailable(workspaceId, launch?.lifecycleOwner)
   const workspace = getWs(workspaceId)
@@ -2277,7 +2279,25 @@ export async function stopAllAgents(timeoutMs = 3_000): Promise<void> {
 
 /** Automatic continuations must preserve their durable intent during teardown. */
 export function isShuttingDown(): boolean {
-  return shuttingDown
+  return shuttingDown || isUpdateMaintenanceActive()
+}
+
+/** Used synchronously by update reservation; include runtimes still closing and pending replacements. */
+export function isIdleForUpdate(): boolean {
+  if (shuttingDown || controllers.size || pendingStarts.size) return false
+  const db = getDb()
+  return (
+    !db.prepare("SELECT 1 FROM agent_sessions WHERE status = 'running' LIMIT 1").get() &&
+    !db
+      .prepare(
+        "SELECT 1 FROM workspaces WHERE status IN ('extracting','brainstorming','executing','compacting') LIMIT 1",
+      )
+      .get()
+  )
+}
+
+export function resumeAfterUpdateMaintenance(): void {
+  notifyCapacityAvailable('')
 }
 
 /** Deliver a scheduled check without stopping background work or cancelling the wakeup as user input. */

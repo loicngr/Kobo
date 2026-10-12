@@ -41,6 +41,7 @@ npm run typecheck:tests             # type check backend test fixtures and tests
 npm test                            # backend vitest suite
 (cd src/client && npm test)         # client stores, utilities, composables and components
 npm run test:all                    # backend + client suites
+npm run test:deployment             # Python 3.10+ / OpenSSL tooling tests; no Docker/network/production data
 make ci                            # install, audit, lint, type checks, build, both suites
 npm run test:watch                  # vitest in watch mode
 
@@ -247,6 +248,57 @@ Two emit flavors in `websocket-service.ts`:
 - `emitEphemeral(workspaceId, type, payload)` delivers once and never persists. Use it for lifecycle events (archive, status changes) that shouldn't replay.
 
 ## External integrations
+
+### VPS deployment tooling
+
+`docker-compose.vps.yml` is the standalone fresh-instance example for an existing
+Traefik network. It persists `/root`, mounts project paths identically on host and
+container, and leaves the Docker socket opt-in. `docs/deployment-vps.md` owns the
+operator walkthrough; `CONFIGURATION.md` compares all Compose topologies.
+
+`scripts/kobo-install` guides a fresh installation; it does not adopt existing
+unmanaged stacks. Preserve its read-only `--check`, explicit Docker-socket opt-in,
+managed-file fingerprints, shared updater lock, and durable start phases. Completed
+reruns must never restart containers or replace credentials. Only the updater's
+image pin may differ from the managed Compose fingerprint. Interrupted starts
+require diagnosis instead of automatic recreation. This tool reuses the updater's
+release resolution/build helpers; no separate public image registry is assumed.
+
+Optional GitHub App authentication uses `scripts/kobo-gh` and
+`scripts/kobo-github-app-token`, mounted read-only with the user's RSA key. The
+wrapper honors explicit `GH_TOKEN` / `GITHUB_TOKEN`, otherwise obtains a renewable
+installation token from the private, locked cache. Keep JWTs, PEM contents and
+tokens out of logs/errors. HTTPS Git uses the same wrapper via a github.com-scoped
+credential helper; commit author identity is configured separately. Never bake
+credentials into an image or add web settings for these host-managed secrets.
+
+`scripts/kobo-update` is a Python 3.10+ operator tool for this layout, separate
+from the backend's update notifications. Preserve explicit invocation, idle checks,
+unique image tags, private stopped-volume backups, migration tests on a copy,
+and durable failure records. The authenticated `/api/maintenance/update` reservation
+checks runtime ownership and closes agent admission synchronously before shutdown.
+Track in-flight workspace creations and PR checkouts through all asynchronous
+steps and rollback. Maintenance and creation admission must exclude each other
+synchronously; rejecting only the final agent start is too late. Direct HTTP and
+MCP creation paths share this guard.
+Scheduled cron/wakeup/quota deliveries defer without consuming persisted intent;
+valid pending wakeups get `retry_at=target_at` before successful reservation (only
+when `retry_at` was null), so long maintenance does not expire them at boot. Keep
+the requested deadline/prompt and existing retry metadata; do not revive already
+stale, never-attempted wakeups. New wakeups scheduled during maintenance get the
+same durable deferral marker.
+Replaced timers must invalidate deferred callbacks. Legacy runtimes without this
+protocol refuse automatic deployment while `--prepare` remains available. Failed
+pre-stop requests release their reservation; uncertain stops must be confirmed
+before restarting. A crashed updater may require the documented manual recovery. Never automatically run an old image against a
+potentially migrated database or restore snapshots after new work may have run.
+No deployment-specific hostname, App credentials or private source paths belong
+in this script. Its deterministic tests run through `npm run test:deployment`,
+`make ci` and the PR workflow; live deployment is not a CI test.
+Installer/updater Compose commands explicitly select the stack's `.env` and strip
+the template's Kobo/Traefik interpolation variables plus `COMPOSE_*` from a copy
+of the child environment. Apply the same policy to captured and logged commands;
+never mutate the parent environment or lose Docker/forge authentication settings.
 
 ### Forge providers
 

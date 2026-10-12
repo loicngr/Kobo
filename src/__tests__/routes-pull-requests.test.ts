@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { acquireUpdateMaintenance, releaseUpdateMaintenance } from '../server/services/update-maintenance-service.js'
 
 vi.mock('../server/services/forge/resolve.js', () => ({ resolveForge: vi.fn() }))
 vi.mock('../server/services/forge/registry.js', () => ({ getForgeProvider: vi.fn() }))
@@ -21,6 +22,7 @@ import { resolveForge } from '../server/services/forge/resolve.js'
 import * as prCheckout from '../server/services/pr-checkout-service.js'
 
 beforeEach(() => vi.clearAllMocks())
+afterEach(() => releaseUpdateMaintenance('pr-test'))
 
 describe('GET /', () => {
   it('returns the provider page', async () => {
@@ -122,6 +124,46 @@ describe('POST /diagnose', () => {
 })
 
 describe('POST /resolve', () => {
+  const resolveRequest = () =>
+    app.request('/resolve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectPath: '/repo', fingerprint: 'FP' }),
+    })
+
+  it('rejects checkout before mutations while update maintenance is active', async () => {
+    expect(acquireUpdateMaintenance('pr-test', () => true)).toBe('acquired')
+    expect((await resolveRequest()).status).toBe(503)
+    expect(prCheckout.resolvePrCheckout).not.toHaveBeenCalled()
+  })
+
+  it('keeps admission until an asynchronous checkout failure has settled', async () => {
+    let reached!: () => void
+    const entered = new Promise<void>((resolve) => {
+      reached = resolve
+    })
+    let release!: () => void
+    const resume = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    vi.mocked(prCheckout.resolvePrCheckout).mockImplementationOnce(async () => {
+      reached()
+      await resume
+      throw new Error('checkout failed')
+    })
+    const resolving = resolveRequest()
+    await entered
+    try {
+      expect(acquireUpdateMaintenance('pr-test', () => true)).toBe('busy')
+    } finally {
+      releaseUpdateMaintenance('pr-test')
+      release()
+      await resolving
+    }
+    expect((await resolving).status).toBe(422)
+    expect(acquireUpdateMaintenance('pr-test', () => true)).toBe('acquired')
+  })
+
   it('maps a stale diagnosis to 409', async () => {
     vi.mocked(prCheckout.resolvePrCheckout).mockRejectedValue(new MockStaleDiagnosisError('stale'))
     const res = await app.request('/resolve', {

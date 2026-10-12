@@ -91,5 +91,8 @@ jobs:
         working-directory: src/client
         run: npm test
 
+      - name: Test deployment tooling (Python/OpenSSL, no Docker or network)
+        run: npm run test:deployment
+
       - name: Install and smoke-test the distributable tarball
         run: npm run test:package

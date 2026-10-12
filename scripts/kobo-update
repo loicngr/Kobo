@@ -1,0 +1,499 @@
+#!/usr/bin/env python3
+"""Update a standalone Kōbō Compose deployment. Python 3.10+; standard library only."""
+import argparse
+import fcntl
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import tarfile
+import tempfile
+import time
+import urllib.error
+import urllib.request
+import uuid
+from datetime import datetime, timezone
+
+REPO = 'https://github.com/loicngr/kobo.git'
+VERSION = re.compile(r'\d+\.\d+\.\d+')
+COMPOSE_ENV_KEYS = ('KOBO_DOMAIN', 'KOBO_PROJECTS_DIR', 'TRAEFIK_NETWORK',
+                    'TRAEFIK_ENTRYPOINT', 'TRAEFIK_CERTRESOLVER')
+BUSY_JS = r"""
+const db = new (require('better-sqlite3'))('/root/.config/kobo/kobo.db', {readonly:true});
+const sessions = db.prepare("SELECT count(*) n FROM agent_sessions WHERE status = 'running'").get().n;
+const workspaces = db.prepare("SELECT count(*) n FROM workspaces WHERE status IN ('extracting','brainstorming','executing','compacting')").get().n;
+console.log(JSON.stringify({sessions, workspaces}));
+"""
+MIGRATION_JS = r"""
+import Database from 'better-sqlite3';
+import { runMigrations } from './dist/server/db/migrations.js';
+const db = new Database('/check/kobo.db');
+db.pragma('foreign_keys = ON');
+runMigrations(db);
+if (db.pragma('integrity_check', {simple:true}) !== 'ok') throw new Error('SQLite integrity check failed');
+if (db.pragma('foreign_key_check').length) throw new Error('SQLite foreign key check failed');
+db.close();
+"""
+API_JS = r"""
+(async () => {
+const fs = require('fs');
+const token = JSON.parse(fs.readFileSync('/root/.config/kobo/settings.json','utf8')).global.networkAccessToken;
+if (!token) throw new Error('Missing network token');
+const headers = {'X-Kobo-Token': token};
+const r = await fetch(`http://127.0.0.1:${process.env.SERVER_PORT || 3000}/api/workspaces`,{headers,signal:AbortSignal.timeout(10000)});
+if (!r.ok) throw new Error('Authenticated API check failed');
+console.log('API authenticated: OK');
+})().catch(() => process.exit(1));
+"""
+MAINTENANCE_JS = r"""
+(async () => {
+const fs = require('fs');
+const token = JSON.parse(fs.readFileSync('/root/.config/kobo/settings.json','utf8')).global.networkAccessToken;
+if (!token) throw new Error('Missing network token');
+const method = process.argv[1];
+const options = {method, headers:{'X-Kobo-Token':token,'Content-Type':'application/json'}, signal:AbortSignal.timeout(10000)};
+if (method !== 'GET') options.body = JSON.stringify({owner:process.argv[2]});
+const r = await fetch(`http://127.0.0.1:${process.env.SERVER_PORT || 3000}/api/maintenance/update`,options);
+const body = await r.json().catch(() => ({}));
+console.log(JSON.stringify({status:r.status, protocol:body.protocol}));
+})().catch(() => process.exit(1));
+"""
+
+
+class UpdateError(Exception):
+    pass
+
+
+def atomic_write(path, data, mode=0o600):
+    fd, name = tempfile.mkstemp(prefix='.' + path.name + '.', dir=path.parent)
+    try:
+        with os.fdopen(fd, 'wb') as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(name, mode)
+        os.replace(name, path)
+        parent_fd = os.open(path.parent, os.O_DIRECTORY)
+        try:
+            os.fsync(parent_fd)
+        finally:
+            os.close(parent_fd)
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
+
+
+def image_config(text, image):
+    # Refuse an unexpected/multi-service structure instead of modifying other services.
+    pattern = r'(?m)^    image: [^\n]+$'
+    if len(re.findall(pattern, text)) != 1:
+        raise UpdateError('Unexpected Compose layout: exactly one indented image entry is required.')
+    return re.sub(pattern, '    image: ' + image, text)
+
+
+def normalize_version(value):
+    value = value.removeprefix('v')
+    if not VERSION.fullmatch(value):
+        raise UpdateError('Expected a stable version such as 2.1.16 (or latest).')
+    return value
+
+
+def say(message):
+    print(message, flush=True)
+
+
+class Updater:
+    def __init__(self, stack):
+        self.stack = stack.resolve()
+        self.compose_file = self.stack / 'compose.yaml'
+        self.log = None
+        self.job = None
+        self.state = {}
+        self.container = None
+        self.project_name = None
+        self.public_url = None
+        self.maintenance_owner = uuid.uuid4().hex
+
+    def command_environment(self, args):
+        env = os.environ.copy()
+        if args[:2] == ['docker', 'compose']:
+            # Deployment inputs come from the selected stack's .env, never an
+            # unrelated caller shell. Keep Docker context and authentication.
+            for key in list(env):
+                if key in COMPOSE_ENV_KEYS or key.startswith('COMPOSE_'):
+                    del env[key]
+        return env
+
+    def run(self, args, timeout=120, data=None):
+        try:
+            result = subprocess.run(args, input=data, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, timeout=timeout, check=False,
+                                    env=self.command_environment(args))
+        except subprocess.TimeoutExpired as e:
+            raise UpdateError(f'Timeout: {args[0]}') from e
+        if result.returncode:
+            if self.log:
+                with self.log.open('ab') as f:
+                    f.write(result.stderr)
+            raise UpdateError(f'Failed: {args[0]} (code {result.returncode}). See the private update log.')
+        return result.stdout.decode().strip()
+
+    def logged(self, args, timeout=3600):
+        with self.log.open('ab') as f:
+            try:
+                subprocess.run(args, stdout=f, stderr=subprocess.STDOUT,
+                               timeout=timeout, check=True, env=self.command_environment(args))
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+                raise UpdateError(f'Failed: {args[0]}. Log: {self.log}') from e
+
+    def compose(self, *args, file=None):
+        project = ['-p', self.project_name] if self.project_name else []
+        return ['docker', 'compose', '--project-directory', str(self.stack),
+                '--env-file', str(self.stack / '.env'),
+                *project, '-f', str(file or self.compose_file), *args]
+
+    def record(self, phase, **values):
+        self.state.update(values, phase=phase)
+        atomic_write(self.job / 'state.json', json.dumps(self.state, indent=2).encode())
+
+    def idle(self):
+        counts = json.loads(self.run(['docker', 'exec', self.container, 'node', '-e', BUSY_JS]))
+        if counts['sessions'] or counts['workspaces']:
+            raise UpdateError('Kōbō is busy: wait for agents or stop them in the UI, then retry.')
+
+    def maintenance(self, method):
+        reply = json.loads(self.run(['docker', 'exec', self.container, 'node', '-e',
+                                     MAINTENANCE_JS, method, self.maintenance_owner]))
+        if method == 'DELETE' and reply['status'] == 409:
+            return  # Our reservation was never acquired or has already been released.
+        if reply['status'] == 404 or (reply['status'] == 200 and reply.get('protocol') != 1):
+            raise UpdateError('Runtime lacks atomic update reservation. Use --prepare and perform the first upgrade manually; see the VPS guide.')
+        if reply['status'] != 200:
+            raise UpdateError(f'Update reservation {method} refused (HTTP {reply["status"]}).')
+
+    def inspect(self):
+        ids = self.run(self.compose('ps', '-q', 'kobo')).splitlines()
+        if len(ids) != 1:
+            raise UpdateError('Exactly one running Kōbō container is required.')
+        self.container = ids[0]
+        info = json.loads(self.run(['docker', 'inspect', self.container]))[0]
+        if not info['State']['Running']:
+            raise UpdateError('The Kōbō container is stopped.')
+        mounts = [m for m in info['Mounts'] if m['Destination'] == '/root']
+        if len(mounts) != 1 or mounts[0]['Type'] != 'volume':
+            raise UpdateError('Expected a named /root volume; no changes made.')
+        if any(m['Destination'].startswith('/root/') for m in info['Mounts']):
+            raise UpdateError('Nested /root mounts would escape the home backup. This layout is not supported.')
+        config = json.loads(self.run(self.compose('config', '--format', 'json')))
+        self.config_snapshot = config
+        if set(config['services']) != {'kobo'}:
+            raise UpdateError('This script requires a standalone stack containing only the kobo service.')
+        configured_mounts = config['services']['kobo'].get('volumes', [])
+        home = [v for v in configured_mounts if v['target'] == '/root']
+        if (len(home) != 1 or home[0]['type'] != 'volume'
+                or config.get('volumes', {}).get(home[0]['source'], {}).get('name') != mounts[0]['Name']
+                or any(v['target'].startswith('/root/') for v in configured_mounts)):
+            raise UpdateError('Compose home mounts do not match the running persistent volume.')
+        self.project_name = config['name']
+        env = config['services']['kobo'].get('environment', {})
+        host = env.get('KOBO_NETWORK_ACCESS_PROXY_HOST', '')
+        if not re.fullmatch(r'[A-Za-z0-9.-]+(?::[0-9]+)?', host):
+            raise UpdateError('Set KOBO_NETWORK_ACCESS_PROXY_HOST to your HTTPS hostname.')
+        if env.get('KOBO_HOME') != '/root/.config/kobo':
+            raise UpdateError('This updater requires KOBO_HOME=/root/.config/kobo and a named /root volume.')
+        self.public_url = 'https://' + host
+        if config['services']['kobo']['image'] != info['Config']['Image']:
+            raise UpdateError('Compose and the running container use different images. Reconcile them before updating.')
+        self.old_image = info['Image']  # immutable digest, for backup/migration helpers
+        self.volume = mounts[0]['Name']
+        self.original = self.compose_file.read_bytes()
+        self.original_mode = self.compose_file.stat().st_mode & 0o777
+        image_config(self.original.decode(), 'kobo:validation')
+        self.installed = normalize_version(self.run(['docker', 'exec', self.container,
+                                   'node', '-p', 'require("./package.json").version']))
+        self.idle()
+        self.run(['docker', 'compose', 'version'])
+        used_kib = int(self.run(['docker', 'exec', self.container, 'du', '-sk', '/root']).split()[0])
+        # Sources/build layers plus archive + migration copy; compression is not assumed.
+        required = 6 * 1024**3 + used_kib * 1024 * 2
+        docker_root = self.run(['docker', 'info', '--format', '{{.DockerRootDir}}'])
+        docker_free = int(self.run(['docker', 'run', '--rm', '--network', 'none',
+            '--read-only', '--entrypoint', 'node', '--mount',
+            f'type=bind,src={docker_root},dst=/docker,readonly', self.old_image,
+            '-e', "const s=require('fs').statfsSync('/docker');console.log(s.bavail*s.bsize)"]))
+        if min(shutil.disk_usage(self.stack).free, docker_free) < required:
+            raise UpdateError(f'Insufficient disk space: need at least {required / 1024**3:.1f} GiB free.')
+        return info['Config']['Image']
+
+    def resolve(self, requested):
+        if requested == 'latest':
+            with urllib.request.urlopen('https://registry.npmjs.org/@loicngr%2fkobo/latest', timeout=30) as r:
+                requested = json.load(r)['version']
+        version = normalize_version(requested)
+        if tuple(map(int, version.split('.'))) < tuple(map(int, self.installed.split('.'))):
+            raise UpdateError('Downgrade refused: an older image may be incompatible with the current database.')
+        # Public repository: no App token is needed to discover/retrieve a release.
+        refs = self.run(['git', '-c', 'credential.helper=', 'ls-remote', '--exit-code',
+                         REPO, f'refs/tags/v{version}', f'refs/tags/v{version}^{{}}'])
+        pairs = [line.split() for line in refs.splitlines()]
+        sha = next((sha for sha, ref in pairs if ref.endswith('^{}')), pairs[0][0])
+        if not re.fullmatch('[a-f0-9]{40}', sha):
+            raise UpdateError('Invalid release reference.')
+        return version, sha
+
+    def build(self, version, sha):
+        source = self.job / 'source'
+        source.mkdir()
+        self.logged(['git', 'init', str(source)])
+        self.logged(['git', '-C', str(source), '-c', 'credential.helper=', 'fetch',
+                     '--depth=1', REPO, f'refs/tags/v{version}'])
+        self.logged(['git', '-C', str(source), 'checkout', '--detach', 'FETCH_HEAD'])
+        actual = self.run(['git', '-C', str(source), 'rev-parse', 'HEAD'])
+        if actual != sha or json.loads((source / 'package.json').read_text())['version'] != version:
+            raise UpdateError('Release changed or package.json does not match the tag.')
+        # Never overwrite a tag still used by production or a rollback configuration.
+        build_id = self.job.name.lower()
+        base = f'kobo:{version}-{sha[:12]}-base-{build_id}'
+        image = f'kobo:{version}-{sha[:12]}-vps-{build_id}'
+        self.logged(['docker', 'build', '--progress=plain', '-t', base, str(source)])
+        overlay = self.job / 'overlay'
+        overlay.mkdir()
+        (overlay / 'Dockerfile').write_text(
+            f'FROM {base}\nRUN docker compose version >/dev/null 2>&1 || '
+            '(apt-get update && apt-get install -y --no-install-recommends docker-compose-plugin '
+            '&& rm -rf /var/lib/apt/lists/*)\n')
+        self.logged(['docker', 'build', '--progress=plain', '-t', image, str(overlay)])
+        self.run(['docker', 'run', '--rm', '--network', 'none', '--entrypoint', 'docker',
+                  image, 'compose', 'version'])
+        self.run(['docker', 'run', '--rm', '--network', 'none', '--entrypoint', 'node', image,
+                  '-e', "require('better-sqlite3')(':memory:').close();require('node-pty')"])
+        return image
+
+    def backup(self):
+        archive = self.job / 'home.tar.gz'
+        with archive.open('xb') as f, self.log.open('ab') as err:
+            try:
+                subprocess.run(['docker', 'run', '--rm', '--network', 'none', '--read-only',
+                    '--mount', f'type=volume,src={self.volume},dst=/data,readonly',
+                    '--entrypoint', 'tar', self.old_image, '-C', '/data', '-czf', '-', '.'],
+                    stdout=f, stderr=err, check=True, timeout=3600)
+                f.flush()
+                os.fsync(f.fileno())
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+                raise UpdateError('Failed: backup. The previous version will be restarted.') from e
+        check = self.job / 'migration-check'
+        check.mkdir()
+        # Read the complete gzip stream; extract only DB files as regular files, never symlinks.
+        with tarfile.open(archive, 'r|gz') as tar:
+            for member in tar:
+                if member.name in {f'./.config/kobo/{name}' for name in ('kobo.db','kobo.db-wal','kobo.db-shm')}:
+                    if not member.isfile():
+                        raise UpdateError('Unexpected SQLite file in backup.')
+                    with tar.extractfile(member) as src, (check / Path(member.name).name).open('wb') as dst:
+                        shutil.copyfileobj(src, dst)
+        if not (check / 'kobo.db').is_file():
+            raise UpdateError('Backup does not contain the Kōbō database.')
+        return check
+
+    def verify(self, version):
+        self.container = self.run(self.compose('ps', '-q', 'kobo'))
+        self.run(['docker', 'exec', self.container, 'node', '-e', API_JS])
+        last_error = None
+        for attempt in range(15):
+            try:
+                with urllib.request.urlopen(self.public_url + '/api/health', timeout=10) as r:
+                    health = json.load(r)
+                if health.get('version') != version or health.get('status') != 'ok':
+                    raise UpdateError('Unexpected HTTPS version or health status.')
+                try:
+                    with urllib.request.urlopen(self.public_url + '/api/workspaces', timeout=10):
+                        raise UpdateError('The public API no longer requires authentication.')
+                except urllib.error.HTTPError as e:
+                    if e.code != 401:
+                        raise UpdateError('Unexpected public API authentication response.') from e
+                return
+            except Exception as e:
+                last_error = e
+                if attempt < 14:
+                    time.sleep(2)
+        raise UpdateError('HTTPS verification failed.') from last_error
+
+    def execute(self, requested, check_only=False, prepare_only=False):
+        for state in (self.stack / 'updates').glob('*/state.json'):
+            if json.loads(state.read_text())['phase'] not in {'complete','prepared','aborted'}:
+                raise UpdateError(f'Interrupted update requires review: {state}. See RECOVERY.md in that directory.')
+        old_tag = self.inspect()
+        version, sha = self.resolve(requested)
+        say(f'Installed: {self.installed} — target: {version} ({sha[:12]}).')
+        if not prepare_only:
+            self.maintenance('GET')
+        if check_only:
+            say('Checks passed. No shutdown or update performed.')
+            return
+        if version == self.installed and not prepare_only:
+            say('This version is already installed. Nothing to do.')
+            return
+        updates = self.stack / 'updates'
+        updates.mkdir(mode=0o700, exist_ok=True)
+        self.job = Path(tempfile.mkdtemp(prefix=datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ-'), dir=updates))
+        self.log = self.job / 'update.log'
+        self.log.touch(mode=0o600)
+        (self.job / 'compose.before.yaml').write_bytes(self.original)
+        self.record('building', previous_image=old_tag, previous_digest=self.old_image,
+                    volume=self.volume, version=version, sha=sha,
+                    maintenance_owner=self.maintenance_owner,
+                    backup_complete=False, new_version_start_attempted=False)
+        self.recovery_notes()
+        stopped = False
+        launching = False
+        maintenance_requested = False
+        try:
+            say(f'Building the image; Kōbō remains available. Log: {self.log}')
+            image = self.build(version, sha)
+            candidate = self.job / 'compose.next.yaml'
+            candidate.write_text(image_config(self.original.decode(), image))
+            self.run(self.compose('config', '--quiet', file=candidate))
+            if prepare_only:
+                self.record('prepared', image=image)
+                say(f'Image ready: {image}. Service was not interrupted.')
+                return
+            self.idle()  # Agents may have started while the build ran.
+            if self.compose_file.read_bytes() != self.original:
+                raise UpdateError('Compose changed during the build. Aborting without deployment.')
+            if json.loads(self.run(self.compose('config', '--format', 'json'))) != self.config_snapshot:
+                raise UpdateError('Resolved Compose configuration changed during the build (environment or files). Aborting.')
+            self.record('reserving', image=image)
+            # Set before sending: a lost response can still mean the server acquired our reservation.
+            maintenance_requested = True
+            self.maintenance('POST')
+            self.record('stopping')
+            stopped = True  # Also recover if the stop command itself fails/interruption arrives.
+            say('Stopping Kōbō, backing up /root and testing migrations on a database copy…')
+            self.run(self.compose('stop', '-t', '60', 'kobo'))
+            info = json.loads(self.run(['docker', 'inspect', self.container]))[0]
+            if info['State']['Running']:
+                raise UpdateError('The container did not stop.')
+            check = self.backup()
+            self.record('backed-up', backup_complete=True)
+            self.logged(['docker', 'run', '--rm', '--network', 'none',
+                         '--mount', f'type=bind,src={check},dst=/check', '--entrypoint', 'node',
+                         image, '--input-type=module', '-e', MIGRATION_JS], timeout=180)
+            atomic_write(self.compose_file, candidate.read_bytes(), self.original_mode)
+            # From here migrations/automatic jobs may have run. Never automatically restore old data.
+            launching = True
+            self.record('launching', new_version_start_attempted=True)
+            say('Starting the new version and checking the API and HTTPS…')
+            self.logged(self.compose('up', '-d', '--no-deps', '--wait', '--wait-timeout', '180', 'kobo'), timeout=240)
+            self.verify(version)
+            self.record('complete')
+            say(f'Kōbō {version} is up to date. Backup: {self.job / "home.tar.gz"}')
+        except BaseException:
+            if stopped and not launching:
+                # Only safe before any process from the new version has used production data.
+                try:
+                    # A failed/interrupted CLI does not prove the daemon's stop completed.
+                    # Keep admission reserved until the old process is confirmed gone.
+                    info = json.loads(self.run(['docker', 'inspect', self.container]))[0]
+                    if info['State']['Running']:
+                        self.run(['docker', 'stop', '-t', '60', self.container])
+                        info = json.loads(self.run(['docker', 'inspect', self.container]))[0]
+                        if info['State']['Running']:
+                            raise UpdateError('Previous process shutdown is unconfirmed.')
+                    atomic_write(self.compose_file, self.original, self.original_mode)
+                    self.logged(self.compose('up', '-d', '--no-deps', '--wait', '--wait-timeout', '180', 'kobo'), timeout=240)
+                    self.record('aborted')
+                    say('Update aborted; previous version restarted, original database unchanged.')
+                except BaseException:
+                    self.record('recovery-required')
+                    say(f'Restart requires review. Instructions: {self.job / "RECOVERY.md"}')
+            elif launching:
+                self.record('recovery-required')
+                say(f'New version requires diagnosis. Data retained; no automatic database rollback. See {self.job / "RECOVERY.md"}')
+            else:
+                try:
+                    if maintenance_requested:
+                        self.maintenance('DELETE')
+                    self.record('aborted')
+                except BaseException:
+                    self.record('recovery-required')
+                    say(f'Update reservation may still be active. Instructions: {self.job / "RECOVERY.md"}')
+            raise
+
+    def recovery_notes(self):
+        import shlex
+        restart = shlex.join(self.compose('up', '-d', '--no-deps', '--wait', 'kobo'))
+        (self.job / 'RECOVERY.md').write_text(f'''# Kōbō update recovery
+
+Private log: `{self.job / 'update.log'}`. Durable phase: `state.json`.
+Previous configuration: `compose.before.yaml`.
+Previous immutable image: `{self.old_image}`.
+Original volume: `{self.volume}`.
+The archive `home.tar.gz` is validated only when backup_complete=true.
+new_version_start_attempted indicates whether a new-version launch was attempted.
+Projects outside /root are NOT included in this archive; back them up separately.
+Old images, volumes and backups are never automatically deleted.
+
+## Interrupted admission reservation
+The runtime reservation blocks agent starts and defers scheduled deliveries until
+the container stops or the owner explicitly releases it. It does not expire.
+If phase is reserving/stopping/recovery-required, inspect whether the old process
+is still running. Before any new-version launch, stop it with Docker and confirm
+it has exited before restarting the previous configuration below; this clears
+the in-memory reservation. Do not release admission while a Docker stop may still
+be in progress. The reservation identifier is state.json's maintenance_owner.
+
+## Before a new-version launch
+If no new-version launch was attempted, restore compose.before.yaml to
+`{self.compose_file}` and run:
+
+```sh
+{restart}
+```
+
+Verify service health before setting state.json phase to aborted to allow a retry.
+
+## After a new-version launch (launching/recovery-required)
+Do not run an older image against a potentially migrated database.
+Inspect the private log and Compose logs (which may contain credentials).
+A proxy error can leave a working backend: check for new messages and resumed
+work before considering a restore.
+To roll back fully, stop Kōbō, back up the current volume too, extract home.tar.gz
+into a NEW empty Docker volume and adapt the previous Compose configuration to
+use that restored volume and the previous immutable image above. Keep the current
+volume. Database rollback does not undo external agent or project changes.
+After recovery and health verification, set state.json phase to complete or aborted.
+''')
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Update a Kōbō VPS Compose stack (latest stable release by default).')
+    parser.add_argument('version', nargs='?', default='latest', help='latest, 2.1.16 or v2.1.16')
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument('--check', action='store_true', help='check without building or interrupting the service')
+    modes.add_argument('--prepare', action='store_true', help='build and test the image without deploying')
+    parser.add_argument('--directory', type=Path, default=Path.cwd(),
+                        help='deployment directory containing compose.yaml and .env (default: current directory)')
+    args = parser.parse_args()
+    os.umask(0o077)
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
+    try:
+        with (args.directory / '.update.lock').open('a') as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise UpdateError('Another update is already running.')
+            Updater(args.directory).execute(args.version, args.check, args.prepare)
+    except (Exception, KeyboardInterrupt) as e:
+        message = str(e) if isinstance(e, UpdateError) else type(e).__name__
+        say(f'Stopped: {message}.')
+        return 1
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

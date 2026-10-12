@@ -8,7 +8,10 @@ import { closeDb, getDb } from '../server/db/index.js'
 import { runMigrations } from '../server/db/migrations.js'
 import router from '../server/routes/workspaces.js'
 import { startAgent } from '../server/services/agent/orchestrator.js'
+import { acquireUpdateMaintenance, releaseUpdateMaintenance } from '../server/services/update-maintenance-service.js'
 import { listWorkspaces } from '../server/services/workspace-service.js'
+import * as worktreeService from '../server/services/worktree-service.js'
+import { fetchSourceBranchOrThrowAsync } from '../server/utils/git-ops.js'
 import { makeEffectiveSettings, makeGlobalSettings } from './helpers/fixtures.js'
 
 vi.mock('../server/services/agent/orchestrator.js', () => ({
@@ -52,8 +55,62 @@ beforeEach(() => {
   runMigrations(getDb(join(directory, 'kobo.db')))
 })
 afterEach(() => {
+  releaseUpdateMaintenance('creation-test')
+  vi.restoreAllMocks()
   closeDb()
   rmSync(directory, { recursive: true, force: true })
+})
+
+it('rejects creation during update maintenance before fetching or mutating the repository', async () => {
+  expect(acquireUpdateMaintenance('creation-test', () => true)).toBe('acquired')
+  const before = execFileSync('git', ['worktree', 'list', '--porcelain'], { cwd: repository, encoding: 'utf8' })
+  const response = await create()
+  expect(response.status).toBe(503)
+  expect(await response.json()).toMatchObject({ code: 'update-maintenance' })
+  expect(fetchSourceBranchOrThrowAsync).not.toHaveBeenCalled()
+  expect(listWorkspaces()).toHaveLength(0)
+  expect(execFileSync('git', ['worktree', 'list', '--porcelain'], { cwd: repository, encoding: 'utf8' })).toBe(before)
+})
+
+it('blocks update reservation throughout a paused worktree creation, and releases after success', async () => {
+  let reached!: () => void
+  const entered = new Promise<void>((resolve) => {
+    reached = resolve
+  })
+  let release!: () => void
+  const resume = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const original = worktreeService.createWorktreeUnlocked
+  vi.spyOn(worktreeService, 'createWorktreeUnlocked').mockImplementationOnce(async (...args) => {
+    reached()
+    await resume
+    return original(...args)
+  })
+  const creating = create()
+  await entered
+  try {
+    expect(listWorkspaces()[0]?.status).toBe('created')
+    expect(acquireUpdateMaintenance('creation-test', () => true)).toBe('busy')
+  } finally {
+    releaseUpdateMaintenance('creation-test')
+    release()
+    await creating
+  }
+  expect((await creating).status).toBe(201)
+  expect(acquireUpdateMaintenance('creation-test', () => true)).toBe('acquired')
+})
+
+it('releases update admission after validation failures and creation rollback', async () => {
+  expect((await create({ name: '' })).status).toBe(400)
+  expect(acquireUpdateMaintenance('creation-test', () => true)).toBe('acquired')
+  releaseUpdateMaintenance('creation-test')
+  vi.mocked(startAgent).mockImplementationOnce(() => {
+    throw new Error('Startup failed')
+  })
+  expect((await create()).status).toBe(500)
+  expect(listWorkspaces()).toHaveLength(0)
+  expect(acquireUpdateMaintenance('creation-test', () => true)).toBe('acquired')
 })
 
 function create(overrides: Record<string, unknown> = {}) {

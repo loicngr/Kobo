@@ -1,0 +1,60 @@
+# Fresh, independent Kōbō instance behind an EXISTING Traefik Docker provider.
+# Setup, authentication and upgrades: docs/deployment-vps.md
+# Copy to your deployment directory as compose.yaml and create its .env first.
+name: kobo
+
+services:
+  kobo:
+    # Build this initial image locally. kobo-update later pins a unique release tag.
+    image: kobo:local
+    init: true
+    restart: unless-stopped
+    # Use the host's SSH and `docker compose exec`; no container SSH daemon.
+    entrypoint: ["node"]
+    command: ["dist/server/index.js"]
+    environment:
+      NODE_ENV: production
+      SERVER_PORT: "3000"
+      KOBO_HOME: /root/.config/kobo
+      KOBO_NETWORK_ACCESS_ENABLED: "true"
+      KOBO_NETWORK_ACCESS_BEHIND_PROXY: "true"
+      KOBO_NETWORK_ACCESS_PROXY_HOST: ${KOBO_DOMAIN:?Set KOBO_DOMAIN to the public hostname}
+    volumes:
+      # Includes Kōbō, Claude/Codex state and Git configuration; no PC auth mounts.
+      - kobo-home:/root
+      # Same ABSOLUTE path in both namespaces for project Docker bind mounts.
+      # Create the host directory first; fail rather than silently making one.
+      - type: bind
+        source: ${KOBO_PROJECTS_DIR:?Set KOBO_PROJECTS_DIR to an existing absolute path}
+        target: ${KOBO_PROJECTS_DIR:?Set KOBO_PROJECTS_DIR to an existing absolute path}
+        bind:
+          create_host_path: false
+      # Optional: enables project Docker commands, with root-equivalent host access.
+      # - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - proxy
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${TRAEFIK_NETWORK:-web}
+      traefik.http.routers.kobo.rule: Host(`${KOBO_DOMAIN:?Set KOBO_DOMAIN to the public hostname}`)
+      traefik.http.routers.kobo.entrypoints: ${TRAEFIK_ENTRYPOINT:-websecure}
+      traefik.http.routers.kobo.tls: "true"
+      traefik.http.routers.kobo.tls.certresolver: ${TRAEFIK_CERTRESOLVER:-letsencrypt}
+      traefik.http.services.kobo.loadbalancer.server.port: "3000"
+    # No published HTTP or SSH ports. Traefik handles HTTP and WebSockets.
+    stop_grace_period: 60s
+    healthcheck:
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+networks:
+  proxy:
+    external: true
+    name: ${TRAEFIK_NETWORK:-web}
+
+volumes:
+  kobo-home:

@@ -7,6 +7,7 @@ import { resolveWorkspaceWorktreePath } from '../utils/worktree-paths.js'
 import * as orchestrator from './agent/orchestrator.js'
 import * as autoLoopService from './auto-loop-service.js'
 import * as settingsService from './settings-service.js'
+import { deferForUpdateMaintenance } from './update-maintenance-service.js'
 import { emitEphemeral } from './websocket-service.js'
 
 export interface PendingCron {
@@ -239,6 +240,13 @@ export function listAll(): PendingCron[] {
  */
 function fireOrSkip(id: string): void {
   if (suspended) return
+  const pendingTimer = timers.get(id)
+  if (
+    deferForUpdateMaintenance(`cron:${id}`, () => {
+      if (timers.get(id) === pendingTimer) fireOrSkip(id)
+    })
+  )
+    return
   try {
     timers.delete(id)
     const db = getDb()

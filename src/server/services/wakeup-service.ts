@@ -5,6 +5,7 @@ import { resolveWorkspaceWorktreePath } from '../utils/worktree-paths.js'
 import * as orchestrator from './agent/orchestrator.js'
 import * as autoLoopService from './auto-loop-service.js'
 import * as settingsService from './settings-service.js'
+import { deferForUpdateMaintenance, isUpdateMaintenanceActive } from './update-maintenance-service.js'
 import { emitEphemeral } from './websocket-service.js'
 
 export interface PendingWakeup {
@@ -38,6 +39,20 @@ export function suspendForShutdown(): void {
   suspended = true
   for (const timer of timers.values()) clearTimeout(timer)
   timers.clear()
+}
+
+/** Claim valid pending wakeups before planned downtime, without changing their requested deadline. */
+export function preserveForUpdateMaintenance(): void {
+  const cutoff = new Date(Date.now() - STALE_WAKEUP_GRACE_MS).toISOString()
+  getDb()
+    .prepare(
+      `UPDATE pending_wakeups SET retry_at = target_at
+       WHERE retry_at IS NULL AND julianday(target_at) >= julianday(?)
+       AND workspace_id IN (
+         SELECT id FROM workspaces WHERE archived_at IS NULL AND worktree_purged_at IS NULL
+       )`,
+    )
+    .run(cutoff)
 }
 
 function clamp(n: number, lo: number, hi: number): number {
@@ -91,8 +106,8 @@ export function schedule(
   const row = getDb()
     .prepare(
       `INSERT OR REPLACE INTO pending_wakeups
-       (workspace_id, target_at, prompt, reason, created_at, agent_session_id)
-     VALUES (?, ?, ?, ?, ?, ?)
+       (workspace_id, target_at, prompt, reason, created_at, agent_session_id, retry_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
      RETURNING target_at, reason`,
     )
     .get(
@@ -102,6 +117,7 @@ export function schedule(
       reason ?? null,
       new Date().toISOString(),
       agentSessionId ?? null,
+      isUpdateMaintenanceActive() ? targetAtIso : null,
     ) as {
     target_at: string
     reason: string | null
@@ -220,6 +236,13 @@ export function rehydrate(): void {
 /** Internal — invoked by setTimeout. */
 function fire(workspaceId: string): void {
   if (suspended) return
+  const pendingTimer = timers.get(workspaceId)
+  if (
+    deferForUpdateMaintenance(`wakeup:${workspaceId}`, () => {
+      if (timers.get(workspaceId) === pendingTimer) fire(workspaceId)
+    })
+  )
+    return
   try {
     const db = getDb()
 

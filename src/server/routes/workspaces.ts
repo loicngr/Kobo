@@ -39,6 +39,7 @@ import { MAX_ATTACHMENT_REQUEST_BYTES } from '../../shared/attachments.js'
 import { AUTO_LOOP_HARD_RULES, buildAutoLoopGroomingSteps, buildGroomingIntro } from '../../shared/auto-loop-prompts.js'
 import { getDb } from '../db/index.js'
 import { migrationGuard } from '../middleware/migration-guard.js'
+import { workspaceCreationMaintenance } from '../middleware/workspace-creation-maintenance.js'
 import { listEngines } from '../services/agent/engines/registry.js'
 import * as agentManager from '../services/agent/orchestrator.js'
 import * as archiveScriptService from '../services/archive-script-service.js'
@@ -584,7 +585,7 @@ const creationBodyLimit = bodyLimit({
   onError: (c) => c.json({ error: 'Workspace creation request is too large', step: 'validate' }, 413),
 })
 
-app.post('/', migrationGuard, creationBodyLimit, async (c) => {
+app.post('/', workspaceCreationMaintenance, migrationGuard, creationBodyLimit, async (c) => {
   // Declared outside the try so the outermost catch (any unforeseen throw,
   // including a malformed request body) can still name a step instead of
   // leaving the create-progress channel silent. Updated in lockstep with

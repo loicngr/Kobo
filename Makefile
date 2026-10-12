@@ -7,7 +7,7 @@
 # Quick reference:
 #   make ci          # everything CI runs on a PR (audit + lint + tsc + tests)
 #   make release     # CI gates + build + version-not-yet-published guard
-#   make test        # backend + client tests only
+#   make test        # backend + client + deployment tooling tests
 #   make lint        # biome lint only
 #   make audit       # npm audit on all three trees
 #   make install     # `npm ci` on all three trees (CI-equivalent install)
@@ -35,9 +35,10 @@ help:
 	@echo "  make audit      npm audit --audit-level=high on all three trees"
 	@echo "  make lint       biome check"
 	@echo "  make typecheck  tsc --noEmit (backend), tests, vue-tsc (client)"
-	@echo "  make test       backend + client vitest suites"
+	@echo "  make test       backend + client vitest suites + deployment tooling"
 	@echo "  make test-back  backend tests only"
 	@echo "  make test-front client tests only"
+	@echo "  make test-deployment tooling tests (Python 3.10+ / OpenSSL, no Docker/network)"
 	@echo "  make build      production build"
 	@echo "  make clean      remove build artefacts"
 
@@ -90,14 +91,18 @@ typecheck-front:
 
 # ── Tests ──────────────────────────────────────────────────────────────────────
 
-.PHONY: test test-back test-front
-test: test-back test-front
+.PHONY: test test-back test-front test-deployment
+test: test-back test-front test-deployment
 
 test-back:
 	npm test
 
 test-front:
 	cd $(CLIENT_DIR) && npm test
+
+# Deterministic updater tests: no Docker daemon, network or production data.
+test-deployment:
+	npm run test:deployment
 
 # ── Build ──────────────────────────────────────────────────────────────────────
 
@@ -112,7 +117,7 @@ clean:
 # ── Pipelines ──────────────────────────────────────────────────────────────────
 
 # Mirrors `.github/workflows/ci.yml` step-for-step, in the same order: install,
-# audit, lint, the three type checks, build, then the two test suites. Anything
+# audit, lint, the three type checks, build, then app suites and updater tests. Anything
 # added to the workflow must be added here too, or a red CI is found after the
 # push instead of before.
 .PHONY: ci

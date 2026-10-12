@@ -9,7 +9,7 @@
       class="bg-dark"
     >
       <WorkspaceList />
-      <div v-if="!$q.screen.lt.md" class="resize-handle" @mousedown="startResize" />
+      <div class="resize-handle" @pointerdown="startResize" @touchstart.stop />
     </q-drawer>
 
     <q-drawer
@@ -22,9 +22,9 @@
       @update:model-value="layout.setRight"
     >
       <div
-        v-if="!$q.screen.lt.md"
         class="resize-handle resize-handle--right"
-        @mousedown="startRightResize"
+        @pointerdown="startRightResize"
+        @touchstart.stop
       />
       <div class="column no-wrap" style="position: absolute; inset: 0; overflow: hidden;">
         <!-- Upper zone -->
@@ -116,7 +116,7 @@
         </div>
 
         <!-- Drag handle -->
-        <div v-if="!$q.screen.lt.md" class="vertical-resize-handle" @mousedown="startVerticalResize" />
+        <div class="vertical-resize-handle" @pointerdown="startVerticalResize" @touchstart.stop />
 
         <!-- Lower zone -->
         <div :style="{ flex: `${100 - topPercent} 1 0%` }" class="column no-wrap" style="overflow: hidden;">
@@ -186,6 +186,7 @@ import TasksPanel from 'src/components/TasksPanel.vue'
 import ToolsPanel from 'src/components/ToolsPanel.vue'
 import WhatsNewDialog from 'src/components/WhatsNewDialog.vue'
 import WorkspaceList from 'src/components/WorkspaceList.vue'
+import { usePointerResize } from 'src/composables/use-pointer-resize'
 import { useTours } from 'src/composables/use-tours'
 import { useWhatsNew } from 'src/composables/use-whats-new'
 import { supportsSubagents } from 'src/constants/engineFeatures'
@@ -285,66 +286,49 @@ watch(
 const DRAWER_WIDTH_KEY = 'at-left-drawer-width'
 const savedWidth = parseInt(localStorage.getItem(DRAWER_WIDTH_KEY) ?? '260', 10)
 const leftDrawerWidth = ref(Math.min(500, Math.max(140, savedWidth)))
-const isResizing = ref(false)
+const resize = usePointerResize()
 
 const RIGHT_DRAWER_WIDTH_KEY = 'kobo:rightDrawerWidth'
 const RIGHT_DRAWER_MIN = 240
 const RIGHT_DRAWER_MAX = 800
 const savedRightWidth = parseInt(localStorage.getItem(RIGHT_DRAWER_WIDTH_KEY) ?? '300', 10)
 const rightDrawerWidth = ref(Math.min(RIGHT_DRAWER_MAX, Math.max(RIGHT_DRAWER_MIN, savedRightWidth)))
-const isResizingRight = ref(false)
 
 // Cap the overlay drawer width to the viewport (minus a safe strip) on small
 // screens so it never covers the whole screen; full saved width on large screens.
 const effectiveLeftWidth = computed(() => cappedDrawerWidth(leftDrawerWidth.value, $q.screen.width, $q.screen.lt.md))
 const effectiveRightWidth = computed(() => cappedDrawerWidth(rightDrawerWidth.value, $q.screen.width, $q.screen.lt.md))
 
-function startResize(event: MouseEvent) {
-  event.preventDefault()
-  isResizing.value = true
-
-  const onMouseMove = (e: MouseEvent) => {
-    const newWidth = Math.min(500, Math.max(140, e.clientX))
-    leftDrawerWidth.value = newWidth
-  }
-
-  const onMouseUp = () => {
-    isResizing.value = false
-    localStorage.setItem(DRAWER_WIDTH_KEY, String(leftDrawerWidth.value))
-    document.removeEventListener('mousemove', onMouseMove)
-    document.removeEventListener('mouseup', onMouseUp)
-    document.body.style.cursor = ''
-    document.body.style.userSelect = ''
-  }
-
-  document.body.style.cursor = 'col-resize'
-  document.body.style.userSelect = 'none'
-  document.addEventListener('mousemove', onMouseMove)
-  document.addEventListener('mouseup', onMouseUp)
+function startResize(event: PointerEvent) {
+  const initialWidth = effectiveLeftWidth.value
+  const initialX = event.clientX
+  resize(event, {
+    cursor: 'col-resize',
+    move: (next) => {
+      leftDrawerWidth.value = cappedDrawerWidth(
+        Math.min(500, Math.max(140, initialWidth + next.clientX - initialX)),
+        $q.screen.width,
+        $q.screen.lt.md,
+      )
+    },
+    end: () => localStorage.setItem(DRAWER_WIDTH_KEY, String(leftDrawerWidth.value)),
+  })
 }
 
-function startRightResize(event: MouseEvent) {
-  event.preventDefault()
-  isResizingRight.value = true
-
-  const onMouseMove = (e: MouseEvent) => {
-    const newWidth = Math.min(RIGHT_DRAWER_MAX, Math.max(RIGHT_DRAWER_MIN, window.innerWidth - e.clientX))
-    rightDrawerWidth.value = newWidth
-  }
-
-  const onMouseUp = () => {
-    isResizingRight.value = false
-    localStorage.setItem(RIGHT_DRAWER_WIDTH_KEY, String(rightDrawerWidth.value))
-    document.removeEventListener('mousemove', onMouseMove)
-    document.removeEventListener('mouseup', onMouseUp)
-    document.body.style.cursor = ''
-    document.body.style.userSelect = ''
-  }
-
-  document.body.style.cursor = 'col-resize'
-  document.body.style.userSelect = 'none'
-  document.addEventListener('mousemove', onMouseMove)
-  document.addEventListener('mouseup', onMouseUp)
+function startRightResize(event: PointerEvent) {
+  const initialWidth = effectiveRightWidth.value
+  const initialX = event.clientX
+  resize(event, {
+    cursor: 'col-resize',
+    move: (next) => {
+      rightDrawerWidth.value = cappedDrawerWidth(
+        Math.min(RIGHT_DRAWER_MAX, Math.max(RIGHT_DRAWER_MIN, initialWidth + initialX - next.clientX)),
+        $q.screen.width,
+        $q.screen.lt.md,
+      )
+    },
+    end: () => localStorage.setItem(RIGHT_DRAWER_WIDTH_KEY, String(rightDrawerWidth.value)),
+  })
 }
 
 const route = useRoute()
@@ -443,37 +427,23 @@ provide(openSubagentActivityKey, (target: SubagentActivityTarget) => {
 const SPLIT_KEY = 'kobo:rightDrawerSplit'
 const savedSplit = parseInt(localStorage.getItem(SPLIT_KEY) ?? '60', 10)
 const topPercent = ref(Math.min(80, Math.max(20, savedSplit)))
-const isResizingVertical = ref(false)
 
 const bottomTab = ref('tools')
 
-function startVerticalResize(event: MouseEvent) {
-  event.preventDefault()
-  isResizingVertical.value = true
-
-  const drawer = (event.target as HTMLElement).closest('.q-drawer') as HTMLElement | null
-  if (!drawer) return
-
-  const onMouseMove = (e: MouseEvent) => {
-    const rect = drawer.getBoundingClientRect()
-    const y = e.clientY - rect.top
-    const percent = Math.round((y / rect.height) * 100)
-    topPercent.value = Math.min(80, Math.max(20, percent))
-  }
-
-  const onMouseUp = () => {
-    isResizingVertical.value = false
-    localStorage.setItem(SPLIT_KEY, String(topPercent.value))
-    document.removeEventListener('mousemove', onMouseMove)
-    document.removeEventListener('mouseup', onMouseUp)
-    document.body.style.cursor = ''
-    document.body.style.userSelect = ''
-  }
-
-  document.body.style.cursor = 'row-resize'
-  document.body.style.userSelect = 'none'
-  document.addEventListener('mousemove', onMouseMove)
-  document.addEventListener('mouseup', onMouseUp)
+function startVerticalResize(event: PointerEvent) {
+  const drawer = (event.currentTarget as HTMLElement).closest('.q-drawer')
+  const height = drawer?.getBoundingClientRect().height
+  if (!height) return
+  const initialPercent = topPercent.value
+  const initialY = event.clientY
+  resize(event, {
+    cursor: 'row-resize',
+    move: (next) => {
+      const percent = Math.round(initialPercent + ((next.clientY - initialY) / height) * 100)
+      topPercent.value = Math.min(80, Math.max(20, percent))
+    },
+    end: () => localStorage.setItem(SPLIT_KEY, String(topPercent.value)),
+  })
 }
 </script>
 
@@ -500,33 +470,52 @@ function startVerticalResize(event: MouseEvent) {
 .resize-handle {
   position: absolute;
   top: 0;
-  right: -2px;
+  right: 0;
   width: 4px;
   height: 100%;
   cursor: col-resize;
+  touch-action: none;
   z-index: 10;
   transition: background-color 0.15s;
 
   &:hover,
   &:active {
-    background-color: rgba(102, 95, 221, 0.5);
+    background-color: var(--kobo-border-strong);
   }
 
   &--right {
     right: auto;
-    left: -2px;
+    left: 0;
   }
 }
 
 .vertical-resize-handle {
   height: 4px;
   cursor: row-resize;
+  touch-action: none;
+  flex-shrink: 0;
   background-color: var(--kobo-hover);
   transition: background-color 0.15s;
 
   &:hover,
   &:active {
-    background-color: rgba(102, 95, 221, 0.5);
+    background-color: var(--kobo-border-strong);
+  }
+}
+// A touch target wide enough to catch without covering the drawer actions.
+@media (any-pointer: coarse) {
+  .resize-handle {
+    width: var(--kobo-space-xl);
+    &::after {
+      content: '';
+      position: absolute;
+      inset: 0 var(--kobo-space-sm);
+      background-color: var(--kobo-border-strong);
+    }
+  }
+
+  .vertical-resize-handle {
+    height: var(--kobo-space-xl);
   }
 }
 </style>

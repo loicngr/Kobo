@@ -73,6 +73,42 @@ describe('cron-service — arm / cancel / get / list', () => {
     }
   })
 
+  it('does not fire a replacement schedule early when maintenance is released', async () => {
+    const maintenance = await import('../server/services/update-maintenance-service.js')
+    const service = await import('../server/services/cron-service.js')
+    const orch = await import('../server/services/agent/orchestrator.js')
+    const first = service.arm(wsId, { expression: '* * * * *', prompt: 'first', oneShot: true })
+    maintenance.acquireUpdateMaintenance('scheduler-test', () => true)
+    try {
+      await vi.advanceTimersByTimeAsync(60_000)
+      service.cancel(first.id, 'user')
+      service.arm(wsId, { expression: '0 * * * *', prompt: 'replacement', oneShot: true })
+    } finally {
+      maintenance.releaseUpdateMaintenance('scheduler-test')
+    }
+    await vi.advanceTimersByTimeAsync(1)
+    expect(orch.startAgent).not.toHaveBeenCalled()
+  })
+
+  it('preserves pending intent while update maintenance holds admission', async () => {
+    const maintenance = await import('../server/services/update-maintenance-service.js')
+    const service = await import('../server/services/cron-service.js')
+    const { getDb } = await import('../server/db/index.js')
+    const orch = await import('../server/services/agent/orchestrator.js')
+    service.arm(wsId, { expression: '* * * * *', prompt: 'tick', oneShot: true })
+    const before = getDb().prepare('SELECT * FROM pending_crons').all()
+    maintenance.acquireUpdateMaintenance('scheduler-test', () => true)
+    try {
+      await vi.advanceTimersByTimeAsync(120_000)
+      expect(getDb().prepare('SELECT * FROM pending_crons').all()).toEqual(before)
+      expect(orch.startAgent).not.toHaveBeenCalled()
+    } finally {
+      maintenance.releaseUpdateMaintenance('scheduler-test')
+    }
+    await vi.advanceTimersByTimeAsync(1)
+    expect(orch.startAgent).toHaveBeenCalledOnce()
+  })
+
   it('rejects six-field expressions and retains invalid legacy rows without arming them', async () => {
     const svc = await import('../server/services/cron-service.js')
     expect(() => svc.arm(wsId, { expression: '* * * * * *', prompt: 'too frequent' })).toThrow(/invalid cron/i)

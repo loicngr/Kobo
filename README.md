@@ -116,7 +116,9 @@ for credential priority and native-configuration scope.
 
 ### Docker
 
-An official `Dockerfile` and three ready-to-use Compose files ship in this repository: a quick local test stack, a Traefik-fronted local rehearsal (no domain needed), and a full VPS reference (Traefik + Let's Encrypt, SSH access, optional Docker-socket passthrough). See [`CONFIGURATION.md`](./CONFIGURATION.md#docker-deployment) for every compose file, env var, and volume mount.
+An official `Dockerfile` and four Compose examples ship in this repository: a local test stack, a local Traefik rehearsal, a deployment including Traefik, and a fresh VPS instance behind an existing Traefik.
+
+**Working remotely on your own VPS?** The [VPS deployment guide](./docs/deployment-vps.md) includes a guided `kobo-install` installer, optional renewable GitHub App authentication, persistent agent logins and Docker updates. Your browser runs on your PC; repositories and agents run on the VPS. See [`CONFIGURATION.md`](./CONFIGURATION.md#docker-deployment) for the Compose comparison and shared settings.
 
 ### Network access
 
@@ -164,4 +166,4 @@ GPL-3.0-or-later. See [`LICENSE`](./LICENSE).
 
 Report reproducible bugs and feature requests in [GitHub Issues](https://github.com/loicngr/Kobo/issues). Read [Contributing](./CONTRIBUTING.md) and the [Code of conduct](./CODE_OF_CONDUCT.md) before participating. Vulnerabilities belong in the private channel described in [Security](./SECURITY.md), not public issues. Support is maintained on a best-effort basis; no response-time commitment is implied.
 
-Platform validation and release blockers are recorded in the [public-readiness evidence](./docs/release/public-readiness-evidence.md). Linux is locally exercised; macOS CI, WSL and real-provider beta sessions require their own evidence. See [third-party notices](./THIRD_PARTY_NOTICES.md) for redistributed assets.
+Linux is locally exercised; macOS CI, WSL and real-provider beta sessions require their own evidence. See [third-party notices](./THIRD_PARTY_NOTICES.md) for redistributed assets.

@@ -72,6 +72,45 @@ describe('quota-backoff-service', () => {
     }
   })
 
+  it('does not fire a replacement schedule early when maintenance is released', async () => {
+    const maintenance = await import('../server/services/update-maintenance-service.js')
+    const wsId = await makeWorkspace()
+    const service = await import('../server/services/quota-backoff-service.js')
+    const fired = vi.fn()
+    service.setOnFireCallback(fired)
+    service.arm(wsId, 60_000, { resetsAt: null, source: 'usage_api', reason: 'quota', retryCount: 3 })
+    maintenance.acquireUpdateMaintenance('scheduler-test', () => true)
+    try {
+      await vi.advanceTimersByTimeAsync(60_000)
+      service.arm(wsId, 3_600_000, { resetsAt: null, source: 'usage_api', reason: 'quota', retryCount: 4 })
+    } finally {
+      maintenance.releaseUpdateMaintenance('scheduler-test')
+    }
+    await vi.advanceTimersByTimeAsync(1)
+    expect(fired).not.toHaveBeenCalled()
+  })
+
+  it('preserves pending intent while update maintenance holds admission', async () => {
+    const maintenance = await import('../server/services/update-maintenance-service.js')
+    const wsId = await makeWorkspace()
+    const service = await import('../server/services/quota-backoff-service.js')
+    const { getDb } = await import('../server/db/index.js')
+    const fired = vi.fn()
+    service.setOnFireCallback(fired)
+    service.arm(wsId, 60_000, { resetsAt: null, source: 'usage_api', reason: 'quota', retryCount: 3 })
+    const before = getDb().prepare('SELECT * FROM pending_quota_backoffs').all()
+    maintenance.acquireUpdateMaintenance('scheduler-test', () => true)
+    try {
+      await vi.advanceTimersByTimeAsync(120_000)
+      expect(getDb().prepare('SELECT * FROM pending_quota_backoffs').all()).toEqual(before)
+      expect(fired).not.toHaveBeenCalled()
+    } finally {
+      maintenance.releaseUpdateMaintenance('scheduler-test')
+    }
+    await vi.advanceTimersByTimeAsync(1)
+    expect(fired).toHaveBeenCalledOnce()
+  })
+
   it('waits through a reset beyond the Node timeout limit without firing early', async () => {
     const wsId = await makeWorkspace()
     const service = await import('../server/services/quota-backoff-service.js')

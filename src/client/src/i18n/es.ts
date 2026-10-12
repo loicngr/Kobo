@@ -1212,7 +1212,7 @@ export default {
   'tours.home.title': 'Orientarse',
   'tours.home.list.title': 'Workspaces',
   'tours.home.list.description':
-    'Cada misión vive aquí con su estado. Los badges señalan una CI fallida, una review que pide cambios o una PR lista para merge.',
+    'Cada misión vive aquí con su estado. Los badges señalan una CI fallida, una review que pide cambios o una PR lista para merge. Arrastra el borde interior de un panel lateral con el ratón o el dedo para cambiar su tamaño. Los botones superiores se distribuyen en varias líneas si falta espacio.',
   'tours.home.create.title': 'Crear un workspace',
   'tours.home.create.description':
     'Un workspace es un worktree de Git, una rama y una sesión de agente para una tarea.',

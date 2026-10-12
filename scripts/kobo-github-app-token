@@ -1,0 +1,190 @@
+#!/usr/bin/env python3
+"""Print a short-lived GitHub App installation token, or a secret-free --check result."""
+import argparse
+import base64
+from datetime import datetime
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.request
+
+RENEW_MARGIN = 120
+LOCK_TIMEOUT = 45
+MAX_BYTES = 65536
+
+
+class TokenError(Exception):
+    """An operator-facing failure that never contains credential material."""
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def read_config(path):
+    try:
+        data = json.loads(Path(path).read_text())
+        app_id = data['app_id']
+        installation_id = data['installation_id']
+        key = data['private_key']
+        if isinstance(app_id, bool) or not re.fullmatch(r'[A-Za-z0-9_.-]{1,100}', str(app_id)):
+            raise ValueError()
+        if isinstance(installation_id, bool) or not re.fullmatch(r'[1-9][0-9]*', str(installation_id)):
+            raise ValueError()
+        if not isinstance(key, str) or not Path(key).is_absolute():
+            raise ValueError()
+        key_bytes = Path(key).read_bytes()
+        if not key_bytes or len(key_bytes) > MAX_BYTES:
+            raise ValueError()
+        config = {'app_id': str(app_id), 'installation_id': str(installation_id), 'private_key': key}
+        identity = hashlib.sha256(json.dumps(config, sort_keys=True).encode() + b'\0' + key_bytes).hexdigest()
+        return config, identity
+    except (OSError, ValueError, KeyError, TypeError):
+        raise TokenError('Cannot read GitHub App configuration: check IDs and the absolute RSA key path.') from None
+
+
+def secure_directory(path):
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    info = path.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        raise TokenError('The token cache directory must be owned by this user, private (0700), and not a symlink.')
+
+
+def private_file(path, flags):
+    fd = os.open(path, flags | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        os.close(fd)
+        raise TokenError('Token cache files must be regular private files (0600) owned by this user.')
+    return fd
+
+
+def usable_token(data):
+    if not isinstance(data, dict):
+        return False
+    token, expiry = data.get('token'), data.get('expires_at')
+    if not isinstance(token, str) or not re.fullmatch(r'[A-Za-z0-9_.-]{1,8192}', token):
+        return False
+    try:
+        parsed = datetime.fromisoformat(expiry.replace('Z', '+00:00'))
+        return parsed.tzinfo is not None and parsed.timestamp() > time.time() + RENEW_MARGIN
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        return False
+
+
+def read_cache(path, identity):
+    try:
+        with os.fdopen(private_file(path, os.O_RDONLY)) as handle:
+            data = json.loads(handle.read(MAX_BYTES))
+        if data.get('identity') == identity and usable_token(data):
+            return data
+    except (FileNotFoundError, ValueError, AttributeError):
+        pass
+    return None
+
+
+def write_cache(path, data):
+    fd, temp = tempfile.mkstemp(prefix='.token-', dir=path.parent)
+    try:
+        with os.fdopen(fd, 'w') as handle:
+            json.dump(data, handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp, path)
+    finally:
+        if os.path.exists(temp):
+            os.unlink(temp)
+
+
+def encode(data):
+    return base64.urlsafe_b64encode(data).rstrip(b'=').decode('ascii')
+
+
+def jwt(config):
+    now = int(time.time())
+    header = encode(json.dumps({'alg': 'RS256', 'typ': 'JWT'}, separators=(',', ':')).encode())
+    payload = encode(json.dumps({'iat': now - 60, 'exp': now + 540, 'iss': config['app_id']},
+                                separators=(',', ':')).encode())
+    unsigned = f'{header}.{payload}'.encode()
+    try:
+        # Reject EC/encrypted keys instead of sending a mislabeled or interactive JWT.
+        subprocess.run(['openssl', 'rsa', '-in', config['private_key'], '-passin', 'pass:',
+                        '-check', '-noout'], check=True, capture_output=True, timeout=10)
+        signature = subprocess.run(['openssl', 'dgst', '-sha256', '-sign', config['private_key'],
+                                    '-passin', 'pass:'], input=unsigned, check=True,
+                                   capture_output=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        raise TokenError('Cannot sign the App JWT: install OpenSSL and provide an unencrypted RSA private key.') from None
+    return f'{header}.{payload}.{encode(signature)}'
+
+
+def mint(config):
+    request = urllib.request.Request(
+        f"https://api.github.com/app/installations/{config['installation_id']}/access_tokens",
+        data=b'{}', method='POST', headers={
+            'Authorization': f'Bearer {jwt(config)}',
+            'Accept': 'application/vnd.github+json',
+            'Content-Type': 'application/json',
+            'User-Agent': 'kobo-github-app-token',
+            'X-GitHub-Api-Version': '2022-11-28',
+        })
+    try:
+        with urllib.request.build_opener(NoRedirect()).open(request, timeout=20) as response:
+            data = json.loads(response.read(MAX_BYTES))
+        if not usable_token(data):
+            raise ValueError()
+        return {'token': data['token'], 'expires_at': data['expires_at']}
+    except (OSError, ValueError, TypeError):
+        raise TokenError('GitHub App token renewal failed: check network, App installation, IDs and key.') from None
+
+
+def get_token(config_path, cache_dir):
+    config, identity = read_config(config_path)
+    cache_dir = Path(cache_dir).expanduser()
+    secure_directory(cache_dir)
+    with os.fdopen(private_file(cache_dir / 'token.lock', os.O_CREAT | os.O_RDWR), 'w') as lock:
+        deadline = time.monotonic() + LOCK_TIMEOUT
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise TokenError('Timed out waiting for another GitHub App token renewal.') from None
+                time.sleep(0.05)
+        cached = read_cache(cache_dir / 'token.json', identity)
+        if cached:
+            return {key: cached[key] for key in ('token', 'expires_at')}
+        token = mint(config)
+        write_cache(cache_dir / 'token.json', {**token, 'identity': identity})
+        return token
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--config', type=Path, default=Path('/etc/kobo/github-app.json'))
+    parser.add_argument('--cache-dir', type=Path, default=Path.home() / '.cache/kobo/github-app')
+    parser.add_argument('--check', action='store_true', help='Validate authentication without printing the token.')
+    args = parser.parse_args(argv)
+    try:
+        result = get_token(args.config, args.cache_dir)
+        print(json.dumps({'status': 'ok', 'expires_at': result['expires_at']}) if args.check else result['token'])
+        return 0
+    except TokenError as error:
+        print(str(error), file=sys.stderr)
+    except (OSError, ValueError):
+        print('Cannot access the private token configuration or cache. Check paths and permissions.', file=sys.stderr)
+    return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

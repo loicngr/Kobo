@@ -1204,7 +1204,7 @@ export default {
   'tours.home.title': 'Getting around',
   'tours.home.list.title': 'Workspaces',
   'tours.home.list.description':
-    'Every mission lives here with its status. Badges flag a failing CI, a review asking for changes or a PR ready to merge.',
+    'Every mission lives here with its status. Badges flag a failing CI, a review asking for changes or a PR ready to merge. Drag the inner edge of a side panel with a mouse or finger to resize it. Header buttons wrap when space is limited.',
   'tours.home.create.title': 'Create a workspace',
   'tours.home.create.description': 'A workspace is a git worktree, a branch and an agent session for one task.',
   'tours.home.search.title': 'Search',

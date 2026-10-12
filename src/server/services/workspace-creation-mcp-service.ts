@@ -4,6 +4,7 @@ import { CLAUDE_CODE_CAPABILITIES } from './agent/engines/claude-code/capabiliti
 import { CODEX_CAPABILITIES } from './agent/engines/codex/capabilities.js'
 import { rollbackCreatedPrCheckout } from './pr-checkout-rollback-service.js'
 import type { PrCheckoutDecisions, PrCheckoutReport, ResolvePrCheckoutResult } from './pr-checkout-service.js'
+import { beginWorkspaceCreation } from './update-maintenance-service.js'
 
 type Dispatch = (path: string, init: RequestInit) => Promise<Response>
 interface Diagnosis {
@@ -101,6 +102,24 @@ function mapInput(input: Record<string, unknown>): Record<string, unknown> {
 
 /** Reuses the application's route validation, lifecycle guards, Git locks and rollback. */
 export async function executeWorkspaceCreationTool(name: string, raw: unknown, dispatch: Dispatch): Promise<unknown> {
+  if (name !== 'create_workspace') return executeCreation(name, raw, dispatch)
+  // One lease spans both in-process routes and any compensating checkout rollback.
+  // Each route also guards direct HTTP callers; nested leases are safe.
+  const release = beginWorkspaceCreation()
+  if (!release)
+    throw new WorkspaceCreationMcpError(
+      'Workspace creation is unavailable during update maintenance',
+      503,
+      'maintenance',
+    )
+  try {
+    return await executeCreation(name, raw, dispatch)
+  } finally {
+    release()
+  }
+}
+
+async function executeCreation(name: string, raw: unknown, dispatch: Dispatch): Promise<unknown> {
   let input: Record<string, unknown>
   try {
     input = validateWorkspaceCreationArguments(name, raw)

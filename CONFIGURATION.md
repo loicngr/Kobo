@@ -35,6 +35,8 @@ Reference for Kōbō configuration and external integrations. The tables cover t
   - [Quick local test — docker-compose.local.yml](#quick-local-test--docker-composelocalyml)
   - [Rehearsing the reverse-proxy stack — docker-compose.local-traefikyml](#rehearsing-the-reverse-proxy-stack--docker-composelocal-traefikyml)
   - [Real deployment — docker-compose.exampleyml](#real-deployment--docker-composeexampleyml)
+  - [VPS with existing Traefik](#vps-with-existing-traefik)
+  - [Docker updates and backups](#docker-updates-and-backups)
   - [Troubleshooting](#troubleshooting)
 - [Agent runtimes](#agent-runtimes)
   - [Claude Code](#claude-code)
@@ -254,6 +256,12 @@ When working from source, `npm run install-all` installs the root, client, and
 `src/client/src-pwa` dependency trees. The third tree contains Quasar's
 build-only Workbox dependencies and is required by `npm run build`, but not by
 the normal development client.
+
+On touch screens, drag the inner edge of either side panel to resize it. The
+horizontal divider inside the right panel can also be dragged. Widths and the
+split position are remembered in this browser; on small screens, a strip of the
+chat remains visible so you can tap outside a panel to close it. Sidebar actions
+wrap onto additional lines when needed, keeping Settings and Create accessible.
 
 ## Custom change-source-branch script
 
@@ -1108,27 +1116,31 @@ For the concrete Docker setup (which compose file, which env vars, which volumes
 
 ## Docker deployment
 
-Kōbō ships an official `Dockerfile` and three ready-to-use Compose files, one per use case. All
-three build from the same image; only the topology and a handful of env vars differ.
+Kōbō ships an official `Dockerfile` and four Compose examples. Choose whether you
+want to reuse host credentials or start an independent instance, and whether
+Traefik already exists. Build the image from a source checkout before starting.
 
 ### Choosing a compose file
 
 | File | Topology | Use it for |
 |---|---|---|
-| [`docker-compose.local.yml`](./docker-compose.local.yml) | Kōbō only, port `3000` published directly. No Traefik, no TLS, no SSH server, no Docker socket. | Trying Kōbō out or poking at a change locally — the fastest path to a running instance. |
+| [`docker-compose.local.yml`](./docker-compose.local.yml) | Kōbō only, port `3000` published directly. No Traefik, TLS, published SSH port or Docker socket. | Trying Kōbō out or poking at a change locally — the fastest path to a running instance. |
 | [`docker-compose.local-traefik.yml`](./docker-compose.local-traefik.yml) | Traefik in front, Kōbō never on a published port, `kobo.localhost` (auto-resolves to `127.0.0.1`, no `/etc/hosts` editing). | Rehearsing the exact reverse-proxy topology/auth/mount setup locally, before touching a real VPS. |
+| [`docker-compose.vps.yml`](./docker-compose.vps.yml) | Kōbō only, existing external Traefik network, persistent `/root`, no published ports or host credential mounts. | A fresh, independent remote instance; follow the [VPS guide](./docs/deployment-vps.md). |
 | [`docker-compose.example.yml`](./docker-compose.example.yml) | Traefik + Let's Encrypt (real domain, real TLS), SSH access, optional Docker-socket passthrough. | The reference for an actual production deployment (VPS behind a reverse proxy). |
 
-All three share the same underlying image (`docker build -t kobo:local .` from the repo root,
-once) and the same core volume set; they differ in network topology and which optional pieces
-(SSH server, Docker socket, TLS) are wired in.
+All four use the same underlying image (`docker build -t kobo:local .` from the
+repo root). The original three mount provider/Git configuration from the host;
+the VPS example keeps independent credentials in a persistent container home.
+The VPS example overrides the entrypoint to start Node directly; the original
+files use the image entrypoint, which starts `sshd` even when port 22 is not published.
 
 ### The image
 
 Multi-stage `Dockerfile`, `node:24.19.0-slim` base:
 
 - **Build stage**: installs root, client, and PWA deps, then runs `npm run build` (client via Quasar, server via `tsc`).
-- **Runtime stage**: production deps only, plus OS tooling the agents and forge CLIs need — `git`, `openssh-client` + `openssh-server`, `ripgrep`, `fd-find`, `jq`, `curl`, Python + build tools, the Docker CLI (talks to a mounted host socket, see [Volumes](#volumes)), `gh`, `glab`, `tmux`, `vim`/`nano`, and more for interactive shell use.
+- **Runtime stage**: production deps only, plus OS tooling the agents and forge CLIs need — `git`, `openssh-client` + `openssh-server`, `ripgrep`, `fd-find`, `jq`, `curl`, Python + build tools, the Docker CLI and Compose plugin (`docker compose`, talks to a mounted host socket, see [Volumes](#volumes)), `gh`, `glab`, `tmux`, `vim`/`nano`, and more for interactive shell use.
 - **Global CLIs**: `@anthropic-ai/claude-code` and `@openai/codex` are installed globally for interactive login (`claude /login`, `codex login` over SSH) — separate from Kōbō's own bundled SDK/subprocess usage, which needs no global install.
 - **`git config --system --add safe.directory '*'`**: the container runs as root, but bind-mounted project repos keep the *host* user's UID on disk. Git's ownership check (CVE-2022-24765 mitigation) refuses to touch a repo it doesn't "own" unless told otherwise. This line pre-trusts every mounted path — fine for a single-user dev container, not something you'd do on a multi-tenant host.
 - **`HEALTHCHECK`**: `curl -f http://localhost:$SERVER_PORT/api/health` every 30s. `/api/health` is exempt from the network-access token gate unconditionally (even with `networkAccessBehindProxy` on) — Docker's `HEALTHCHECK` process has no way to supply the runtime-generated token, and without the exemption a "behind a reverse proxy" container never reports healthy, which makes Traefik's Docker provider filter it out of its router table entirely (Traefik drops unhealthy/starting containers from routing).
@@ -1142,11 +1154,13 @@ Beyond the [general environment variables](#environment-variables), these matter
 
 | Variable | Where it's set | Purpose |
 |---|---|---|
-| `KOBO_HOME` | all three compose files | Points at the named volume mount (`/root/.config/kobo`) so state survives `docker compose down`. |
-| `KOBO_NETWORK_ACCESS_ENABLED` | all three | Binds Kōbō to `0.0.0.0` inside the container at boot — required, since a Docker-forwarded or Traefik-proxied connection never looks like true loopback from Kōbō's point of view, even locally. Without it the container's `127.0.0.1`-only default blocks every external route. |
-| `KOBO_NETWORK_ACCESS_BEHIND_PROXY` | `local-traefik.yml`, `example.yml` | Disables the loopback-trust bypass entirely — needed whenever a reverse proxy sits in front, since every request now looks like it comes from the proxy. Not set in `local.yml`, which publishes Kōbō's port directly with no proxy in between. |
-| `GH_TOKEN` / `GITLAB_TOKEN` | `example.yml` (bring your own via `.env`) | Non-interactive auth for `gh`/`glab` inside the container — there's no browser to complete an interactive `gh auth login` on a headless VPS. |
-| `KOBO_PROJECTS_DIR` | host-side, read by all three via `${KOBO_PROJECTS_DIR:-./kobo-projects}` | Not a container env var — a *host* shell variable that picks the bind-mount source for `/projects`. Defaults to `./kobo-projects` next to the compose file. |
+| `KOBO_HOME` | all four Compose files | Kōbō state at `/root/.config/kobo`, inside a named volume; survives `docker compose down` without `-v`. The VPS example persists all of `/root`. |
+| `KOBO_NETWORK_ACCESS_ENABLED` | all four | Binds Kōbō to `0.0.0.0` inside the container at boot — required, since a Docker-forwarded or Traefik-proxied connection never looks like true loopback from Kōbō's point of view, even locally. Without it the container's `127.0.0.1`-only default blocks every external route. |
+| `KOBO_NETWORK_ACCESS_BEHIND_PROXY` | `local-traefik.yml`, `example.yml`, `vps.yml` | Disables the loopback-trust bypass entirely — needed whenever a reverse proxy sits in front, since every request now looks like it comes from the proxy. Not set in `local.yml`, which publishes Kōbō's port directly with no proxy in between. |
+| `GH_TOKEN` / `GITLAB_TOKEN` | `example.yml` (bring your own via `.env`) | Optional non-interactive auth for `gh`/`glab` inside the container. A CLI browser/device flow can also be completed from your PC. Expiring GitHub App tokens need a [renewable helper](./docs/deployment-vps.md#github-app-bot-authentication), not a static token in `.env`. |
+| `KOBO_PROJECTS_DIR` | Compose interpolation on the host | Original three: source for `/projects`, default `./kobo-projects`. VPS: required existing absolute directory, mounted at the **same path** in the container for host-Docker bind mounts. |
+| `KOBO_DOMAIN` | `vps.yml`, Compose interpolation | Public hostname used in the Traefik rule and `KOBO_NETWORK_ACCESS_PROXY_HOST`; required, without `https://`. |
+| `TRAEFIK_NETWORK` / `TRAEFIK_ENTRYPOINT` / `TRAEFIK_CERTRESOLVER` | `vps.yml`, Compose interpolation | Existing Traefik names; defaults `web` / `websecure` / `letsencrypt`. Adapt to your proxy. |
 
 Both `KOBO_NETWORK_ACCESS_ENABLED` and `KOBO_NETWORK_ACCESS_BEHIND_PROXY` are read once at boot —
 this is what lets the container come up fully configured with no manual Settings-UI step (there's
@@ -1157,14 +1171,15 @@ retrieved once — see [Token / login flow](#token--login-flow).
 
 | Mount | RO/RW | Purpose |
 |---|---|---|
+| `kobo-home:/root` (`vps.yml`, named volume) | RW | Independent Kōbō, Claude/Codex, Git and forge state. Authenticate inside the container; no PC credential files are required. |
 | `<name>-data:/root/.config/kobo` (named volume) | RW | Kōbō's own state — SQLite DB, `settings.json`, etc. Named (not bind-mounted) so it survives `docker compose down` without `-v`, and so it can be deliberately **shared** across compose files by reusing the same volume name (see the two local files, both `kobo-test-data`). |
-| `${KOBO_PROJECTS_DIR:-./kobo-projects}:/projects` | RW | The repos you create workspaces against, and their worktrees — all on one filesystem, so a worktree created next to a project lands on the same volume as the project itself. |
+| `${KOBO_PROJECTS_DIR:-./kobo-projects}:/projects` | RW | Your project repositories. Ensure the configured worktree directory is also persistent. For project Docker bind mounts, use the VPS example’s identical host/container paths; see the [path setup](./docs/deployment-vps.md#optional-project-docker-environments). |
 | `${HOME}/.ssh:/root/.ssh` | RO | Git SSH auth — needed to push/pull over SSH remotes. |
 | `${HOME}/.gitconfig:/root/.gitconfig` | RO | Commit author identity. Without it, agent-authored commits fail with "please tell me who you are". |
 | `${HOME}/.claude.json:/root/.claude.json` | RW | Claude Code auth + MCP server registrations. **Must already exist as a file on the host** (run `claude /login` locally first if it doesn't) — Docker silently creates an empty *directory* instead of erroring on a missing bind-mount source, which breaks auth in a confusing way. |
 | `${HOME}/.claude:/root/.claude` | RW | Claude Code's full state directory (skills/plugins cache, session transcripts, memory) — Claude Code writes into this tree during normal operation. |
 | `${HOME}/.codex:/root/.codex` | RW | Codex's full state directory (`auth.json`, `config.toml`). Harmless to mount even if you only use Claude Code. |
-| `/var/run/docker.sock:/var/run/docker.sock` | RW, `example.yml` only | Lets the dev-server panel start/stop/tail logs for your projects' own `docker compose` stacks. **DANGER**: grants the container root-equivalent control over the host — anyone who can run a command inside `kobo` can spawn a privileged container that mounts the host filesystem. Remove this line if you don't need the dev-server panel. |
+| `/var/run/docker.sock:/var/run/docker.sock` | RW, enabled in `example.yml`, opt-in in `vps.yml` | Lets the dev-server panel start/stop/tail logs for your projects' own `docker compose` stacks. **DANGER**: grants the container root-equivalent control over the host — anyone who can run a command inside `kobo` can spawn a privileged container that mounts the host filesystem. Remove this line if you don't need the dev-server panel. |
 
 ### Ports
 
@@ -1175,12 +1190,12 @@ retrieved once — see [Token / login flow](#token--login-flow).
 | `443` | `example.yml` | Traefik's TLS entrypoint (Let's Encrypt via the `le` cert resolver), routes your real domain. |
 | `2222 → 22` (published) | `example.yml` only | SSH into the container (`ssh -p 2222 root@<host>`), key-based auth only via the same mounted `~/.ssh`, no password login. The one exception to "no published ports" — Traefik proxies HTTP/WS, not raw TCP, so SSH needs its own path. Rebuilding the image regenerates the SSH host keys, so expect a one-time "host key changed" warning from your SSH client after a rebuild. |
 
-Kōbō itself is **never** published directly in the two Traefik-fronted files — only Traefik is
+Kōbō itself is **never** published directly in the three Traefik-fronted files — only Traefik is
 reachable, matching the real production posture.
 
 ### Token / login flow
 
-All three files pre-enable network access via env vars, so there's no interactive Settings-UI step.
+All four files pre-enable network access via env vars, so there's no interactive Settings-UI step.
 Retrieve the auto-generated token from the container's boot log, then bookmark the token-bearing URL:
 
 ```bash
@@ -1263,6 +1278,36 @@ docker compose -f docker-compose.example.yml logs kobo | grep Token
 Open `https://kobo.example.com/?token=<token>`. SSH access: `ssh -p 2222 root@<host>` (key-based
 only). See [Ports](#ports) and [Volumes](#volumes) above for the full rationale on the Docker socket
 and SSH tradeoffs before deploying this to a real machine.
+
+### VPS with existing Traefik
+
+Use [`docker-compose.vps.yml`](./docker-compose.vps.yml) and the
+[step-by-step VPS guide](./docs/deployment-vps.md). This variant runs only Kōbō,
+keeps agent credentials in its own persistent home and joins an existing proxy
+network. Your browser's project picker refers to paths on the VPS/container,
+not your PC. The guide covers provider login, GitHub App bots, Git HTTPS helpers
+and the host/container path requirements for project Docker environments.
+
+For a fresh stack, [`scripts/kobo-install`](./scripts/kobo-install) guides domain,
+project path, existing Traefik settings and optional GitHub App credentials.
+`--check` performs read-only checks; `--prepare` builds without starting. Its
+private manifest protects managed files from accidental replacement. GitHub App
+configuration stays in private host files with read-only container mounts, outside
+web settings. See the [guided installation](./docs/deployment-vps.md#guided-installation)
+and [manual bot configuration](./docs/deployment-vps.md#github-app-bot-authentication).
+
+### Docker updates and backups
+
+For the independent VPS layout, [`scripts/kobo-update`](./scripts/kobo-update)
+accepts a stable version or defaults to npm `latest`. It has `--check`, `--prepare`
+and `--directory` options. See [updater usage and recovery](./docs/deployment-vps.md#update-with-kobo-update).
+This is an operator-invoked script; the in-app update banner does not install releases.
+
+A source-built image needs rebuilding for a new release; `docker compose pull`
+alone cannot update an image that only exists locally. Recreate the service
+with the same persistent volumes and credential mounts after backing up its
+state. Preserve repository/worktree data and project databases separately.
+An old image alone is not a complete rollback after database migrations.
 
 ### Troubleshooting
 

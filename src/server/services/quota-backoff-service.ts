@@ -1,4 +1,5 @@
 import { getDb } from '../db/index.js'
+import { deferForUpdateMaintenance } from './update-maintenance-service.js'
 import { emitEphemeral } from './websocket-service.js'
 import { getWorkspace } from './workspace-service.js'
 
@@ -197,6 +198,13 @@ export function restoreOnBoot(onFire: OnFire): void {
 /** Internal — invoked when a timer fires. */
 function fireOrSkip(workspaceId: string): void {
   if (suspended) return
+  const pendingTimer = timers.get(workspaceId)
+  if (
+    deferForUpdateMaintenance(`quota-backoff:${workspaceId}`, () => {
+      if (timers.get(workspaceId) === pendingTimer) fireOrSkip(workspaceId)
+    })
+  )
+    return
   timers.delete(workspaceId)
   const pending = getPending(workspaceId)
   if (!pending) return

@@ -1,9 +1,11 @@
 node_modules/
+__pycache__/
 data/
 dist/
 docs/*
 !docs/assets/
 !docs/getting-started.md
+!docs/deployment-vps.md
 !docs/troubleshooting.md
 !docs/release/
 docs/release/*

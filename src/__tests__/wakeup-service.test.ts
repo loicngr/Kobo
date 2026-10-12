@@ -79,6 +79,60 @@ describe('wakeup-service', () => {
     }
   })
 
+  it('keeps a wakeup scheduled during maintenance through a long stopped interval', async () => {
+    const maintenance = await import('../server/services/update-maintenance-service.js')
+    const service = await import('../server/services/wakeup-service.js')
+    const orch = await import('../server/services/agent/orchestrator.js')
+    service.rehydrate()
+    maintenance.acquireUpdateMaintenance('scheduler-test', () => true)
+    try {
+      service.schedule(wsId, 60, 'late instruction', undefined)
+      service.suspendForShutdown()
+      vi.setSystemTime(new Date(Date.now() + 10 * 60_000))
+    } finally {
+      maintenance.releaseUpdateMaintenance('scheduler-test')
+    }
+    service.rehydrate()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(orch.startAgent).toHaveBeenCalledOnce()
+    expect(vi.mocked(orch.startAgent).mock.calls[0]?.[2]).toBe('late instruction')
+  })
+
+  it('does not fire a replacement schedule early when maintenance is released', async () => {
+    const maintenance = await import('../server/services/update-maintenance-service.js')
+    const service = await import('../server/services/wakeup-service.js')
+    const orch = await import('../server/services/agent/orchestrator.js')
+    service.schedule(wsId, 60, 'first', undefined)
+    maintenance.acquireUpdateMaintenance('scheduler-test', () => true)
+    try {
+      await vi.advanceTimersByTimeAsync(60_000)
+      service.schedule(wsId, 3600, 'replacement', undefined)
+    } finally {
+      maintenance.releaseUpdateMaintenance('scheduler-test')
+    }
+    await vi.advanceTimersByTimeAsync(1)
+    expect(orch.startAgent).not.toHaveBeenCalled()
+  })
+
+  it('preserves pending intent while update maintenance holds admission', async () => {
+    const maintenance = await import('../server/services/update-maintenance-service.js')
+    const service = await import('../server/services/wakeup-service.js')
+    const { getDb } = await import('../server/db/index.js')
+    const orch = await import('../server/services/agent/orchestrator.js')
+    service.schedule(wsId, 60, 'wake', undefined)
+    const before = getDb().prepare('SELECT * FROM pending_wakeups').all()
+    maintenance.acquireUpdateMaintenance('scheduler-test', () => true)
+    try {
+      await vi.advanceTimersByTimeAsync(120_000)
+      expect(getDb().prepare('SELECT * FROM pending_wakeups').all()).toEqual(before)
+      expect(orch.startAgent).not.toHaveBeenCalled()
+    } finally {
+      maintenance.releaseUpdateMaintenance('scheduler-test')
+    }
+    await vi.advanceTimersByTimeAsync(1)
+    expect(orch.startAgent).toHaveBeenCalledOnce()
+  })
+
   it('rehydrates a wakeup armed during suspension without consuming it during shutdown', async () => {
     const service = await import('../server/services/wakeup-service.js')
     const orch = await import('../server/services/agent/orchestrator.js')

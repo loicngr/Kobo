@@ -1,5 +1,6 @@
 import path from 'node:path'
 import { Hono } from 'hono'
+import { workspaceCreationMaintenance } from '../middleware/workspace-creation-maintenance.js'
 import { getForgeProvider } from '../services/forge/registry.js'
 import { resolveForge } from '../services/forge/resolve.js'
 import type { PullRequestFilter, PullRequestSummary } from '../services/forge/types.js'
@@ -114,7 +115,7 @@ app.post('/diagnose', async (c) => {
   }
 })
 
-app.post('/resolve', async (c) => {
+app.post('/resolve', workspaceCreationMaintenance, async (c) => {
   try {
     const body = await c.req
       .json<{

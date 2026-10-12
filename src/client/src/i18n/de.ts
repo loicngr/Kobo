@@ -1219,7 +1219,7 @@ export default {
   'tours.home.title': 'Orientierung',
   'tours.home.list.title': 'Workspaces',
   'tours.home.list.description':
-    'Jede Mission lebt hier mit ihrem Status. Badges markieren eine fehlgeschlagene CI, ein Review mit Änderungswünschen oder einen merge-bereiten PR.',
+    'Jede Mission lebt hier mit ihrem Status. Badges markieren eine fehlgeschlagene CI, ein Review mit Änderungswünschen oder einen merge-bereiten PR. Ziehe den inneren Rand einer Seitenleiste mit der Maus oder dem Finger, um ihre Breite zu ändern. Bei wenig Platz werden die Schaltflächen oben umgebrochen.',
   'tours.home.create.title': 'Workspace erstellen',
   'tours.home.create.description':
     'Ein Workspace ist ein Git-Worktree, ein Branch und eine Agent-Session für eine Aufgabe.',
