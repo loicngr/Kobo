@@ -2210,7 +2210,7 @@ export default {
   'activity.a11y.toolStarted': 'Werkzeug {name} gestartet',
   'activity.a11y.toolFinished': 'Werkzeug {name} beendet',
   'activity.a11y.toolFailed': 'Werkzeug {name} fehlgeschlagen',
-  'chat.systemPrompt': 'System-Prompt',
+  'chat.systemPrompt': 'Kōbō-Anweisungen',
   'chat.agent': 'Agent',
   'chat.cleanupScript': 'Cleanup-Skript',
   'chat.archiveScript': 'Archiv-Skript',
@@ -2567,4 +2567,19 @@ export default {
   'tours.home.activity.title': 'Aktivität nach Abwesenheit prüfen',
   'tours.home.activity.description':
     'Unten in der linken Seitenleiste findest du Fragen, Sitzungsenden, Fehler und PR-Änderungen seit deinem letzten Besuch.',
+  'progress.title': 'Aktivitäten',
+  'progress.status.running': 'Läuft',
+  'progress.status.succeeded': 'Erfolgreich',
+  'progress.status.failed': 'Fehlgeschlagen',
+  'progress.status.interrupted': 'Fortschrittsmeldung unterbrochen',
+  'progress.dismiss': '{label} ausblenden',
+  'progress.dismissHint': 'Diese Aktivität ausblenden, ohne die Arbeit zu stoppen',
+  'progress.others': 'Weitere anzeigen ({count})',
+  'progress.collapse': 'Weniger anzeigen',
+  'progress.loadError': 'Aktivitäten konnten nicht geladen werden.',
+  'progress.dismissError': 'Diese Aktivität konnte nicht ausgeblendet werden. Versuchen Sie das Schließen erneut.',
+  'progress.retry': 'Erneut versuchen',
+  'tours.workspace.progress.title': 'Aktivitätsfortschritt',
+  'tours.workspace.progress.description':
+    'Agenten und ihre Unteragenten melden lange Aufgaben über dem Nachrichtenfeld. Zunächst sind drei Aktivitäten sichtbar; weitere lassen sich einblenden. Die Werte werden von Agenten gemeldet und sind kein Prüfnachweis. Erfolge verschwinden nach fünf Sekunden; Fehler bleiben sichtbar. Schließen blendet nur diese Aktivität aus, ohne die Arbeit abzubrechen.',
 }

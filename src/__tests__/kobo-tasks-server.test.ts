@@ -942,7 +942,7 @@ describe('MCP server tool registration — global workspace tools', () => {
   it('gates the exposed tool list on workspaceId being set', () => {
     const src = readServerSource()
     expect(src).toMatch(
-      /const tools\s*=\s*workspaceId\s*\?\s*\[\.\.\.WORKSPACE_SCOPED_TOOLS,\s*\.\.\.GLOBAL_TOOLS\.filter\(\(tool\) => !isMemoryToolName\(tool\.name\)\)\]\s*:\s*GLOBAL_TOOLS/,
+      /const tools\s*=\s*workspaceId\s*\?\s*\[\s*\.\.\.WORKSPACE_SCOPED_TOOLS,\s*\.\.\.GLOBAL_TOOLS\.filter\(\(tool\) => !isMemoryToolName\(tool\.name\) && !isProgressBarTool\(tool\.name\)\),?\s*\]\s*:\s*GLOBAL_TOOLS/,
     )
   })
 

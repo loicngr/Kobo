@@ -24,6 +24,8 @@ Kōbō (工房, "workshop") turns *one agent, one terminal* into a real workflow
 
 Use [group messages](CONFIGURATION.md#group-workspace-messages) to send one instruction to selected workspaces, filtered by tags and status, from the interface or MCP. Auto-loops receive it on their next iteration; each recipient has a durable delivery result.
 
+[Session progress bars](CONFIGURATION.md#session-progress-bars) show labelled long-running activities above the message input, including work delegated to subagents. Agents report progress through internal or external MCP; you can dismiss an individual bar without stopping its work.
+
 ## Quick start
 
 Requires Node.js ≥ 24.15, Git, Bash and your own Claude Code **or** Codex authentication. No skill plugin or ticket integration is required. Kōbō is a local, single-user tool; each user installs their own instance.

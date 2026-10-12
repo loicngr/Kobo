@@ -10,6 +10,9 @@ import {
   type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk'
 import { nanoid } from 'nanoid'
+import { getKoboPromptCapabilities } from '../../../../../shared/launch-instructions.js'
+import { PROGRESS_BAR_PROMPT } from '../../../../../shared/progress-bar-prompts.js'
+import { isProgressBarTool } from '../../../../../shared/progress-bar-tools.js'
 import { isSubagentTask } from '../../../../../shared/subagent-classification.js'
 import { isWorkspacePermissionAllowed } from '../../../workspace-permission-policy-service.js'
 import { createStreamingBatcher } from '../../streaming-batcher.js'
@@ -280,31 +283,53 @@ export function createClaudeCodeEngine(): AgentEngine {
       const pendingResolvers = new Map<string, PendingResolver>()
 
       const isInteractive = options.agentPermissionMode === 'interactive'
+      const promptCapabilities = getKoboPromptCapabilities(
+        options.mcpServers?.find((server) => server.name === 'kobo-tasks')?.env,
+      )
 
       const canUseTool: CanUseTool = (toolName, input, ctx) => {
         const toolCallId =
           typeof ctx.toolUseID === 'string' && ctx.toolUseID.length > 0 ? ctx.toolUseID : `tu_${nanoid()}`
 
-        // Plan mode alone is not read-only here: the non-interactive allow below
-        // would approve ExitPlanMode and then every edit. Anything that needs a
-        // permission, a question included, is refused outright instead.
+        // Progress reports modify operational metadata only, with a dedicated launch capability.
+        if (
+          toolName.startsWith('mcp__kobo-tasks__') &&
+          isProgressBarTool(toolName.slice('mcp__kobo-tasks__'.length)) &&
+          options.mcpServers?.some((server) => server.name === 'kobo-tasks' && server.env.KOBO_PROGRESS_SESSION_TOKEN)
+        )
+          return Promise.resolve<PermissionResult>({ behavior: 'allow', updatedInput: input })
+
+        // Automatic-return reviews and handoff reports must also refuse
+        // questions, so they finish without waiting on user input. Only their
+        // managed report capabilities and progress metadata are exceptions.
         if (options.readOnly) {
           // This capability-scoped report changes orchestration metadata only.
           // The backend validates its token and current reviewer session again.
           if (
-            toolName === 'mcp__kobo-tasks__submit_final_review' &&
-            options.mcpServers?.some(
-              (server) =>
-                server.name === 'kobo-tasks' &&
-                server.env.KOBO_FINAL_REVIEW_TOKEN &&
-                server.env.KOBO_FINAL_REVIEW_SESSION_ID,
-            )
+            (toolName === 'mcp__kobo-tasks__submit_session_handoff' && promptCapabilities.handoff) ||
+            (toolName === 'mcp__kobo-tasks__submit_final_review' &&
+              options.mcpServers?.some(
+                (server) =>
+                  server.name === 'kobo-tasks' &&
+                  server.env.KOBO_FINAL_REVIEW_TOKEN &&
+                  server.env.KOBO_FINAL_REVIEW_SESSION_ID,
+              ))
           )
             return Promise.resolve<PermissionResult>({ behavior: 'allow', updatedInput: input })
           return Promise.resolve<PermissionResult>({
             behavior: 'deny',
             message:
-              'This is a read-only review session: do not modify anything or ask the user. Put the finding in your final report instead.',
+              'This is a read-only review/report session: do not modify anything or ask the user. Put the finding in your final report instead.',
+            interrupt: false,
+          })
+        }
+
+        // Approving a proposed plan is not permission to change the launch mode.
+        if (options.agentPermissionMode === 'plan' && toolName === 'ExitPlanMode') {
+          return Promise.resolve<PermissionResult>({
+            behavior: 'deny',
+            message:
+              'Remain in Plan mode. The user must explicitly select permissions in Kōbō and start a new launch before implementation.',
             interrupt: false,
           })
         }
@@ -367,6 +392,22 @@ export function createClaudeCodeEngine(): AgentEngine {
       // support `additionalContext`. `buildCompactionSessionStartOutput` gates
       // on the compact source so normal startup/resume/clear inject nothing.
       const hooks: Options['hooks'] = {
+        ...(options.mcpServers?.some((server) => server.name === 'kobo-tasks' && server.env.KOBO_PROGRESS_SESSION_TOKEN)
+          ? {
+              SubagentStart: [
+                {
+                  hooks: [
+                    async () => ({
+                      hookSpecificOutput: {
+                        hookEventName: 'SubagentStart' as const,
+                        additionalContext: PROGRESS_BAR_PROMPT,
+                      },
+                    }),
+                  ],
+                },
+              ],
+            }
+          : {}),
         SessionStart: [
           {
             hooks: [
@@ -377,27 +418,35 @@ export function createClaudeCodeEngine(): AgentEngine {
             ],
           },
         ],
-        // Decision-point enforcement of the "schedule a wakeup or the session
-        // stalls" invariant: when the agent tries to end its turn with
-        // background work still in flight and nothing scheduled to resume the
-        // session, inject a reminder so it calls `kobo__schedule_wakeup` instead
-        // of going idle. A passive system-prompt rule isn't enough — see
-        // stop-hook.ts. `additionalContext` continues the turn so the model acts.
+        // Only offer durable follow-up advice when this launch can schedule it.
         Stop: [
           {
             hooks: [
               async (input) =>
-                buildStopHookOutput(options.workspaceId, input as Parameters<typeof buildStopHookOutput>[1]),
+                buildStopHookOutput(options.workspaceId, input as Parameters<typeof buildStopHookOutput>[1], {
+                  canScheduleWakeup:
+                    !options.readOnly &&
+                    options.agentPermissionMode !== 'plan' &&
+                    !promptCapabilities.handoff &&
+                    !promptCapabilities.finalReview,
+                  autoLoop: options.autoLoop,
+                }),
             ],
           },
         ],
       }
 
-      const { options: sdkOptions, effectivePrompt } = buildClaudeOptions({
+      const {
+        options: sdkOptions,
+        effectivePrompt,
+        koboInstructions,
+      } = buildClaudeOptions({
         prompt: options.prompt,
         model: options.model,
         effort: options.effort,
         agentPermissionMode: options.agentPermissionMode ?? 'bypass',
+        readOnly: options.readOnly,
+        autoLoop: options.autoLoop,
         resumeFromEngineSessionId: options.resumeFromEngineSessionId,
         workingDir: options.workingDir,
         mcpServers: toMcpServersMap(options.mcpServers),
@@ -425,6 +474,11 @@ export function createClaudeCodeEngine(): AgentEngine {
         },
         env: options.env,
       })
+      try {
+        options.onPromptPrepared?.(koboInstructions)
+      } catch {
+        console.warn('[claude-engine] Could not persist prepared launch instructions')
+      }
       sdkOptions.abortController = abortController
       // SDK cleanup has its own bounded wait. Iterator completion alone does
       // not prove that its runtime exited: retain writer ownership until both.

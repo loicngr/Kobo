@@ -12,8 +12,8 @@ describe('buildAutoLoopGroomingSteps(e2e, finalization)', () => {
   it('produces the legacy 4-step output when both framework and finalization are empty', () => {
     const out = buildAutoLoopGroomingSteps({ framework: '', skill: '', prompt: '' }, { prompt: '' })
     expect(out).toBe(AUTO_LOOP_GROOMING_STEPS)
-    expect(out).toContain('1. Call `kobo__list_tasks`')
-    expect(out).toContain('4. Call `kobo__mark_auto_loop_ready`')
+    expect(out).toContain('1. Call `list_tasks`')
+    expect(out).toContain('4. Call `mark_auto_loop_ready`')
     expect(out).not.toContain('E2E review')
     expect(out).not.toContain('Finalization task')
     // Sentinel: no '5.' numbering — required because the workspace creation
@@ -25,7 +25,7 @@ describe('buildAutoLoopGroomingSteps(e2e, finalization)', () => {
   it('inserts the E2E review step at position 4 and renumbers mark_auto_loop_ready to 5 when framework is set', () => {
     const out = buildAutoLoopGroomingSteps({ framework: 'cypress', skill: '', prompt: '' }, { prompt: '' })
     expect(out).toContain('4. **E2E review**')
-    expect(out).toContain('5. Call `kobo__mark_auto_loop_ready`')
+    expect(out).toContain('5. Call `mark_auto_loop_ready`')
     expect(out).toContain('The project uses `cypress`.')
   })
 
@@ -72,7 +72,7 @@ describe('buildAutoLoopGroomingSteps(e2e, finalization)', () => {
       { prompt: 'Run quality checks at the end.' },
     )
     expect(out).toContain('4. **Finalization task**:')
-    expect(out).toContain('5. Call `kobo__mark_auto_loop_ready`')
+    expect(out).toContain('5. Call `mark_auto_loop_ready`')
     expect(out).not.toContain('E2E review')
   })
 
@@ -83,13 +83,13 @@ describe('buildAutoLoopGroomingSteps(e2e, finalization)', () => {
     )
     expect(out).toContain('4. **E2E review**')
     expect(out).toContain('5. **Finalization task**:')
-    expect(out).toContain('6. Call `kobo__mark_auto_loop_ready`')
+    expect(out).toContain('6. Call `mark_auto_loop_ready`')
   })
 
   it('omits the finalization step when finalization.prompt is empty', () => {
     const out = buildAutoLoopGroomingSteps({ framework: 'cypress', skill: '', prompt: '' }, { prompt: '' })
     expect(out).not.toContain('Finalization task')
-    expect(out).toContain('5. Call `kobo__mark_auto_loop_ready`')
+    expect(out).toContain('5. Call `mark_auto_loop_ready`')
   })
 })
 
@@ -98,7 +98,7 @@ describe('buildE2eIterationBlock(e2e)', () => {
     const out = buildE2eIterationBlock({ framework: 'playwright', skill: '', prompt: '' })
     expect(out).toContain('not_run')
     expect(out).toContain('do NOT mark the task done')
-    expect(out).not.toContain('then call `kobo__mark_task_done` with a note')
+    expect(out).not.toContain('then call `mark_task_done` with a note')
   })
   it('returns empty string when framework is empty', () => {
     expect(buildE2eIterationBlock({ framework: '', skill: '', prompt: '' })).toBe('')

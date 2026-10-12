@@ -2196,7 +2196,7 @@ export default {
   'activity.a11y.toolStarted': 'Herramienta {name} iniciada',
   'activity.a11y.toolFinished': 'Herramienta {name} finalizada',
   'activity.a11y.toolFailed': 'Herramienta {name} falló',
-  'chat.systemPrompt': 'Prompt del sistema',
+  'chat.systemPrompt': 'Instrucciones de Kōbō',
   'chat.agent': 'Agente',
   'chat.cleanupScript': 'Script de limpieza',
   'chat.archiveScript': 'Script de archivado',
@@ -2551,4 +2551,19 @@ export default {
   'tours.home.activity.title': 'Revisar la actividad tras una ausencia',
   'tours.home.activity.description':
     'Al pie del panel izquierdo encontrarás preguntas, sesiones finalizadas, errores y cambios de PR desde tu última visita.',
+  'progress.title': 'Actividades',
+  'progress.status.running': 'En curso',
+  'progress.status.succeeded': 'Completada',
+  'progress.status.failed': 'Fallida',
+  'progress.status.interrupted': 'Seguimiento interrumpido',
+  'progress.dismiss': 'Ocultar {label}',
+  'progress.dismissHint': 'Ocultar esta actividad sin detener su trabajo',
+  'progress.others': 'Ver las demás ({count})',
+  'progress.collapse': 'Ver menos',
+  'progress.loadError': 'No se pudieron cargar las actividades.',
+  'progress.dismissError': 'No se pudo ocultar esta actividad. Vuelve a pulsar su botón de cierre.',
+  'progress.retry': 'Reintentar',
+  'tours.workspace.progress.title': 'Progreso de las actividades',
+  'tours.workspace.progress.description':
+    'Los agentes y sus subagentes informan de tareas largas sobre el campo de mensaje. Se muestran tres actividades; despliega para ver las demás. Los valores son comunicados por los agentes y no constituyen una verificación. Los éxitos desaparecen tras cinco segundos; los fallos siguen visibles. Cerrar oculta solo esa actividad sin cancelar el trabajo.',
 }

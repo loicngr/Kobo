@@ -1,3 +1,4 @@
+import type { KoboLaunchInstructions } from '../../../../shared/launch-instructions.js'
 import type { EffectiveSettings } from '../../settings-service.js'
 
 // ── Engine contract ───────────────────────────────────────────────────────────
@@ -95,6 +96,10 @@ export interface StartOptions {
    * never wait on the user, so the session ends and hands its report back.
    */
   readOnly?: boolean
+  /** Whether Kōbō already owns autonomous continuation for this launch. */
+  autoLoop?: boolean
+  /** Application-owned instructions prepared by the actual engine builder, before dispatch. */
+  onPromptPrepared?: (instructions: KoboLaunchInstructions) => void
   resumeFromEngineSessionId?: string
   backendUrl: string
   koboHome: string

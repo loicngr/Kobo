@@ -413,21 +413,21 @@ Current pending task (workspace order; finalization follows all todos and criter
 - Title: {taskTitle}
 - Is acceptance criterion: {isAcceptanceCriterion}
 {overrideBlock}
-Throughout the steps below, keep the workspace description current via \`kobo__set_workspace_agent_description(description)\` so the user sees your state in the sidebar without opening the workspace. Update it at the start of the iteration (e.g. "Iter #{n}: implementing <short task title>") AND whenever your focus shifts (e.g. "Running tests", "Awaiting code review", "Fixing review feedback", "Marking task done"). Plain text, ≤200 chars.
+Throughout the steps below, keep the workspace description current via \`set_workspace_agent_description(description)\` so the user sees your state in the sidebar without opening the workspace. Update it at the start of the iteration (e.g. "Iter #{n}: implementing <short task title>") AND whenever your focus shifts (e.g. "Running tests", "Awaiting code review", "Fixing review feedback", "Marking task done"). Plain text, ≤200 chars.
 
 Your job this iteration:
-1. Read \`kobo__list_tasks\` to see all tasks and the big picture.
-   When prior-session context is useful, call \`kobo__read_workspace_events_csv\` to read the paginated user/agent history for this workspace. Use a small \`limit\` and follow \`nextOffset\` only as needed.
+1. Read \`list_tasks\` to see all tasks and the big picture.
+   When prior-session context is useful, call \`read_workspace_events_csv\` to read the paginated user/agent history for this workspace. Use a small \`limit\` and follow \`nextOffset\` only as needed.
 2. Implement the SINGLE task above and nothing else. Do not pick a different task.
 3. Run the project's quality checks (lint, typecheck, tests). Check \`.ai/.git-conventions.md\` for the exact commands if unclear.
 4. If checks fail, fix until they pass. If blocked, leave the task unchanged and explain in chat.
-5. Commit with a conventional message (\`feat: [short description]\` or similar per repo conventions).
+5. Commit only when the workflow policy or explicit user instructions authorize it; otherwise keep changes uncommitted for review. Follow repository conventions when committing.
 6. {reviewGate}
 7. Act on the review:
-   - If Critical/Important issues: fix them, amend or add a fix-up commit, re-run checks from step 3. Do NOT mark_task_done.
+   - If Critical/Important issues: fix them and re-run checks from step 3; amend or add a fix-up commit only when authorized. Do NOT mark_task_done.
    - If only Minor issues: fix them if trivial (< 2 min), otherwise note them in the chat and proceed.
    - If approved with no issues: proceed.
-8. Only if the review cleared (or only minor notes remain), call \`kobo__mark_task_done(taskId="{taskId}")\`.
+8. Only if the review cleared (or only minor notes remain), call \`mark_task_done\` with \`task_id="{taskId}"\` and structured verification of the checks that actually passed, following the exposed tool schema.
 
 Do NOT modify other tasks' state. Do NOT create a PR. Do NOT skip the checks.
 Do NOT run \`kill\`, \`pkill\`, \`killall\`, \`pgrep -k\`, or any process-killing command — you may tear down the Kōbō server itself or sibling dev servers. If a dev server needs restarting, let the user do it.
@@ -608,7 +608,7 @@ function spawnNextIteration(workspaceId: string, opts: { throwOnStartAgentError?
 
   if (grooming)
     prompt = `[Kōbō auto-loop — resume grooming]
-Resume the interrupted preparation. Read the workspace conversation with kobo__read_workspace_events_csv, recover the user's goal and constraints, and inspect existing tasks before making changes. Do not duplicate tasks.
+Resume the interrupted preparation. Read the workspace conversation with read_workspace_events_csv, recover the user's goal and constraints, and inspect existing tasks before making changes. Do not duplicate tasks.
 ${buildAutoLoopGroomingSteps(e2eSettings, finalizationSettings)}
 ${AUTO_LOOP_HARD_RULES}`
   if (diagnostic)
@@ -628,9 +628,9 @@ ${prompt}`
   const storedMode = row.agent_permission_mode
   const agentPermissionMode =
     storedMode === 'bypass' || storedMode === 'strict' || storedMode === 'interactive' ? storedMode : 'plan'
-  if (!grooming && !summaryContinuation && agentPermissionMode === 'plan') {
+  if (!summaryContinuation && agentPermissionMode === 'plan') {
     const message =
-      'Execution requires an explicit permission choice. Change this workspace from Plan to an execution mode (strict, interactive where supported, or bypass), then resume auto-loop. Permissions were not changed.'
+      'Auto-loop task preparation and execution require an explicit permission choice. Change this workspace from Plan to an execution mode (strict, interactive where supported, or bypass), then resume auto-loop. Permissions were not changed.'
     block(workspaceId, message)
     if (opts.throwOnStartAgentError) throw new Error(message)
     return
@@ -649,7 +649,7 @@ ${prompt}`
   let agentSessionId: string | undefined
   const instructions = claimLoopMessages(workspaceId)
   if (instructions.length)
-    prompt = `[Kōbō auto-loop — integrate user instructions]\nRead kobo__list_tasks and relevant workspace history. Integrate the following instructions into the todos and acceptance criteria, preserving the user's constraints. Update existing tasks and create missing ones before ending this turn. Do not implement or finalize work during this intake turn: the next iteration will select the updated highest-priority task. Leave finalization open.\n${instructions.map((m) => `- ${m.content}`).join('\n')}\n${grooming ? prompt : AUTO_LOOP_ITERATION_RULES}`
+    prompt = `[Kōbō auto-loop — integrate user instructions]\nRead list_tasks and relevant workspace history. Integrate the following instructions into the todos and acceptance criteria, preserving the user's constraints. Update existing tasks and create missing ones before ending this turn. Do not implement or finalize work during this intake turn: the next iteration will select the updated highest-priority task. Leave finalization open.\n${instructions.map((m) => `- ${m.content}`).join('\n')}\n${grooming ? prompt : AUTO_LOOP_ITERATION_RULES}`
   try {
     const agent = orchestrator.startAgent(
       workspaceId,

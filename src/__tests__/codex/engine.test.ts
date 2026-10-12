@@ -1710,3 +1710,43 @@ it('correlates file approvals to the exact thread, turn and item without reusing
   pushNotification('turn/completed', { threadId: 'thr_files', turn: { id: 'turn_files', status: 'completed' } })
   await flush()
 })
+
+it.each([false, true])(
+  'prepares Codex instructions once and still dispatches after a snapshot failure (%s)',
+  async (failSnapshot) => {
+    resetChild()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const prepared = vi.fn(() => {
+      if (failSnapshot) throw new Error('private persistence detail')
+    })
+    await createCodexEngine().start(
+      {
+        ...BASE_OPTIONS,
+        onPromptPrepared: prepared,
+        mcpServers: [
+          { name: 'kobo-tasks', command: 'node', args: [], env: { KOBO_PROGRESS_SESSION_TOKEN: 'private' } },
+        ],
+      },
+      () => {},
+    )
+    try {
+      expect(prepared).toHaveBeenCalledTimes(1)
+      expect(prepared).toHaveBeenCalledWith(
+        expect.objectContaining({ promptPrefix: expect.stringContaining('create_progress_bar'), systemAppend: '' }),
+      )
+      await flush(5)
+      pushInitializeResponse()
+      await flush(5)
+      pushThreadStartResponse('snapshot')
+      await flush(5)
+      expect(_child._written.map((line) => JSON.parse(line)).some((message) => message.method === 'turn/start')).toBe(
+        true,
+      )
+      expect(JSON.stringify(warn.mock.calls)).not.toContain('private persistence detail')
+    } finally {
+      _child.kill('SIGTERM')
+      await flush(5)
+      warn.mockRestore()
+    }
+  },
+)

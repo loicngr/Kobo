@@ -1,3 +1,8 @@
+import {
+  buildKoboLaunchInstructions,
+  getKoboPromptCapabilities,
+  type KoboLaunchInstructions,
+} from '../../../../../shared/launch-instructions.js'
 import type { CollaborationMode, ModelReasoningEffort, ThreadStartParams, UserInput } from './protocol/types.js'
 
 export type AgentPermissionMode = 'plan' | 'bypass' | 'strict' | 'interactive'
@@ -10,11 +15,8 @@ export interface BuildCodexOptionsInput {
   agentPermissionMode: AgentPermissionMode
   /** Review session with an automatic return: read-only sandbox, never waits on the user. */
   readOnly?: boolean
-  /**
-   * Used only as a boolean signal: when set, the Kōbō MCP brief is NOT prepended
-   * (resume sessions already have context). The value itself is not echoed in the result;
-   * the calling engine decides whether to call startThread or resumeThread.
-   */
+  autoLoop?: boolean
+  /** Native thread to resume; current launch instructions are refreshed on every launch. */
   resumeFromEngineSessionId?: string
   workingDir: string
   /** Kōbō McpServerSpec list, raw — function flattens into `config.mcp_servers` */
@@ -25,27 +27,12 @@ export interface BuildCodexOptionsResult {
   threadParams: ThreadStartParams
   input: UserInput[]
   isResume: boolean
+  koboInstructions: KoboLaunchInstructions
   /** Always emitted after the engine fills in the thread's resolved default model. */
   collaborationMode: Omit<CollaborationMode, 'settings'> & {
     settings: Omit<CollaborationMode['settings'], 'model'> & { model?: string }
   }
 }
-
-const CODEX_KOBO_MCP_BRIEF = [
-  '[Kōbō MCP] This workspace exposes a dedicated MCP server named `kobo-tasks`. The Codex CLI surfaces its tools under the literal name `mcp__kobo-tasks__<tool>` — always use that full form when invoking them.',
-  'Plan mode: when running with a read-only sandbox, the read-only restriction applies to MCP tools too. Reads (`mcp__kobo-tasks__list_*`, `mcp__kobo-tasks__read_document`, `mcp__kobo-tasks__search_codebase`, `mcp__kobo-tasks__get_*`) are fine; mutations (`mcp__kobo-tasks__mark_task_done`, `mcp__kobo-tasks__log_thought`, `mcp__kobo-tasks__set_workspace_status`, `mcp__kobo-tasks__set_auto_loop`) must wait until the plan is approved.',
-  'Conventions — read these BEFORE starting work, not as a fallback:',
-  '• `mcp__kobo-tasks__list_tasks` first on any non-trivial turn, then `mcp__kobo-tasks__mark_task_done` as each item completes.',
-  '• `mcp__kobo-tasks__list_documents` / `mcp__kobo-tasks__read_document` to discover existing plans and specs under docs/ and .ai/thoughts/ before writing new ones.',
-  '• `mcp__kobo-tasks__log_thought` to persist notable decisions to `.ai/thoughts/logs/<date>-<slug>.md`.',
-  '• `mcp__kobo-tasks__search_codebase` to recall prior chat history (conversations, not source — use shell tools for source).',
-  '• `mcp__kobo-tasks__get_workspace_info` / `mcp__kobo-tasks__get_git_info` / `mcp__kobo-tasks__get_ticket` for context.',
-  '• If `mcp__kobo-tasks__get_workspace_info` reports `autoLoop: false`, call `mcp__kobo-tasks__set_auto_loop({ enabled: true })` only when the user explicitly asks for autonomous continuation; never disable it unless explicitly asked.',
-  '• `mcp__kobo-tasks__set_workspace_status` when the mission is done or irrecoverably blocked. Never set `idle` while this session is active; ask the user or end the turn instead.',
-  '• `mcp__kobo-tasks__schedule_wakeup` / `mcp__kobo-tasks__cancel_wakeup` to schedule (or cancel) a follow-up session.',
-  'Each tool carries its own "WHEN to use" guidance in its description — follow it.',
-  'Only one agent edits the worktree at a time: do not run background subagents that modify files while you or another subagent modify files too. Parallel read-only subagents (search, analysis, review) are fine. Wait for a file-editing subagent to finish before editing or running tests yourself, and remember that changes appearing in the worktree may come from your own subagents.',
-].join('\n')
 
 export function buildCodexOptions(input: BuildCodexOptionsInput): BuildCodexOptionsResult {
   const isResume = input.resumeFromEngineSessionId !== undefined
@@ -115,7 +102,15 @@ export function buildCodexOptions(input: BuildCodexOptionsInput): BuildCodexOpti
     threadParams.config = { mcp_servers: mcpServersConfig }
   }
 
-  const effectivePrompt = isResume ? input.prompt : `${CODEX_KOBO_MCP_BRIEF}\n\n${input.prompt}`
+  const capabilities = getKoboPromptCapabilities(input.mcpServers?.find((server) => server.name === 'kobo-tasks')?.env)
+  const koboInstructions = buildKoboLaunchInstructions({
+    engine: 'codex',
+    permissionMode: input.agentPermissionMode,
+    readOnly: input.readOnly,
+    autoLoop: input.autoLoop,
+    ...capabilities,
+  })
+  const effectivePrompt = `${koboInstructions.promptPrefix}\n\n${input.prompt}`
 
   // Always emit collaborationMode — it's sticky server-side, so omitting it
   // would leave a resumed thread stuck in the previous turn's mode. Plan also
@@ -136,6 +131,7 @@ export function buildCodexOptions(input: BuildCodexOptionsInput): BuildCodexOpti
     threadParams,
     input: [{ type: 'text', text: effectivePrompt, text_elements: [] }],
     isResume,
+    koboInstructions,
     collaborationMode,
   }
 }

@@ -117,7 +117,7 @@ describe('auto-loop-service', () => {
     expect(svc.getAutomaticAdmissionStatus('missing').reason).toBe('not-found')
   })
 
-  it('can resume grooming in Plan without changing the stored permission mode', async () => {
+  it('blocks autonomous grooming in Plan without changing stored permissions', async () => {
     const svc = await import('../server/services/auto-loop-service.js')
     const { getDb } = await import('../server/db/index.js')
     const { getWorkspace, updateWorkspaceFields } = await import('../server/services/workspace-service.js')
@@ -125,16 +125,8 @@ describe('auto-loop-service', () => {
     updateWorkspaceFields(wsId, { agentPermissionMode: 'plan' })
     getDb().prepare("UPDATE workspaces SET auto_loop = 1, auto_loop_ready = 0, status = 'idle' WHERE id = ?").run(wsId)
     svc.onSessionEnded(wsId, 'completed', 1)
-    expect(startAgent).toHaveBeenCalledWith(
-      wsId,
-      expect.any(String),
-      expect.stringContaining('resume grooming'),
-      expect.any(String),
-      true,
-      'plan',
-      undefined,
-      expect.any(String),
-    )
+    expect(startAgent).not.toHaveBeenCalled()
+    expect(svc.getStatus(wsId)).toMatchObject({ state: 'blocked', auto_loop: true })
     expect(getWorkspace(wsId)?.agentPermissionMode).toBe('plan')
   })
 
@@ -796,7 +788,11 @@ describe('auto-loop-service', () => {
       const prompt = args[2] as string
       expect(prompt).toContain(task.id)
       expect(prompt).toContain('implement X')
-      expect(prompt).toContain('kobo__mark_task_done')
+      expect(prompt).toContain('mark_task_done')
+      expect(prompt).not.toContain('kobo__')
+      expect(prompt).toContain('only when the workflow policy or explicit user instructions authorize it')
+      expect(prompt).toContain('structured verification')
+      expect(prompt).not.toContain('taskId=')
 
       expect(ws.emitEphemeral).toHaveBeenCalledWith(
         wsId,

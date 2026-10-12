@@ -20,7 +20,7 @@ describe('mcp tasks server bootstrap', () => {
 
   it('routes workspace memory only through its launch capability before the global dialogue bridge', () => {
     const memoryDispatch = source.indexOf('if (isMemoryToolName(name))')
-    const globalBridge = source.indexOf('callWorkspaceDialogueTool(')
+    const globalBridge = source.indexOf('WORKSPACE_DIALOGUE_TOOLS.some((tool) => tool.name === name)')
     expect(memoryDispatch).toBeGreaterThan(-1)
     expect(globalBridge).toBeGreaterThan(memoryDispatch)
     expect(source).toContain('KOBO_MEMORY_SESSION_TOKEN')
@@ -33,6 +33,8 @@ describe('mcp tasks server bootstrap', () => {
     const globalToolsEnd = source.indexOf('/**\n * Tool names callable', globalToolsStart)
     expect(source.slice(globalToolsStart, globalToolsEnd)).toContain('EXTERNAL_MEMORY_TOOL_DEFINITIONS')
     expect(source).toContain('...MEMORY_TOOL_DEFINITIONS')
-    expect(source).toContain('GLOBAL_TOOLS.filter((tool) => !isMemoryToolName(tool.name))')
+    expect(source).toContain(
+      'GLOBAL_TOOLS.filter((tool) => !isMemoryToolName(tool.name) && !isProgressBarTool(tool.name))',
+    )
   })
 })

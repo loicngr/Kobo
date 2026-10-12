@@ -74,6 +74,7 @@ describe('tours registry', () => {
       'ws-selectors',
       'ws-sessions',
       'ws-review-return',
+      'ws-progress',
       'ws-actions',
       'ws-tab-subagents',
       'pr-actions',

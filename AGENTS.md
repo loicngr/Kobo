@@ -126,6 +126,7 @@ src/
 | `workspace_activity` | significant lifecycle/PR events for the absence digest |
 | `search_*` | derived logical-message search index and indexing progress; see `search-schema.ts` |
 | `workspace_message_batches` | immutable recipient snapshots, request fingerprint and per-recipient delivery outcomes (v53); no stored message body |
+| `session_progress_bars` | agent-reported session activities, producer ordering, terminal state and durable individual dismissal (v54); CASCADE DELETE on workspace/session |
 | `mcp_message_requests` | durable external-message idempotency ledger; independent of event retention |
 | `schema_migrations` | applied migration versions, names and timestamps |
 | `workspace_chat_history` | chat-input history per workspace: message text + `created_at`, ordered by autoincrement id, capped at 200 entries by the service; CASCADE DELETE on workspace |
@@ -199,6 +200,31 @@ Every feature that touches the schema:
 - **Test upgrades, not just fresh installs.** The `migrations.test.ts` suite must exercise "old DB → new DB" paths.
 
 ## WebSocket protocol
+
+Session progress bars use the separate `progress:changed` ephemeral event with a
+public record payload and workspace/session envelope. Persist the row before
+broadcasting; never append numeric updates to chat history or overload native
+`subagent:progress`. Clients hydrate on selected-session changes and reconnect,
+merge server revisions, and preserve dismissal across races. Success visibility
+expires at the stored completion time plus five seconds, not five seconds after
+each fetch. Three rows are initially visible with bounded expandable overflow.
+
+The four progress MCP tools share service validation across workspace stdio,
+global stdio and HTTP. Internal ownership comes from the dedicated per-launch
+`KOBO_PROGRESS_SESSION_TOKEN`, independent of memory modes/budgets; external
+calls explicitly select an existing workspace/session. Revoke internal writers
+when stopping starts, but interrupt their remaining bars only on confirmed
+controller closure. Late callbacks must not affect a replacement launch or
+reopen a closed database. Startup reconciles lost internal reporters while
+preserving external ones. An interrupted reporter is not proof of cancelled
+background work. Operational reporting never satisfies auto-loop verification.
+
+Retain scoped activity-key fingerprints, producer sequences and dismissed rows
+for retries; subsequent updates cannot resurrect a dismissed indicator or undo a
+terminal state. Bound labels, steps, page size, active/retained records and update
+frequency. Launch prompts instruct parent agents and their delegates to report
+long-running work; restricted review/handoff launches receive only the explicit
+operational-tool exception, never broader mutation permissions.
 
 Claude streaming input is correlated by per-message UUIDs. A result can cover
 several prompts through `user_message_uuids` (messages folded into one turn),
@@ -318,6 +344,29 @@ The selected Claude config entry defaults to the enabled key named exactly `noti
 When adding features touching `notion-service.ts`, remember: **no token = no feature**. The rest of Kōbō must keep working if the Notion token is absent; only the explicit Notion import endpoints should fail with a clear error. Do not throw at server startup.
 
 See the "Notion integration" section of the README for the end-user setup guide.
+
+### Launch instructions
+
+`src/shared/launch-instructions.ts` composes application-owned MCP discovery,
+permissions, progress reporting and continuation rules for both engines on every
+fresh/resumed launch. Prefer discovering the available tool schemas to embedding
+a duplicate catalogue. Keep Plan conversation-only; template approval cannot
+expand tool permissions. Initial writable auto-loop launches seed tasks and end;
+manual launches implement under the workflow policy. Preserve custom templates
+and frozen migration text when changing generated guidance.
+
+The engine's `onPromptPrepared` callback supplies only its textual Kōbō prefix and
+system append. Initial creation and pending initial retries opt into a single
+session-scoped `user:message` with `sender: system-prompt`, displayed as Kōbō
+instructions. Snapshot the orchestration context before memory is appended; never
+serialize engine options, capability tokens or memory bodies into chat. This is
+a prepared-launch record, not delivery confirmation. Snapshot failures must not
+prevent launch. Require durable snapshot persistence before clearing the pending
+initial prompt, using a compare-and-clear against the original mission. Async
+preparation failures must leave that pending prompt available for retry. Historical rows remain unchanged. Handoff generation is enforced
+read-only with only its managed capability-scoped report and operational progress
+metadata exceptions. Ordinary Claude Plan launches cannot promote themselves
+through `ExitPlanMode`; a permission change requires a new launch.
 
 ### Agent engines
 

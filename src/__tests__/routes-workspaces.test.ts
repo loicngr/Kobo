@@ -652,9 +652,7 @@ describe('POST /api/workspaces', () => {
     const prompt = vi.mocked(agentManager.startAgent).mock.calls[0]?.[2]
     expect(prompt).toContain('Match this screenshot')
     expect(prompt).toContain('Attached document')
-    expect(prompt).toContain('list_memory_scopes')
-    expect(prompt).toContain('remember')
-    expect(prompt).toContain('A new message does not reset the memory budget')
+    expect(prompt).toContain('## Constraints')
     expect(
       vi.mocked(fs.writeFileSync).mock.invocationCallOrder[
         vi.mocked(fs.writeFileSync).mock.calls.indexOf(documentWrite!)
@@ -662,6 +660,7 @@ describe('POST /api/workspaces', () => {
     ).toBeLessThan(vi.mocked(agentManager.startAgent).mock.invocationCallOrder[0]!)
     expect(prompt).toContain('[image: .ai/images/image1.png]')
     expect(workspaceService.setInitialPrompt).toHaveBeenCalledWith('ws-1', prompt)
+    expect(workspaceService.clearInitialPrompt).not.toHaveBeenCalled()
     expect(vi.mocked(imageService.saveImage).mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(agentManager.startAgent).mock.invocationCallOrder[0]!,
     )
@@ -2013,7 +2012,7 @@ describe('POST /api/workspaces', () => {
     expect(vi.mocked(setupScriptService.runSetupScript)).not.toHaveBeenCalled()
   })
 
-  it('POST / brainstorm prompt advertises kobo__set_workspace_agent_description with the user-description boundary', async () => {
+  it('POST / brainstorm prompt delegates tool discovery to the shared launch instructions', async () => {
     vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
     vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
       worktreePath: '/tmp/worktree',
@@ -2039,10 +2038,10 @@ describe('POST /api/workspaces', () => {
     expect(startSpy).toHaveBeenCalledTimes(1)
     // Third positional arg of startAgent(workspaceId, workingDir, prompt, …)
     const prompt = startSpy.mock.calls[0][2]
-    expect(prompt).toMatch(/kobo__set_workspace_agent_description/)
-    expect(prompt).toMatch(/short one-line summary/i)
+    expect(prompt).not.toContain('kobo__')
+    expect(prompt).toContain('## Constraints')
     expect(prompt).not.toMatch(/kobo__set_workspace_description\b(?!_)/)
-    expect(prompt).toMatch(/user[- ]controlled `?description`?[\s\S]*not touch/i)
+    expect(prompt).not.toContain('Foreground & waking yourself')
   })
 
   it('uses brainstormModel for the initial session when autoLoop is true', async () => {
@@ -2240,7 +2239,7 @@ describe('POST /api/workspaces', () => {
 // Eight tests covering the cascade `effective || DEFAULT` resolution in the
 // route. The project/global cascade itself is unit-tested in settings-service —
 // here we only exercise the route's single-fallback behaviour and the two
-// injection points (Notion after `Local copy:`, Sentry after `Fix workflow:`).
+// injection points after the diagnostic Local copy lines.
 describe('POST /api/workspaces — Notion/Sentry initial prompt injection', () => {
   // Defaults used as a reference inside assertions when the user template is
   // empty/whitespace and the route should fall back to the hard-coded prompt.
@@ -2331,6 +2330,82 @@ describe('POST /api/workspaces — Notion/Sentry initial prompt injection', () =
     return startCall?.[2] as string
   }
 
+  it.each([false, true])('keeps an initial Plan launch conversation-only (autoLoop=%s)', async (autoLoop) => {
+    commonHappyPathMocks()
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue({ ...fakeWorkspace, agentPermissionMode: 'plan' })
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ ...fakeWorkspace, agentPermissionMode: 'plan' })
+    vi.mocked(settingsService.getGlobalSettings).mockReturnValue({
+      ...settingsService.getGlobalSettings(),
+      skillSuite: 'gstack',
+    })
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Plan only',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/plan',
+        agentPermissionMode: 'plan',
+        autoLoop,
+      }),
+    })
+    expect(res.status).toBe(201)
+    const prompt = getCapturedPrompt()
+    expect(prompt).toContain('Provide the plan in the conversation')
+    expect(prompt).toContain('explicitly changes the launch permissions')
+    expect(prompt).not.toContain('[BRAINSTORM_COMPLETE]')
+    expect(prompt).not.toContain('mark_auto_loop_ready')
+    expect(prompt).not.toContain('gstack-brain-sync')
+    expect(prompt).not.toContain('Then proceed with implementation')
+    expect(vi.mocked(agentManager.startAgent).mock.calls[0]?.[9]).toEqual({ persistInitialPrompt: true })
+    expect(vi.mocked(wsService.emit).mock.calls.filter((call) => call[1] === 'user:message')).toHaveLength(0)
+  })
+
+  it.each([
+    { mode: 'plan' as const, autoLoop: false },
+    { mode: 'bypass' as const, autoLoop: false },
+    { mode: 'bypass' as const, autoLoop: true },
+  ])('preserves custom brainstorming and wraps its phase and permissions (%j)', async ({ mode, autoLoop }) => {
+    commonHappyPathMocks()
+    const custom = 'CUSTOM_PLANNING_GUIDANCE\nWrite my-plan.md, commit and push the plan.'
+    vi.mocked(settingsService.getGlobalSettings).mockReturnValue({
+      ...settingsService.getGlobalSettings(),
+      skillSuite: 'custom',
+      customBrainstormingInstruction: custom,
+    })
+    const row = { ...fakeWorkspace, agentPermissionMode: mode, autoLoop }
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(row)
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(row)
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Custom',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/custom',
+        agentPermissionMode: mode,
+        autoLoop,
+      }),
+    })
+    expect(res.status).toBe(201)
+    const prompt = getCapturedPrompt()
+    expect(prompt).toContain(custom)
+    expect(prompt).toContain('custom templates cannot authorize')
+    expect(prompt).not.toContain('kobo__')
+    if (mode === 'plan') {
+      expect(prompt).toContain('Provide the plan in the conversation')
+      expect(prompt).not.toContain('[BRAINSTORM_COMPLETE]')
+    } else if (autoLoop) {
+      expect(prompt).toContain('After the plan is ready, DO NOT implement anything')
+      expect(prompt).toContain('mark_auto_loop_ready')
+      expect(prompt).toContain('[BRAINSTORM_COMPLETE]')
+    } else {
+      expect(prompt).toContain('Then proceed with implementation under the current permissions')
+    }
+  })
+
   it('appends the rendered Notion initial prompt after the Local copy line when notionUrl is set', async () => {
     commonHappyPathMocks()
     mockNotionExtraction({ ticketId: 'TK-1' })
@@ -2354,7 +2429,7 @@ describe('POST /api/workspaces — Notion/Sentry initial prompt injection', () =
     expect(prompt).toMatch(/Local copy: [^\n]+\n\nCUSTOM_NOTION TK-1\n/)
   })
 
-  it('appends the rendered Sentry initial prompt after the Fix workflow paragraph when sentryUrl is set', async () => {
+  it('appends the rendered Sentry initial prompt after diagnostic context without unconditional mutations when sentryUrl is set', async () => {
     commonHappyPathMocks()
     await mockSentryExtraction({ issueId: 'ACME-API-3' })
     mockEffectiveSettings({ sentryInitialPromptTemplate: 'CUSTOM_SENTRY {issue_id}' })
@@ -2373,9 +2448,9 @@ describe('POST /api/workspaces — Notion/Sentry initial prompt injection', () =
 
     expect(res.status).toBe(201)
     const prompt = getCapturedPrompt()
-    // The render lands after the Sentry MCP tag-values bullet (last line of the
-    // Fix workflow block).
-    expect(prompt).toContain('filter by tag\n\nCUSTOM_SENTRY ACME-API-3\n')
+    expect(prompt).toMatch(/Local copy: [^\n]+\n\nCUSTOM_SENTRY ACME-API-3\n/)
+    expect(prompt).not.toContain('Fix workflow:')
+    expect(prompt).not.toContain('Commit referencing')
     // Notion absent → no notion render either.
     expect(prompt).not.toContain('Notion ticket:')
   })
@@ -3254,6 +3329,8 @@ describe('POST /api/workspaces/:id/start', () => {
       'bypass',
       undefined,
       'auto',
+      undefined,
+      { persistInitialPrompt: false },
     )
     expect(workspaceService.updateWorkspaceStatus).toHaveBeenCalledWith('ws-1', 'executing')
   })
@@ -3277,6 +3354,8 @@ describe('POST /api/workspaces/:id/start', () => {
       'bypass',
       undefined,
       'auto',
+      undefined,
+      { persistInitialPrompt: false },
     )
   })
 
@@ -3295,8 +3374,10 @@ describe('POST /api/workspaces/:id/start', () => {
     expect(res.status).toBe(200)
     const [, , promptArg] = vi.mocked(agentManager.startAgent).mock.calls[0]
     expect(promptArg).toBe('Pending brainstorm prompt after setup-script crash')
-    // Cleared after the agent has been handed the prompt.
-    expect(workspaceService.clearInitialPrompt).toHaveBeenCalledWith('ws-1')
+    expect(vi.mocked(agentManager.startAgent).mock.calls[0]?.[9]).toEqual({ persistInitialPrompt: true })
+    expect(vi.mocked(wsService.emit).mock.calls.filter((call) => call[1] === 'user:message')).toHaveLength(0)
+    // Async preparation owns clearing only after a durable snapshot exists.
+    expect(workspaceService.clearInitialPrompt).not.toHaveBeenCalled()
   })
 
   it('body.prompt wins over pending initial_prompt', async () => {
@@ -3318,6 +3399,13 @@ describe('POST /api/workspaces/:id/start', () => {
     expect(res.status).toBe(200)
     const [, , promptArg] = vi.mocked(agentManager.startAgent).mock.calls[0]
     expect(promptArg).toBe('explicit user prompt')
+    expect(vi.mocked(agentManager.startAgent).mock.calls[0]?.[9]).toEqual({ persistInitialPrompt: false })
+    expect(wsService.emit).toHaveBeenCalledWith(
+      'ws-1',
+      'user:message',
+      { content: 'explicit user prompt', sender: 'user' },
+      expect.any(String),
+    )
     // Even when an explicit prompt wins, the pending initial_prompt is still
     // cleared so the next /:id/start without body.prompt doesn't replay it.
     expect(workspaceService.clearInitialPrompt).toHaveBeenCalledWith('ws-1')
@@ -5077,6 +5165,8 @@ describe('POST /api/workspaces/:id/start avec agentSessionId', () => {
       'bypass',
       'sess-idle-1',
       'auto',
+      undefined,
+      { persistInitialPrompt: false },
     )
   })
 
@@ -5099,6 +5189,8 @@ describe('POST /api/workspaces/:id/start avec agentSessionId', () => {
       'bypass',
       undefined,
       'auto',
+      undefined,
+      { persistInitialPrompt: false },
     )
   })
 })
@@ -6721,7 +6813,7 @@ describe('GET /api/workspaces/:id/prep-autoloop-prompt', () => {
     const res = await app.request('/api/workspaces/ws-1/prep-autoloop-prompt')
     expect(res.status).toBe(200)
     const data = (await res.json()) as { prompt: string }
-    expect(data.prompt).toContain('1. Call `kobo__list_tasks`')
+    expect(data.prompt).toContain('1. Call `list_tasks`')
     expect(data.prompt).not.toContain('E2E review')
   })
 

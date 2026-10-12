@@ -2191,7 +2191,7 @@ export default {
   'activity.a11y.toolStarted': 'Strumento {name} avviato',
   'activity.a11y.toolFinished': 'Strumento {name} completato',
   'activity.a11y.toolFailed': 'Strumento {name} fallito',
-  'chat.systemPrompt': 'Prompt di sistema',
+  'chat.systemPrompt': 'Istruzioni Kōbō',
   'chat.agent': 'Agente',
   'chat.cleanupScript': 'Script di pulizia',
   'chat.archiveScript': 'Script di archiviazione',
@@ -2549,4 +2549,19 @@ export default {
   'tours.home.activity.title': 'Consulta le attività dopo un’assenza',
   'tours.home.activity.description':
     'In fondo al pannello sinistro trovi domande, sessioni terminate, errori e modifiche alle PR dalla tua ultima visita.',
+  'progress.title': 'Attività',
+  'progress.status.running': 'In corso',
+  'progress.status.succeeded': 'Riuscita',
+  'progress.status.failed': 'Fallita',
+  'progress.status.interrupted': 'Monitoraggio interrotto',
+  'progress.dismiss': 'Nascondi {label}',
+  'progress.dismissHint': 'Nascondi questa attività senza interrompere il lavoro',
+  'progress.others': 'Mostra le altre ({count})',
+  'progress.collapse': 'Mostra meno',
+  'progress.loadError': 'Impossibile caricare le attività.',
+  'progress.dismissError': 'Impossibile nascondere questa attività. Riprova con il pulsante di chiusura.',
+  'progress.retry': 'Riprova',
+  'tours.workspace.progress.title': 'Avanzamento delle attività',
+  'tours.workspace.progress.description':
+    'Gli agenti e i loro sottoagenti segnalano le attività lunghe sopra il campo del messaggio. Sono mostrate tre attività; espandi per vedere le altre. I valori sono dichiarati dagli agenti e non costituiscono una verifica. I successi scompaiono dopo cinque secondi; gli errori restano visibili. Chiudere nasconde solo quella attività senza annullare il lavoro.',
 }

@@ -104,17 +104,23 @@ export function createCodexEngine(): AgentEngine {
     capabilities: CODEX_CAPABILITIES,
 
     async start(options: StartOptions, onEvent: (ev: AgentEvent) => void): Promise<EngineProcess> {
-      const { threadParams, input, isResume, collaborationMode } = buildCodexOptions({
+      const { threadParams, input, isResume, collaborationMode, koboInstructions } = buildCodexOptions({
         prompt: options.prompt,
         model: options.model,
         effort: options.effort,
         agentPermissionMode: options.agentPermissionMode ?? 'bypass',
         readOnly: options.readOnly,
+        autoLoop: options.autoLoop,
         resumeFromEngineSessionId: options.resumeFromEngineSessionId,
         workingDir: options.workingDir,
         mcpServers: options.mcpServers,
       })
 
+      try {
+        options.onPromptPrepared?.(koboInstructions)
+      } catch {
+        console.warn('[codex-engine] Could not persist prepared launch instructions')
+      }
       const mapperState = createMapperState()
       const abortController = new AbortController()
       const pendingByCallId = new Map<string, PendingApproval>()

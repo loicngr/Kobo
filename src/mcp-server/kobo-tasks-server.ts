@@ -5,6 +5,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema, type Tool } from '@model
 import type Database from 'better-sqlite3'
 import { getDb } from '../server/db/index.js'
 import { EXTERNAL_MEMORY_TOOL_DEFINITIONS, isMemoryToolName, MEMORY_TOOL_DEFINITIONS } from '../shared/memory-tools.js'
+import { INTERNAL_PROGRESS_BAR_TOOLS, isProgressBarTool, PROGRESS_BAR_TOOLS } from '../shared/progress-bar-tools.js'
 import {
   isWorkspaceCreationTool,
   MAX_MCP_CREATION_REQUEST_BYTES,
@@ -35,6 +36,7 @@ import {
   updateTaskHandler,
 } from './kobo-tasks-handlers.js'
 import { callMemoryTool, isMemoryOutputSuppressed } from './memory-client.js'
+import { callProgressBarTool } from './progress-bar-client.js'
 import { callWorkspaceDialogueTool } from './workspace-dialogue-client.js'
 
 const finalReviewToken = process.env.KOBO_FINAL_REVIEW_TOKEN
@@ -256,7 +258,7 @@ const WORKSPACE_SCOPED_TOOLS: Tool[] = [
   {
     name: 'mark_auto_loop_ready',
     description:
-      'CALL ONLY at the end of a `/kobo-prep-autoloop` grooming session, once all tasks look atomic and implementable in one session. Flips a flag on the workspace that unlocks the auto-loop toggle in the UI. Do NOT call during normal sessions.',
+      'CALL at the end of authorized auto-loop preparation, either during initial workspace creation with auto-loop or a later `/kobo-prep-autoloop` grooming session. First ensure tasks are atomic, implementable, and include the required verification/finalization work. Marks preparation ready; this is a mutation and cannot be called from a read-only launch. Do NOT call during unrelated normal sessions.',
     inputSchema: { type: 'object', properties: {}, required: [] },
     annotations: { destructiveHint: false, openWorldHint: false },
   },
@@ -380,7 +382,7 @@ const WORKSPACE_SCOPED_TOOLS: Tool[] = [
   {
     name: 'cron_create',
     description:
-      'Schedule a recurring trigger on THIS workspace. At each fire, Kōbō waits for the workspace to be idle (no active session) and then resumes the same conversation by injecting `prompt` as the next user message — same UX as `schedule_wakeup` but recurring. Skip-if-active: if a session is already running when the timer fires, that occurrence is skipped, the next occurrence is computed, and the cron continues. The cron persists across server restarts (skip-missed semantics on boot — no catchup spam). Delete with `cron_delete(id)`. Multiple crons per workspace are allowed.',
+      'Schedule a recurring trigger on THIS workspace. At each fire, Kōbō checks that the workspace is idle (no active session), then injects `prompt` into the conversation pinned when scheduled (`mode=resume`) or starts a new session (`mode=fresh`). Skip-if-active: if a session is already running when the timer fires, that occurrence is skipped, the next occurrence is computed, and the cron continues. The cron persists across server restarts (skip-missed semantics on boot — no catchup spam). Delete with `cron_delete(id)`. Multiple crons per workspace are allowed.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -609,7 +611,7 @@ const WORKSPACE_SCOPED_TOOLS: Tool[] = [
   {
     name: 'schedule_wakeup',
     description:
-      'WHEN: use this whenever you would otherwise WAIT for or POLL a long-running task (test suite, CI, build, deploy, or external state) — never block your turn with sleep/poll loops, and never end a turn merely "waiting" on a background job, because the session goes idle and will not resume on its own. CALL to schedule a follow-up turn on THIS workspace after a delay. End the current turn normally; once it finishes and the workspace is idle, Kōbō waits `delaySeconds`, then resumes the same conversation by injecting `prompt` as the next user message. The wakeup is scoped to the current workspace and resumes its latest session — you cannot target another workspace or another session. If a turn is still active when the timer fires, the wakeup is skipped (status: `session-active`). Replaces any previously pending wakeup on this workspace. Delay is clamped to [60, 21600] seconds (1min to 6h). Prefer this over the built-in `ScheduleWakeup` tool — it is the SDK-supported entry point.',
+      'WHEN: the parent agent needs a durable later check for detached work or external state without a tracked completion notification. Do not duplicate SDK tracked-job continuation or schedule merely to advance auto-loop; subagents must leave the one workspace wakeup to their parent. Delay is measured from this call and clamped to [60, 21600] seconds. The wakeup targets this workspace and the session selected at scheduling time, not whichever session is newest later. It is deferred while busy when it cannot be delivered to the waiting controller; active auto-loop receives it as a queued instruction. Replaces the existing pending wakeup on this workspace, so preserve unrelated scheduled intent. Supply a concrete follow-up prompt and optional reason. End the current turn normally; delivery timing also depends on workspace availability. Prefer this durable Kōbō tool over native ScheduleWakeup',
     inputSchema: {
       type: 'object',
       properties: {
@@ -638,6 +640,7 @@ const WORKSPACE_SCOPED_TOOLS: Tool[] = [
     annotations: { destructiveHint: false, openWorldHint: false },
   },
   ...MEMORY_TOOL_DEFINITIONS,
+  ...INTERNAL_PROGRESS_BAR_TOOLS,
 ]
 
 const GLOBAL_TOOLS: typeof WORKSPACE_SCOPED_TOOLS = [
@@ -646,6 +649,7 @@ const GLOBAL_TOOLS: typeof WORKSPACE_SCOPED_TOOLS = [
   ...WORKSPACE_LIFECYCLE_TOOLS,
   ...WORKSPACE_GROUP_MESSAGE_TOOLS,
   ...EXTERNAL_MEMORY_TOOL_DEFINITIONS,
+  ...PROGRESS_BAR_TOOLS,
   {
     name: 'list_workspaces',
     description:
@@ -694,13 +698,20 @@ function availableTools(): Tool[] {
   // A workspace process exposes the capability-bound memory tools exactly once.
   // Unbound/global stdio exposes the external bridge variant instead.
   const tools = workspaceId
-    ? [...WORKSPACE_SCOPED_TOOLS, ...GLOBAL_TOOLS.filter((tool) => !isMemoryToolName(tool.name))]
+    ? [
+        ...WORKSPACE_SCOPED_TOOLS,
+        ...GLOBAL_TOOLS.filter((tool) => !isMemoryToolName(tool.name) && !isProgressBarTool(tool.name)),
+      ]
     : GLOBAL_TOOLS
   return tools.filter((tool) =>
     handoffId && handoffToken
-      ? tool.name === 'submit_session_handoff' || tool.annotations?.readOnlyHint === true
+      ? tool.name === 'submit_session_handoff' ||
+        tool.annotations?.readOnlyHint === true ||
+        (isProgressBarTool(tool.name) && !!process.env.KOBO_PROGRESS_SESSION_TOKEN)
       : finalReviewToken && finalReviewSessionId
-        ? tool.name === 'submit_final_review' || tool.annotations?.readOnlyHint === true
+        ? tool.name === 'submit_final_review' ||
+          tool.annotations?.readOnlyHint === true ||
+          (isProgressBarTool(tool.name) && !!process.env.KOBO_PROGRESS_SESSION_TOKEN)
         : tool.name !== 'submit_session_handoff' && tool.name !== 'submit_final_review',
   )
 }
@@ -766,6 +777,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           report: a.report,
         }),
       )
+    }
+    if (isProgressBarTool(name)) {
+      if (!workspaceId)
+        return await callWorkspaceDialogueTool(
+          backendUrl,
+          name,
+          a,
+          process.env.KOBO_NETWORK_TOKEN,
+          process.env.KOBO_MCP_CLIENT_NAME ?? server.getClientVersion()?.name,
+        )
+      return await callProgressBarTool({
+        backendUrl,
+        name,
+        args: a,
+        capability: process.env.KOBO_PROGRESS_SESSION_TOKEN,
+        networkToken: process.env.KOBO_NETWORK_TOKEN,
+      })
     }
     if (isMemoryToolName(name)) {
       if (!workspaceId) {

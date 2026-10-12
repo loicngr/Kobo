@@ -857,6 +857,44 @@ The **External LLM access (MCP)** panel within global Network access settings pr
 
 External senders can supply `idempotency_key` once per intended message and reuse it on retries. The durable receipt survives backend restarts and event retention. An uncertain delivery is explicitly reported and never automatically sent again; see the MCP guide for response codes and limitations.
 
+## Session progress bars
+
+Agents can report long-running tests, builds or reviews through the
+`create_progress_bar`, `update_progress_bar`, `finish_progress_bar` and
+`list_progress_bars` MCP tools. These tools are available through the workspace
+MCP server, global stdio and the external HTTP endpoint. External clients select
+an existing workspace and session; reporting progress never launches an agent.
+
+Bars appear above the message input for the **selected session**, even while you
+scroll its conversation. Each has an activity label, an optional current step,
+and either measured progress or an indeterminate indicator. Three bars are shown
+initially; **See others** expands a bounded list. Progress is reported by the
+agent, not measured automatically by Kōbō, and does not validate workspace tasks
+or acceptance criteria.
+
+A successful bar disappears five seconds after its recorded completion. Failed
+activities stay visible until you dismiss them. Closing a bar only hides that
+indicator: work continues, later updates cannot bring it back, and new activities
+still appear. Dismissal is saved on the server and shared across browser tabs
+and reloads. Reconnecting does not restart the success display timer.
+
+If an internal reporter's agent runtime closes before completion, its bar shows
+that **reporting was interrupted**. This does not prove that an independently
+running shell command was cancelled. On server restart, internal reporters from
+the previous process are interrupted; external reporters may still be running
+elsewhere, so their last state is preserved. A new internal launch uses a new
+reporting identity.
+
+Workspace launch instructions require agents to use these tools for long tasks
+and pass the requirement to subagents. When a restricted subagent cannot access
+the tools, its parent reports the activity on its behalf. Reporting permissions
+do not grant permission to edit project files or complete tasks during a review.
+
+The service retains at most 1,000 indicators per session, with at most 32 running
+at once. Hidden records are retained so retries cannot recreate dismissed bars.
+The [MCP progress guide](src/mcp-server/README.md#session-progress-tools) documents
+arguments, ordering, retry behavior and update limits.
+
 ## Persistent memory
 
 Kōbō stores deliberate, concise facts in SQLite, independently of Claude Code's native memory and provider chat history. Claude Code and Codex read the same Kōbō scopes, so a fact saved in one engine can be available to the other. There is no background transcript extractor or extra LLM call: agents must deliberately use the memory tools to save useful knowledge.
@@ -2087,10 +2125,18 @@ for the same reason the API refuses the change. A change returns HTTP 409 while 
 
 Fresh defaults are manual. Existing settings/workspaces migrate to the previous automatic behavior for compatibility. Manual requires an explicit user request for that action; automatic supplies the workflow preference for the mission. Narrower user instructions always win. Publish means PR/MR creation, description updates and comments; merging needs separate authorization. Explicit Git-panel actions remain available. These preferences are agent instructions, not a shell-command filter or an OS sandbox.
 
-Plan is never promoted to Bypass by auto-loop preparation, an agent tool event, or loop enablement. Preparation can run in Plan; execution/finalization blocks with an actionable message until an execution mode is explicitly selected.
+Plan is never promoted to Bypass by auto-loop preparation, an agent tool event, or loop enablement. The initial Plan session provides its plan in the conversation without saving files or seeding tasks. Autonomous task preparation, execution and finalization block with an actionable message until an execution mode is explicitly selected.
 
 Notion token environment overrides are applied consistently to both token variables passed to the child process. Explicit `OPENAPI_MCP_HEADERS` remain authoritative for compatibility and are not replaced by the resolved token. Direct integration configuration and legacy fallback are only read when an integration is used; opening Settings does not start a Notion users lookup. Connection tests and users refresh are explicit actions.
 
+
+### Initial Kōbō instructions
+
+New workspaces receive the mission, repository context, current permissions, current phase and expected result. Agents first consult the available managed MCP tool descriptions and schemas, then prefer relevant Kōbō tools for workspace operations. This is not a request to call every tool or poll. Long tasks and delegated work use labeled progress bars; dismissing a bar hides only that activity and does not cancel its work.
+
+Plan launches remain conversation-only. Writable auto-loop launches prepare the plan and task list before returning control to the loop; writable manual launches implement after plan approval, under the configured Git policy. Custom brainstorming, Notion and Sentry templates are preserved; they cannot expand launch permissions or authorize commits automatically. Review returns and handoff reports remain read-only, with only their scoped report and operational progress tools allowed. Plan approval does not change permissions; explicitly select an execution mode in Kōbō and start a new launch to implement.
+
+The expandable **Kōbō instructions** chat entry records the application-owned text prepared by the engine builder for the initial launch or a pending initial-prompt retry, including progress guidance, continuation rules, workflow policy and managed integration notices. The pending initial mission is retained until this entry is durably recorded, so a failure during asynchronous launch preparation remains retryable. A later replacement mission is never cleared by an earlier launch. Preparation is not proof of provider delivery. The provider's own system preset is not included. Retrieved memory bodies and capability tokens are not copied to chat; memory usage remains visible separately in the Memory panel. Existing historical prompt entries retain their original content. Ordinary resumes receive current instructions without creating another initial-prompt entry.
 
 ### Managed integration MCPs in agent sessions
 

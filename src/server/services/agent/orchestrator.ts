@@ -40,6 +40,12 @@ import {
   markMemoryContextInitialized,
   markMemoryContextSubmitted,
 } from '../memory-context-service.js'
+import {
+  closeProgressCapability,
+  createProgressCapability,
+  type ProgressCapability,
+  revokeProgressCapability,
+} from '../progress-bar-runtime.js'
 import * as quotaBackoffService from '../quota-backoff-service.js'
 import { cancelReviewLaunch } from '../review-launch-runtime.js'
 import {
@@ -1077,7 +1083,7 @@ function handleEvent(
     if (conversationKey) bindMemoryNativeConversation(conversationKey, ev.engineSessionId)
   }
   if (sourceController && ev.kind === 'session:ended' && terminalAfterClose)
-    revokeControllerMemoryCapability(sourceController)
+    revokeControllerCapabilities(sourceController)
   // A controller already told to stop (D1) keeps emitting real events until it
   // actually dies — they are persisted and broadcast like any other (see
   // `routeEvent` below, unconditional). But a handful of side effects here
@@ -1634,12 +1640,15 @@ export interface AgentLaunchOptions {
   mcpEnv?: Record<string, string>
   /** Generation turns must not settle instructions or advance loop progress. */
   handoffGeneration?: boolean
+  /** Persist the prepared initial launch text, excluding memory bodies and secrets. */
+  persistInitialPrompt?: boolean
   requireInputAcceptance?: boolean
   onStarted?: () => void
   onError?: (message: string) => void
   onEnded?: (event: Extract<AgentEvent, { kind: 'session:ended' }>) => void
 }
 const launchOptions = new WeakMap<SessionController, AgentLaunchOptions>()
+const controllerProgressCapabilities = new WeakMap<SessionController, ProgressCapability>()
 const controllerMemoryCapabilities = new WeakMap<SessionController, string>()
 const controllerMemoryConversationKeys = new WeakMap<SessionController, string>()
 const controllerMemoryContextIds = new WeakMap<SessionController, string>()
@@ -1653,7 +1662,9 @@ const memoryCompactionStates = new WeakMap<
   }
 >()
 
-function revokeControllerMemoryCapability(controller: SessionController): void {
+function revokeControllerCapabilities(controller: SessionController): void {
+  const progress = controllerProgressCapabilities.get(controller)
+  if (progress) revokeProgressCapability(progress.token)
   const token = controllerMemoryCapabilities.get(controller)
   if (!token) return
   revokeMemoryCapability(token)
@@ -1879,7 +1890,7 @@ export function startAgent(
 
   // A review whose report returns to the original session must end by itself:
   // enforce read-only plan mode here, not only through its prompt.
-  const readOnly = getReviewReturn(workspaceId, agentSessionId) !== null
+  const readOnly = !!launch?.handoffGeneration || getReviewReturn(workspaceId, agentSessionId) !== null
   const effectivePermissionMode = readOnly ? 'plan' : (agentPermissionMode ?? ws?.agentPermissionMode ?? 'bypass')
   const memoryDispatchId = nanoid()
   const memoryCapability = createMemoryCapability({
@@ -1913,6 +1924,7 @@ export function startAgent(
     // Cascade: explicit caller override → workspace setting → 'bypass'.
     agentPermissionMode: effectivePermissionMode,
     readOnly,
+    autoLoop: ws?.autoLoop === true,
     resumeFromEngineSessionId,
     backendUrl: `http://127.0.0.1:${backendPort}`,
     koboHome: (() => {
@@ -1927,21 +1939,66 @@ export function startAgent(
     env: ws ? buildAgentEnv(ws.projectPath) : undefined,
   }
 
+  // Snapshot only application-owned launch instructions. Memory is appended
+  // later for provider delivery and stays out of the persistent chat event.
+  if (launch?.persistInitialPrompt) {
+    const initialContext = options.prompt
+    let recorded = false
+    options.onPromptPrepared = (instructions) => {
+      if (recorded) return
+      emit(
+        workspaceId,
+        'user:message',
+        {
+          sender: 'system-prompt',
+          content: [
+            '# Prepared Kōbō launch instructions',
+            'Application instructions prepared for this launch; provider delivery is not guaranteed. The provider’s own system preset is not shown. Retrieved memory is tracked separately in the Memory panel.',
+            instructions.promptPrefix,
+            instructions.systemAppend,
+            initialContext,
+          ]
+            .filter(Boolean)
+            .join('\n\n'),
+        },
+        agentSessionId,
+        { requirePersistence: true },
+      )
+      recorded = true
+      // Keep the recoverable mission until the snapshot is durable; a delayed
+      // launch must never erase a replacement prompt saved in the meantime.
+      getDb()
+        .prepare('UPDATE workspaces SET initial_prompt = NULL, updated_at = ? WHERE id = ? AND initial_prompt = ?')
+        .run(new Date().toISOString(), workspaceId, prompt)
+    }
+  }
+
+  const progressCapability = createProgressCapability(workspaceId, agentSessionId)
+  const managedMcp = options.mcpServers?.find((server) => server.name === 'kobo-tasks')
+  if (managedMcp) managedMcp.env.KOBO_PROGRESS_SESSION_TOKEN = progressCapability.token
   try {
     beforeDispatch?.()
   } catch (error) {
     revokeMemoryCapability(memoryCapability.token)
+    revokeProgressCapability(progressCapability.token)
     throw error
   }
   let controller: SessionController
   controller = new SessionController(workspaceId, agentSessionId, engine, (ev) =>
     handleEvent(workspaceId, agentSessionId, controller, ev),
   )
+  controllerProgressCapabilities.set(controller, progressCapability)
   controllerMemoryCapabilities.set(controller, memoryCapability.token)
   controllerMemoryConversationKeys.set(controller, memoryCapability.conversationKey)
   // This promise settles only after the controller confirms actual process
   // closure, covering direct stop() paths that do not emit session:ended.
-  void controller.closed.then(() => revokeControllerMemoryCapability(controller))
+  void controller.closed
+    .then(() => {
+      revokeControllerCapabilities(controller)
+      closeProgressCapability(progressCapability)
+      controllerProgressCapabilities.delete(controller)
+    })
+    .catch((error) => console.error('[progress-bars] Failed to finalize closed launch', error))
   if (launch) launchOptions.set(controller, launch)
   registerSessionLifecycleOwner(workspaceId, agentSessionId, controller)
   if (!existingCtrl) controllers.set(workspaceId, controller)
@@ -2012,7 +2069,7 @@ export function startAgent(
       if (controller.status !== 'stopping') launch?.onStarted?.()
     })
     .catch((err) => {
-      revokeControllerMemoryCapability(controller)
+      revokeControllerCapabilities(controller)
       const contextId = controllerMemoryContextIds.get(controller)
       if (contextId) markMemoryContextFailed(contextId)
       if (existingCtrl && controller.status === 'stopping') return
@@ -2105,7 +2162,7 @@ export const STOP_AGENT_TIMEOUT_MS = 15_000
 export type { StopAgentOutcome } from '../../utils/agent-stop-result.js'
 
 async function stopController(workspaceId: string, ctrl: SessionController, cause: StopCause = 'user'): Promise<void> {
-  revokeControllerMemoryCapability(ctrl)
+  revokeControllerCapabilities(ctrl)
   ctrl.stopCause = cause
   restoreReviewConfiguration(workspaceId, ctrl.agentSessionId, cause === 'shutdown' || cause === 'review-recovery')
   preCompactionStatus.delete(ctrl)
@@ -2194,7 +2251,7 @@ export async function stopAgentAndWait(
   let pendingStop = Promise.resolve()
   if (pending) {
     pendingStarts.delete(workspaceId)
-    revokeControllerMemoryCapability(pending)
+    revokeControllerCapabilities(pending)
     pending.stopCause = cause
     pendingStop = pending.stop().then(() => {
       handleEvent(workspaceId, pending.agentSessionId, pending, {

@@ -29,7 +29,7 @@ describe('buildClaudeOptions', () => {
       agentPermissionMode: 'bypass',
       workingDir: '/tmp/work',
     })
-    expect(effectivePrompt).toContain('kobo__set_auto_loop')
+    expect(effectivePrompt).toContain('set_auto_loop')
     expect(effectivePrompt).toContain('never disable it unless explicitly asked')
   })
 
@@ -70,14 +70,15 @@ describe('buildClaudeOptions', () => {
     expect(effectivePrompt).toContain('Only one agent edits the worktree at a time')
   })
 
-  it('does not prepend MCP brief on resume', () => {
+  it('refreshes current MCP instructions on resume', () => {
     const { effectivePrompt, options } = buildClaudeOptions({
       prompt: 'continue',
       agentPermissionMode: 'bypass',
       workingDir: '/x',
       resumeFromEngineSessionId: 'sess-123',
     })
-    expect(effectivePrompt).toBe('continue')
+    expect(effectivePrompt).toContain('[Kōbō MCP]')
+    expect(effectivePrompt.endsWith('continue')).toBe(true)
     expect(options.resume).toBe('sess-123')
   })
 
@@ -115,4 +116,16 @@ describe('buildClaudeOptions', () => {
     expect(options.mcpServers).toBeDefined()
     expect(Object.keys(options.mcpServers as Record<string, unknown>)).toContain('kobo')
   })
+})
+
+it('explains that scoped progress is allowed in Plan without widening other mutations', () => {
+  const { effectivePrompt } = buildClaudeOptions({
+    prompt: 'Review',
+    agentPermissionMode: 'plan',
+    workingDir: '/tmp',
+    mcpServers: { 'kobo-tasks': { command: 'node', env: { KOBO_PROGRESS_SESSION_TOKEN: 'test' } } },
+  })
+  expect(effectivePrompt).toContain('Operational exception')
+  expect(effectivePrompt).toContain('create_progress_bar')
+  expect(effectivePrompt).toContain('Approving a plan does not change these permissions')
 })

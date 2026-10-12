@@ -2,7 +2,7 @@
 
 Standalone MCP (Model Context Protocol) server configured for each Claude Code or Codex agent running inside a workspace. Exposes workspace-scoped tools that the agent can invoke to interact with Kōbō state: tasks, settings, dev server, images, git, etc.
 
-Kōbō also exposes workspace creation, PR checkout diagnosis and conversation tools to external MCP clients over HTTP and through the global stdio server.
+Kōbō also exposes workspace creation, PR checkout diagnosis, conversation and [session progress tools](#session-progress-tools) to external MCP clients over HTTP and through the global stdio server.
 
 ## Connect an external LLM
 
@@ -558,3 +558,90 @@ workspace history before issuing another request for an uncertain recipient.
 MCP client name and HTTP/stdio provenance remain attached to delivered messages.
 Read-only final-review and handoff launches expose preview and receipt lookup,
 but cannot submit a group message.
+
+## Session progress tools
+
+Use these tools to report long-running activities, including tests or reviews
+delegated to subagents. Each indicator belongs to an existing workspace session.
+Reporting neither starts an agent nor completes or verifies workspace tasks.
+
+| Tool | Required arguments | Optional arguments |
+|---|---|---|
+| `create_progress_bar` | `activity_key`, `label` | `step`, paired `current`/`total` |
+| `update_progress_bar` | `progress_id`, `sequence` | `step`, paired `current`/`total` |
+| `finish_progress_bar` | `progress_id`, `sequence`, `outcome` (`succeeded` or `failed`) | `step` |
+| `list_progress_bars` | — | `limit` (1–100, default 50), `offset` (default 0) |
+
+**External HTTP and global stdio callers must also provide `workspace_id` and
+`session_id` on every call.** Use `list_workspace_sessions` to discover session
+IDs. Workspace-bound callers omit those fields: the backend derives their scope
+from a per-launch capability. They cannot forge another workspace, session or
+launch. The managed server exposes the same tools to capable subagents; custom
+subagent tool restrictions still apply. If a child lacks access, the parent
+reports its activity rather than creating a duplicate indicator.
+
+For example, an external client can create an activity with:
+
+```json
+{
+  "workspace_id": "<workspace ID>",
+  "session_id": "<session ID>",
+  "activity_key": "backend-tests-1",
+  "label": "Backend tests",
+  "current": 0,
+  "total": 120
+}
+```
+
+Keep the returned `id`. Report absolute progress with `update_progress_bar`:
+
+```json
+{
+  "workspace_id": "<workspace ID>",
+  "session_id": "<session ID>",
+  "progress_id": "<returned id>",
+  "sequence": 1,
+  "current": 40,
+  "total": 120,
+  "step": "API tests"
+}
+```
+
+Then call `finish_progress_bar` with the same scope/id, a higher `sequence`,
+`outcome: "succeeded"` or `"failed"`, and an optional summary in `step`.
+Supply numeric progress only when known: both values must be finite, with
+`total > 0` and `0 <= current <= total`. Omit both at creation, or send both as
+`null`, for an indeterminate indicator. Updates with no numeric pair keep the
+previous values. Finishing successfully does not invent a final count.
+
+Creation keys identify activities, not tool calls. Retry a lost creation reply
+with the **same key and inputs** to recover the existing record, even if it was
+dismissed or finished. Changed inputs under that key are rejected. Use a new key
+for genuinely new work. Internal keys are scoped to a launch; external keys to
+the selected workspace/session, independently of the client display name.
+
+Producer sequences start at 1 and increase. Retrying the last accepted sequence
+with exactly the same payload is safe; a changed payload at that sequence or an
+older sequence is rejected. Completed states cannot be overwritten by delayed
+updates. Running updates are limited to one accepted update per second; respect
+the returned retry guidance instead of polling. Finish reports are exempt.
+
+Mutation results return the public indicator: `id`, `workspaceId`, `sessionId`,
+`label`, `step`, `current`, `total`, `status`, `sequence`, server `revision`,
+`dismissed`, `dismissedAt`, `completedAt`, `createdAt` and `updatedAt`. Listing
+returns `{ items, totalCount, nextOffset, serverTime }` and includes hidden and
+terminal records. Follow `nextOffset` until it is `null` when a full list is
+needed. Limits are 200 characters for labels, 500 for steps, 100 for activity
+keys, 32 running and 1,000 retained indicators per session.
+
+The human can dismiss an individual bar above the chat input. `dismissed: true`
+means later updates remain hidden; do not create a replacement merely to bypass
+that choice. New activities appear normally. Success disappears five seconds
+after completion; failure remains until dismissed. Dismissal does not stop work.
+
+Internal capability revocation prevents further reports after stopping begins.
+Confirmed runtime closure, or recovery after server restart, changes unfinished
+internal bars to `interrupted`: reporting stopped, but independent background
+jobs might continue. External reporters retain their last state across restart.
+Final-review and handoff sessions may use this narrow reporting capability while
+their existing restrictions on project/task mutations remain in force.

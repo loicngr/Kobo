@@ -2206,7 +2206,7 @@ export default {
   'activity.a11y.toolStarted': 'Outil {name} démarré',
   'activity.a11y.toolFinished': 'Outil {name} terminé',
   'activity.a11y.toolFailed': 'Outil {name} en échec',
-  'chat.systemPrompt': 'Prompt système',
+  'chat.systemPrompt': 'Instructions Kōbō',
   'chat.agent': 'Agent',
   'chat.cleanupScript': 'Script de cleanup',
   'chat.archiveScript': "Script d'archivage",
@@ -2562,4 +2562,19 @@ export default {
   'tours.home.activity.title': 'Consulter l’activité après une absence',
   'tours.home.activity.description':
     'En bas du drawer gauche, retrouve les questions, fins de session, erreurs et changements de PR survenus pendant ton absence.',
+  'progress.title': 'Activités',
+  'progress.status.running': 'En cours',
+  'progress.status.succeeded': 'Réussie',
+  'progress.status.failed': 'Échec',
+  'progress.status.interrupted': 'Suivi interrompu',
+  'progress.dismiss': 'Masquer {label}',
+  'progress.dismissHint': 'Masquer cette activité sans arrêter son travail',
+  'progress.others': 'Voir les autres ({count})',
+  'progress.collapse': 'Réduire',
+  'progress.loadError': 'Impossible de charger les activités.',
+  'progress.dismissError': 'Impossible de masquer cette activité. Réessayez avec sa croix de fermeture.',
+  'progress.retry': 'Réessayer',
+  'tours.workspace.progress.title': 'Progression des activités',
+  'tours.workspace.progress.description':
+    'Les agents et leurs sous-agents signalent les tâches longues au-dessus du champ de message. Trois activités sont visibles ; dépliez pour voir les autres. Les valeurs sont déclarées par les agents et ne constituent pas une vérification. Un succès disparaît après cinq secondes ; un échec reste visible. Fermer masque uniquement cette activité sans annuler le travail.',
 }

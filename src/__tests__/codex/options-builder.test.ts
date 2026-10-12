@@ -150,15 +150,15 @@ describe('buildCodexOptions — brief prepend', () => {
     expect((input[0] as { type: 'text'; text: string }).text).toContain('Only one agent edits the worktree at a time')
   })
 
-  it('does NOT prepend the brief when resumeFromEngineSessionId is set', () => {
+  it('refreshes current instructions when resumeFromEngineSessionId is set', () => {
     const { input } = buildCodexOptions({
       ...BASE_INPUT,
       prompt: 'Resumed prompt',
       resumeFromEngineSessionId: 'thr_existing',
     })
     const text = (input[0] as { type: 'text'; text: string }).text
-    expect(text).not.toContain('[Kōbō MCP]')
-    expect(text).toBe('Resumed prompt')
+    expect(text).toContain('[Kōbō MCP]')
+    expect(text.endsWith('Resumed prompt')).toBe(true)
   })
 
   it('does not tell an active Codex session to set the workspace idle', () => {
@@ -170,7 +170,7 @@ describe('buildCodexOptions — brief prepend', () => {
   it('documents the MCP auto-loop control for fresh sessions', () => {
     const { input } = buildCodexOptions({ ...BASE_INPUT, prompt: 'My prompt' })
     const text = (input[0] as { type: 'text'; text: string }).text
-    expect(text).toContain('mcp__kobo-tasks__set_auto_loop')
+    expect(text).toContain('set_auto_loop')
     expect(text).toContain('never disable it unless explicitly asked')
   })
 })
@@ -248,4 +248,16 @@ describe('buildCodexOptions — collaborationMode', () => {
     expect(result.collaborationMode.settings.model).toBe('gpt-5.4')
     expect(result.collaborationMode.settings.reasoning_effort).toBe('high')
   })
+})
+
+it('explains that scoped progress is allowed in Plan without widening other mutations', () => {
+  const result = buildCodexOptions({
+    ...BASE_INPUT,
+    agentPermissionMode: 'plan',
+    mcpServers: [{ name: 'kobo-tasks', command: 'node', args: [], env: { KOBO_PROGRESS_SESSION_TOKEN: 'test' } }],
+  })
+  const effectivePrompt = (result.input[0] as { text: string }).text
+  expect(effectivePrompt).toContain('Operational exception')
+  expect(effectivePrompt).toContain('create_progress_bar')
+  expect(effectivePrompt).toContain('Approving a plan does not change these permissions')
 })

@@ -2171,7 +2171,7 @@ export default {
   'activity.a11y.toolStarted': 'Tool {name} started',
   'activity.a11y.toolFinished': 'Tool {name} finished',
   'activity.a11y.toolFailed': 'Tool {name} failed',
-  'chat.systemPrompt': 'System prompt',
+  'chat.systemPrompt': 'Kōbō instructions',
   'chat.agent': 'Agent',
   'chat.cleanupScript': 'Cleanup script',
   'chat.archiveScript': 'Archive script',
@@ -2521,4 +2521,19 @@ export default {
   'tours.home.activity.title': 'Review activity after an absence',
   'tours.home.activity.description':
     'At the bottom of the left drawer, find questions, session endings, errors and PR changes since your last visit.',
+  'progress.title': 'Activities',
+  'progress.status.running': 'Running',
+  'progress.status.succeeded': 'Succeeded',
+  'progress.status.failed': 'Failed',
+  'progress.status.interrupted': 'Reporting interrupted',
+  'progress.dismiss': 'Hide {label}',
+  'progress.dismissHint': 'Hide this activity without stopping its work',
+  'progress.others': 'See others ({count})',
+  'progress.collapse': 'Show less',
+  'progress.loadError': 'Could not load activities.',
+  'progress.dismissError': 'Could not hide this activity. Try its close button again.',
+  'progress.retry': 'Retry',
+  'tours.workspace.progress.title': 'Activity progress',
+  'tours.workspace.progress.description':
+    'Agents and their delegates report long-running work above the message field. Three activities are shown initially; expand to see the others. Values are agent-reported, not verification. Success disappears after five seconds; failures stay visible. Closing hides only that activity without cancelling work.',
 }

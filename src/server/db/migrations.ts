@@ -3,6 +3,7 @@ import { initAutoLoopFinalReviewSchema } from './auto-loop-final-review-schema.j
 import { initAutoLoopSchema } from './auto-loop-schema.js'
 import { initMcpMessageSchema } from './mcp-message-schema.js'
 import { migrateMemorySchema } from './memory-schema.js'
+import { initProgressBarSchema } from './progress-bar-schema.js'
 import { initReviewReturnSchema, migrateDurableReviewReturns } from './review-return-schema.js'
 import { initSchema } from './schema.js'
 import { initSearchSchema } from './search-schema.js'
@@ -836,6 +837,7 @@ export const migrations: Migration[] = [
     },
   },
   { version: 53, name: 'workspace-group-message-receipts', migrate: initWorkspaceMessageBatchSchema },
+  { version: 54, name: 'session-progress-bars', migrate: initProgressBarSchema },
 ]
 
 /** Current schema version — always equals the highest migration version. */

@@ -58,8 +58,8 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 53', () => {
-    expect(SCHEMA_VERSION).toBe(53)
+  it('exporte SCHEMA_VERSION = 54', () => {
+    expect(SCHEMA_VERSION).toBe(54)
   })
 
   it('migration v33 records and backfills the engine on agent sessions', () => {
@@ -2628,7 +2628,7 @@ describe('persistent memory schema migration v51', () => {
     const beforeUpgrade = memoryObjects(old)
     expect(beforeUpgrade.objects).toEqual([])
     expect(getMigrationHistory(old).at(-1)?.version).toBe(50)
-    expect(getPendingMigrations(old)).toEqual([51, 52, 53])
+    expect(getPendingMigrations(old)).toEqual([51, 52, 53, 54])
 
     runMigrations(old)
     migrations.find((entry) => entry.version === 51)!.migrate(old)
@@ -2768,7 +2768,7 @@ describe('durable final reviews v52', () => {
       INSERT INTO pending_review_returns VALUES('w','review','original','{"engine":"codex"}','{"engine":"claude-code"}','c');`)
     for (const migration of migrations.filter((m) => m.version <= 51))
       old.prepare('INSERT INTO schema_migrations VALUES(?,?,?)').run(migration.version, migration.name, 'v51')
-    expect(getPendingMigrations(old)).toEqual([52, 53])
+    expect(getPendingMigrations(old)).toEqual([52, 53, 54])
     runMigrations(old)
     migrations.find((m) => m.version === 52)!.migrate(old)
     expect(old.prepare('SELECT * FROM pending_review_returns').get()).toEqual({
@@ -2821,6 +2821,31 @@ describe('group message receipts v53', () => {
       fresh.prepare('PRAGMA table_info(workspace_message_batches)').all(),
     )
     old.close()
+    fresh.close()
+  })
+})
+
+describe('session progress migration v54', () => {
+  it('upgrades v53 without changing sessions and converges with fresh schema', () => {
+    const upgraded = new Database(':memory:')
+    runMigrations(upgraded)
+    upgraded.exec(`DROP TABLE session_progress_bars; DELETE FROM schema_migrations WHERE version=54;
+      INSERT INTO workspaces(id,name,project_path,source_branch,working_branch,created_at,updated_at)
+      VALUES ('existing','Existing','/tmp','main','feature','before','before');
+      INSERT INTO agent_sessions(id,workspace_id,started_at) VALUES ('session','existing','before');`)
+    expect(getPendingMigrations(upgraded)).toEqual([54])
+    runMigrations(upgraded)
+    expect(upgraded.prepare('SELECT name FROM workspaces WHERE id=?').get('existing')).toEqual({ name: 'Existing' })
+    expect(upgraded.prepare('SELECT started_at FROM agent_sessions WHERE id=?').get('session')).toEqual({
+      started_at: 'before',
+    })
+    expect(getMigrationHistory(upgraded).at(-1)?.version).toBe(SCHEMA_VERSION)
+    const fresh = new Database(':memory:')
+    runMigrations(fresh)
+    const shape = (db: Database.Database) =>
+      db.prepare("SELECT type,name,sql FROM sqlite_master WHERE tbl_name='session_progress_bars' ORDER BY name").all()
+    expect(shape(upgraded)).toEqual(shape(fresh))
+    upgraded.close()
     fresh.close()
   })
 })

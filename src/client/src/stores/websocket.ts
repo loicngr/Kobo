@@ -6,6 +6,7 @@ import { disposeTerminalEntry } from 'src/services/terminal-registry'
 import { getWorkspaceQueueHost } from 'src/services/workspace-queue-bridge'
 import { useAgentStreamStore } from 'src/stores/agent-stream'
 import { useAutoLoopReviewStore } from 'src/stores/auto-loop-review'
+import { useProgressBarsStore } from 'src/stores/progress-bars'
 import { useSessionHandoffStore } from 'src/stores/session-handoff'
 import { type GlobalSettings, useSettingsStore } from 'src/stores/settings'
 import { useUpdateStore } from 'src/stores/update'
@@ -18,6 +19,7 @@ import { resolveNotificationSoundOverride } from 'src/utils/notification-sounds'
 import { DEFAULT_TOAST_TIMEOUT_MS } from 'src/utils/notification-timeout'
 import { notify } from 'src/utils/notifications'
 import type { AutoLoopFinalReviewStatus } from '../../../shared/auto-loop-review'
+import type { ProgressBar } from '../../../shared/progress-bars'
 import type { ReviewReturnStatus } from '../../../shared/review-return'
 import type { SessionHandoff } from '../../../shared/session-handoff'
 import { parseMessageSource } from '../utils/message-source'
@@ -619,6 +621,7 @@ export const useWebSocketStore = defineStore('websocket', {
       if (workspaceStore.selectedWorkspaceId) handoffWorkspaces.add(workspaceStore.selectedWorkspaceId)
       await Promise.allSettled([
         workspaceStore.fetchAutoLoopStates(),
+        useProgressBarsStore().refresh(),
         useAutoLoopReviewStore().refreshKnown(),
         ...[...handoffWorkspaces].map((id) => handoffs.refresh(id)),
         ...[...queuedWorkspaces].map((id) => workspaceStore.fetchAutoLoopMessages(id)),
@@ -863,6 +866,19 @@ export const useWebSocketStore = defineStore('websocket', {
               ...(payload.journalOnly === true ? { journalOnly: true } : {}),
             })
           }
+          break
+        }
+        case 'progress:changed': {
+          if (
+            !msg.workspaceId ||
+            !msg.sessionId ||
+            this._replaying ||
+            payload.workspaceId !== msg.workspaceId ||
+            payload.sessionId !== msg.sessionId
+          )
+            break
+          if (typeof payload.id === 'string' && typeof payload.revision === 'number')
+            useProgressBarsStore().apply(payload as unknown as ProgressBar)
           break
         }
         case 'workspace:handoff': {

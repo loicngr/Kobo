@@ -1920,3 +1920,65 @@ it('does not reconcile an external message with an identical pending human messa
   expect(workspaces.activityFeeds.w1[0]?.id).toBe('pending')
   expect(workspaces.activityFeeds.w1[1]?.meta?.source).toEqual(source)
 })
+
+describe('session progress dispatch', () => {
+  beforeEach(() => setActivePinia(createPinia()))
+  it('requires both envelope IDs and never adds progress changes to chat history', async () => {
+    const { useProgressBarsStore } = await import('../stores/progress-bars')
+    const { useWebSocketStore } = await import('../stores/websocket')
+    const { useWorkspaceStore } = await import('../stores/workspace')
+    const store = useProgressBarsStore()
+    store.selectScope('w1', 's1')
+    const addActivity = vi.spyOn(useWorkspaceStore(), 'addActivityItem')
+    const item = {
+      id: 'p1',
+      workspaceId: 'w1',
+      sessionId: 's1',
+      label: 'Tests',
+      step: null,
+      current: null,
+      total: null,
+      status: 'running',
+      dismissed: false,
+      dismissedAt: null,
+      completedAt: null,
+      createdAt: '2026-10-12T12:00:00.000Z',
+      updatedAt: '2026-10-12T12:00:00.000Z',
+      revision: 1,
+      sequence: 0,
+    }
+    const ws = useWebSocketStore()
+    ws._routeMessage({ type: 'progress:changed', workspaceId: 'w1', sessionId: 'other', payload: item })
+    ws._routeMessage({ type: 'progress:changed', workspaceId: 'other', sessionId: 's1', payload: item })
+    ws._routeMessage({ type: 'progress:changed', sessionId: 's1', payload: item })
+    ws._routeMessage({ type: 'progress:changed', workspaceId: 'w1', payload: item })
+    expect(store.visible).toEqual([])
+    ws._routeMessage({ type: 'progress:changed', workspaceId: 'w1', sessionId: 's1', payload: item })
+    expect(store.visible).toHaveLength(1)
+    expect(addActivity).not.toHaveBeenCalled()
+    store.reset()
+  })
+})
+
+it('rehydrates the selected progress scope on live-state refresh after reconnect', async () => {
+  setActivePinia(createPinia())
+  const { useWebSocketStore } = await import('../stores/websocket')
+  const { useWorkspaceStore } = await import('../stores/workspace')
+  const { useProgressBarsStore } = await import('../stores/progress-bars')
+  const { useAutoLoopReviewStore } = await import('../stores/auto-loop-review')
+  const ws = useWebSocketStore()
+  ws.connected = true
+  const workspace = useWorkspaceStore()
+  workspace.workspaces = []
+  workspace.selectedWorkspaceId = null
+  workspace.autoLoopMessages = {}
+  vi.spyOn(workspace, 'fetchWorkspacesInfo').mockResolvedValue()
+  vi.spyOn(workspace, 'fetchAutoLoopStates').mockResolvedValue()
+  vi.spyOn(useAutoLoopReviewStore(), 'refreshKnown').mockResolvedValue()
+  const progress = useProgressBarsStore()
+  progress.selectScope('w1', 's1')
+  const refresh = vi.spyOn(progress, 'refresh').mockResolvedValue()
+  await ws.refreshLiveState()
+  expect(refresh).toHaveBeenCalledOnce()
+  progress.reset()
+})

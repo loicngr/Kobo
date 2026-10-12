@@ -72,7 +72,7 @@ describe('buildNudgeText', () => {
   it('mentions schedule_wakeup and the background-task count', async () => {
     const { buildNudgeText } = await import('../server/services/agent/engines/claude-code/stop-hook.js')
     const text = buildNudgeText(3)
-    expect(text).toContain('kobo__schedule_wakeup')
+    expect(text).toContain('mcp__kobo-tasks__schedule_wakeup')
     expect(text).toContain('3')
   })
 })
@@ -89,7 +89,7 @@ describe('buildStopHookOutput (with Kōbō pending_wakeups cross-check)', () => 
       session_crons: [],
     })
     expect(out.hookSpecificOutput?.hookEventName).toBe('Stop')
-    expect(out.hookSpecificOutput?.additionalContext).toContain('kobo__schedule_wakeup')
+    expect(out.hookSpecificOutput?.additionalContext).toContain('mcp__kobo-tasks__schedule_wakeup')
   })
 
   it('injects nothing when a Kōbō wakeup is already scheduled for the workspace', async () => {
@@ -119,4 +119,21 @@ describe('buildStopHookOutput (with Kōbō pending_wakeups cross-check)', () => 
     })
     expect(out).toEqual({})
   })
+})
+
+it.each([{ canScheduleWakeup: false }, { autoLoop: true }])(
+  'does not nudge unavailable or duplicate continuation: %j',
+  async (context) => {
+    const { buildStopHookOutput } = await import('../server/services/agent/engines/claude-code/stop-hook.js')
+    expect(buildStopHookOutput('unused', { background_tasks: [{}] }, context)).toEqual({})
+  },
+)
+
+it('does not claim SDK tracked jobs are detached or demand killing them', async () => {
+  const { buildNudgeText } = await import('../server/services/agent/engines/claude-code/stop-hook.js')
+  const text = buildNudgeText(2)
+  expect(text).toContain('tracked background')
+  expect(text).toContain('Only for detached')
+  expect(text).not.toContain('will NOT resume')
+  expect(text).not.toContain('kill the process')
 })

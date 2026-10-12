@@ -4,6 +4,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 import { Hono } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
 import { EXTERNAL_MEMORY_TOOL_DEFINITIONS, isMemoryToolName } from '../../shared/memory-tools.js'
+import { isProgressBarTool, PROGRESS_BAR_TOOLS } from '../../shared/progress-bar-tools.js'
 import {
   isWorkspaceCreationTool,
   MAX_MCP_CREATION_REQUEST_BYTES,
@@ -17,6 +18,8 @@ import {
 import { isWorkspaceLifecycleTool, WORKSPACE_LIFECYCLE_TOOLS } from '../../shared/workspace-lifecycle-tools.js'
 import { createMcpClientContext } from '../services/mcp-client-context.js'
 import { executeMemoryMcpTool } from '../services/memory-mcp-service.js'
+import { executeProgressBarTool, progressErrorData } from '../services/progress-bar-mcp-service.js'
+import { ProgressBarError } from '../services/progress-bar-service.js'
 import { executeWorkspaceCreationTool, WorkspaceCreationMcpError } from '../services/workspace-creation-mcp-service.js'
 import { executeWorkspaceDialogueTool } from '../services/workspace-dialogue-service.js'
 import {
@@ -86,6 +89,7 @@ app.all('/', async (c) => {
       ...WORKSPACE_LIFECYCLE_TOOLS,
       ...WORKSPACE_GROUP_MESSAGE_TOOLS,
       ...EXTERNAL_MEMORY_TOOL_DEFINITIONS,
+      ...PROGRESS_BAR_TOOLS,
     ],
   }))
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
@@ -96,23 +100,25 @@ app.all('/', async (c) => {
         c.req.header('X-Kobo-Client-Transport') === 'stdio' ? 'stdio' : 'http',
         c.req.header('X-Kobo-Client-Name-Encoding'),
       )
-      const data = isMemory
-        ? executeMemoryMcpTool(request.params.name, request.params.arguments ?? {}, source)
-        : isWorkspaceCreationTool(request.params.name)
-          ? await executeWorkspaceCreationTool(
-              request.params.name,
-              request.params.arguments ?? {},
-              dispatchWorkspaceRequest,
-            )
-          : isWorkspaceLifecycleTool(request.params.name)
-            ? await executeWorkspaceLifecycleTool(
+      const data = isProgressBarTool(request.params.name)
+        ? executeProgressBarTool(request.params.name, request.params.arguments ?? {})
+        : isMemory
+          ? executeMemoryMcpTool(request.params.name, request.params.arguments ?? {}, source)
+          : isWorkspaceCreationTool(request.params.name)
+            ? await executeWorkspaceCreationTool(
                 request.params.name,
                 request.params.arguments ?? {},
                 dispatchWorkspaceRequest,
               )
-            : isWorkspaceGroupMessageTool(request.params.name)
-              ? executeWorkspaceGroupMessageTool(request.params.name, request.params.arguments ?? {}, source)
-              : await executeWorkspaceDialogueTool(request.params.name, request.params.arguments ?? {}, source)
+            : isWorkspaceLifecycleTool(request.params.name)
+              ? await executeWorkspaceLifecycleTool(
+                  request.params.name,
+                  request.params.arguments ?? {},
+                  dispatchWorkspaceRequest,
+                )
+              : isWorkspaceGroupMessageTool(request.params.name)
+                ? executeWorkspaceGroupMessageTool(request.params.name, request.params.arguments ?? {}, source)
+                : await executeWorkspaceDialogueTool(request.params.name, request.params.arguments ?? {}, source)
       if (isMemory) {
         const bounded = prepareMemoryToolEnvelope(data, { targetTokens: 1_000, transport: 'external' })
         if (bounded.data.memoryOutputSuppressed === true) return { content: [], isError: true }
@@ -131,6 +137,10 @@ app.all('/', async (c) => {
         ...(structuredContent?.accepted === false ? { isError: true } : {}),
       }
     } catch (error) {
+      if (error instanceof ProgressBarError) {
+        const data = progressErrorData(error)
+        return { isError: true, content: [{ type: 'text', text: JSON.stringify(data) }], structuredContent: data }
+      }
       if (error instanceof WorkspaceGroupMessageMcpError) {
         const data = { error: error.message, status: error.status }
         return { isError: true, content: [{ type: 'text', text: JSON.stringify(data) }], structuredContent: data }

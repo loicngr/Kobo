@@ -30,6 +30,13 @@ export const workspaceTour: TourDefinition = {
     { id: 'ws-chat', anchor: 'ws-chat', i18nKey: 'tours.workspace.chat' },
     { id: 'ws-input', anchor: 'ws-input', i18nKey: 'tours.workspace.input' },
     {
+      id: 'ws-progress',
+      anchor: 'ws-progress',
+      i18nKey: 'tours.workspace.progress',
+      when: () => anchorPresent('ws-progress'),
+      gate: 'dom',
+    },
+    {
       id: 'ws-selectors',
       anchor: 'ws-selectors',
       i18nKey: 'tours.workspace.selectors',

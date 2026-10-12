@@ -25,18 +25,7 @@ export interface StopHookDecisionInput {
   koboWakeupScheduled: boolean
 }
 
-/**
- * Decide whether to nudge the agent to schedule a wakeup before it ends its
- * turn. The agent should be reminded ONLY when it leaves background work
- * in-flight with nothing scheduled to resume the session — otherwise the Kōbō
- * session goes idle and the work stalls.
- *
- * Returns false (clean stop, no nudge) when:
- *  - the stop hook is already active (anti-loop — we nudged on the prior stop);
- *  - there is no in-flight background work (a genuine end of turn);
- *  - an SDK-level cron/wakeup is scheduled (`session_crons`); or
- *  - a Kōbō-level wakeup is scheduled (`pending_wakeups`).
- */
+/** Avoid repeated reminders when an existing follow-up already covers the work. */
 export function shouldNudgeWakeup(input: StopHookDecisionInput): boolean {
   if (input.stopHookActive) return false
   if (input.backgroundTaskCount <= 0) return false
@@ -48,14 +37,9 @@ export function shouldNudgeWakeup(input: StopHookDecisionInput): boolean {
 /** The decision-point reminder injected when {@link shouldNudgeWakeup} is true. */
 export function buildNudgeText(backgroundTaskCount: number): string {
   return [
-    `⚠️ [Kōbō] You are about to end your turn with ${backgroundTaskCount} background task(s) still running, but NO wakeup is scheduled.`,
-    'This Kōbō session will go idle and will NOT resume itself — the background work will stall and never be checked.',
-    '',
-    'Before ending your turn, do ONE of:',
-    '• If you need that work to finish: call `kobo__schedule_wakeup` now with `delaySeconds` ≈ the expected remaining duration and a `prompt` telling future-you exactly what to check (log path + next step). Then end the turn.',
-    '• If the background work is no longer needed: stop it (kill the process), then end the turn.',
-    '',
-    'Do not end the turn passively waiting — nothing will wake the session.',
+    `[Kōbō] ${backgroundTaskCount} background task(s) remain. SDK tracked background jobs may deliver completion notifications and continue the live session; do not duplicate that continuation.`,
+    'Only for detached work or an external job with no completion notification: the parent may use `mcp__kobo-tasks__schedule_wakeup` with delaySeconds from now, a concrete follow-up prompt, and optional reason. Subagents must leave workspace wakeup coordination to the parent.',
+    'Keep an accurate report of unfinished work. A running background task is not itself a reason to cancel it or to schedule another turn.',
   ].join('\n')
 }
 
@@ -66,13 +50,13 @@ export interface StopHookInputLike {
   session_crons?: unknown[]
 }
 
-/**
- * Build the Stop hook output for a workspace: cross-checks the SDK signals with
- * Kōbō's own `pending_wakeups` table (since `kobo__schedule_wakeup` is an MCP
- * tool that never appears in the SDK's `session_crons`) and returns the wakeup
- * nudge only when the agent is genuinely about to stall.
- */
-export function buildStopHookOutput(workspaceId: string, input: StopHookInputLike): StopHookOutput {
+/** Suppress follow-up advice when unavailable or already owned by auto-loop. */
+export function buildStopHookOutput(
+  workspaceId: string,
+  input: StopHookInputLike,
+  context: { canScheduleWakeup?: boolean; autoLoop?: boolean } = {},
+): StopHookOutput {
+  if (context.canScheduleWakeup === false || context.autoLoop) return {}
   const backgroundTaskCount = input.background_tasks?.length ?? 0
   const koboWakeupScheduled = isWakeupScheduled(workspaceId)
   const nudge = shouldNudgeWakeup({

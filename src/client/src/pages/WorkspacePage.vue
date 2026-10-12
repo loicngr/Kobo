@@ -210,6 +210,13 @@
     <PermissionRequestPanel v-if="selectedId" :workspace-id="selectedId" />
     <LatestThinkingPanel v-if="selectedId" :workspace-id="selectedId" />
 
+    <SessionProgressPanel
+      v-if="selectedId"
+      :workspace-id="selectedId"
+      :session-id="selectedSessionId"
+      @focus-composer="chatInputRef?.focus()"
+    />
+
     <!-- Chat Input — pinned at bottom -->
     <ChatInput
       v-if="selectedId"
@@ -322,6 +329,7 @@ import ChatInput from 'src/components/ChatInput.vue'
 import LatestThinkingPanel from 'src/components/LatestThinkingPanel.vue'
 import PermissionRequestPanel from 'src/components/PermissionRequestPanel.vue'
 import QuotaBackoffBanner from 'src/components/QuotaBackoffBanner.vue'
+import SessionProgressPanel from 'src/components/SessionProgressPanel.vue'
 import StaleSessionBanner from 'src/components/StaleSessionBanner.vue'
 import WakeupBanner from 'src/components/WakeupBanner.vue'
 import WorkspaceHistorySearch from 'src/components/WorkspaceHistorySearch.vue'
