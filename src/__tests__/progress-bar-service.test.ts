@@ -56,6 +56,19 @@ describe('session progress reporting', () => {
     expect(emitEphemeral).toHaveBeenCalledWith('w1', 'progress:changed', bar, 's1')
     expect(state.db.prepare('SELECT count(*) AS n FROM ws_events').get()).toEqual({ n: 0 })
   })
+  it('broadcasts step-only milestones on the same indeterminate activity without resurrecting dismissal', () => {
+    const bar = progress.createProgressBar(owner, { activityKey: 'audit', label: 'Audit', step: 'Read code' })
+    const hidden = progress.dismissProgressBar(owner, bar.id)
+    const updated = progress.updateProgressBar(owner, bar.id, { sequence: 1, step: 'Verify findings' })
+    expect(updated).toMatchObject({ id: bar.id, current: null, total: null, dismissedAt: hidden.dismissedAt })
+    expect(updated.revision).toBeGreaterThan(hidden.revision)
+    expect(emitEphemeral).toHaveBeenLastCalledWith('w1', 'progress:changed', updated, 's1')
+    const finished = progress.finishProgressBar(owner, bar.id, { sequence: 2, outcome: 'succeeded' })
+    expect(finished).toMatchObject({ status: 'succeeded', current: null, total: null, dismissedAt: hidden.dismissedAt })
+    expect(emitEphemeral).toHaveBeenLastCalledWith('w1', 'progress:changed', finished, 's1')
+    expect(progress.listProgressBars(owner).items).toEqual([finished])
+    expect(state.db.prepare('SELECT count(*) AS n FROM ws_events').get()).toEqual({ n: 0 })
+  })
   it('rejects mismatched sessions, malformed values and conflicting creation without broadcasting', () => {
     expect(() => progress.createProgressBar({ ...owner, sessionId: 's2' }, input)).toThrow()
     for (const bad of [

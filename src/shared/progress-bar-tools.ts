@@ -33,7 +33,7 @@ function tools(external: boolean): Tool[] {
   return [
     definition(
       'create_progress_bar',
-      'Report a labelled long-running activity in this session. Use a new activity_key per activity; identical retries return its current state, including dismissal. Report measured current/total together, or omit both for indeterminate progress. Closing a bar never cancels work.',
+      'Start reporting a labelled long-running activity. Save the returned id and sequence, update that same bar at actual phase changes and meaningful completed milestones, and finish it before the final report when the outcome is known. Use a new activity_key per activity; identical retries return its current state, including dismissal. Supply measured current/total together or omit both for indeterminate progress. Closing a bar never cancels work.',
       {
         activity_key: { type: 'string', minLength: 1, maxLength: 100 },
         label: { type: 'string', minLength: 1, maxLength: 200 },
@@ -45,13 +45,13 @@ function tools(external: boolean): Tool[] {
     ),
     definition(
       'update_progress_bar',
-      'Update absolute measured progress and/or step. Both numbers must be provided together, or both null. At most one accepted running update per second; respect retry guidance. Dismissed bars remain hidden. Never invent a percentage.',
+      'Update the existing bar at actual phase changes or meaningful completed milestones, even when no percentage is known. Omit both numbers for step-only updates (previous numeric values are preserved); provide both measured numbers together, or both null to switch to indeterminate. Use the returned id as progress_id and increase sequence. Never invent percentages or send unchanged updates. At most one accepted running update per second; respect retry guidance without polling. Dismissed bars remain hidden.',
       { progress_id: id, sequence, step, current: numberOrNull, total: numberOrNull },
       ['progress_id', 'sequence'],
     ),
     definition(
       'finish_progress_bar',
-      'Finish reporting with succeeded or failed. Terminal state is immutable except an exact retry. Success hides after five seconds; failure remains until the user closes it. Reporting does not mark workspace tasks done.',
+      'Finish the same bar with succeeded or failed before your final report or return to the parent, only once the activity outcome is known. Do not finish ongoing background work merely because you yield control. Increase sequence; terminal state is immutable except an exact retry. Success hides after five seconds; failure remains until the user closes it. Reporting does not mark workspace tasks done.',
       { progress_id: id, sequence, step, outcome: { type: 'string', enum: ['succeeded', 'failed'] } },
       ['progress_id', 'sequence', 'outcome'],
     ),

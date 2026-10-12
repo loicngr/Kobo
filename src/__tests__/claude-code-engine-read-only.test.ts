@@ -125,11 +125,12 @@ it('allows only launch-scoped progress metadata in read-only sessions', async ()
       () => {},
     )
     try {
-      if (scoped)
-        expect((await capturedHooks!.SubagentStart![0].hooks[0]()).hookSpecificOutput.additionalContext).toContain(
-          'Pass this requirement to all subagents',
-        )
-      else expect(capturedHooks?.SubagentStart).toBeUndefined()
+      if (scoped) {
+        const guidance = (await capturedHooks!.SubagentStart![0].hooks[0]()).hookSpecificOutput.additionalContext
+        expect(guidance).toContain('Pass this requirement to all subagents')
+        expect(guidance).toContain('update the same bar at each actual phase change or meaningful completed milestone')
+        expect(guidance).toContain('before your final report')
+      } else expect(capturedHooks?.SubagentStart).toBeUndefined()
       const ctx = { signal: new AbortController().signal, toolUseID: 'progress' }
       for (const name of ['create_progress_bar', 'update_progress_bar', 'finish_progress_bar', 'list_progress_bars'])
         expect(await capturedCanUseTool!(`mcp__kobo-tasks__${name}`, {}, ctx)).toMatchObject({

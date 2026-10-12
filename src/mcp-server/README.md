@@ -578,7 +578,9 @@ IDs. Workspace-bound callers omit those fields: the backend derives their scope
 from a per-launch capability. They cannot forge another workspace, session or
 launch. The managed server exposes the same tools to capable subagents; custom
 subagent tool restrictions still apply. If a child lacks access, the parent
-reports its activity rather than creating a duplicate indicator.
+reports its observed milestones and outcome rather than creating a duplicate
+indicator. Pass the full create → update → finish lifecycle to delegates; they
+must finish their own activity before returning when its outcome is known.
 
 For example, an external client can create an activity with:
 
@@ -593,7 +595,9 @@ For example, an external client can create an activity with:
 }
 ```
 
-Keep the returned `id`. Report absolute progress with `update_progress_bar`:
+Keep the returned `id` and `sequence`. Update **the same bar** at actual phase
+changes and meaningful completed milestones, including during a long phase.
+Report absolute progress with `update_progress_bar`:
 
 ```json
 {
@@ -607,8 +611,28 @@ Keep the returned `id`. Report absolute progress with `update_progress_bar`:
 }
 ```
 
-Then call `finish_progress_bar` with the same scope/id, a higher `sequence`,
-`outcome: "succeeded"` or `"failed"`, and an optional summary in `step`.
+An audit with no measurable denominator still needs step updates. After creating
+an indeterminate activity, send this when its phase changes:
+
+```json
+{
+  "workspace_id": "<workspace ID>",
+  "session_id": "<session ID>",
+  "progress_id": "<returned id>",
+  "sequence": 1,
+  "step": "Code inspection complete; verifying findings"
+}
+```
+
+Omitting **both** `current` and `total` is valid on updates. It keeps an
+indeterminate activity indeterminate, or preserves existing numeric values.
+Do not invent a percentage, send unchanged updates or create periodic LLM turns
+just to refresh a bar.
+
+Before your final report (or return to the parent), call `finish_progress_bar`
+with the same scope/id, a higher `sequence`, `outcome: "succeeded"` or `"failed"`,
+and an optional summary in `step`, once the outcome is known. Do not finish an
+activity merely because you yield while its background work continues.
 Supply numeric progress only when known: both values must be finite, with
 `total > 0` and `0 <= current <= total`. Omit both at creation, or send both as
 `null`, for an indeterminate indicator. Updates with no numeric pair keep the

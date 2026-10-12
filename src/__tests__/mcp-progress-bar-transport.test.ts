@@ -41,6 +41,9 @@ async function exercise(client: Client, external: boolean) {
   const tools = (await client.listTools()).tools
   expect(tools.filter((t) => t.name.endsWith('progress_bar') || t.name === 'list_progress_bars')).toHaveLength(4)
   expect(tools.find((t) => t.name === 'create_progress_bar')?.annotations?.readOnlyHint).toBe(false)
+  expect(tools.find((t) => t.name === 'update_progress_bar')?.description).toContain(
+    'Omit both numbers for step-only updates',
+  )
   const scope = external ? { workspace_id: 'w', session_id: 's' } : {}
   const created = await client.callTool({
     name: 'create_progress_bar',
@@ -69,6 +72,38 @@ async function exercise(client: Client, external: boolean) {
     ),
   ).toMatchObject({ status: 'succeeded' })
   expect(data(await client.callTool({ name: 'list_progress_bars', arguments: scope })).items).toHaveLength(1)
+  // An audit can advance through real phases without a known denominator.
+  const audit = data(
+    await client.callTool({
+      name: 'create_progress_bar',
+      arguments: { ...scope, activity_key: 'audit', label: 'Audit', step: 'Read code' },
+    }),
+  )
+  expect(audit).toMatchObject({ current: null, total: null, sequence: 0, status: 'running' })
+  const step = data(
+    await client.callTool({
+      name: 'update_progress_bar',
+      arguments: { ...scope, progress_id: audit.id, sequence: audit.sequence + 1, step: 'Verify findings' },
+    }),
+  )
+  expect(step).toMatchObject({ id: audit.id, step: 'Verify findings', current: null, total: null, sequence: 1 })
+  expect(step.revision).toBeGreaterThan(audit.revision)
+  const finished = data(
+    await client.callTool({
+      name: 'finish_progress_bar',
+      arguments: {
+        ...scope,
+        progress_id: audit.id,
+        sequence: step.sequence + 1,
+        outcome: 'succeeded',
+        step: 'Audit complete',
+      },
+    }),
+  )
+  expect(finished).toMatchObject({ id: audit.id, status: 'succeeded', sequence: 2, current: null, total: null })
+  const hydrated = await app.request('/api/progress-bars?workspaceId=w&sessionId=s')
+  expect((await hydrated.json()).items).toContainEqual(finished)
+  expect(getDb().prepare('SELECT count(*) n FROM session_progress_bars').get()).toEqual({ n: 2 })
   const invalid = await client.callTool({ name: 'list_progress_bars', arguments: { ...scope, unexpected: true } })
   expect(invalid.isError).toBe(true)
   expect(data(invalid)).toMatchObject({ status: 400, code: 'invalid_arguments' })

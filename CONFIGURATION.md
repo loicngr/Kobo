@@ -885,10 +885,23 @@ the previous process are interrupted; external reporters may still be running
 elsewhere, so their last state is preserved. A new internal launch uses a new
 reporting identity.
 
-Workspace launch instructions require agents to use these tools for long tasks
-and pass the requirement to subagents. When a restricted subagent cannot access
-the tools, its parent reports the activity on its behalf. Reporting permissions
-do not grant permission to edit project files or complete tasks during a review.
+Workspace launch instructions require the full reporting lifecycle: create a
+bar, keep its returned ID and sequence, update that same bar at actual phase
+changes and meaningful completed milestones, and finish it before the final
+report once the outcome is known. Even without a measurable percentage, agents
+must update the current step; omitting both numeric values preserves
+indeterminate progress. No percentage is inferred from tool calls, elapsed time
+or model activity. Unchanged updates, polling and timer-driven reporting loops
+are not requested.
+
+Parents pass this lifecycle to subagents, which report and finish their own
+activities before returning. When a restricted subagent cannot access the tools,
+its parent reports observed milestones and the outcome on its behalf, without
+duplicate bars. Yielding while background work continues does not mean success.
+Reporting permissions do not grant permission to edit project files or complete
+tasks during a review. These instructions guide the model; they cannot guarantee
+that it reports every milestone. Updated guidance applies on the next launch or
+resume, not retroactively to an already running agent.
 
 The service retains at most 1,000 indicators per session, with at most 32 running
 at once. Hidden records are retained so retries cannot recreate dismissed bars.
