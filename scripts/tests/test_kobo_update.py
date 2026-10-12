@@ -117,7 +117,7 @@ class UpdateTests(unittest.TestCase):
     def test_compose_uses_selected_directory_not_private_project_name(self):
         u = m.Updater(self.stack)
         command = u.compose('config')
-        self.assertEqual(command[command.index('--project-directory') + 1], str(self.stack))
+        self.assertEqual(command[command.index('--project-directory') + 1], str(self.stack.resolve()))
         self.assertNotIn('-p', command)
 
     def test_help_exposes_directory_and_has_no_private_host(self):
@@ -385,7 +385,7 @@ class ComposeEnvironmentTests(unittest.TestCase):
                 self.assertEqual(received['env']['GH_TOKEN'], 'test-explicit-token')
                 self.assertEqual(received['env']['DOCKER_CONTEXT'], 'test-context')
                 args = received['args']
-                self.assertEqual(args[args.index('--env-file') + 1], str(self.stack / '.env'))
+                self.assertEqual(args[args.index('--env-file') + 1], str(self.stack.resolve() / '.env'))
 
     def test_non_compose_process_keeps_its_environment(self):
         with patch.dict(os.environ, {'PATH': str(self.stack) + os.pathsep + os.environ['PATH'],
