@@ -196,7 +196,8 @@ rules, never all private PC configuration into a project repository.
 
 | Location | Container restart | Container replacement |
 | --- | --- | --- |
-| Named `/root` volume: logins, skills/plugins, user-local tools and downloads | Preserved | Preserved and included in updater backup |
+| `/root/.config/kobo`: Kōbō database, settings and application data | Preserved | Preserved and included in `kobo.tar.gz` |
+| Rest of the named `/root` volume: engine logins, skills/plugins, user-local tools and downloads | Preserved | Preserved; not included in updater backup |
 | Mounted projects/worktrees and project data | Preserved | Preserved; back up separately |
 | Container OS packages, `/usr/local/bin` installs, global npm tools | Preserved | Replaced by the new image |
 | VPS host settings, including inotify | Preserved | Unchanged; managed separately |

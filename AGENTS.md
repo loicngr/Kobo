@@ -315,13 +315,20 @@ credentials into an image or add web settings for these host-managed secrets.
 
 `scripts/kobo-update` is a Python 3.10+ operator tool for this layout, separate
 from the backend's update notifications. Preserve explicit invocation, idle checks,
-unique image tags, private stopped-volume backups, migration tests on a copy,
+unique image tags, private backups of `/root/.config/kobo` while stopped, migration tests on a copy,
 and durable failure records. The authenticated `/api/maintenance/update` reservation
 checks runtime ownership and closes agent admission synchronously before shutdown.
 Track in-flight workspace creations and PR checkouts through all asynchronous
 steps and rollback. Maintenance and creation admission must exclude each other
 synchronously; rejecting only the final agent start is too late. Direct HTTP and
 MCP creation paths share this guard.
+The updater's `kobo.tar.gz` contains only Kōbō data, with paths relative to `/root`;
+never archive engine homes, skills, caches or projects as part of routine updates.
+Record the archive name/scope in update state. Migration checks extract regular
+SQLite files and sidecars only. Recovery must preserve the original volume and
+clone it before replacing only `.config/kobo` in the clone; a partial data archive
+must not be described as a complete home snapshot. Old `home.tar.gz` jobs retain
+their original recovery instructions.
 Scheduled cron/wakeup/quota deliveries defer without consuming persisted intent;
 valid pending wakeups get `retry_at=target_at` before successful reservation (only
 when `retry_at` was null), so long maintenance does not expire them at boot. Keep

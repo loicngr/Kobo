@@ -8,6 +8,7 @@ from pathlib import Path
 import tempfile
 import subprocess
 import sys
+import tarfile
 
 sys.dont_write_bytecode = True
 import unittest
@@ -133,6 +134,12 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual(u.state['phase'], 'complete')
         self.assertEqual(u.compose_file.read_text(), COMPOSE.replace('kobo:old','kobo:new'))
         self.assertEqual((u.job / 'compose.before.yaml').read_text(), COMPOSE)
+        self.assertEqual(u.state['backup_scope'], '/root/.config/kobo')
+        self.assertEqual(u.state['backup_archive'], 'kobo.tar.gz')
+        recovery = (u.job / 'RECOVERY.md').read_text()
+        self.assertIn('replace\n.config/kobo completely', recovery)
+        self.assertIn('Clone that\nstopped volume into a NEW Docker volume', recovery)
+        self.assertNotIn('home.tar.gz', recovery)
 
     def test_check_never_builds_or_stops(self):
         u = self.updater()
@@ -299,6 +306,80 @@ class UpdateTests(unittest.TestCase):
             m.Updater.resolve(u, '2.0.0')
 
 
+class BackupTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.stack = Path(self.tmp.name)
+        self.home = self.stack / 'home'
+        self.data = self.home / '.config/kobo'
+        self.data.mkdir(parents=True)
+        for name in ['kobo.db', 'kobo.db-wal', 'kobo.db-shm', 'settings.json', 'skills.json']:
+            (self.data / name).write_bytes(('fixture-' + name).encode())
+        (self.data / 'attachments').mkdir()
+        (self.data / 'attachments/image.png').write_bytes(b'attachment')
+        for directory in ['.claude', '.codex', '.cache', '.npm', 'projects']:
+            target = self.home / directory
+            target.mkdir()
+            (target / 'excluded').write_bytes(b'must not be archived')
+        self.u = m.Updater(self.stack)
+        self.u.job = self.stack / 'job'
+        self.u.job.mkdir()
+        self.u.log = self.u.job / 'update.log'
+        self.u.volume = 'home-volume'
+        self.u.old_image = 'sha256:old'
+        self.command = None
+        real_run = subprocess.run
+
+        def local_tar(args, **kwargs):
+            self.command = args
+            self.assertIn('--read-only', args)
+            self.assertIn('type=volume,src=home-volume,dst=/data,readonly', args)
+            # Run the exact tar arguments against a temporary fixture, not Docker.
+            tar_args = args[args.index(self.u.old_image) + 1:]
+            tar_args[tar_args.index('/data')] = str(self.home)
+            return real_run(['tar', *tar_args], **kwargs)
+        patcher = patch.object(m.subprocess, 'run', side_effect=local_tar)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_archives_only_kobo_and_copies_sqlite_sidecars_for_migration(self):
+        check = self.u.backup()
+        with tarfile.open(self.u.job / 'kobo.tar.gz') as archive:
+            names = set(archive.getnames())
+        self.assertIn('./.config/kobo/settings.json', names)
+        self.assertIn('./.config/kobo/skills.json', names)
+        self.assertIn('./.config/kobo/attachments/image.png', names)
+        self.assertTrue(all(n == './.config/kobo' or n.startswith('./.config/kobo/') for n in names))
+        self.assertEqual({p.name for p in check.iterdir()}, {'kobo.db', 'kobo.db-wal', 'kobo.db-shm'})
+        for item in check.iterdir():
+            self.assertEqual(item.read_bytes(), (self.data / item.name).read_bytes())
+        self.assertFalse((self.u.job / 'home.tar.gz').exists())
+
+    def test_does_not_follow_symlinks_outside_kobo(self):
+        (self.data / 'external-cache').symlink_to(self.home / '.cache', target_is_directory=True)
+        self.u.backup()
+        with tarfile.open(self.u.job / 'kobo.tar.gz') as archive:
+            self.assertTrue(archive.getmember('./.config/kobo/external-cache').issym())
+            self.assertNotIn('./.config/kobo/external-cache/excluded', archive.getnames())
+
+    def test_rejects_missing_database(self):
+        (self.data / 'kobo.db').unlink()
+        with self.assertRaisesRegex(m.UpdateError, 'does not contain'):
+            self.u.backup()
+
+    def test_rejects_symlink_database(self):
+        (self.data / 'kobo.db').unlink()
+        (self.data / 'kobo.db').symlink_to(self.home / '.claude/excluded')
+        with self.assertRaisesRegex(m.UpdateError, 'Unexpected SQLite'):
+            self.u.backup()
+
+    def test_missing_data_directory_fails_backup(self):
+        self.data.rename(self.home / 'moved')
+        with self.assertRaisesRegex(m.UpdateError, 'Failed: backup'):
+            self.u.backup()
+
+
 class InspectionTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -321,7 +402,9 @@ class InspectionTests(unittest.TestCase):
             if 'config' in args: return json.dumps(self.config)
             if '-p' in args and 'node' in args: return '2.1.16'
             if m.BUSY_JS in args: return '{"sessions":0,"workspaces":0}'
-            if 'du' in args: return '100 /root'
+            if 'du' in args:
+                self.assertEqual(args[-1], '/root/.config/kobo')
+                return '100 /root/.config/kobo'
             if 'context' in args: return 'unix:///var/run/docker.sock'
             if 'info' in args: return '/var/lib/docker'
             if 'run' in args: return str(100 * 1024**3)

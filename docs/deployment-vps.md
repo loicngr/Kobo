@@ -563,9 +563,9 @@ It retrieves npm's `latest` version (or the explicit
 stable version), verifies the Git tag's commit and package version, builds a uniquely
 tagged image, ensures Compose, Buildx, netcat and the non-root launcher are installed and checks native modules. The old
 service stays available during the build. Plan for roughly 5–15 minutes without
-build cache; backup duration depends on the volume size.
+build cache; backup duration depends only on the size of Kōbō's data directory.
 
-Once idle, it stops Kōbō, archives the complete `/root` volume, tests SQLite
+Once idle, it stops Kōbō, archives only `/root/.config/kobo`, tests SQLite
 migrations/integrity on a copy, pins the new image directly in `compose.yaml`, and
 starts the service. It checks container health, the authenticated internal API,
 the version served through HTTPS, and public API rejection without a token. It
@@ -577,9 +577,12 @@ repository when you want to update the updater.
 ## Backups and failed updates
 
 Each update records its private log, `state.json`, previous Compose file,
-`home.tar.gz` and recovery instructions in `<deployment>/updates/<timestamp>-<id>/`.
-The archive contains credentials as well as application data; keep it private.
-A prepared-only build does not create a home backup. No old images, backups or
+`kobo.tar.gz` and recovery instructions in `<deployment>/updates/<timestamp>-<id>/`.
+The archive contains the whole `/root/.config/kobo` directory: SQLite database
+and WAL/SHM sidecars when present, settings, templates, attachments and other Kōbō
+data. It retains paths relative to `/root`. Settings can contain credentials;
+keep the archive private. `state.json` records the backup scope and archive name.
+A prepared-only build does not create a backup. No old images, backups or
 volumes are automatically removed; monitor disk space and retain off-host copies.
 
 An error before shutdown releases the reservation, including a lost acquisition
@@ -590,9 +593,12 @@ the reservation deliberately has no expiry that could reopen the race. Follow
 container and confirm its exit before restarting it. Restart clears the in-memory
 reservation. Never release it while a Docker stop could still be in progress.
 
-Repositories/worktrees stored outside `/root`, bind-mounted App keys/scripts and
-project database volumes are **not included** in `home.tar.gz`. Back them up
-separately along with `.env` and other deployment files. Never copy a live SQLite
+Claude/Codex configuration and credentials, skills/plugins, caches, browser
+downloads, repositories/worktrees, bind-mounted App keys/scripts and project
+database volumes are **not included** in `kobo.tar.gz`. Files outside the Kōbō
+directory remain in the existing volume; the updater neither archives nor deletes
+them. Back up important files separately, along with `.env` and deployment files.
+Never copy a live SQLite
 file as your only database backup; the updater stops Kōbō before archiving it.
 
 A build failure leaves the current service running. A backup or migration-test
@@ -600,8 +606,17 @@ failure restarts the previous version before new code touches production data.
 After a new-version launch, an error leaves data intact for diagnosis: an older
 image must not be blindly started against a migrated database, and a snapshot
 restore could discard messages or work resumed since launch. Read the generated
-`RECOVERY.md`; restore to a **new volume**, retaining the current one, if a full
-rollback is necessary. An interrupted update blocks subsequent updates until its
+`RECOVERY.md`: for a rollback, stop Kōbō and clone the current volume into a **new
+volume** so engine credentials and skills are retained. In the new volume only,
+replace `.config/kobo` completely from `kobo.tar.gz`, preserving numeric ownership
+and permissions, then use that volume with the previous image. Do not overlay an
+old database onto newer WAL/SHM files. Keep the original volume. This restores
+Kōbō data only, not engine state or project changes.
+
+Older updater versions created `home.tar.gz` containing all of `/root`; use each
+backup's own `RECOVERY.md`. Updating the Kōbō image does not update the operator
+script: install the newer `scripts/kobo-update` to use the smaller backups.
+An interrupted update blocks subsequent updates until its
 recorded state has been reviewed. Inspect logs locally; they may contain secrets.
 
 For troubleshooting, start with `docker compose ps`, the private update log and

@@ -1365,6 +1365,9 @@ For the independent VPS layout, [`scripts/kobo-update`](./scripts/kobo-update)
 accepts a stable version or defaults to npm `latest`. It has `--check`, `--prepare`
 and `--directory` options. See [updater usage and recovery](./docs/deployment-vps.md#update-with-kobo-update).
 This is an operator-invoked script; the in-app update banner does not install releases.
+Its `kobo.tar.gz` backup contains only `/root/.config/kobo` (database, settings and
+other Kōbō data). The rest of the persistent home, including engine credentials,
+skills and caches, is preserved in place but is not included in this backup.
 
 A source-built image needs rebuilding for a new release; `docker compose pull`
 alone cannot update an image that only exists locally. Recreate the service

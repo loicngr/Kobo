@@ -217,7 +217,7 @@ class Updater:
                                    'node', '-p', 'require("./package.json").version']))
         self.idle()
         self.run(['docker', 'compose', 'version'])
-        used_kib = int(self.run(['docker', 'exec', self.container, 'du', '-sk', '/root']).split()[0])
+        used_kib = int(self.run(['docker', 'exec', self.container, 'du', '-sk', '/root/.config/kobo']).split()[0])
         # Sources/build layers plus archive + migration copy; compression is not assumed.
         required = 6 * 1024**3 + used_kib * 1024 * 2
         docker_root = self.run(['docker', 'info', '--format', '{{.DockerRootDir}}'])
@@ -288,12 +288,12 @@ class Updater:
         return image
 
     def backup(self):
-        archive = self.job / 'home.tar.gz'
+        archive = self.job / 'kobo.tar.gz'
         with archive.open('xb') as f, self.log.open('ab') as err:
             try:
                 subprocess.run(['docker', 'run', '--rm', '--network', 'none', '--read-only',
                     '--mount', f'type=volume,src={self.volume},dst=/data,readonly',
-                    '--entrypoint', 'tar', self.old_image, '-C', '/data', '-czf', '-', '.'],
+                    '--entrypoint', 'tar', self.old_image, '-C', '/data', '-czf', '-', './.config/kobo'],
                     stdout=f, stderr=err, check=True, timeout=3600)
                 f.flush()
                 os.fsync(f.fileno())
@@ -360,6 +360,7 @@ class Updater:
         self.record('building', previous_image=old_tag, previous_digest=self.old_image,
                     volume=self.volume, version=version, sha=sha,
                     maintenance_owner=self.maintenance_owner,
+                    backup_archive='kobo.tar.gz', backup_scope='/root/.config/kobo',
                     backup_complete=False, new_version_start_attempted=False)
         self.recovery_notes()
         stopped = False
@@ -386,7 +387,7 @@ class Updater:
             self.maintenance('POST')
             self.record('stopping')
             stopped = True  # Also recover if the stop command itself fails/interruption arrives.
-            say('Stopping Kōbō, backing up /root and testing migrations on a database copy…')
+            say('Stopping Kōbō, backing up only /root/.config/kobo and testing migrations on a database copy…')
             self.run(self.compose('stop', '-t', '60', 'kobo'))
             info = json.loads(self.run(['docker', 'inspect', self.container]))[0]
             if info['State']['Running']:
@@ -404,7 +405,7 @@ class Updater:
             self.logged(self.compose('up', '-d', '--no-deps', '--wait', '--wait-timeout', '180', 'kobo'), timeout=240)
             self.verify(version)
             self.record('complete')
-            say(f'Kōbō {version} is up to date. Backup: {self.job / "home.tar.gz"}')
+            say(f'Kōbō {version} is up to date. Backup: {self.job / "kobo.tar.gz"}')
         except BaseException:
             if stopped and not launching:
                 # Only safe before any process from the new version has used production data.
@@ -446,9 +447,11 @@ Private log: `{self.job / 'update.log'}`. Durable phase: `state.json`.
 Previous configuration: `compose.before.yaml`.
 Previous immutable image: `{self.old_image}`.
 Original volume: `{self.volume}`.
-The archive `home.tar.gz` is validated only when backup_complete=true.
+The archive `kobo.tar.gz` is validated only when backup_complete=true.
+It contains ONLY /root/.config/kobo, with paths relative to /root.
 new_version_start_attempted indicates whether a new-version launch was attempted.
-Projects outside /root are NOT included in this archive; back them up separately.
+Claude/Codex credentials, skills/plugins, caches and projects are NOT included;
+back up those files separately if needed. They remain in the original volume.
 Old images, volumes and backups are never automatically deleted.
 
 ## Interrupted admission reservation
@@ -475,10 +478,15 @@ Do not run an older image against a potentially migrated database.
 Inspect the private log and Compose logs (which may contain credentials).
 A proxy error can leave a working backend: check for new messages and resumed
 work before considering a restore.
-To roll back fully, stop Kōbō, back up the current volume too, extract home.tar.gz
-into a NEW empty Docker volume and adapt the previous Compose configuration to
-use that restored volume and the previous immutable image above. Keep the current
-volume. Database rollback does not undo external agent or project changes.
+To roll back Kōbō data, stop Kōbō and preserve the current volume. Clone that
+stopped volume into a NEW Docker volume to retain current engine credentials,
+skills and other files outside .config/kobo. In the NEW volume only, replace
+.config/kobo completely with the contents of kobo.tar.gz (extract at the volume
+root, preserving numeric owners and permissions). Do not merge the old database
+with newer WAL/SHM files or other new-version Kōbō files. Adapt the previous
+Compose configuration to use that restored volume and the previous immutable
+image above. Keep the original volume. This archive cannot roll back files
+outside .config/kobo, external agent actions or project changes.
 After recovery and health verification, set state.json phase to complete or aborted.
 ''')
 
