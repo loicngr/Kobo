@@ -727,12 +727,12 @@ export const useWebSocketStore = defineStore('websocket', {
       return true
     },
 
-    sendChatMessageConfirmed(workspaceId: string, content: string, sessionId?: string): Promise<void> {
+    sendChatMessageConfirmed(workspaceId: string, content: string, sessionId?: string, force = false): Promise<void> {
       // getRandomValues is available on HTTP LAN origins too (randomUUID is not).
       const entropy = Array.from(crypto.getRandomValues(new Uint32Array(4)), (n) => n.toString(16)).join('-')
       const clientMessageId = `${entropy}-${++nextChatDeliveryId}`
       const pending = chatDeliveries.wait(workspaceId, clientMessageId, t('network.login.unreachable'))
-      if (!this.sendChatMessage(workspaceId, content, sessionId, undefined, false, clientMessageId)) {
+      if (!this.sendChatMessage(workspaceId, content, sessionId, undefined, force, clientMessageId)) {
         chatDeliveries.settle(workspaceId, clientMessageId, new Error(t('network.login.unreachable')))
       }
       return pending

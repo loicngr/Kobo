@@ -324,6 +324,7 @@ export interface GlobalSettings {
   autoLoopMaxRetries: number
   /** Opt-in agent inactivity watchdogs, captured at each launch/resume. */
   agentWatchdogEnabled: boolean
+  forceImmediateMessages: boolean
   showProgressBars: boolean
   stopDevServersOnShutdown: boolean
   /**
@@ -1343,6 +1344,13 @@ const settingsMigrations: SettingsMigration[] = [
       }
     },
   },
+  {
+    version: 67,
+    name: 'opt-in-immediate-chat-messages',
+    migrate: ({ global }) => {
+      if (typeof global.forceImmediateMessages !== 'boolean') global.forceImmediateMessages = false
+    },
+  },
 ]
 
 /** Current settings schema version — always equals the highest migration version. */
@@ -1434,6 +1442,7 @@ function defaultSettings(): Settings {
       autoPurgeOnPrMerged: false,
       autoLoopMaxRetries: 5,
       agentWatchdogEnabled: false,
+      forceImmediateMessages: false,
       showProgressBars: true,
       stopDevServersOnShutdown: true,
       awaitingUserReminderMinutes: 0,
@@ -1593,6 +1602,7 @@ export function runSettingsMigrations(raw: Record<string, unknown>): Settings {
   if (typeof current.global.onboardingComplete !== 'boolean') current.global.onboardingComplete = true
   current.global.workflowPolicy = resolveWorkflowPolicy(current.global.workflowPolicy as Partial<WorkflowPolicy>)
   if (!isMemoryMode(current.global.memoryMode)) current.global.memoryMode = 'hybrid'
+  if (typeof current.global.forceImmediateMessages !== 'boolean') current.global.forceImmediateMessages = false
   if (typeof current.global.showProgressBars !== 'boolean') current.global.showProgressBars = true
   if (typeof current.global.stopDevServersOnShutdown !== 'boolean') current.global.stopDevServersOnShutdown = true
   if (typeof current.global.shutdownScript !== 'string') current.global.shutdownScript = ''
@@ -1992,6 +2002,9 @@ export function updateGlobalSettings(input: Partial<GlobalSettings>): GlobalSett
   if ('stopDevServersOnShutdown' in data && typeof data.stopDevServersOnShutdown !== 'boolean') {
     delete (data as Record<string, unknown>).stopDevServersOnShutdown
   }
+  if ('forceImmediateMessages' in data && typeof data.forceImmediateMessages !== 'boolean') {
+    delete (data as Record<string, unknown>).forceImmediateMessages
+  }
   if ('showProgressBars' in data && typeof data.showProgressBars !== 'boolean') {
     delete (data as Record<string, unknown>).showProgressBars
   }
@@ -2060,6 +2073,7 @@ export function updateGlobalSettings(input: Partial<GlobalSettings>): GlobalSett
     'autoPurgeOnPrMerged',
     'autoLoopMaxRetries',
     'agentWatchdogEnabled',
+    'forceImmediateMessages',
     'showProgressBars',
     'stopDevServersOnShutdown',
     'awaitingUserReminderMinutes',

@@ -1982,3 +1982,24 @@ it('rehydrates the selected progress scope on live-state refresh after reconnect
   expect(refresh).toHaveBeenCalledOnce()
   progress.reset()
 })
+
+it('uses forced confirmed delivery and reports rejection without creating a queued message', async () => {
+  setActivePinia(createPinia())
+  const { useWebSocketStore } = await import('../stores/websocket')
+  const { useWorkspaceStore } = await import('../stores/workspace')
+  const ws = useWebSocketStore()
+  const queue = vi.spyOn(useWorkspaceStore(), 'queueMessage')
+  const send = vi.spyOn(ws, '_send').mockReturnValue(true)
+  const pending = ws.sendChatMessageConfirmed('w1', 'now', 's1', true)
+  const payload = send.mock.calls[0]![0].payload as { clientMessageId: string; force: boolean }
+  expect(payload.force).toBe(true)
+  const rejected = expect(pending).rejects.toThrow('Session is not active')
+  ws._routeMessage({
+    type: 'chat:rejected',
+    workspaceId: 'w1',
+    payload: { ...payload, sessionId: 's1', content: 'now', message: 'Session is not active' },
+  })
+  await rejected
+  expect(queue).not.toHaveBeenCalled()
+  send.mockRestore()
+})

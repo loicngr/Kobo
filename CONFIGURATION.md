@@ -397,14 +397,43 @@ silently.
 
 ### Hook environment variables
 
-Every hook gets the standard set: `WORKSPACE_ID`, `WORKSPACE_NAME`,
-`BRANCH_NAME`, `SOURCE_BRANCH`, `PROJECT_PATH`, plus `KOBO_HOOK_EVENT` naming
-the event. On top of that:
+Settings → Scripts and each project's script fields include expandable
+**Available variables** help. Setup, cleanup, archive and lifecycle scripts all
+run in the workspace worktree (`PWD`) and receive:
+
+| Variable | Value |
+|---|---|
+| `WORKSPACE_ID`, `WORKSPACE_NAME` | Workspace identifier and display name |
+| `BRANCH_NAME`, `SOURCE_BRANCH` | Working branch and source branch |
+| `PROJECT_PATH` | Main repository path, not the worktree |
+| `INSTANCE` | Matching Docker instance name, or the lowercased branch with `/` and `_` replaced by `-` |
+| `PROJECT_NAME` | Exact Compose project name from the matching `PROJECT_PATH/.container/instances/*.env` file; empty without a known matching instance |
+
+Docker identity is resolved at each script execution using the same instance
+metadata as the dev-server panel. It never inherits a Docker project from the
+server's environment or guesses one from a folder name. In particular, setup
+before the first dev-server launch usually has an empty `PROJECT_NAME`.
+Keep the metadata file if later archive/PR hooks need that identity. These
+variables are specific to the shared workspace script runner; dev start/stop
+and change-source-branch commands have their own contracts documented below.
+
+Quote variables and guard destructive Docker commands against a missing project:
+
+```bash
+# Archive or PR merged — stop this stack, preserving volumes and images.
+docker compose -p "${PROJECT_NAME:?Missing Docker project}" down --remove-orphans
+```
+
+Add `--volumes --rmi local` only to also remove its Compose-managed volumes and
+images without custom tags. This does not remove every image on the Docker host.
+
+Lifecycle hooks also receive `KOBO_HOOK_EVENT` naming the event. On top of that:
 
 | Hook | Extra variables |
 |---|---|
 | Session ended | `KOBO_SESSION_ID`, `KOBO_SESSION_END_REASON` (`completed` / `error` / `killed` / `watchdog`), `KOBO_SESSION_EXIT_CODE` (empty when the engine reports none), `KOBO_SESSION_STOP_CAUSE` (`user`, `replacement`, `setup`, `archive`, or `shutdown`; empty for a natural end; superseded sessions and delete/purge stops skip the hook), `KOBO_AUTOLOOP_ACTIVE` (`1` when auto-loop is enabled, so a test run may overlap with the next agent's edits) |
 | PR merged | `KOBO_PR_NUMBER`, `KOBO_PR_URL` |
+| Kōbō shutdown | `KOBO_SHUTDOWN_SIGNAL` |
 | Auto-loop stopped | `KOBO_AUTOLOOP_REASON` (`completed` / `user-action`; blocked missions retain their intent and do not fire this hook), `KOBO_TASKS_PENDING` |
 
 Only `KOBO_`-prefixed variables are passed through from the event; a hook
@@ -850,6 +879,13 @@ The setting lives in `settings.json` under `global` and has no UI control yet:
 ## External LLM access through MCP
 
 An external MCP client can connect to `http://127.0.0.1:3000/api/mcp` using Streamable HTTP (use your backend's configured port). It can create workspaces with the same options as the form, diagnose and check out existing PRs, discover workspaces, read their conversations, send messages and answer pending questions. Workspace-bound stdio, global stdio and HTTP share the creation contract, including brainstorm settings, final auto-loop review, workflow policy, imports, existing worktrees, comparison grouping and inline attachments. All three transports also expose archive, disk-space purge, permanent deletion with explicit branch confirmation, unarchive and recovery of purged worktrees. See the [creation and PR guide](src/mcp-server/README.md#create_workspace) for fields, explicit checkout decisions and timeout/retry behavior.
+
+Both `create_workspace` and `send_workspace_message` accept inline `attachments`
+with `{name, mime_type, data_base64}`: 10 files, 50 MiB decoded total, same formats
+as the interface. Messages may contain only attachments. Kōbō saves them in the
+destination worktree and sends file/image references to the agent and chat.
+Keyed retries include attachment identity and never upload or send twice. See
+[Sending files and images](src/mcp-server/README.md#sending-files-and-images).
 
 Remote HTTP clients follow the [network access](#network-access) settings and supply the Kōbō token as `Authorization: Bearer <token>` or `X-Kobo-Token`. The endpoint uses the same Host/Origin and reverse-proxy policy as the rest of the backend. No network setting is changed automatically.
 
@@ -1424,6 +1460,23 @@ claude /login
 Kōbō talks to the embedded [`@anthropic-ai/claude-agent-sdk`](https://github.com/anthropics/claude-agent-sdk-typescript), which reuses the same login. The `claude` CLI is **not** required at runtime; you only need it for `/login`, `mcp add`, and other one-off setup commands. As a fallback you can export `ANTHROPIC_API_KEY` instead.
 
 The model selector is populated from [`src/shared/models.ts`](./src/shared/models.ts), also used by backend validation. This checkout includes Fable 5.1, Mythos 5, Opus 5, Opus 4.8, Sonnet 5 and older variants. Pick the default in **Settings → Agents**. Catalogue entries describe what Kōbō offers; provider access still depends on your account. `auto` leaves model selection to the runtime.
+
+#### Immediate chat messages
+
+**Settings → Agents → Force immediate message delivery** controls
+`forceImmediateMessages`, **false by default**, including existing installations.
+When enabled, new chat messages reach a busy Claude/Codex agent directly, like
+**Ctrl+Enter**, instead of waiting in Kōbō's message queue. Messages sent during
+an auto-loop go through immediate delivery and pause the active, ready loop.
+Previously queued instructions stay queued; changing the setting never sends
+old drafts automatically. The setting affects subsequent sends without restarting
+the server or agent.
+
+Compaction, pending questions/permissions, archive and session handoff guards
+still apply. Failed or rejected sends restore the draft; they do not silently
+queue it. MCP messages already use direct delivery and do not depend on this
+interface setting. Explicit next-iteration scheduling remains available through
+its dedicated auto-loop API.
 
 #### Session watchdogs
 

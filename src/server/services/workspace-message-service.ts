@@ -1,6 +1,8 @@
+import { type McpAttachment, validateMcpAttachments } from '../../shared/mcp-attachments.js'
 import type { MessageSource } from '../../shared/workspace-message-types.js'
-import { assertWorkspaceLifecycleAvailable } from '../utils/workspace-lifecycle-guard.js'
+import { assertWorkspaceLifecycleAvailable, withWorkspaceLifecycleGuard } from '../utils/workspace-lifecycle-guard.js'
 import { isAgentUnavailableError, isShuttingDown, sendMessage, startAgent } from './agent/orchestrator.js'
+import { attachmentReference, removeAttachments, type SavedAttachment, saveAttachments } from './attachment-service.js'
 import { hasLoopMessage } from './auto-loop-message-service.js'
 import * as autoLoop from './auto-loop-service.js'
 import { createChatReceipt } from './chat-receipt-service.js'
@@ -10,6 +12,7 @@ import { getActiveSession, getWorkspace, updateWorkspaceStatus } from './workspa
 export interface WorkspaceMessage {
   source?: MessageSource
   content: string
+  attachments?: McpAttachment[]
   sessionId?: string
   clientMessageId?: string
   force?: boolean
@@ -23,10 +26,28 @@ export async function deliverWorkspaceMessage(
   message: WorkspaceMessage,
   hooks?: { beforeDispatch?: () => void; persist?: (payload: unknown, sessionId?: string) => void },
 ): Promise<{ sessionId?: string }> {
+  // Keep the caller's original content unchanged for durable idempotency fingerprints.
+  message = { ...message }
   const receipt = createChatReceipt(workspaceId, message, hooks?.persist)
+  let saved: SavedAttachment[] = []
+  let attachmentWorktree: string | undefined
+  let dispatched = false
+  const beforeDispatch = () => {
+    if (saved.length) {
+      assertWorkspaceLifecycleAvailable(workspaceId)
+      const current = getWorkspace(workspaceId)
+      if (!current || current.archivedAt || current.worktreePurgedAt || current.worktreePath !== attachmentWorktree)
+        throw new Error('Workspace changed before attachment delivery')
+      if (current.status === 'compacting' || current.status === 'awaiting-user' || isShuttingDown())
+        throw new Error('Workspace is not ready to receive a message')
+    }
+    hooks?.beforeDispatch?.()
+    dispatched = true
+  }
   let reason: string | undefined
   try {
-    if (!message.content.trim()) throw new Error('Message content must not be empty')
+    const attachments = validateMcpAttachments(message.attachments)
+    if (!message.content.trim() && !attachments.length) throw new Error('Message content must not be empty')
     if (isShuttingDown()) throw new Error('Kōbō is shutting down')
     assertWorkspaceLifecycleAvailable(workspaceId)
     const workspace = getWorkspace(workspaceId)
@@ -34,6 +55,7 @@ export async function deliverWorkspaceMessage(
     if (workspace.archivedAt || workspace.worktreePurgedAt)
       throw new Error('Restore the workspace before sending a message')
     if (message.delivery === 'next_iteration') {
+      if (attachments.length) throw new Error('Attachments require immediate delivery')
       if (!message.clientMessageId) throw new Error('clientMessageId is required for queued delivery')
       const acceptedBefore = hasLoopMessage(workspaceId, message.clientMessageId)
       if (!acceptedBefore) {
@@ -54,11 +76,29 @@ export async function deliverWorkspaceMessage(
       reason = 'awaiting-user'
       throw new Error('Answer the pending question or permission request before sending a chat message')
     }
+    if (attachments.length) {
+      attachmentWorktree = workspace.worktreePath
+      await withWorkspaceLifecycleGuard(workspaceId, async () => {
+        const files = attachments.map(
+          (file) => new File([Buffer.from(file.data_base64, 'base64')], file.name, { type: file.mime_type }),
+        )
+        saved = await saveAttachments(workspace.worktreePath, files)
+      })
+      assertWorkspaceLifecycleAvailable(workspaceId)
+      const current = getWorkspace(workspaceId)
+      if (!current || current.archivedAt || current.worktreePurgedAt || current.worktreePath !== attachmentWorktree)
+        throw new Error('Workspace changed while saving attachments')
+      if (current.status === 'compacting' || current.status === 'awaiting-user' || isShuttingDown())
+        throw new Error('Workspace is not ready to receive a message')
+      message.content = [message.content.trim(), ...saved.map(attachmentReference)].filter(Boolean).join('\n\n')
+      // Binary data never belongs in the chat receipt or agent prompt.
+      delete message.attachments
+    }
+    const trackDispatch = !!hooks?.beforeDispatch || saved.length > 0
     const loop = autoLoop.getStatus(workspaceId)
     let sessionId = message.sessionId ?? getActiveSession(workspaceId)?.id
     try {
-      if (hooks?.beforeDispatch)
-        await sendMessage(workspaceId, message.content, message.sessionId, hooks.beforeDispatch)
+      if (trackDispatch) await sendMessage(workspaceId, message.content, message.sessionId, beforeDispatch)
       else await sendMessage(workspaceId, message.content, message.sessionId)
     } catch (error) {
       if (!isAgentUnavailableError(error instanceof Error ? error.message : String(error))) throw error
@@ -75,7 +115,7 @@ export async function deliverWorkspaceMessage(
         message.agentPermissionModeOverride ?? current.agentPermissionMode,
         message.sessionId,
         current.reasoningEffort,
-        ...(hooks?.beforeDispatch ? [hooks.beforeDispatch] : []),
+        ...(trackDispatch ? [beforeDispatch] : []),
       )
       updateWorkspaceStatus(workspaceId, 'executing')
       sessionId = message.sessionId ?? started.agentSessionId
@@ -84,6 +124,21 @@ export async function deliverWorkspaceMessage(
     receipt.accept(sessionId)
     return { sessionId }
   } catch (error) {
+    // Once dispatch may have happened, keep files available to the agent even if
+    // acknowledgement failed. Only remove files from a definitively rejected send.
+    if (saved.length && attachmentWorktree && !dispatched) {
+      const worktree = attachmentWorktree
+      try {
+        await withWorkspaceLifecycleGuard(workspaceId, async () => {
+          const current = getWorkspace(workspaceId)
+          if (!current || current.worktreePurgedAt || current.worktreePath !== worktree) return
+          for (const warning of await removeAttachments(worktree, saved))
+            console.warn(`[message-attachments] ${warning}`)
+        })
+      } catch {
+        // A competing lifecycle operation owns the checkout now; do not touch it.
+      }
+    }
     receipt.reject(error instanceof Error ? error.message : String(error), reason)
     throw error
   }

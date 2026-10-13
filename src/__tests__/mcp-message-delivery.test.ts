@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -24,7 +24,7 @@ import { sendMessage, startAgent } from '../server/services/agent/orchestrator.j
 
 let directory: string
 const args = { workspace_id: 'ws', content: 'hello', session_id: 's', idempotency_key: 'one-intent' }
-const send = (input = args) => executeWorkspaceDialogueTool('send_workspace_message', input)
+const send = (input: Record<string, unknown> = args) => executeWorkspaceDialogueTool('send_workspace_message', input)
 beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(sendMessage).mockImplementation(async (_ws, _content, _session, beforeDispatch) => {
@@ -128,4 +128,87 @@ it('keeps the same reservation when an unavailable engine requires the normal re
   expect(await send()).toMatchObject({ accepted: true })
   expect(await send()).toMatchObject({ accepted: true, replayed: true })
   expect(startAgent).toHaveBeenCalledTimes(1)
+})
+
+const note = {
+  name: 'note.md',
+  mime_type: 'text/markdown',
+  data_base64: Buffer.from('Task details').toString('base64'),
+}
+const picture = {
+  name: 'screen.png',
+  mime_type: 'image/png',
+  data_base64: Buffer.from('png-content').toString('base64'),
+}
+function prepareWorktree() {
+  const worktree = join(directory, 'worktree')
+  mkdirSync(worktree)
+  getDb().prepare('UPDATE workspaces SET worktree_path=?').run(worktree)
+  return worktree
+}
+it('saves images and documents, delivers references and persists them in chat', async () => {
+  const worktree = prepareWorktree()
+  const result = await send({ ...args, attachments: [note, picture] })
+  expect(result).toMatchObject({ accepted: true })
+  const content = vi.mocked(sendMessage).mock.calls[0]![1]
+  const file = /\[file: (.*?)\]/.exec(content)![1]!
+  const image = /\[image: (.*?)\]/.exec(content)![1]!
+  expect(readFileSync(join(worktree, file), 'utf8')).toBe('Task details')
+  expect(readFileSync(join(worktree, image), 'utf8')).toBe('png-content')
+  const history = await executeWorkspaceDialogueTool('read_workspace_messages', { workspace_id: 'ws' })
+  expect(history).toMatchObject({ messages: [{ text: content }] })
+  expect(JSON.stringify(history)).not.toContain(note.data_base64)
+})
+it('replays attached messages without writing or dispatching twice and rejects changed attachments', async () => {
+  const worktree = prepareWorktree()
+  const input = { ...args, attachments: [note] }
+  await send(input)
+  expect(await send(input)).toMatchObject({ accepted: true, replayed: true })
+  expect(
+    await send({ ...input, attachments: [{ ...note, data_base64: Buffer.from('changed').toString('base64') }] }),
+  ).toMatchObject({ code: 'idempotency_conflict' })
+  expect(readdirSync(join(worktree, '.ai/attachments'))).toHaveLength(1)
+  expect(sendMessage).toHaveBeenCalledTimes(1)
+})
+it('accepts an attachment-only message without an idempotency key', async () => {
+  prepareWorktree()
+  expect(
+    await executeWorkspaceDialogueTool('send_workspace_message', { workspace_id: 'ws', attachments: [note] }),
+  ).toMatchObject({ accepted: true })
+  expect(vi.mocked(sendMessage).mock.calls[0]![1]).toContain('[file:')
+})
+it('does not save attachments for archived or compacting workspaces', async () => {
+  const worktree = prepareWorktree()
+  getDb().exec("UPDATE workspaces SET status='compacting'")
+  expect(await send({ ...args, attachments: [note] })).toMatchObject({ code: 'delivery_rejected' })
+  expect(existsSync(join(worktree, '.ai'))).toBe(false)
+})
+it('removes attachments rejected before dispatch but retains them after ambiguous delivery', async () => {
+  const worktree = prepareWorktree()
+  vi.mocked(sendMessage).mockRejectedValueOnce(new Error('Session is not active'))
+  expect(await send({ ...args, attachments: [note] })).toMatchObject({ code: 'delivery_rejected' })
+  expect(readdirSync(join(worktree, '.ai/attachments'))).toHaveLength(0)
+  vi.mocked(sendMessage).mockImplementationOnce(async (_ws, _content, _session, beforeDispatch) => {
+    beforeDispatch?.()
+    throw new Error('Connection lost')
+  })
+  expect(await send({ ...args, idempotency_key: 'second', attachments: [note] })).toMatchObject({
+    code: 'delivery_unknown',
+  })
+  expect(readdirSync(join(worktree, '.ai/attachments'))).toHaveLength(1)
+})
+
+it.each(['worktree', 'status'])('revalidates attachment ownership at dispatch after a %s change', async (change) => {
+  prepareWorktree()
+  let nativeDispatches = 0
+  vi.mocked(sendMessage).mockImplementationOnce(async (_ws, _content, _session, beforeDispatch) => {
+    // Simulate the controller waiting for engine startup while metadata changes.
+    await Promise.resolve()
+    if (change === 'worktree') getDb().prepare('UPDATE workspaces SET worktree_path=?').run(join(directory, 'renamed'))
+    else getDb().exec("UPDATE workspaces SET status='awaiting-user'")
+    beforeDispatch?.()
+    nativeDispatches++
+  })
+  expect(await send({ ...args, attachments: [note] })).toMatchObject({ code: 'delivery_rejected' })
+  expect(nativeDispatches).toBe(0)
 })

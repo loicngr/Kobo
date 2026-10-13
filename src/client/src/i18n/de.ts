@@ -1114,6 +1114,25 @@ export default {
   'settings.setupScript': 'Setup-Skript',
   'settings.cleanupScript': 'Cleanup-Skript',
   'settings.archiveScript': 'Archiv-Skript',
+  'settings.scriptVariables.title': 'Verfügbare Variablen',
+  'settings.scriptVariables.cwd':
+    'Ausführung im Worktree des Workspaces (PWD). Werte gelten für diese Ausführung; Shell-Variablen in Anführungszeichen setzen.',
+  'settings.scriptVariables.workspaceId': 'Workspace-ID.',
+  'settings.scriptVariables.workspaceName': 'Workspace-Name.',
+  'settings.scriptVariables.branchName': 'Arbeitsbranch.',
+  'settings.scriptVariables.sourceBranch': 'Quellbranch.',
+  'settings.scriptVariables.projectPath': 'Pfad des Hauptrepositorys, nicht des Worktrees.',
+  'settings.scriptVariables.instance':
+    'Name der bekannten Docker-Instanz; sonst Branch in Kleinbuchstaben, / und _ durch - ersetzt.',
+  'settings.scriptVariables.projectName':
+    'Exakter Docker-Compose-Projektname aus der passenden Datei PROJECT_PATH/.container/instances/*.env. Leer ohne passende Instanz, etwa vor dem ersten Start des Entwicklungsservers.',
+  'settings.scriptVariables.guard':
+    'Bei leerem PROJECT_NAME Docker nicht ausführen. Stopp-Beispiel mit Erhalt von Volumes und Images:',
+  'settings.scriptVariables.session-ended':
+    'Sitzungs-ID; Grund (completed, error, killed, watchdog); Exit-Code (leer wenn unbekannt); Stopp-Ursache (user, replacement, setup, archive, shutdown oder leer bei natürlichem Ende); Auto-Loop aktiv (1 oder 0).',
+  'settings.scriptVariables.pr-merged': 'Nummer und URL des gemergten PR.',
+  'settings.scriptVariables.autoloop-disabled': 'Grund (completed oder user-action) und Anzahl ausstehender Aufgaben.',
+  'settings.scriptVariables.kobo-shutdown': 'Von Kōbō empfangenes Signal: SIGINT oder SIGTERM.',
   'settings.archiveScriptHint':
     'Shell-Skript, das serverseitig im Worktree ausgeführt wird, wenn ein Workspace archiviert wird. Leer lassen zum Deaktivieren.',
   'settings.archiveScriptPlaceholder': 'z. B. Container aufräumen, Speicherplatz freigeben…',
@@ -1331,7 +1350,7 @@ export default {
     'Notion- und Sentry-Verbindungen sowie Bitbucket-Zugangsdaten. GitHub und GitLab verwenden Ihre lokale CLI-Anmeldung.',
   'tours.settings.automation.title': 'Automatisierung',
   'tours.settings.automation.description':
-    'Setup- und Cleanup-Skripte, Lifecycle-Hooks, Prompt-Templates, Workspace-Templates und Skills.',
+    'Setup- und Cleanup-Skripte, Lifecycle-Hooks, Prompt-Templates, Workspace-Templates und Skills. Unter jedem Skript zeigt „Verfügbare Variablen“ die Workspace-, Docker- und Hook-Variablen.',
   'tours.settings.worktrees.title': 'Worktrees',
   'tours.settings.memory.title': 'Erinnerungen',
   'tours.settings.memory.description':
@@ -1979,9 +1998,15 @@ export default {
   'settings.autoPurgeOnPrMerged': 'Worktree automatisch löschen, wenn PR gemerged',
   'settings.autoPurgeOnPrMergedHint':
     'Wenn aktiviert, wird der Worktree von der Festplatte gelöscht, sobald die PR gemerged wird (zusätzlich zur automatischen Archivierung). Chat-Verlauf bleibt erhalten.',
+  'settings.forceImmediateMessages': 'Nachrichten sofort senden',
+  'settings.forceImmediateMessagesHint':
+    'Standardmäßig deaktiviert. Neue Nachrichten während der Arbeit des Agenten wie mit Strg+Enter ohne Warteschlange senden. Bei Auto-Loop sofort senden und die Schleife pausieren. Bereits wartende Nachrichten bleiben unverändert; Komprimierungs- und Berechtigungssperren gelten weiterhin.',
   'settings.showProgressBars': 'Fortschrittsbalken anzeigen',
   'settings.showProgressBarsHint':
     'Standardmäßig aktiviert. Das Ausblenden schließt keine Aktivitäten und beendet nicht deren Verfolgung. Änderungen gelten nach dem Speichern.',
+  'tours.settings.immediateMessages.title': 'Sofort senden',
+  'tours.settings.immediateMessages.description':
+    'Diese Einstellung sendet neue Nachrichten direkt wie mit Strg+Enter. Standardmäßig deaktiviert: Nachrichten warten bis zum Ende des Turns.',
   'tours.settings.progressBars.title': 'Fortschrittsbalken',
   'tours.settings.progressBars.description':
     'Blenden Sie die Balken über dem Nachrichtenfeld ein oder aus. Die Verfolgung läuft auch ausgeblendet weiter.',

@@ -67,6 +67,7 @@ beforeEach(() => {
 
 afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true })
+  vi.unstubAllEnvs()
   delete process.env.WORKTREE_DUMP
 })
 
@@ -234,7 +235,12 @@ describe('lifecycle hook entry points', () => {
   })
 })
 
-it('passes the exact Docker instance identity to the shutdown script in its worktree', async () => {
+it.each([
+  ['kobo-shutdown', 'shutdownScript'],
+  ['pr-merged', 'prMergedScript'],
+  ['session-ended', 'sessionEndedScript'],
+  ['autoloop-disabled', 'autoLoopDisabledScript'],
+] as const)('passes the exact Docker identity to %s in its worktree', async (event, setting) => {
   const project = path.join(tmpDir, 'base-project')
   fs.mkdirSync(path.join(project, '.container/instances'), { recursive: true })
   fs.writeFileSync(
@@ -242,19 +248,30 @@ it('passes the exact Docker instance identity to the shutdown script in its work
     'INSTANCE_NAME=feature-x\nPROJECT_NAME=sekur-feature-x\nHTTP_PORT=8710\n',
   )
   workspaceRow = { ...workspaceRow, project_path: project }
-  effectiveSettings.shutdownScript = DUMP_ENV
-  expect(await runLifecycleHook('kobo-shutdown', 'ws-1', { KOBO_SHUTDOWN_SIGNAL: 'SIGTERM' })).toEqual({ exitCode: 0 })
+  fs.writeFileSync(
+    path.join(project, '.container/instances/other.env'),
+    'INSTANCE_NAME=feature-other\nPROJECT_NAME=other-stack\n',
+  )
+  vi.stubEnv('PROJECT_NAME', 'unrelated-host-stack')
+  effectiveSettings[setting] = DUMP_ENV
+  expect(await runLifecycleHook(event, 'ws-1', { KOBO_SHUTDOWN_SIGNAL: 'SIGTERM' })).toEqual({ exitCode: 0 })
   const env = readDump()
   expect(env.PROJECT_NAME).toBe('sekur-feature-x')
   expect(env.INSTANCE).toBe('feature-x')
-  expect(env.PWD).toBe(tmpDir)
+  expect(fs.realpathSync(env.PWD!)).toBe(fs.realpathSync(tmpDir))
   expect(env.KOBO_SHUTDOWN_SIGNAL).toBe('SIGTERM')
-  expect(env.KOBO_HOOK_EVENT).toBe('kobo-shutdown')
+  expect(env.KOBO_HOOK_EVENT).toBe(event)
 })
 
-it('does not guess a Docker project when the instance is unknown', async () => {
+it.each([
+  ['kobo-shutdown', 'shutdownScript'],
+  ['pr-merged', 'prMergedScript'],
+  ['session-ended', 'sessionEndedScript'],
+  ['autoloop-disabled', 'autoLoopDisabledScript'],
+] as const)('refuses an unknown Docker project in %s even with ambient identity', async (event, setting) => {
   workspaceRow = { ...workspaceRow, project_path: path.join(tmpDir, 'no-instance') }
+  vi.stubEnv('PROJECT_NAME', 'unrelated-host-stack')
   // biome-ignore lint/suspicious/noTemplateCurlyInString: bash parameter expansion, not JavaScript
-  effectiveSettings.shutdownScript = 'test -n "${PROJECT_NAME:?Missing Docker project}"'
-  expect(await runLifecycleHook('kobo-shutdown', 'ws-1', { KOBO_SHUTDOWN_SIGNAL: 'SIGINT' })).toEqual({ exitCode: 1 })
+  effectiveSettings[setting] = 'test -n "${PROJECT_NAME:?Missing Docker project}"'
+  expect(await runLifecycleHook(event, 'ws-1', {})).toEqual({ exitCode: 1 })
 })

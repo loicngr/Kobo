@@ -3,13 +3,10 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import { Hono } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
+import { MAX_MCP_ATTACHMENT_REQUEST_BYTES } from '../../shared/mcp-attachments.js'
 import { EXTERNAL_MEMORY_TOOL_DEFINITIONS, isMemoryToolName } from '../../shared/memory-tools.js'
 import { isProgressBarTool, PROGRESS_BAR_TOOLS } from '../../shared/progress-bar-tools.js'
-import {
-  isWorkspaceCreationTool,
-  MAX_MCP_CREATION_REQUEST_BYTES,
-  WORKSPACE_CREATION_TOOLS,
-} from '../../shared/workspace-creation-tools.js'
+import { isWorkspaceCreationTool, WORKSPACE_CREATION_TOOLS } from '../../shared/workspace-creation-tools.js'
 import { EXTERNAL_MCP_TOOLS } from '../../shared/workspace-dialogue-tools.js'
 import {
   isWorkspaceGroupMessageTool,
@@ -33,21 +30,26 @@ import {
 import { prepareMemoryToolEnvelope } from '../utils/memory-token-budget.js'
 
 const app = new Hono()
-// Only creation envelopes may carry the larger, base64 attachment payload.
+// Only creation and message envelopes may carry the larger, base64 attachment payload.
 // Other tools retain their existing 1 MiB limit, including malformed envelopes.
-app.use('*', bodyLimit({ maxSize: MAX_MCP_CREATION_REQUEST_BYTES }))
+app.use('*', bodyLimit({ maxSize: MAX_MCP_ATTACHMENT_REQUEST_BYTES }))
 app.use('*', async (c, next) => {
   if (c.req.raw.body) {
     const body = await c.req.raw.clone().arrayBuffer()
     if (body.byteLength > 1024 * 1024) {
-      let creation = false
+      let attachmentTool = false
       try {
         const envelope = JSON.parse(new TextDecoder().decode(body))
-        creation = envelope?.method === 'tools/call' && envelope?.params?.name === 'create_workspace'
+        attachmentTool =
+          envelope?.method === 'tools/call' &&
+          (envelope?.params?.name === 'create_workspace' ||
+            (envelope?.params?.name === 'send_workspace_message' &&
+              Array.isArray(envelope?.params?.arguments?.attachments) &&
+              envelope.params.arguments.attachments.length > 0))
       } catch {
         /* Preserve the normal body-size rejection for malformed input. */
       }
-      if (!creation) return c.json({ error: 'MCP request is too large' }, 413)
+      if (!attachmentTool) return c.json({ error: 'MCP request is too large' }, 413)
     }
   }
   return next()
@@ -80,7 +82,7 @@ app.all('/', async (c) => {
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
     enableJsonResponse: true,
-    maxRequestBodySize: MAX_MCP_CREATION_REQUEST_BYTES,
+    maxRequestBodySize: MAX_MCP_ATTACHMENT_REQUEST_BYTES,
   })
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: [

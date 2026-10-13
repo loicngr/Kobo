@@ -117,6 +117,7 @@ interface GlobalSettings {
   autoPurgeOnPrMerged: boolean
   autoLoopMaxRetries: number
   agentWatchdogEnabled: boolean
+  forceImmediateMessages: boolean
   showProgressBars: boolean
   stopDevServersOnShutdown: boolean
   /** Minutes before Kōbō reminds you about an unanswered question. 0 = off. */
@@ -264,6 +265,7 @@ export const useSettingsStore = defineStore('settings', {
       autoPurgeOnPrMerged: false,
       autoLoopMaxRetries: 5,
       agentWatchdogEnabled: false,
+      forceImmediateMessages: false,
       showProgressBars: true,
       stopDevServersOnShutdown: true,
       awaitingUserReminderMinutes: 0,

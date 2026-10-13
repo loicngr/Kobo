@@ -205,6 +205,26 @@ describe('settings drafts', () => {
     expect(controls()[1]!.props('modelValue')).toBe('echo stopping')
   })
 
+  it('saves immediate chat delivery and restores the persisted preference', async () => {
+    const { wrapper, store, tab, vm } = await setup()
+    await tab('agents')
+    const control = () => wrapper.getComponent<typeof Field>('[data-tour="settings-immediate-messages"] input')
+    expect(control().props('modelValue')).toBe(false)
+    control().vm.$emit('update:modelValue', true)
+    await flushPromises()
+    expect(hasUnsavedWork()).toBe(true)
+    await vm.savebarSave()
+    await flushPromises()
+    expect(api).toHaveBeenCalledWith(
+      '/api/settings/global',
+      expect.objectContaining({ body: expect.objectContaining({ forceImmediateMessages: true }) }),
+    )
+    expect(store.global.forceImmediateMessages).toBe(true)
+    vm.syncGlobalForm()
+    await flushPromises()
+    expect(control().props('modelValue')).toBe(true)
+  })
+
   it('saves progress visibility and restores the persisted preference', async () => {
     const { wrapper, store, tab, vm } = await setup()
     await tab('agents')

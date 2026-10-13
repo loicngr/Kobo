@@ -14,7 +14,7 @@ export async function deliverKeyedMcpMessage(
   message: WorkspaceMessage,
 ): Promise<MessageRequestResult> {
   const db = getDb()
-  const request = reserveMessageRequest(db, workspaceId, key, message.content, message.sessionId)
+  const request = reserveMessageRequest(db, workspaceId, key, message.content, message.sessionId, message.attachments)
   if (!request.fresh) return request.result
   let dispatched = false
   let accepted: Extract<MessageRequestResult, { accepted: true }> | undefined

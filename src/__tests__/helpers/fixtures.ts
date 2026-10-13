@@ -171,6 +171,7 @@ export function makeGlobalSettings(overrides: Partial<GlobalSettings> = {}): Glo
     autoPurgeOnPrMerged: false,
     autoLoopMaxRetries: 5,
     agentWatchdogEnabled: false,
+    forceImmediateMessages: false,
     showProgressBars: true,
     stopDevServersOnShutdown: true,
     awaitingUserReminderMinutes: 0,

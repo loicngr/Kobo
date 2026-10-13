@@ -5,6 +5,7 @@ import { defineComponent, ref } from 'vue'
 import { createI18n } from 'vue-i18n'
 import ChatInput from '../components/ChatInput.vue'
 import en from '../i18n/en'
+import { useSettingsStore } from '../stores/settings'
 import { useWebSocketStore } from '../stores/websocket'
 import { useWorkspaceStore, type Workspace } from '../stores/workspace'
 
@@ -276,3 +277,85 @@ it('records accepted queued instructions in their original workspace history aft
   expect(historyPosts).toHaveLength(1)
   expect(historyPosts[0]![0]).toBe('/api/workspaces/a/chat-history')
 })
+
+it.each(['claude-code', 'codex'] as const)(
+  'forces immediate busy messages with attachments for %s when enabled',
+  async (engine) => {
+    const { store, wrapper } = await setup('executing')
+    store.workspaces[0]!.engine = engine
+    store.sessions[0]!.status = 'running'
+    useSettingsStore().global.forceImmediateMessages = true
+    const ws = useWebSocketStore()
+    vi.spyOn(ws, 'isConnected').mockReturnValue(true)
+    const send = vi.spyOn(ws, 'sendChatMessageConfirmed').mockResolvedValue()
+    await attach(wrapper)
+    await wrapper.get('button[data-icon="send"]').trigger('click')
+    await flushPromises()
+    expect(send).toHaveBeenCalledWith('a', expect.stringContaining('[file:'), 'session', true)
+    expect(store.getQueuedMessage('a', 'session')).toBeFalsy()
+    expect(wrapper.get('textarea').element.value).toBe('')
+    expect(deletes()).toEqual([])
+  },
+)
+it('restores the draft when an immediate send cannot reach the server', async () => {
+  const { store, wrapper } = await setup('executing')
+  store.sessions[0]!.status = 'running'
+  useSettingsStore().global.forceImmediateMessages = true
+  const ws = useWebSocketStore()
+  vi.spyOn(ws, 'isConnected').mockReturnValue(true)
+  vi.spyOn(ws, 'sendChatMessageConfirmed').mockRejectedValue(new Error('offline'))
+  await attach(wrapper)
+  await wrapper.get('button[data-icon="send"]').trigger('click')
+  await flushPromises()
+  expect(wrapper.get('textarea').element.value).toContain('[file:')
+  expect(store.getQueuedMessage('a', 'session')).toBeFalsy()
+  expect(deletes()).toEqual([])
+})
+it('uses immediate delivery instead of scheduling an auto-loop instruction when enabled', async () => {
+  const { store, wrapper } = await setup('executing')
+  store.sessions[0]!.status = 'running'
+  store.workspaces[0]!.autoLoop = true
+  useSettingsStore().global.forceImmediateMessages = true
+  const ws = useWebSocketStore()
+  vi.spyOn(ws, 'isConnected').mockReturnValue(true)
+  const send = vi.spyOn(ws, 'sendChatMessageConfirmed').mockResolvedValue()
+  const queued = vi.spyOn(store, 'queueAutoLoopMessage').mockResolvedValue()
+  await wrapper.get('textarea').setValue('Do this now')
+  await wrapper.get('button[data-icon="send"]').trigger('click')
+  await flushPromises()
+  expect(queued).not.toHaveBeenCalled()
+  expect(send).toHaveBeenCalledWith('a', 'Do this now', 'session', true)
+})
+it.each(['compacting', 'awaiting-user'] as const)(
+  'keeps %s protection with immediate delivery enabled',
+  async (status) => {
+    const { wrapper } = await setup(status)
+    useSettingsStore().global.forceImmediateMessages = true
+    const send = vi.spyOn(useWebSocketStore(), 'sendChatMessageConfirmed').mockResolvedValue()
+    await wrapper.get('textarea').setValue('Wait safely')
+    await wrapper.get('button[data-icon="send"]').trigger('click')
+    await flushPromises()
+    expect(send).not.toHaveBeenCalled()
+    expect(wrapper.get('textarea').element.value).toBe('Wait safely')
+  },
+)
+
+it.each(['ordinary message', '/kobo-check-progress'])(
+  'does not queue rejected idle-session messages in immediate mode: %s',
+  async (content) => {
+    const { store, wrapper } = await setup('idle')
+    store.sessions[0]!.status = 'running'
+    useSettingsStore().global.forceImmediateMessages = true
+    const ws = useWebSocketStore()
+    vi.spyOn(ws, 'isConnected').mockReturnValue(true)
+    const confirmed = vi.spyOn(ws, 'sendChatMessageConfirmed').mockRejectedValue(new Error('Pending permission'))
+    const unconfirmed = vi.spyOn(ws, 'sendChatMessage').mockReturnValue(true)
+    await wrapper.get('textarea').setValue(content)
+    await wrapper.get('button[data-icon="send"]').trigger('click')
+    await flushPromises()
+    expect(confirmed).toHaveBeenCalled()
+    expect(unconfirmed).not.toHaveBeenCalled()
+    expect(store.getQueuedMessage('a', 'session')).toBeFalsy()
+    expect(wrapper.get('textarea').element.value).toBe(content)
+  },
+)

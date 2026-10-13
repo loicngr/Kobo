@@ -1,4 +1,5 @@
 import type { Tool } from '@modelcontextprotocol/sdk/types.js'
+import { MCP_ATTACHMENTS_SCHEMA, validateMcpAttachments } from './mcp-attachments.js'
 
 const workspace = { type: 'string', minLength: 1, maxLength: 200, description: 'Workspace ID from list_workspaces.' }
 const session = {
@@ -54,20 +55,21 @@ export const WORKSPACE_DIALOGUE_TOOLS: Tool[] = [
   ),
   tool(
     'send_workspace_message',
-    'Send a message to an agent, resuming it if needed. Returns acceptance, not the agent reply; read_workspace_messages retrieves replies. Uses the configured permission mode and pauses active auto-loop. Do not retry blindly after an ambiguous connection failure. Do not send to your own workspace.',
+    'Send text and/or inline base64 files/images to an agent, resuming it if needed. Attachments use the same format as create_workspace (10 files, 50 MiB total). Returns acceptance, not the agent reply; read_workspace_messages retrieves replies. Uses the configured permission mode and pauses active auto-loop. Do not retry blindly after an ambiguous connection failure. Do not send to your own workspace.',
     {
       workspace_id: workspace,
       session_id: session,
-      content: { type: 'string', minLength: 1, maxLength: 100_000 },
+      content: { type: 'string', minLength: 0, maxLength: 100_000 },
+      attachments: MCP_ATTACHMENTS_SCHEMA,
       idempotency_key: {
         type: 'string',
         minLength: 1,
         maxLength: 200,
         description:
-          'Generate once per intended message; reuse on retries to prevent duplicate dispatch, including after restart. Reuse with different content/session is rejected.',
+          'Generate once per intended message; reuse on retries to prevent duplicate dispatch, including after restart. Reuse with different content/session/attachments is rejected.',
       },
     },
-    ['workspace_id', 'content'],
+    ['workspace_id'],
     false,
   ),
   tool(
@@ -106,8 +108,14 @@ export function validateDialogueArguments(name: string, value: unknown): Record<
   for (const [key, input] of Object.entries(args)) {
     const property = properties[key]
     if (!Object.hasOwn(properties, key)) throw new Error(`Unknown argument '${key}'`)
-    if (property.type === 'string') {
-      if (typeof input !== 'string' || !input.trim() || input.length > (property.maxLength ?? 100_000))
+    if (key === 'attachments') {
+      validateMcpAttachments(input)
+    } else if (property.type === 'string') {
+      if (
+        typeof input !== 'string' ||
+        (property.minLength !== 0 && !input.trim()) ||
+        input.length > (property.maxLength ?? 100_000)
+      )
         throw new Error(`${key} must be a non-empty string within its length limit`)
     } else if (property.type === 'boolean') {
       if (typeof input !== 'boolean') throw new Error(`${key} must be a boolean`)
@@ -128,6 +136,11 @@ export function validateDialogueArguments(name: string, value: unknown): Record<
     ) {
       throw new Error(`${key} must be a non-empty object of string answers`)
     }
+  }
+  if (name === 'send_workspace_message') {
+    if (!(args.content as string | undefined)?.trim() && !validateMcpAttachments(args.attachments).length)
+      throw new Error('Message content or attachments are required')
+    return { ...args, content: args.content ?? '' }
   }
   return args
 }

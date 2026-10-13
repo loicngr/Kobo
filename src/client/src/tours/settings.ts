@@ -49,6 +49,13 @@ export const settingsTour: TourDefinition = {
               beforeShow: () => clickAnchor('settings-nav-agents', 'settings-agent-watchdog'),
             },
             {
+              id: 'settings-immediate-messages',
+              anchor: 'settings-immediate-messages',
+              i18nKey: 'tours.settings.immediateMessages',
+              clickTarget: 'settings-nav-agents',
+              beforeShow: () => clickAnchor('settings-nav-agents', 'settings-immediate-messages'),
+            },
+            {
               id: 'settings-progress-bars',
               anchor: 'settings-progress-bars',
               i18nKey: 'tours.settings.progressBars',

@@ -1112,6 +1112,25 @@ export default {
   'settings.setupScript': 'Script de setup',
   'settings.cleanupScript': 'Script de cleanup',
   'settings.archiveScript': "Script d'archivage",
+  'settings.scriptVariables.title': 'Variables disponibles',
+  'settings.scriptVariables.cwd':
+    'Exécution dans le worktree du workspace (PWD). Valeurs propres à chaque exécution ; protégez les variables shell avec des guillemets.',
+  'settings.scriptVariables.workspaceId': 'Identifiant du workspace.',
+  'settings.scriptVariables.workspaceName': 'Nom du workspace.',
+  'settings.scriptVariables.branchName': 'Branche de travail.',
+  'settings.scriptVariables.sourceBranch': 'Branche source.',
+  'settings.scriptVariables.projectPath': 'Chemin du dépôt principal, pas du worktree.',
+  'settings.scriptVariables.instance':
+    'Nom de l’instance Docker connue ; sinon branche en minuscules avec / et _ remplacés par -.',
+  'settings.scriptVariables.projectName':
+    'Nom exact du projet Docker Compose, lu dans le fichier correspondant de PROJECT_PATH/.container/instances/*.env. Vide si aucune instance ne correspond ; notamment avant le premier lancement du serveur de dev.',
+  'settings.scriptVariables.guard':
+    'Pour Docker, refusez de continuer si PROJECT_NAME est vide. Exemple d’arrêt conservant les volumes et les images :',
+  'settings.scriptVariables.session-ended':
+    'ID de session ; raison (completed, error, killed, watchdog) ; code de sortie (vide si inconnu) ; cause de l’arrêt (user, replacement, setup, archive, shutdown, ou vide si naturel) ; auto-loop active (1 ou 0).',
+  'settings.scriptVariables.pr-merged': 'Numéro et URL de la PR mergée.',
+  'settings.scriptVariables.autoloop-disabled': 'Raison (completed ou user-action) et nombre de tâches en attente.',
+  'settings.scriptVariables.kobo-shutdown': 'Signal reçu par Kōbō : SIGINT ou SIGTERM.',
   'settings.archiveScriptHint':
     'Script shell exécuté côté serveur dans le worktree quand un workspace est archivé. Laisser vide pour désactiver.',
   'settings.archiveScriptPlaceholder': "ex. nettoyer des conteneurs, libérer de l'espace disque…",
@@ -1329,7 +1348,7 @@ export default {
     'Connexions Notion et Sentry, et identifiants Bitbucket. GitHub et GitLab utilisent votre connexion CLI locale.',
   'tours.settings.automation.title': 'Automatisation',
   'tours.settings.automation.description':
-    'Scripts de setup et de cleanup, hooks de cycle de vie, templates de prompts, templates de workspace et skills.',
+    'Scripts de setup et de cleanup, hooks de cycle de vie, templates de prompts, templates de workspace et skills. Ouvrez « Variables disponibles » sous chaque script pour connaître les variables du workspace, de Docker et du hook.',
   'tours.settings.worktrees.title': 'Worktrees',
   'tours.settings.memory.title': 'Mémoire',
   'tours.settings.memory.description':
@@ -1977,9 +1996,15 @@ export default {
   'settings.autoPurgeOnPrMerged': 'Purger le worktree quand la PR est mergée',
   'settings.autoPurgeOnPrMergedHint':
     "Quand activé, le worktree est supprimé du disque dès que la PR est mergée (en plus de l'archivage auto). L'historique des messages est conservé.",
+  'settings.forceImmediateMessages': 'Forcer l’envoi immédiat des messages',
+  'settings.forceImmediateMessagesHint':
+    'Désactivé par défaut. Envoie les nouveaux messages pendant que l’agent travaille, comme Ctrl+Entrée, sans les mettre en file d’attente. En auto-loop, envoie maintenant et met la boucle en pause. Les messages déjà en attente restent inchangés ; les blocages de compaction et d’autorisation restent actifs.',
   'settings.showProgressBars': 'Afficher les barres de progression',
   'settings.showProgressBarsHint':
     'Activé par défaut. Masquer les barres ne ferme aucune activité et ne suspend pas leur suivi. Le changement s’applique dès l’enregistrement.',
+  'tours.settings.immediateMessages.title': 'Envoi immédiat',
+  'tours.settings.immediateMessages.description':
+    'Activez ce réglage pour envoyer vos nouveaux messages directement, comme Ctrl+Entrée. Désactivé par défaut : les messages attendent la fin du tour.',
   'tours.settings.progressBars.title': 'Barres de progression',
   'tours.settings.progressBars.description':
     'Affichez ou masquez les barres au-dessus du champ de message. Leur suivi continue même lorsqu’elles sont masquées.',

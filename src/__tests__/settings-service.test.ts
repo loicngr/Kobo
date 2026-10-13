@@ -82,6 +82,41 @@ describe('agent watchdog setting', () => {
   })
 })
 
+describe('immediate chat setting', () => {
+  it('defaults new installations to queueing', () => {
+    expect(getGlobalSettings().forceImmediateMessages).toBe(false)
+  })
+
+  it.each([undefined, null, 'true', 1, false, true])('migrates legacy settings safely (%s)', (value) => {
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        schemaVersion: 66,
+        global: { forceImmediateMessages: value, gitConventions: 'Keep this preference' },
+        projects: [],
+      }),
+    )
+    expect(getSettings().global.forceImmediateMessages).toBe(typeof value === 'boolean' ? value : false)
+    expect(getSettings().global.gitConventions).toBe('Keep this preference')
+    const saved = JSON.parse(fs.readFileSync(settingsPath, 'utf8'))
+    expect(saved.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
+    expect(saved.global.forceImmediateMessages).toBe(typeof value === 'boolean' ? value : false)
+  })
+
+  it('persists explicit enable/disable and rejects non-boolean updates', () => {
+    updateGlobalSettings({ forceImmediateMessages: true })
+    for (const value of ['false', 0, null]) {
+      updateGlobalSettings({ forceImmediateMessages: value } as unknown as Partial<GlobalSettings>)
+      expect(getGlobalSettings().forceImmediateMessages).toBe(true)
+    }
+    _setSettingsPath(settingsPath)
+    expect(getGlobalSettings().forceImmediateMessages).toBe(true)
+    updateGlobalSettings({ forceImmediateMessages: false })
+    _setSettingsPath(settingsPath)
+    expect(getGlobalSettings().forceImmediateMessages).toBe(false)
+  })
+})
+
 describe('progress visibility setting', () => {
   it('defaults new installations to visible', () => {
     expect(getGlobalSettings().showProgressBars).toBe(true)

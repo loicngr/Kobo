@@ -1101,6 +1101,25 @@ export default {
   'settings.setupScript': 'Setup script',
   'settings.cleanupScript': 'Cleanup script',
   'settings.archiveScript': 'Archive script',
+  'settings.scriptVariables.title': 'Available variables',
+  'settings.scriptVariables.cwd':
+    'Runs in the workspace worktree (PWD). Values belong to this execution; quote shell variables.',
+  'settings.scriptVariables.workspaceId': 'Workspace ID.',
+  'settings.scriptVariables.workspaceName': 'Workspace name.',
+  'settings.scriptVariables.branchName': 'Working branch.',
+  'settings.scriptVariables.sourceBranch': 'Source branch.',
+  'settings.scriptVariables.projectPath': 'Main repository path, not the worktree.',
+  'settings.scriptVariables.instance':
+    'Known Docker instance name; otherwise the lowercase branch with / and _ replaced by -.',
+  'settings.scriptVariables.projectName':
+    'Exact Docker Compose project name from the matching PROJECT_PATH/.container/instances/*.env file. Empty when no instance matches, including before the first dev server launch.',
+  'settings.scriptVariables.guard':
+    'For Docker, refuse to continue if PROJECT_NAME is empty. Stop example preserving volumes and images:',
+  'settings.scriptVariables.session-ended':
+    'Session ID; reason (completed, error, killed, watchdog); exit code (empty if unknown); stop cause (user, replacement, setup, archive, shutdown, or empty for natural completion); auto-loop enabled (1 or 0).',
+  'settings.scriptVariables.pr-merged': 'Merged PR number and URL.',
+  'settings.scriptVariables.autoloop-disabled': 'Reason (completed or user-action) and pending task count.',
+  'settings.scriptVariables.kobo-shutdown': 'Signal received by Kōbō: SIGINT or SIGTERM.',
   'settings.archiveScriptHint':
     'Shell script run server-side in the worktree when a workspace is archived. Leave empty to disable.',
   'settings.archiveScriptPlaceholder': 'e.g. clean up containers, free disk space…',
@@ -1310,7 +1329,7 @@ export default {
     'Notion and Sentry connections, plus Bitbucket credentials. GitHub and GitLab use your local CLI login.',
   'tours.settings.automation.title': 'Automation',
   'tours.settings.automation.description':
-    'Setup and cleanup scripts, lifecycle hooks, prompt templates, workspace templates and skills.',
+    'Setup and cleanup scripts, lifecycle hooks, prompt templates, workspace templates and skills. Open “Available variables” below each script for workspace, Docker and hook variables.',
   'tours.settings.worktrees.title': 'Worktrees',
   'tours.settings.memory.title': 'Memory',
   'tours.settings.memory.description':
@@ -1946,9 +1965,15 @@ export default {
   'settings.autoPurgeOnPrMerged': 'Auto-purge worktree on PR merged',
   'settings.autoPurgeOnPrMergedHint':
     'When ON, the worktree is deleted from disk as soon as the PR is merged (in addition to the auto-archive). Chat history is kept.',
+  'settings.forceImmediateMessages': 'Force immediate message delivery',
+  'settings.forceImmediateMessagesHint':
+    'Off by default. Send new messages while the agent is working, like Ctrl+Enter, without queueing them. In auto-loop, send now and pause the loop. Already queued messages stay unchanged; compaction and permission blocks still apply.',
   'settings.showProgressBars': 'Show progress bars',
   'settings.showProgressBarsHint':
     'Enabled by default. Hiding bars does not dismiss activities or stop their tracking. Changes apply as soon as you save.',
+  'tours.settings.immediateMessages.title': 'Immediate delivery',
+  'tours.settings.immediateMessages.description':
+    'Enable this setting to send new messages directly, like Ctrl+Enter. Off by default: messages wait until the turn ends.',
   'tours.settings.progressBars.title': 'Progress bars',
   'tours.settings.progressBars.description':
     'Show or hide the bars above the message input. Tracking continues while they are hidden.',

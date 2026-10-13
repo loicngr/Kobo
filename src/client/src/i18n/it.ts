@@ -1109,6 +1109,25 @@ export default {
   'settings.setupScript': 'Script di setup',
   'settings.cleanupScript': 'Script di pulizia',
   'settings.archiveScript': 'Script di archiviazione',
+  'settings.scriptVariables.title': 'Variabili disponibili',
+  'settings.scriptVariables.cwd':
+    'Esecuzione nel worktree del workspace (PWD). I valori riguardano questa esecuzione; racchiudi le variabili shell tra virgolette.',
+  'settings.scriptVariables.workspaceId': 'ID del workspace.',
+  'settings.scriptVariables.workspaceName': 'Nome del workspace.',
+  'settings.scriptVariables.branchName': 'Branch di lavoro.',
+  'settings.scriptVariables.sourceBranch': 'Branch sorgente.',
+  'settings.scriptVariables.projectPath': 'Percorso del repository principale, non del worktree.',
+  'settings.scriptVariables.instance':
+    'Nome dell’istanza Docker nota; altrimenti branch in minuscolo con / e _ sostituiti da -.',
+  'settings.scriptVariables.projectName':
+    'Nome esatto del progetto Docker Compose dal file corrispondente PROJECT_PATH/.container/instances/*.env. Vuoto se nessuna istanza corrisponde, anche prima del primo avvio del server di sviluppo.',
+  'settings.scriptVariables.guard':
+    'Per Docker, non proseguire se PROJECT_NAME è vuoto. Esempio di arresto che conserva volumi e immagini:',
+  'settings.scriptVariables.session-ended':
+    'ID sessione; motivo (completed, error, killed, watchdog); codice di uscita (vuoto se sconosciuto); causa di arresto (user, replacement, setup, archive, shutdown o vuoto se naturale); auto-loop attivo (1 o 0).',
+  'settings.scriptVariables.pr-merged': 'Numero e URL della PR unita.',
+  'settings.scriptVariables.autoloop-disabled': 'Motivo (completed o user-action) e numero di attività in sospeso.',
+  'settings.scriptVariables.kobo-shutdown': 'Segnale ricevuto da Kōbō: SIGINT o SIGTERM.',
   'settings.archiveScriptHint':
     'Script di shell eseguito lato server nel worktree quando un workspace viene archiviato. Lascia vuoto per disattivare.',
   'settings.archiveScriptPlaceholder': 'es. pulire container, liberare spazio su disco…',
@@ -1321,7 +1340,7 @@ export default {
     'Connessioni Notion e Sentry e credenziali Bitbucket. GitHub e GitLab usano la sessione CLI locale.',
   'tours.settings.automation.title': 'Automazione',
   'tours.settings.automation.description':
-    'Script di setup e cleanup, lifecycle hook, template di prompt, template di workspace e skill.',
+    'Script di setup e cleanup, lifecycle hook, template di prompt, template di workspace e skill. Apri «Variabili disponibili» sotto ogni script per le variabili del workspace, di Docker e dell’hook.',
   'tours.settings.worktrees.title': 'Worktrees',
   'tours.settings.memory.title': 'Memoria',
   'tours.settings.memory.description':
@@ -1963,9 +1982,15 @@ export default {
   'settings.autoPurgeOnPrMerged': 'Elimina worktree al merge della PR',
   'settings.autoPurgeOnPrMergedHint':
     "Se abilitato, il worktree viene eliminato dal disco non appena la PR viene mergiata (oltre all'archiviazione automatica). La cronologia delle chat viene conservata.",
+  'settings.forceImmediateMessages': 'Forza l’invio immediato dei messaggi',
+  'settings.forceImmediateMessagesHint':
+    'Disattivato per impostazione predefinita. Invia nuovi messaggi mentre l’agente lavora, come Ctrl+Invio, senza metterli in coda. In auto-loop, invia subito e sospende il ciclo. I messaggi già in coda restano invariati; i blocchi di compattazione e autorizzazione rimangono attivi.',
   'settings.showProgressBars': 'Mostra le barre di avanzamento',
   'settings.showProgressBarsHint':
     'Attivo per impostazione predefinita. Nascondere le barre non chiude le attività né interrompe il monitoraggio. Le modifiche si applicano al salvataggio.',
+  'tours.settings.immediateMessages.title': 'Invio immediato',
+  'tours.settings.immediateMessages.description':
+    'Attiva questa impostazione per inviare nuovi messaggi direttamente, come Ctrl+Invio. Disattivata per impostazione predefinita: i messaggi attendono la fine del turno.',
   'tours.settings.progressBars.title': 'Barre di avanzamento',
   'tours.settings.progressBars.description':
     'Mostra o nascondi le barre sopra il campo del messaggio. Il monitoraggio continua mentre sono nascoste.',

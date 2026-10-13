@@ -1,8 +1,8 @@
 import type { Tool } from '@modelcontextprotocol/sdk/types.js'
-import { MAX_ATTACHMENTS, MAX_ATTACHMENTS_BYTES, validateAttachments } from './attachments.js'
+import { MAX_MCP_ATTACHMENT_REQUEST_BYTES, MCP_ATTACHMENTS_SCHEMA, validateMcpAttachments } from './mcp-attachments.js'
 
 /** Base64 expansion of the shared upload limit, plus bounded JSON metadata. */
-export const MAX_MCP_CREATION_REQUEST_BYTES = Math.ceil(MAX_ATTACHMENTS_BYTES / 3) * 4 + 1024 * 1024
+export const MAX_MCP_CREATION_REQUEST_BYTES = MAX_MCP_ATTACHMENT_REQUEST_BYTES
 
 type Schema = {
   type: 'object' | 'string' | 'boolean' | 'array' | ['object', 'null']
@@ -75,14 +75,7 @@ const properties: Record<string, Schema> = {
   worktree_path: path,
   comparison_id: string(),
   creation_id: string(),
-  attachments: {
-    type: 'array',
-    maxItems: MAX_ATTACHMENTS,
-    items: object(
-      { name: string(255), mime_type: string(200, 0), data_base64: string(Math.ceil(MAX_ATTACHMENTS_BYTES / 3) * 4) },
-      ['name', 'mime_type', 'data_base64'],
-    ),
-  },
+  attachments: MCP_ATTACHMENTS_SCHEMA,
   pr_checkout: object(
     {
       fingerprint: string(),
@@ -175,28 +168,7 @@ export function validateWorkspaceCreationArguments(name: string, input: unknown)
     if (!value.pr_url && (!value.source_branch || (!value.worktree_path && !value.working_branch)))
       throw new Error('source_branch and working_branch are required unless using a PR or existing worktree')
     if (value.pr_checkout && !value.pr_url) throw new Error('pr_checkout requires pr_url')
-    const files = (value.attachments ?? []) as Array<{ name: string; mime_type: string; data_base64: string }>
-    const metadata = files.map((file) => {
-      if (/[/\\]/.test(file.name) || file.name === '.' || file.name === '..')
-        throw new Error('Attachment name must be a filename, not a path')
-      const data = file.data_base64
-      if (data.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(data))
-        throw new Error('Attachment data_base64 must be canonical base64')
-      // Reject non-zero pad bits too, before the server allocates decoded buffers.
-      const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
-      if (
-        (data.endsWith('==') && (alphabet.indexOf(data.at(-3)!) & 15) !== 0) ||
-        (!data.endsWith('==') && data.endsWith('=') && (alphabet.indexOf(data.at(-2)!) & 3) !== 0)
-      )
-        throw new Error('Attachment data_base64 must be canonical base64')
-      return {
-        name: file.name,
-        type: file.mime_type,
-        size: (data.length / 4) * 3 - (data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0),
-      }
-    })
-    const error = validateAttachments(metadata)
-    if (error) throw new Error(`Invalid attachments: ${error}`)
+    validateMcpAttachments(value.attachments)
   }
   return value
 }

@@ -1,3 +1,4 @@
+import { once } from 'node:events'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -357,6 +358,65 @@ it(
     } finally {
       await client.close()
       await new Promise<void>((resolve, reject) => listener.close((error) => (error ? reject(error) : resolve())))
+    }
+  },
+  STDIO_TEST_TIMEOUT_MS,
+)
+
+it.each(['http', 'stdio-global', 'stdio-workspace'] as const)(
+  'sends large inline attachments through %s with the shared schema',
+  async (mode) => {
+    const server = serve({ fetch: app.fetch, port: 0, hostname: '127.0.0.1' })
+    if (!server.listening) await once(server, 'listening')
+    const address = server.address() as { port: number }
+    const client = new Client({ name: 'attachments-test', version: '1' })
+    const url = `http://127.0.0.1:${address.port}`
+    try {
+      await client.connect(
+        mode === 'http'
+          ? new StreamableHTTPClientTransport(new URL(`${url}/api/mcp`))
+          : new StdioClientTransport({
+              command: process.execPath,
+              args: ['--import', 'tsx', 'src/mcp-server/kobo-tasks-server.ts'],
+              env: {
+                ...process.env,
+                KOBO_HOME: directory,
+                KOBO_WORKSPACE_ID: mode === 'stdio-workspace' ? 'a' : '',
+                KOBO_DB_PATH: getDb().name,
+                KOBO_BACKEND_URL: url,
+              },
+              stderr: 'pipe',
+            }),
+      )
+      const { tools } = await client.listTools()
+      const messageSchema = tools.find((tool) => tool.name === 'send_workspace_message')!.inputSchema
+      const creationSchema = tools.find((tool) => tool.name === 'create_workspace')!.inputSchema
+      expect(messageSchema.properties!.attachments).toEqual(creationSchema.properties!.attachments)
+      const file = {
+        name: 'large.txt',
+        mime_type: 'text/plain',
+        data_base64: Buffer.alloc(4 * 1024 * 1024, 65).toString('base64'),
+      }
+      const result = await client.callTool({
+        name: 'send_workspace_message',
+        arguments: { workspace_id: 'b', attachments: [file] },
+      })
+      expect(result.isError).not.toBe(true)
+      expect(deliverWorkspaceMessage).toHaveBeenCalledWith(
+        'b',
+        expect.objectContaining({ content: '', attachments: [file] }),
+      )
+      if (mode === 'stdio-workspace') {
+        const own = await client.callTool({
+          name: 'send_workspace_message',
+          arguments: { workspace_id: 'a', attachments: [file] },
+        })
+        expect(own.isError).toBe(true)
+        expect(deliverWorkspaceMessage).toHaveBeenCalledTimes(1)
+      }
+    } finally {
+      await client.close()
+      await new Promise<void>((resolve) => server.close(() => resolve()))
     }
   },
   STDIO_TEST_TIMEOUT_MS,

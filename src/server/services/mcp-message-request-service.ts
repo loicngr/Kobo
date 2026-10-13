@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import type Database from 'better-sqlite3'
 import { nanoid } from 'nanoid'
+import type { McpAttachment } from '../../shared/mcp-attachments.js'
 
 export type MessageRequestResult =
   | { accepted: true; requestId: string; sessionId?: string; eventId: string; replayed?: boolean }
@@ -24,10 +25,19 @@ export function reserveMessageRequest(
   key: string,
   content: string,
   sessionId?: string,
+  attachments?: readonly McpAttachment[],
 ): { fresh: true; requestId: string } | { fresh: false; requestId: string; result: MessageRequestResult } {
-  const fingerprint = createHash('sha256')
-    .update(JSON.stringify([content, sessionId ?? null]))
-    .digest('hex')
+  // Keep text-only fingerprints compatible with receipts issued before attachment support.
+  const identity: unknown[] = [content, sessionId ?? null]
+  if (attachments?.length)
+    identity.push(
+      attachments.map((file) => [
+        file.name,
+        file.mime_type,
+        createHash('sha256').update(file.data_base64).digest('hex'),
+      ]),
+    )
+  const fingerprint = createHash('sha256').update(JSON.stringify(identity)).digest('hex')
   return db
     .transaction(() => {
       const requestId = `mcp-${nanoid()}`
@@ -48,7 +58,7 @@ export function reserveMessageRequest(
           accepted: false,
           requestId: row.request_id,
           code: 'idempotency_conflict',
-          message: 'This key was already used for different content or a different session',
+          message: 'This key was already used for different content, session or attachments',
         }
       else if (row.result_json) {
         result = JSON.parse(row.result_json) as MessageRequestResult

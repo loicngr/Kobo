@@ -265,6 +265,11 @@
                 </div>
               </div>
 
+              <div class="q-mb-md" data-tour="settings-immediate-messages">
+                <q-toggle v-model="globalForceImmediateMessages" :label="$t('settings.forceImmediateMessages')" color="primary" />
+                <div class="text-caption text-kobo-3 q-mt-xs">{{ $t('settings.forceImmediateMessagesHint') }}</div>
+              </div>
+
               <div class="q-mb-md" data-tour="settings-progress-bars">
                 <q-toggle v-model="globalShowProgressBars" :label="$t('settings.showProgressBars')" color="primary" />
                 <div class="text-caption text-kobo-3 q-mt-xs">{{ $t('settings.showProgressBarsHint') }}</div>
@@ -1575,6 +1580,7 @@ where ffmpeg</pre>
                 :placeholder="$t('settings.setupScriptPlaceholder')"
                 class="settings-input mono-textarea"
               />
+              <ScriptVariablesHelp />
             </div>
 
             <!-- Cleanup script -->
@@ -1591,6 +1597,7 @@ where ffmpeg</pre>
                 :placeholder="$t('settings.cleanupScriptPlaceholder')"
                 class="settings-input mono-textarea"
               />
+              <ScriptVariablesHelp />
               <div class="text-caption text-kobo-3 q-mt-md q-mb-xs">{{ $t('settings.cleanupScriptMode') }}</div>
               <q-option-group
                 v-model="globalCleanupScriptMode"
@@ -1626,6 +1633,7 @@ where ffmpeg</pre>
                 :placeholder="$t('settings.archiveScriptPlaceholder')"
                 class="settings-input mono-textarea"
               />
+              <ScriptVariablesHelp />
             </div>
 
             <!-- Lifecycle hook: shutdown -->
@@ -1646,6 +1654,7 @@ where ffmpeg</pre>
                 :placeholder="$t('settings.hook.shutdownPlaceholder')"
                 class="settings-input mono-textarea"
               />
+              <ScriptVariablesHelp event="kobo-shutdown" />
             </div>
 
             <!-- Lifecycle hook: sessionEnded -->
@@ -1662,6 +1671,7 @@ where ffmpeg</pre>
                 :placeholder="$t('settings.hook.sessionEndedPlaceholder')"
                 class="settings-input mono-textarea"
               />
+              <ScriptVariablesHelp event="session-ended" />
             </div>
 
             <!-- Lifecycle hook: prMerged -->
@@ -1678,6 +1688,7 @@ where ffmpeg</pre>
                 :placeholder="$t('settings.hook.prMergedPlaceholder')"
                 class="settings-input mono-textarea"
               />
+              <ScriptVariablesHelp event="pr-merged" />
             </div>
 
             <!-- Lifecycle hook: autoLoopDisabled -->
@@ -1694,6 +1705,7 @@ where ffmpeg</pre>
                 :placeholder="$t('settings.hook.autoLoopDisabledPlaceholder')"
                 class="settings-input mono-textarea"
               />
+              <ScriptVariablesHelp event="autoloop-disabled" />
             </div>
 
             <!-- Change-source-branch script -->
@@ -2316,6 +2328,7 @@ where ffmpeg</pre>
                         :placeholder="$t('settings.setupScriptPlaceholder')"
                         class="settings-input mono-textarea"
                       />
+                      <ScriptVariablesHelp />
                       <div class="text-caption text-kobo-3 q-mt-xs">{{ $t('settings.setupScriptHint') }}</div>
                     </div>
 
@@ -2331,6 +2344,7 @@ where ffmpeg</pre>
                         :placeholder="$t('settings.cleanupScriptPlaceholder')"
                         class="settings-input mono-textarea"
                       />
+                      <ScriptVariablesHelp />
                       <div class="field-label-sub text-caption q-mt-sm q-mb-xs text-kobo-3">{{ $t('settings.cleanupScriptMode') }}</div>
                       <q-select
                         v-model="projectForm.cleanupScriptMode"
@@ -2355,6 +2369,7 @@ where ffmpeg</pre>
                         :placeholder="$t('settings.archiveScriptPlaceholder')"
                         class="settings-input mono-textarea"
                       />
+                      <ScriptVariablesHelp />
                     </div>
 
                     <div>
@@ -2369,6 +2384,7 @@ where ffmpeg</pre>
                         :placeholder="$t('settings.hook.shutdownPlaceholder')"
                         class="settings-input mono-textarea"
                       />
+                      <ScriptVariablesHelp event="kobo-shutdown" />
                     </div>
 
                     <div>
@@ -2383,6 +2399,7 @@ where ffmpeg</pre>
                         :placeholder="$t('settings.hook.sessionEndedPlaceholder')"
                         class="settings-input mono-textarea"
                       />
+                      <ScriptVariablesHelp event="session-ended" />
                     </div>
 
                     <div>
@@ -2397,6 +2414,7 @@ where ffmpeg</pre>
                         :placeholder="$t('settings.hook.prMergedPlaceholder')"
                         class="settings-input mono-textarea"
                       />
+                      <ScriptVariablesHelp event="pr-merged" />
                     </div>
 
                     <div>
@@ -2411,6 +2429,7 @@ where ffmpeg</pre>
                         :placeholder="$t('settings.hook.autoLoopDisabledPlaceholder')"
                         class="settings-input mono-textarea"
                       />
+                      <ScriptVariablesHelp event="autoloop-disabled" />
                     </div>
 
                     <div>
@@ -2793,6 +2812,7 @@ import IntegrationConnectionSettings from 'src/components/IntegrationConnectionS
 import McpConnectionSettings from 'src/components/McpConnectionSettings.vue'
 import MemorySettingsPanel from 'src/components/MemorySettingsPanel.vue'
 import PrNotificationSoundSettings from 'src/components/PrNotificationSoundSettings.vue'
+import ScriptVariablesHelp from 'src/components/ScriptVariablesHelp.vue'
 import SettingsNavList from 'src/components/SettingsNavList.vue'
 import TourReplayButton from 'src/components/TourReplayButton.vue'
 import WhipShortcutRecorder from 'src/components/WhipShortcutRecorder.vue'
@@ -2929,6 +2949,7 @@ const globalTerminalCommand = ref('')
 const globalAutoPurgeOnPrMerged = ref(false)
 const globalAutoLoopMaxRetries = ref(5)
 const globalAgentWatchdogEnabled = ref(false)
+const globalForceImmediateMessages = ref(false)
 const globalShowProgressBars = ref(true)
 const globalStopDevServersOnShutdown = ref(true)
 const globalAwaitingUserReminderMinutes = ref(0)
@@ -3992,6 +4013,7 @@ function readGlobalForm(): Record<string, unknown> {
     autoPurgeOnPrMerged: globalAutoPurgeOnPrMerged.value,
     autoLoopMaxRetries: globalAutoLoopMaxRetries.value,
     agentWatchdogEnabled: globalAgentWatchdogEnabled.value,
+    forceImmediateMessages: globalForceImmediateMessages.value,
     showProgressBars: globalShowProgressBars.value,
     stopDevServersOnShutdown: globalStopDevServersOnShutdown.value,
     awaitingUserReminderMinutes: globalAwaitingUserReminderMinutes.value,
@@ -4130,6 +4152,7 @@ function syncGlobalForm() {
   globalAutoPurgeOnPrMerged.value = store.global.autoPurgeOnPrMerged ?? false
   globalAutoLoopMaxRetries.value = store.global.autoLoopMaxRetries ?? 5
   globalAgentWatchdogEnabled.value = store.global.agentWatchdogEnabled === true
+  globalForceImmediateMessages.value = store.global.forceImmediateMessages === true
   globalShowProgressBars.value = store.global.showProgressBars !== false
   globalStopDevServersOnShutdown.value = store.global.stopDevServersOnShutdown !== false
   globalAwaitingUserReminderMinutes.value = store.global.awaitingUserReminderMinutes ?? 0
@@ -4515,6 +4538,7 @@ async function saveGlobal() {
       autoPurgeOnPrMerged: globalAutoPurgeOnPrMerged.value,
       autoLoopMaxRetries: globalAutoLoopMaxRetries.value,
       agentWatchdogEnabled: globalAgentWatchdogEnabled.value,
+      forceImmediateMessages: globalForceImmediateMessages.value,
       showProgressBars: globalShowProgressBars.value,
       stopDevServersOnShutdown: globalStopDevServersOnShutdown.value,
       awaitingUserReminderMinutes: globalAwaitingUserReminderMinutes.value,

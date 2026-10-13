@@ -30,6 +30,23 @@ describe('runArchiveScript()', () => {
     expect(result.exitCode).toBe(0)
   })
 
+  it('provides the matching Docker identity to the archive script', async () => {
+    const project = path.join(tmpDir, 'base-project')
+    fs.mkdirSync(path.join(project, '.container/instances'), { recursive: true })
+    fs.writeFileSync(
+      path.join(project, '.container/instances/workspace.env'),
+      'INSTANCE_NAME=feature-x\nPROJECT_NAME=app-feature-x\n',
+    )
+    const result = await runArchiveScript('ws-1', tmpDir, 'printf "%s/%s" "$PROJECT_NAME" "$INSTANCE" > identity.txt', {
+      workspaceName: 'demo',
+      branchName: 'feature/x',
+      sourceBranch: 'develop',
+      projectPath: project,
+    })
+    expect(result.exitCode).toBe(0)
+    expect(fs.readFileSync(path.join(tmpDir, 'identity.txt'), 'utf8')).toBe('app-feature-x/feature-x')
+  })
+
   it('returns a non-zero exitCode for a failing script', async () => {
     const result = await runArchiveScript('ws-1', tmpDir, '#!/usr/bin/env bash\nexit 9')
     expect(result.exitCode).toBe(9)

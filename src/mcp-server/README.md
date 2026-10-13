@@ -60,7 +60,7 @@ Leave `KOBO_WORKSPACE_ID` unset or empty for an external client. Use the same da
 | `get_workspace` | `workspace_id` | Workspace metadata, tasks and active/latest session. |
 | `list_workspace_sessions` | `workspace_id` | Workspace sessions with their IDs and status. |
 | `read_workspace_messages` | `workspace_id`, optional `session_id`, `after_cursor`, `limit` | Chronological conversation fragments, `nextCursor`, `hasMore`, `workspaceStatus`, `activeSessionId`. |
-| `send_workspace_message` | `workspace_id`, `content`, optional `session_id`, `idempotency_key` | `{ accepted: true, sessionId }`; keyed sends also return `requestId`, `eventId`, and `replayed` on a successful retry. |
+| `send_workspace_message` | `workspace_id`, `content` and/or `attachments`, optional `session_id`, `idempotency_key` | `{ accepted: true, sessionId }`; keyed sends also return `requestId`, `eventId`, and `replayed` on a successful retry. |
 | `get_workspace_questions` | `workspace_id` | Pending `questions` and `requiresHumanApproval` for a permission request at the head of the queue. |
 | `answer_workspace_question` | `workspace_id`, `tool_call_id`, `answers` | `{ accepted: true }` after answering the current question. |
 
@@ -68,13 +68,44 @@ Typical dialogue:
 
 1. Call `list_workspaces`, then `get_workspace` and optionally `list_workspace_sessions` to select the conversation.
 2. Read existing messages, following `nextCursor` while `hasMore` is true. Keep the final cursor.
-3. Call `send_workspace_message` with the workspace ID and your text. An inactive agent is resumed; a selected session must belong to this workspace and must be the running session if one is already running.
+3. Call `send_workspace_message` with the workspace ID and your text and/or inline attachments. An inactive agent is resumed; a selected session must belong to this workspace and must be the running session if one is already running.
 4. Poll `read_workspace_messages` with the saved cursor for the reply. Acceptance means the message was delivered, not that the agent finished its work. `workspaceStatus` and `get_workspace_questions` expose progress and blockers.
 5. To answer a question, pass the current `toolCallId` as `tool_call_id`, and map its question identifiers to string answers in `answers` (Codex uses question IDs; Claude questions use their question text). Tool permission requests must be approved by the human in Kōbō.
 
 Each message fragment has `{ id, sessionId, role, text, messageId, createdAt }`, optionally `source` and `clientMessageId`. Concatenate assistant fragments sharing a `messageId` and `sessionId` in returned order. `limit` bounds **source events scanned**, from 1 to 200 (default 100): a page can contain no text while still advancing its cursor. Session filtering also includes older untagged events (`sessionId: null`). Keep the same session filter when continuing a cursor. Cursors are workspace-specific; if retention removes a cursor, the tool returns an explicit error and reading must restart without it.
 
-Messages use the workspace's configured engine and permission mode, and pause an active auto-loop just like chat input. Archived or purged workspaces must be restored first; messages are refused during compaction or while a question/permission is pending. A workspace-bound stdio agent cannot send to itself. Message content is limited to 100,000 characters; HTTP request bodies to 1 MiB.
+Messages use the workspace's configured engine and permission mode, and pause an active auto-loop just like chat input. Archived or purged workspaces must be restored first; messages are refused during compaction or while a question/permission is pending. A workspace-bound stdio agent cannot send to itself. Message content is limited to 100,000 characters. Text-only HTTP request bodies remain limited to 1 MiB. Creation and message tools with attachments allow base64 expansion of the 50 MiB decoded file limit plus 1 MiB of envelope metadata, through both SDK HTTP and stdio transports.
+
+### Sending files and images
+
+`create_workspace` and `send_workspace_message` accept the same `attachments`
+array: up to **10 files, 50 MiB decoded total**, using the same image/document
+formats as the interface (PNG, JPEG, GIF, WebP, PDF, Markdown, text, CSV, JSON,
+YAML, XML, logs and TOML). Provide canonical base64 bytes, a filename (no path),
+and a MIME type. A path on the client's PC is not a path on a remote Kōbō server.
+
+```json
+{
+  "workspace_id": "<workspace ID>",
+  "content": "Read this note",
+  "attachments": [
+    { "name": "note.md", "mime_type": "text/markdown", "data_base64": "IyBOb3RlCg==" }
+  ],
+  "idempotency_key": "<one UUID for this message and these files>"
+}
+```
+
+Omit `content` for an attachment-only message. Images are stored in `.ai/images/`
+and documents in `.ai/attachments/` in the destination worktree. The agent and
+chat receive file references, never the base64 payload. Validation happens before
+writes; rejected deliveries before engine dispatch remove their uploaded files.
+Ambiguous deliveries retain the files because the agent may already use them.
+Retries with the same key reuse the receipt without another upload; changing
+file names, MIME types, bytes or order produces an idempotency conflict.
+
+This works through workspace-bound stdio, external global stdio and HTTP. The
+existing prohibition on sending to one's own workspace and restricted-launch
+permissions still apply. Group-message tools remain text-only.
 
 ### Retrying messages safely
 
@@ -435,7 +466,7 @@ Example with final review:
 
 If creation fails after PR checkout, Kōbō removes only the checkout created by that request when its directory, branch and HEAD are unchanged, it has no local or ignored files, and no workspace adopted it. The PR branch and earlier checkout decisions remain intact. Existing, modified or adopted checkouts are preserved. Errors include `details.checkoutRecovery` with the path, `removed` outcome and a reason when retained. An uncertain creation outcome preserves the checkout for inspection; do not retry automatically.
 
-Creation requests have no automatic retry or exactly-once guarantee. After a disconnect/timeout, inspect `list_workspaces` before trying again: checkout or creation may have completed. The stdio bridge allows up to 15 minutes for creation; external clients should configure their own request timeout for slow setup scripts. Ordinary MCP requests retain the 1 MiB envelope limit; creation allows base64 expansion of the 50 MiB upload limit plus 1 MiB metadata, including at the SDK HTTP and stdio transport boundaries.
+Creation requests have no automatic retry or exactly-once guarantee. After a disconnect/timeout, inspect `list_workspaces` before trying again: checkout or creation may have completed. The stdio bridge allows up to 15 minutes for creation; external clients should configure their own request timeout for slow setup scripts. Ordinary MCP requests retain the 1 MiB envelope limit; creation and messages with attachments allow base64 expansion of the 50 MiB upload limit plus 1 MiB metadata, including at the SDK HTTP and stdio transport boundaries.
 
 #### `diagnose_workspace_pr`
 

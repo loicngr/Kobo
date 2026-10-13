@@ -4,13 +4,10 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema, type Tool } from '@modelcontextprotocol/sdk/types.js'
 import type Database from 'better-sqlite3'
 import { getDb } from '../server/db/index.js'
+import { MAX_MCP_ATTACHMENT_REQUEST_BYTES } from '../shared/mcp-attachments.js'
 import { EXTERNAL_MEMORY_TOOL_DEFINITIONS, isMemoryToolName, MEMORY_TOOL_DEFINITIONS } from '../shared/memory-tools.js'
 import { INTERNAL_PROGRESS_BAR_TOOLS, isProgressBarTool, PROGRESS_BAR_TOOLS } from '../shared/progress-bar-tools.js'
-import {
-  isWorkspaceCreationTool,
-  MAX_MCP_CREATION_REQUEST_BYTES,
-  WORKSPACE_CREATION_TOOLS,
-} from '../shared/workspace-creation-tools.js'
+import { isWorkspaceCreationTool, WORKSPACE_CREATION_TOOLS } from '../shared/workspace-creation-tools.js'
 import { WORKSPACE_DIALOGUE_TOOLS } from '../shared/workspace-dialogue-tools.js'
 import { isWorkspaceGroupMessageTool, WORKSPACE_GROUP_MESSAGE_TOOLS } from '../shared/workspace-group-message-tools.js'
 import { isWorkspaceLifecycleTool, WORKSPACE_LIFECYCLE_TOOLS } from '../shared/workspace-lifecycle-tools.js'
@@ -1153,7 +1150,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 const transport = new StdioServerTransport(process.stdin, process.stdout, {
   // Include the JSON-lines delimiter in addition to the HTTP envelope budget.
-  maxBufferSize: MAX_MCP_CREATION_REQUEST_BYTES + 1,
+  maxBufferSize: MAX_MCP_ATTACHMENT_REQUEST_BYTES + 1,
 })
 server.connect(transport).catch((err) => {
   console.error('[kobo-tasks-server] Fatal:', err)

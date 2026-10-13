@@ -3,7 +3,6 @@ import { getDb } from '../db/index.js'
 import { slugifyProjectName } from '../utils/project-slug.js'
 import { runScript } from '../utils/script-runner.js'
 import { resolveWorkspaceWorktreePath } from '../utils/worktree-paths.js'
-import { resolveInstance, sanitizeBranchName } from './dev-server-service.js'
 import { getEffectiveSettings, getGlobalSettings, getProjectSettings } from './settings-service.js'
 import { listWorkspaces } from './workspace-service.js'
 
@@ -85,7 +84,6 @@ export async function runLifecycleHook(
       return null
     }
 
-    const instance = event === 'kobo-shutdown' ? resolveInstance(row.project_path, row.working_branch) : null
     return await runScript({
       workspaceId,
       worktreePath,
@@ -100,12 +98,6 @@ export async function runLifecycleHook(
         branchName: row.working_branch,
         sourceBranch: row.source_branch,
         projectPath: row.project_path,
-        ...(event === 'kobo-shutdown'
-          ? {
-              projectName: instance?.projectName ?? '',
-              instanceName: instance?.instanceName ?? sanitizeBranchName(row.working_branch),
-            }
-          : {}),
       },
       extraEnv: { ...extraEnv, KOBO_HOOK_EVENT: event },
     })

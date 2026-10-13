@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import * as wsService from '../services/websocket-service.js'
+import { resolveInstance, sanitizeBranchName } from './dev-server-instance.js'
 import { getIndexLockPath } from './git-ops.js'
 import { ensureDirectoryInside } from './safe-path.js'
 
@@ -14,9 +15,6 @@ export interface ScriptEnv {
   branchName: string
   sourceBranch: string
   projectPath: string
-  /** Docker identity, supplied by Kōbō for workspace shutdown hooks only. */
-  projectName?: string
-  instanceName?: string
 }
 
 export interface RunScriptOptions {
@@ -70,6 +68,8 @@ export function runScript(opts: RunScriptOptions): Promise<{ exitCode: number }>
     scriptPath = path.join(scriptDirectory, path.basename(tmpFileName))
     fs.writeFileSync(scriptPath, script, { mode: 0o700, flag: 'wx' })
 
+    // Resolve only from this workspace's persisted instance, never the host's env.
+    const instance = env?.projectPath && env.branchName ? resolveInstance(env.projectPath, env.branchName) : null
     const proc = spawn('bash', [scriptPath], {
       cwd: worktreePath,
       env: {
@@ -80,8 +80,8 @@ export function runScript(opts: RunScriptOptions): Promise<{ exitCode: number }>
         BRANCH_NAME: env?.branchName ?? '',
         SOURCE_BRANCH: env?.sourceBranch ?? '',
         PROJECT_PATH: env?.projectPath ?? '',
-        ...(env?.projectName !== undefined ? { PROJECT_NAME: env.projectName } : {}),
-        ...(env?.instanceName !== undefined ? { INSTANCE: env.instanceName } : {}),
+        PROJECT_NAME: instance?.projectName ?? '',
+        INSTANCE: instance?.instanceName ?? sanitizeBranchName(env?.branchName ?? ''),
       },
       stdio: ['ignore', 'pipe', 'pipe'],
       // Detached so this is the leader of its own process group: a script

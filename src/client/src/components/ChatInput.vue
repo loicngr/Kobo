@@ -733,12 +733,14 @@ async function sendMessageNow() {
   )
     return
 
+  const immediate =
+    settingsStore.global.forceImmediateMessages === true && supportsLiveSteering(store.selectedWorkspace?.engine)
   let session = currentSession.value
 
   const autoLoopEnabled =
     store.autoLoopStates[workspaceId]?.auto_loop ??
     store.workspaces.find((workspace) => workspace.id === workspaceId)?.autoLoop
-  if (autoLoopEnabled) {
+  if (autoLoopEnabled && !immediate) {
     // A queued iteration can become selected before its HTTP receipt arrives.
     // Transfer attachment ownership before that change clears the old draft.
     const sentAttachments = attachments.take()
@@ -766,7 +768,7 @@ async function sendMessageNow() {
 
   // Intercept Kobo built-in commands
   const koboCmd = KOBO_COMMANDS[text]
-  if (koboCmd) {
+  if (koboCmd && !immediate) {
     if (!wsStore.sendChatMessage(workspaceId, koboCmd.prompt, store.selectedSessionId ?? undefined)) {
       $q.notify({ type: 'negative', message: t('network.login.unreachable'), position: 'top', timeout: 0 })
       return
@@ -787,7 +789,7 @@ async function sendMessageNow() {
   }
 
   // Queue the message if the agent is busy
-  if (isAgentBusy.value) {
+  if (isAgentBusy.value && !immediate) {
     if (!store.selectedSessionId) return
     store.queueMessage(workspaceId, text, store.selectedSessionId)
     attachments.take()
@@ -795,8 +797,10 @@ async function sendMessageNow() {
   }
   store.cancelQueuedMessage(workspaceId, store.selectedSessionId)
 
+  const forceSend = immediate && (isAgentBusy.value || !!autoLoopEnabled)
+
   // Ready attachments already have their final references in the draft.
-  let composedText = text
+  let composedText = koboCmd?.prompt ?? text
   const orphanTags = pendingAttachments.value
     .filter((p) => p.status === 'ready' && p.path && !composedText.includes(p.placeholder))
     .map((p) => p.reference ?? p.placeholder)
@@ -809,14 +813,14 @@ async function sendMessageNow() {
   const sentAttachments = attachments.take()
   const restoreDraft = () => {
     if (props.workspaceId === workspaceId && store.selectedSessionId === targetSessionId) {
-      message.value = composedText
+      message.value = koboCmd ? text : composedText
       attachments.restore(sentAttachments)
     }
   }
   // Historical completed/error sessions without an engine conversation cannot
   // be resumed. Start a new session transparently so the user's message can
   // still continue the workspace.
-  if ((session?.status === 'completed' || session?.status === 'error') && !session.engineSessionId) {
+  if (!forceSend && (session?.status === 'completed' || session?.status === 'error') && !session.engineSessionId) {
     try {
       session = await store.createSession(workspaceId)
       targetSessionId = session.id
@@ -838,7 +842,8 @@ async function sendMessageNow() {
   }
   const sessionTag = session?.id ?? store.selectedSessionId ?? undefined
 
-  const requiresWebSocket = session?.status !== 'idle' && session?.status !== 'completed' && session?.status !== 'error'
+  const requiresWebSocket =
+    forceSend || (session?.status !== 'idle' && session?.status !== 'completed' && session?.status !== 'error')
   if (requiresWebSocket && !wsStore.isConnected()) {
     restoreDraft()
     $q.notify({ type: 'negative', message: t('network.login.unreachable'), position: 'top', timeout: 0 })
@@ -879,7 +884,13 @@ async function sendMessageNow() {
     })
   }
 
-  if (session?.status === 'idle') {
+  if (forceSend || (immediate && requiresWebSocket)) {
+    try {
+      await wsStore.sendChatMessageConfirmed(workspaceId, composedText, targetSessionId ?? undefined, true)
+    } catch (error) {
+      rollback(error, 'send immediate message')
+    }
+  } else if (session?.status === 'idle') {
     // First message on an idle session — start a fresh agent for it
     try {
       await store.startWorkspace(workspaceId, composedText, session.id)

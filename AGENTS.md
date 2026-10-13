@@ -243,7 +243,23 @@ Claude SDK `task_*` messages cover agents **and** background jobs. Preserve `tas
 
 ### External MCP dialogue and update checks
 
-Workspace-bound stdio, global stdio and HTTP expose shared `create_workspace` / `diagnose_workspace_pr` definitions in `src/shared/workspace-creation-tools.ts`. Stdio forwards them to the backend. `workspace-creation-mcp-service.ts` validates inputs and dispatches through the existing workspace and PR routes in process; preserve UI validation, checkout fingerprints, lifecycle guards and rollback. Inputs use snake_case except the existing camelCase PR checkout decisions. Attachments are inline base64, bounded to the shared 10-file/50 MiB decoded limit before checkout mutations. Keep SDK HTTP/stdio limits aligned with the shared creation envelope budget. Only creation envelopes get the larger base64 HTTP body budget; ordinary MCP requests remain 1 MiB. After a known PR creation failure, rollback only a checkout proven newly created, unchanged, clean (including ignored files) and unowned, under the Git repository lock; retain other checkouts and expose recovery details. Do not retry uncertain creation automatically or treat `creation_id` as an idempotency key. Restricted review/handoff launches cannot create workspaces or invoke lifecycle mutations. Shared lifecycle tools (`workspace-lifecycle-tools.ts` / `workspace-lifecycle-mcp-service.ts`) also expose archive, purge, delete, unarchive and restore through the same transports. Reject reserved/bulk/path-like IDs, require explicit purge/delete flags, and preserve warnings. Single-workspace DELETE accepts optional `confirmationBranch`, rechecked under its lifecycle guard before stopping processes; MCP always supplies it. Branch rename/resync share this guard so the confirmed branch and checkout path cannot change during teardown. Recovery uses `restore-worktree` before unarchive and never starts an agent.
+Workspace-bound stdio, global stdio and HTTP expose shared `create_workspace` / `diagnose_workspace_pr` definitions in `src/shared/workspace-creation-tools.ts`. Stdio forwards them to the backend. `workspace-creation-mcp-service.ts` validates inputs and dispatches through the existing workspace and PR routes in process; preserve UI validation, checkout fingerprints, lifecycle guards and rollback. Inputs use snake_case except the existing camelCase PR checkout decisions. Attachments are inline base64, bounded to the shared 10-file/50 MiB decoded limit before checkout mutations. Keep SDK HTTP/stdio limits aligned with the shared creation envelope budget. Creation and send_workspace_message envelopes with attachments get the larger base64 HTTP body budget; ordinary MCP requests remain 1 MiB. After a known PR creation failure, rollback only a checkout proven newly created, unchanged, clean (including ignored files) and unowned, under the Git repository lock; retain other checkouts and expose recovery details. Do not retry uncertain creation automatically or treat `creation_id` as an idempotency key. Restricted review/handoff launches cannot create workspaces or invoke lifecycle mutations. Shared lifecycle tools (`workspace-lifecycle-tools.ts` / `workspace-lifecycle-mcp-service.ts`) also expose archive, purge, delete, unarchive and restore through the same transports. Reject reserved/bulk/path-like IDs, require explicit purge/delete flags, and preserve warnings. Single-workspace DELETE accepts optional `confirmationBranch`, rechecked under its lifecycle guard before stopping processes; MCP always supplies it. Branch rename/resync share this guard so the confirmed branch and checkout path cannot change during teardown. Recovery uses `restore-worktree` before unarchive and never starts an agent.
+
+MCP creation and single-workspace messages share `shared/mcp-attachments.ts`
+validation and inline `{name, mime_type, data_base64}` schemas. Validate before
+writing, reserve keyed-message identity before uploading, and fingerprint the
+original content/session plus attachment names, types and bytes (preserving old
+text-only fingerprints). Delivery saves files under the target worktree using
+the existing attachment service, then passes references to the engine and chat.
+Clean up definitively rejected files; retain them if dispatch is uncertain.
+Never expose raw server filesystem paths as attachment inputs. Group messages
+remain text-only.
+
+The global JSON setting `forceImmediateMessages` (v67, default false) bypasses
+client chat queueing for new messages using confirmed immediate delivery. It
+also bypasses the auto-loop next-iteration UI path; normal backend immediate
+message delivery pauses a ready loop. Do not flush existing queues on toggle,
+remove compaction/permission/handoff guards, or queue rejected forced sends.
 
 `POST /api/mcp` exposes stateless Streamable HTTP discovery/dialogue tools, behind the existing Host/Origin and network-token gates. The global stdio server forwards dialogue calls through this backend so agent runtime ownership remains centralized. `workspace-message-service.ts` shares delivery with WebSocket chat.
 
@@ -653,6 +669,14 @@ reuse outside PR import still forces setup off. Worktree ownership is unchanged.
 `src/server/services/lifecycle-hook-service.ts` runs a user-provided bash script on three moments that previously had none: `session-ended` (from `orchestrator.onSessionEnded`, once a session is known not to be superseded), `pr-merged` (from the pr-watcher, at the `pr:merged` emit, before archive/purge) and `autoloop-disabled` (from `auto-loop-service.disable`, for **every** reason including `user-action`, unlike the cleanup script which only fires on `completed`). The session-ended hook goes through `fireSessionEndedHook`, which also covers the watchdog's dead-engine sweep (that path never reaches `onSessionEnded`), dedupes by session id so a late `session:ended` from the same engine does not fire it twice, and stands down when the stop cause is `delete` or `purge` (`stopAgentAndWait`'s third argument) because the worktree is being removed.
 
 Each event maps to one effective-settings key (`sessionEndedScript` / `prMergedScript` / `autoLoopDisabledScript`, settings migration v55), cascading project-over-global with empty meaning inherit. Execution reuses `runScript` with `eventPrefix: 'hook:<event>'`; `runScript` gained an `extraEnv` option, merged **under** the identity variables so a hook payload can never claim a different `WORKSPACE_ID`. `runLifecycleHook` never rejects and returns `null` when there is nothing to run (no script, unknown workspace, worktree gone). The pr-watcher awaits the `pr-merged` hook before auto-purge so a deploy script does not lose its worktree mid-run. See [CONFIGURATION.md → Lifecycle hooks](CONFIGURATION.md#lifecycle-hooks).
+
+The shared `utils/script-runner.ts` supplies `INSTANCE` and `PROJECT_NAME` to
+setup, cleanup, archive and every lifecycle hook, including shutdown. Resolve
+these at execution time through `utils/dev-server-instance.ts`, shared with the
+dev-server service. Never inherit ambient Docker identity or invent a Compose
+project name: `PROJECT_NAME` is empty when no matching instance metadata exists.
+`ScriptVariablesHelp.vue` documents common and event-specific variables in both
+global and project settings; keep this help and CONFIGURATION.md in sync.
 
 ### Engine comparison
 

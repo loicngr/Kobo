@@ -1,4 +1,5 @@
 import { nanoid } from 'nanoid'
+import type { McpAttachment } from '../../shared/mcp-attachments.js'
 import { validateDialogueArguments } from '../../shared/workspace-dialogue-tools.js'
 import { type MessageSource, parseMessageSource } from '../../shared/workspace-message-types.js'
 import { getDb } from '../db/index.js'
@@ -93,6 +94,7 @@ export async function executeWorkspaceDialogueTool(
   if (name === 'send_workspace_message' && args.idempotency_key)
     return deliverKeyedMcpMessage(workspaceId, args.idempotency_key as string, {
       content: args.content as string,
+      ...(args.attachments ? { attachments: args.attachments as McpAttachment[] } : {}),
       sessionId: args.session_id as string | undefined,
       source,
     })
@@ -101,6 +103,7 @@ export async function executeWorkspaceDialogueTool(
       accepted: true,
       ...(await deliverWorkspaceMessage(workspaceId, {
         content: args.content as string,
+        ...(args.attachments ? { attachments: args.attachments as McpAttachment[] } : {}),
         sessionId: args.session_id as string | undefined,
         clientMessageId: `mcp-${nanoid()}`,
         source,
