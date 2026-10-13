@@ -1,0 +1,51 @@
+#!/bin/sh
+# VPS bootstrap: keep the historical home volume, drop root before running agents.
+set -eu
+
+KOBO_UID=${KOBO_UID:-1000}
+KOBO_GID=${KOBO_GID:-1000}
+for value in "$KOBO_UID" "$KOBO_GID"; do
+    case "$value" in
+        ''|0|0*|*[!0-9]*) echo 'KOBO_UID and KOBO_GID must be positive decimal IDs.' >&2; exit 1 ;;
+    esac
+    [ "$value" -le 2147483647 ] || exit 1
+done
+
+export HOME=/root
+runtime_path="/root/.local/bin:/root/.bun/bin:$PATH"
+prepare_home=true
+if [ "${1:-}" = --exec ]; then
+    prepare_home=false
+    shift
+fi
+if [ "$(/usr/bin/id -u)" != 0 ]; then
+    [ "$(/usr/bin/id -u)" = "$KOBO_UID" ] && [ "$(/usr/bin/id -g)" = "$KOBO_GID" ] || {
+        echo 'The runtime user must match KOBO_UID/KOBO_GID.' >&2; exit 1;
+    }
+    export PATH="$runtime_path"
+    exec "$@"
+fi
+
+# Never resolve privileged bootstrap commands from the writable agent home.
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+if [ "$prepare_home" = true ]; then
+    getent group "$KOBO_GID" >/dev/null || groupadd -g "$KOBO_GID" kobo
+    getent passwd "$KOBO_UID" >/dev/null || useradd -u "$KOBO_UID" -g "$KOBO_GID" -d /root -M -s /bin/bash kobo
+    # Only the dedicated named home volume is migrated, never mounted projects.
+    # Do not dereference symlinks to files outside it (e.g. a linked skill).
+    find /root -xdev \( ! -uid "$KOBO_UID" -o ! -gid "$KOBO_GID" \) -exec chown -h "$KOBO_UID:$KOBO_GID" {} +
+    chmod 700 /root
+fi
+USER=$(getent passwd "$KOBO_UID" | cut -d: -f1)
+[ -n "$USER" ] || { echo 'Start the VPS container before using --exec.' >&2; exit 1; }
+export USER LOGNAME="$USER"
+
+if [ -S /var/run/docker.sock ]; then
+    docker_gid=$(stat -c %g /var/run/docker.sock)
+    exec setpriv --reuid="$KOBO_UID" --regid="$KOBO_GID" --groups="$docker_gid" \
+        /usr/bin/env PATH="$runtime_path" "$@"
+fi
+exec setpriv --reuid="$KOBO_UID" --regid="$KOBO_GID" --clear-groups \
+    /usr/bin/env PATH="$runtime_path" "$@"

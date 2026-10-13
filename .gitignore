@@ -6,6 +6,7 @@ docs/*
 !docs/assets/
 !docs/getting-started.md
 !docs/deployment-vps.md
+!docs/vps-projects-and-skills.md
 !docs/troubleshooting.md
 !docs/release/
 docs/release/*

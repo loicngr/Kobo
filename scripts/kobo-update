@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 REPO = 'https://github.com/loicngr/kobo.git'
 VERSION = re.compile(r'\d+\.\d+\.\d+')
 COMPOSE_ENV_KEYS = ('KOBO_DOMAIN', 'KOBO_PROJECTS_DIR', 'TRAEFIK_NETWORK',
-                    'TRAEFIK_ENTRYPOINT', 'TRAEFIK_CERTRESOLVER')
+                    'TRAEFIK_ENTRYPOINT', 'TRAEFIK_CERTRESOLVER', 'KOBO_UID', 'KOBO_GID')
 BUSY_JS = r"""
 const db = new (require('better-sqlite3'))('/root/.config/kobo/kobo.db', {readonly:true});
 const sessions = db.prepare("SELECT count(*) n FROM agent_sessions WHERE status = 'running'").get().n;
@@ -262,15 +262,29 @@ class Updater:
         self.logged(['docker', 'build', '--progress=plain', '-t', base, str(source)])
         overlay = self.job / 'overlay'
         overlay.mkdir()
+        launcher = Path(__file__).resolve().with_name('kobo-vps-entrypoint')
+        if not launcher.is_file():
+            raise UpdateError('Install kobo-vps-entrypoint beside kobo-update before building an image.')
+        shutil.copyfile(launcher, overlay / 'kobo-vps-entrypoint')
         (overlay / 'Dockerfile').write_text(
-            f'FROM {base}\nRUN docker compose version >/dev/null 2>&1 || '
-            '(apt-get update && apt-get install -y --no-install-recommends docker-compose-plugin '
-            '&& rm -rf /var/lib/apt/lists/*)\n')
+            f'FROM {base}\nUSER root\n'
+            'RUN apt-get update && apt-get install -y --no-install-recommends '
+            'docker-compose-plugin docker-buildx-plugin netcat-openbsd util-linux '
+            '&& rm -rf /var/lib/apt/lists/*\n'
+            'COPY --chmod=755 kobo-vps-entrypoint /usr/local/bin/kobo-vps-entrypoint\n'
+            'RUN chmod a+r /app/package.json /app/package-lock.json /app/CHANGELOG.md '
+            '&& chmod -R a+rX /app/dist /app/src/client/dist\n')
         self.logged(['docker', 'build', '--progress=plain', '-t', image, str(overlay)])
         self.run(['docker', 'run', '--rm', '--network', 'none', '--entrypoint', 'docker',
                   image, 'compose', 'version'])
         self.run(['docker', 'run', '--rm', '--network', 'none', '--entrypoint', 'node', image,
                   '-e', "require('better-sqlite3')(':memory:').close();require('node-pty')"])
+        self.run(['docker', 'run', '--rm', '--network', 'none', '--entrypoint', 'kobo-vps-entrypoint',
+                  image, 'node', '-e', "if(process.getuid()===0)process.exit(1);"
+                  "const fs=require('fs');const dir='/app/src/client/dist/';"
+                  "const mode=['pwa','spa'].find(m=>fs.existsSync(dir+m+'/index.html'));"
+                  "if(!mode)throw Error('Missing built UI');fs.accessSync(dir+mode+'/index.html',fs.constants.R_OK);"
+                  "require('better-sqlite3')(':memory:').close();require('node-pty')"])
         return image
 
     def backup(self):

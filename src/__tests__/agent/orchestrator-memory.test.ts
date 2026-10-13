@@ -2,13 +2,21 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentEngine, AgentEvent, EngineProcess, StartOptions } from '../../server/services/agent/engines/types.js'
 import { resetDb } from '../helpers/reset-db.js'
 
+const networkSettings = vi.hoisted(() => ({
+  networkAccessEnabled: true,
+  networkAccessBehindProxy: false,
+  networkAccessToken: 'test-network-token',
+}))
+vi.mock('@hono/node-server/conninfo', () => ({
+  getConnInfo: () => ({ remote: { address: '127.0.0.1' } }),
+}))
 vi.mock('../../server/services/websocket-service.js', () => ({
   emit: vi.fn(),
   emitEphemeral: vi.fn(),
   broadcastAll: vi.fn(),
 }))
 vi.mock('../../server/services/settings-service.js', () => ({
-  getGlobalSettings: () => ({ autoLoopMaxRetries: 5, memoryMode: 'hybrid' }),
+  getGlobalSettings: () => ({ autoLoopMaxRetries: 5, memoryMode: 'hybrid', ...networkSettings }),
   getProjectSettings: () => ({ forge: 'none' }),
   getEffectiveFinalization: () => ({ prompt: '' }),
   getEffectiveSettings: () => ({
@@ -97,7 +105,70 @@ describe('orchestrator memory context', () => {
   beforeEach(async () => {
     vi.resetModules()
     vi.clearAllMocks()
+    networkSettings.networkAccessBehindProxy = false
     await resetDb()
+  })
+
+  it.each([
+    ['claude-code', false],
+    ['claude-code', true],
+    ['codex', false],
+    ['codex', true],
+  ] as const)('authenticates internal %s MCP calls with behind-proxy mode %s', async (engineId, behindProxy) => {
+    networkSettings.networkAccessBehindProxy = behindProxy
+    const workspace = await createWorkspace(engineId)
+    const capture = makeEngine(engineId)
+    const { _registerEngineForTest } = await import('../../server/services/agent/engines/registry.js')
+    _registerEngineForTest(capture.engine)
+    const orchestrator = await import('../../server/services/agent/orchestrator.js')
+    const { Hono } = await import('hono')
+    const { networkAuthMiddleware } = await import('../../server/middleware/network-auth-middleware.js')
+    const { default: memoryRoutes } = await import('../../server/routes/memory.js')
+    const { default: progressRoutes } = await import('../../server/routes/progress-bars.js')
+    const { callMemoryTool } = await import('../../mcp-server/memory-client.js')
+    const { callProgressBarTool } = await import('../../mcp-server/progress-bar-client.js')
+    const app = new Hono()
+    app.use('/api/*', networkAuthMiddleware)
+    app.route('/api/memory', memoryRoutes)
+    app.route('/api/progress-bars', progressRoutes)
+
+    orchestrator.startAgent(workspace.id, workspace.projectPath, 'Long-running task')
+    await flush()
+    try {
+      const env = capture.starts[0].mcpServers!.find((server) => server.name === 'kobo-tasks')!.env
+      const transport = {
+        backendUrl: env.KOBO_BACKEND_URL,
+        networkToken: env.KOBO_NETWORK_TOKEN,
+        fetcher: (async (input, init) => app.request(new Request(input, init))) as typeof fetch,
+      }
+      const memoryRequest = {
+        ...transport,
+        name: 'list_memory_scopes',
+        args: {},
+        capability: env.KOBO_MEMORY_SESSION_TOKEN,
+      }
+      await expect(callMemoryTool(memoryRequest)).resolves.toMatchObject({ items: expect.any(Array) })
+      const progress = await callProgressBarTool({
+        ...transport,
+        name: 'create_progress_bar',
+        args: { activity_key: 'proxy-test', label: 'Run tests' },
+        capability: env.KOBO_PROGRESS_SESSION_TOKEN,
+      })
+      expect(progress.isError).toBeUndefined()
+      expect(progress.structuredContent).toMatchObject({ label: 'Run tests', workspaceId: workspace.id })
+
+      if (behindProxy) {
+        await expect(callMemoryTool({ ...memoryRequest, networkToken: undefined })).rejects.toThrow('401: unauthorized')
+      } else {
+        expect(env.KOBO_NETWORK_TOKEN).toBeUndefined()
+      }
+      // The network credential never replaces per-launch authorization.
+      await expect(callMemoryTool({ ...memoryRequest, capability: 'invalid-capability' })).rejects.toThrow(
+        '401: Invalid or expired memory capability',
+      )
+    } finally {
+      await orchestrator.stopAgentAndWait(workspace.id)
+    }
   })
 
   it.each(['claude-code', 'codex'] as const)(

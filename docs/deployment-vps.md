@@ -132,11 +132,34 @@ docker build -t kobo:local source
 
 Save [`docker-compose.vps.yml`](../docker-compose.vps.yml) as `/opt/kobo/compose.yaml`
 and [`scripts/kobo-update`](../scripts/kobo-update) as `/opt/kobo/kobo-update`.
+Also copy [`scripts/kobo-vps-entrypoint`](../scripts/kobo-vps-entrypoint) beside the updater as `/opt/kobo/kobo-vps-entrypoint`; the updater includes it in its compatibility image layer.
+
 These files may be newer than the example release above: obtain them from the
 checkout containing this guide, not an older tag that predates them.
 
 ```bash
-chmod 755 /opt/kobo/kobo-update
+chmod 755 /opt/kobo/kobo-update /opt/kobo/kobo-vps-entrypoint
+```
+
+For an older release image without the launcher, build this small compatibility
+layer before starting the current Compose template. Its build context contains
+only the launcher, never the deployment `.env`, projects or credentials:
+
+```bash
+mkdir -p runtime
+cp kobo-vps-entrypoint runtime/
+docker tag kobo:local kobo:release-base
+cat > runtime/Dockerfile <<'DOCKERFILE'
+FROM kobo:release-base
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    util-linux netcat-openbsd docker-compose-plugin docker-buildx-plugin \
+    && rm -rf /var/lib/apt/lists/*
+COPY --chmod=755 kobo-vps-entrypoint /usr/local/bin/kobo-vps-entrypoint
+RUN chmod a+r /app/package.json /app/package-lock.json /app/CHANGELOG.md \
+    && chmod -R a+rX /app/dist /app/src/client/dist
+DOCKERFILE
+docker build -t kobo:local runtime
 ```
 
 Create `/opt/kobo/.env` with your deployment values:
@@ -147,7 +170,11 @@ KOBO_PROJECTS_DIR=/opt/kobo/projects
 TRAEFIK_NETWORK=web
 TRAEFIK_ENTRYPOINT=websecure
 TRAEFIK_CERTRESOLVER=letsencrypt
+KOBO_UID=1000
+KOBO_GID=1000
 ```
+
+Replace `KOBO_UID` and `KOBO_GID` with `id -u` and `id -g` from the host user who owns your projects. Both must be nonzero. The guided installer collects them automatically; `--uid` and `--gid` override them.
 
 The network, entrypoint and resolver names must match **your existing Traefik**;
 `web`, `websecure` and `letsencrypt` are examples. If Traefik uses a preloaded
@@ -173,8 +200,7 @@ remembers the token; treat both that URL and startup logs as credentials.
 the public hostname. Both network access and behind-proxy mode are enabled.
 
 This example publishes no HTTP or SSH ports. Use SSH to the VPS followed by
-`docker compose exec kobo bash` for a container shell. The Compose entrypoint
-starts Node directly, so it does not start the image's optional SSH daemon.
+`docker compose exec kobo kobo-vps-entrypoint --exec bash` for a container shell. The VPS launcher prepares the home permissions, then drops root before starting Node. It does not start the image's optional SSH daemon. `--exec` runs administrative shell/CLI commands as the same non-root user without repeating home migration.
 
 Check routing before starting a mission:
 
@@ -188,13 +214,85 @@ without a token. `/api/health` is intentionally public. Ordinary authenticated
 REST requests use `X-Kobo-Token`; the external MCP endpoint also supports Bearer
 authentication. No additional Traefik route is needed for WebSocket upgrades.
 
+Behind-proxy mode also protects loopback requests. Kōbō supplies the current
+network token to its internal workspace MCP process when launching Claude or
+Codex, so memory, progress bars and other backend calls can authenticate without
+manual MCP configuration. Memory and progress calls still require their separate
+per-launch capabilities. After rotating the network token, stop and resume active
+agent sessions so their MCP processes receive the new token.
+
 ## 3. Authenticate and choose a project
+
+### Runtime user and existing installations
+
+The VPS Compose example runs Kōbō and its agents as `KOBO_UID:KOBO_GID`, not
+root. Claude's bypass mode requires a non-root process; select that permission
+mode explicitly in Kōbō. The launcher's brief root bootstrap creates a matching
+user/group and assigns the dedicated home volume to them. Project directories
+are never recursively chowned. They must already be writable by the chosen UID.
+When the Docker socket is mounted, its numeric group is added to the agent's
+supplementary groups. That access still grants control over the host daemon.
+
+`HOME=/root` and `KOBO_HOME=/root/.config/kobo` deliberately remain unchanged:
+the directory name does not mean the process runs as root. Keeping it avoids
+losing existing sessions, logins, plugin paths and updater backups. Do not put
+additional bind mounts below `/root` in this standalone layout.
+
+Verify the effective identity, then use the same launcher for setup commands:
+
+```bash
+docker compose exec kobo kobo-vps-entrypoint --exec id
+docker compose exec kobo kobo-vps-entrypoint --exec bash
+```
+
+A plain `docker compose exec kobo ...` still defaults to the container's root
+bootstrap user. Installing skills or authenticating that way can create files
+the agent cannot update. Use `kobo-vps-entrypoint --exec` throughout this guide;
+reserve `--user 0` for deliberate OS maintenance. Do not add `user:` to the VPS
+Compose file: that would skip the permission bootstrap of an existing root home.
+
+For an **existing root deployment**, schedule an idle maintenance window and
+back up the full home volume plus the Compose file first. Build an image with
+the new launcher (the updated updater's `--prepare` does this), select your host
+UID/GID in `.env`, and update the service settings below (merge the environment
+with existing settings). `.env` alone does not pass variables into a container:
+
+```yaml
+entrypoint: ["kobo-vps-entrypoint"]
+command: ["node", "dist/server/index.js"]
+environment:
+  KOBO_UID: ${KOBO_UID:-1000}
+  KOBO_GID: ${KOBO_GID:-1000}
+  HOME: /root
+  NODE_ENV: development
+  NPM_CONFIG_INCLUDE: dev
+```
+
+Keep the same named home volume and project mount paths. Recreate the idle
+service, verify `id`, authenticated API access and one agent launch. The initial
+ownership scan takes longer for a large home. Read-only App keys/configuration
+must also be readable by the selected UID; changing the home owner cannot repair
+their host permissions.
+
+The updater preserves existing Compose settings: updating an image alone does
+**not** convert a legacy `entrypoint: ["node"]` deployment to non-root. The
+installer does not migrate completed managed stacks or rewrite their recorded
+fingerprints. Retain their manifest as history and manage an intentional Compose
+migration with the updater/manual procedure; do not rerun the installer to adopt
+the altered files. The other Compose examples retain their historical entrypoint.
+
+The current VPS template needs an image containing `kobo-vps-entrypoint`. For a
+fresh manual installation of an older release, build the compatibility layer in
+step 1. For an existing installation, the updated updater's `--prepare` includes
+it. Do not combine the new template with an unmodified old image.
+
+### Engine and Git login
 
 Authenticate **inside the container**, using the engine you intend to run:
 
 ```bash
-docker compose exec kobo claude auth login
-docker compose exec kobo codex login --device-auth
+docker compose exec kobo kobo-vps-entrypoint --exec claude auth login
+docker compose exec kobo kobo-vps-entrypoint --exec codex login --device-auth
 ```
 
 Follow the browser URL/code printed by your installed CLI. Provider availability
@@ -206,10 +304,10 @@ For a personal GitHub account, complete the CLI's browser login flow from your P
 then connect Git HTTPS credentials to it:
 
 ```bash
-docker compose exec kobo gh auth login --hostname github.com --git-protocol https --web
-docker compose exec kobo gh auth setup-git --hostname github.com
-docker compose exec kobo git config --global user.name "Your Name"
-docker compose exec kobo git config --global user.email "you@example.com"
+docker compose exec kobo kobo-vps-entrypoint --exec gh auth login --hostname github.com --git-protocol https --web
+docker compose exec kobo kobo-vps-entrypoint --exec gh auth setup-git --hostname github.com
+docker compose exec kobo kobo-vps-entrypoint --exec git config --global user.name "Your Name"
+docker compose exec kobo kobo-vps-entrypoint --exec git config --global user.email "you@example.com"
 ```
 
 Git commit identity and forge authentication are separate settings. For a GitHub
@@ -219,7 +317,7 @@ instead of an interactive account login.
 Clone your repository in the mounted project directory (replace the repository):
 
 ```bash
-docker compose exec kobo git clone https://github.com/YOUR-ORG/YOUR-REPO.git /opt/kobo/projects/my-project
+docker compose exec kobo kobo-vps-entrypoint --exec git clone https://github.com/YOUR-ORG/YOUR-REPO.git /opt/kobo/projects/my-project
 ```
 
 In the first-run form, **Local project directory** means
@@ -233,9 +331,9 @@ not automatically available inside a container. See [Docker volume persistence](
 
 ## Optional project Docker environments
 
-The image includes the Docker CLI and Compose plugin. Verify with
-`docker compose exec kobo docker compose version`; an older release image may
-need the plugin installed in a derived image. The updater below adds it when missing.
+The image includes the Docker CLI, Compose and Buildx plugins, and netcat (`nc`). Verify with
+`docker compose exec kobo kobo-vps-entrypoint --exec docker compose version`; an older release image may
+need these tools installed in a derived image. The updater below includes them in its compatibility layer.
 
 To let agents manage project containers, explicitly enable the commented
 `/var/run/docker.sock` mount in `compose.yaml` and recreate the service when idle.
@@ -252,6 +350,10 @@ Keep the same path arrangement for any additional bind-mounted project data.
 An `npm` development process does not require the Docker socket. Development
 server URLs are separate from Kōbō's dashboard URL; configure their own reachable
 ports or proxy routes. See the [dev-server contract](../CONFIGURATION.md#dev-server).
+
+For project dependencies, private registry login, SSH tunnels, stop/cleanup commands,
+file-watcher troubleshooting and installing Claude/Codex extensions, follow
+[Projects, development servers and skills on a VPS](./vps-projects-and-skills.md).
 
 ## GitHub App bot authentication
 
@@ -348,12 +450,12 @@ Recreate the idle service to apply the mounts, then configure Git inside it:
 ```bash
 docker compose config --quiet
 docker compose up -d --wait --wait-timeout 180 kobo
-docker compose exec kobo kobo-github-app-token --check
-docker compose exec kobo git config --global --replace-all credential.https://github.com.helper ''
-docker compose exec kobo git config --global --add credential.https://github.com.helper '!/usr/local/bin/gh auth git-credential'
-docker compose exec kobo bash -lc 'command -v gh'
-docker compose exec kobo gh repo view YOUR-ORG/YOUR-REPO --json nameWithOwner
-docker compose exec kobo git -C /opt/kobo/projects/my-project ls-remote origin HEAD
+docker compose exec kobo kobo-vps-entrypoint --exec kobo-github-app-token --check
+docker compose exec kobo kobo-vps-entrypoint --exec git config --global --replace-all credential.https://github.com.helper ''
+docker compose exec kobo kobo-vps-entrypoint --exec git config --global --add credential.https://github.com.helper '!/usr/local/bin/gh auth git-credential'
+docker compose exec kobo kobo-vps-entrypoint --exec bash -lc 'command -v gh'
+docker compose exec kobo kobo-vps-entrypoint --exec gh repo view YOUR-ORG/YOUR-REPO --json nameWithOwner
+docker compose exec kobo kobo-vps-entrypoint --exec git -C /opt/kobo/projects/my-project ls-remote origin HEAD
 ```
 
 The empty helper entry resets inherited helpers **only for this HTTPS host**.
@@ -373,7 +475,7 @@ renewals with a bounded lock, and invalidates cached tokens when the configurati
 or key changes. Failed renewal never falls back to an expired token. HTTPS calls
 use the fixed GitHub API endpoint and do not follow redirects.
 
-Use `docker compose exec kobo kobo-github-app-token --check` to validate signing,
+Use `docker compose exec kobo kobo-vps-entrypoint --exec kobo-github-app-token --check` to validate signing,
 GitHub authentication and the cache without exposing a token. It prints a JSON
 status and expiration time. On failure, check file permissions, the key and IDs,
 the App installation's repository access, server clock and outbound HTTPS. Do not
@@ -385,8 +487,8 @@ commits. Configure commit identity separately, for example using your App's bot
 login and its actual GitHub bot-user email:
 
 ```bash
-docker compose exec kobo git config --global user.name 'YOUR-APP[bot]'
-docker compose exec kobo git config --global user.email 'BOT-USER-ID+YOUR-APP[bot]@users.noreply.github.com'
+docker compose exec kobo kobo-vps-entrypoint --exec git config --global user.name 'YOUR-APP[bot]'
+docker compose exec kobo kobo-vps-entrypoint --exec git config --global user.email 'BOT-USER-ID+YOUR-APP[bot]@users.noreply.github.com'
 ```
 
 `BOT-USER-ID` is the bot account's user ID, not the App ID or installation ID.
@@ -427,9 +529,11 @@ assuming a particular server. It uses the local Docker daemon; do not point it
 at a remote Docker context. It requires network access to npm, GitHub and image
 build dependencies. It does not update Traefik or install a scheduled auto-updater.
 
+Keep `kobo-vps-entrypoint` beside `kobo-update` when updating the operator scripts (the guided installer places both in `bin/`). This is required even when building an older release.
+
 Both operator scripts explicitly read the deployment directory's `.env` for
 Compose. Exported `KOBO_DOMAIN`, `KOBO_PROJECTS_DIR`, `TRAEFIK_NETWORK`,
-`TRAEFIK_ENTRYPOINT`, `TRAEFIK_CERTRESOLVER` and `COMPOSE_*` variables in the caller's
+`TRAEFIK_ENTRYPOINT`, `TRAEFIK_CERTRESOLVER`, `KOBO_UID`, `KOBO_GID` and `COMPOSE_*` variables in the caller's
 shell cannot override these commands. This applies to validation, start, stop and
 recovery. Docker context selection and forge authentication remain available to
 child processes; other commands such as image builds retain their environment.
@@ -457,7 +561,7 @@ original deadline and prompt stay unchanged. Already stale, never-attempted
 wakeups are not revived.
 It retrieves npm's `latest` version (or the explicit
 stable version), verifies the Git tag's commit and package version, builds a uniquely
-tagged image, ensures Compose is installed and checks native modules. The old
+tagged image, ensures Compose, Buildx, netcat and the non-root launcher are installed and checks native modules. The old
 service stays available during the build. Plan for roughly 5–15 minutes without
 build cache; backup duration depends on the volume size.
 

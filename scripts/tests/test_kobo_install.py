@@ -24,7 +24,7 @@ class InstallerTest(unittest.TestCase):
         self.config = dict(domain='kobo.example.com', projects_directory=str(self.stack / 'projects'),
                            network='web', entrypoint='websecure', certresolver='letsencrypt',
                            docker_socket=False, github_app_id=None, github_installation_id=None,
-                           github_private_key=None, version='2.1.16')
+                           github_private_key=None, version='2.1.16', uid=str(os.getuid() or 1000), gid=str(os.getgid() or 1000))
         self.installer = m.Installer(self.stack)
 
     def test_check_does_not_write_or_build(self):
@@ -56,6 +56,51 @@ class InstallerTest(unittest.TestCase):
         self.assertNotIn('tls.certresolver:', compose)
         self.assertNotIn('      - /var/run/docker.sock:', compose)
         self.assertIn("KOBO_DOMAIN='kobo.example.com'", env)
+
+    def test_runtime_identity_is_explicit_and_root_is_refused(self):
+        for bad in ('0', '-1', '01', 'root', '1000;id', '2147483648'):
+            for field in ('uid', 'gid'):
+                with self.subTest(field=field, bad=bad), self.assertRaises(m.InstallError):
+                    m.validate_config({**self.config, field: bad})
+        compose, env = m.render({**self.config, 'uid': '1234', 'gid': '2345'}, self.stack)
+        self.assertIn("KOBO_UID='1234'", env)
+        self.assertIn("KOBO_GID='2345'", env)
+        self.assertIn('entrypoint: ["kobo-vps-entrypoint"]', compose)
+        self.assertIn('NPM_CONFIG_INCLUDE: dev', compose)
+
+    def test_new_configuration_defaults_to_host_user_without_changing_legacy_config(self):
+        args = m.arguments(['--directory', str(self.stack), '--yes', '--domain', 'kobo.example.com',
+                            '--network', 'web', '--entrypoint', 'websecure'])
+        with patch.object(m.os, 'getuid', return_value=1234), patch.object(m.os, 'getgid', return_value=2345):
+            config = m.configure(args, self.installer)
+        self.assertEqual((config['uid'], config['gid']), ('1234', '2345'))
+        legacy = {k: v for k, v in self.config.items() if k not in ('uid', 'gid')}
+        self.installer.state = {'config': legacy}
+        self.assertNotIn('uid', m.configure(args, self.installer))
+
+    def test_github_setup_runs_as_agent_for_new_installation(self):
+        self.installer.state = {'config': self.config}
+        with patch.object(self.installer, 'run') as run:
+            self.installer.configure_github()
+        for call in run.call_args_list:
+            self.assertIn('kobo-vps-entrypoint', call.args[0])
+            self.assertIn('--exec', call.args[0])
+
+    def test_new_projects_require_matching_owner_unless_installer_is_root(self):
+        config = {**self.config, 'uid': '1234', 'gid': '2345'}
+        with patch.object(m.os, 'getuid', return_value=3456), self.assertRaises(m.InstallError):
+            m.validate_config(config)
+        with patch.object(m.os, 'getuid', return_value=0), patch.object(m.os, 'chown') as chown:
+            m.validate_config(config)
+            self.installer.initialize(config)
+        chown.assert_called_once_with(Path(config['projects_directory']), 1234, 2345)
+
+    def test_existing_projects_are_not_chowned(self):
+        Path(self.config['projects_directory']).mkdir(parents=True)
+        with patch.object(self.installer, 'assert_fresh'), patch.object(m.os, 'getuid', return_value=0), \
+             patch.object(m.os, 'chown') as chown:
+            self.installer.initialize(self.config)
+        chown.assert_not_called()
 
     def test_github_mounts_are_readonly_and_private_key_is_not_copied(self):
         key = Path(self.tmp.name) / 'key.pem'

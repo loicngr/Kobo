@@ -626,6 +626,7 @@ function buildMcpServers(
 ): McpServerSpec[] {
   const mcpServerCompiled = getCompiledMcpServerPath()
   const mcpServerSource = getMcpServerSourcePath()
+  const global = getGlobalSettings()
   return [
     {
       name: 'kobo-tasks',
@@ -638,6 +639,11 @@ function buildMcpServers(
         KOBO_DB_PATH: getDbPath(),
         KOBO_SETTINGS_PATH: getSettingsPath(),
         KOBO_BACKEND_URL: `http://127.0.0.1:${backendPort}`,
+        // Behind a proxy, even internal loopback requests require network auth.
+        // Per-launch memory/progress capabilities remain independently required.
+        ...(global.networkAccessBehindProxy && global.networkAccessToken
+          ? { KOBO_NETWORK_TOKEN: global.networkAccessToken }
+          : {}),
       },
     },
   ]

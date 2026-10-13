@@ -363,6 +363,7 @@ class ComposeEnvironmentTests(unittest.TestCase):
         self.u = m.Updater(self.stack)
         self.u.log = self.stack / 'private.log'
         self.overrides = {'KOBO_DOMAIN': 'wrong.example.com', 'KOBO_PROJECTS_DIR': '/other-projects',
+                          'KOBO_UID': '0', 'KOBO_GID': '0',
                           'TRAEFIK_NETWORK': 'other-network', 'TRAEFIK_ENTRYPOINT': 'other-entrypoint',
                           'TRAEFIK_CERTRESOLVER': 'other-resolver', 'COMPOSE_FILE': '/other.yml',
                           'COMPOSE_PROJECT_NAME': 'other-project', 'COMPOSE_ENV_FILES': '/other.env',

@@ -282,6 +282,21 @@ Traefik network. It persists `/root`, mounts project paths identically on host a
 container, and leaves the Docker socket opt-in. `docs/deployment-vps.md` owns the
 operator walkthrough; `CONFIGURATION.md` compares all Compose topologies.
 
+The VPS launcher `scripts/kobo-vps-entrypoint` bootstraps the dedicated home and
+executes Kōbō as positive `KOBO_UID:KOBO_GID`, adding the socket's numeric group
+when mounted. Keep `HOME=/root` and the existing volume for compatibility. Do not
+chown existing project mounts, follow home symlinks, or resolve root bootstrap
+commands through user-writable skill/tool paths. `--exec` runs operator commands
+as the agent without rescanning ownership. Legacy root Compose entrypoints are
+preserved by the updater and need the documented explicit migration. New installer
+identity fields must not silently reconfigure old completed manifests.
+
+The updater needs the launcher beside its script to build its compatibility layer
+(including netcat/Buildx). `docs/vps-projects-and-skills.md` covers dependency/env
+setup, private registry auth, SSH dev-server access, scoped cleanup, native
+Claude/Codex skills and persistence. Project-specific OS packages and host inotify
+changes are operator-managed; the updater does not preserve arbitrary image layers.
+
 `scripts/kobo-install` guides a fresh installation; it does not adopt existing
 unmanaged stacks. Preserve its read-only `--check`, explicit Docker-socket opt-in,
 managed-file fingerprints, shared updater lock, and durable start phases. Completed

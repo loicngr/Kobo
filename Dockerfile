@@ -54,6 +54,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       nano \
       less \
       make \
+      netcat-openbsd \
+      util-linux \
       wget \
       unzip \
       htop \
@@ -65,7 +67,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian bookworm stable" \
       > /etc/apt/sources.list.d/docker.list \
-    && apt-get update && apt-get install -y --no-install-recommends docker-ce-cli docker-compose-plugin \
+    && apt-get update && apt-get install -y --no-install-recommends docker-ce-cli docker-compose-plugin docker-buildx-plugin \
     && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
       | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
     && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
@@ -99,12 +101,16 @@ RUN npm install -g @anthropic-ai/claude-code @openai/codex
 
 # Built output, preserving the same relative layout the server expects at
 # runtime (src/server/utils/paths.ts's getClientSpaPath() looks for
-# src/client/dist/spa relative to the package root).
+# src/client/dist/pwa relative to the package root).
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/src/client/dist ./src/client/dist
 # In-app "What's new" dialog reads this at runtime — without it the route
 # degrades to an empty version list instead of crashing, but silently.
 COPY --from=build /app/CHANGELOG.md ./CHANGELOG.md
+# Release archives can preserve restrictive source modes; the VPS process is non-root.
+RUN chmod a+r /app/package.json /app/package-lock.json /app/CHANGELOG.md \
+    && chmod -R a+rX /app/dist /app/src/client/dist
+COPY --chmod=755 scripts/kobo-vps-entrypoint /usr/local/bin/kobo-vps-entrypoint
 
 ENV NODE_ENV=production
 ENV SERVER_PORT=3000

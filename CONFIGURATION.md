@@ -1183,23 +1183,35 @@ Traefik already exists. Build the image from a source checkout before starting.
 All four use the same underlying image (`docker build -t kobo:local .` from the
 repo root). The original three mount provider/Git configuration from the host;
 the VPS example keeps independent credentials in a persistent container home.
-The VPS example overrides the entrypoint to start Node directly; the original
+The VPS example uses `kobo-vps-entrypoint`: it prepares the dedicated home volume
+then drops to `KOBO_UID:KOBO_GID` before starting Node, without `sshd`. The original
 files use the image entrypoint, which starts `sshd` even when port 22 is not published.
+See the [VPS runtime user and migration procedure](./docs/deployment-vps.md#runtime-user-and-existing-installations)
+and [project/skills operations guide](./docs/vps-projects-and-skills.md).
 
 ### The image
 
 Multi-stage `Dockerfile`, `node:24.19.0-slim` base:
 
 - **Build stage**: installs root, client, and PWA deps, then runs `npm run build` (client via Quasar, server via `tsc`).
-- **Runtime stage**: production deps only, plus OS tooling the agents and forge CLIs need — `git`, `openssh-client` + `openssh-server`, `ripgrep`, `fd-find`, `jq`, `curl`, Python + build tools, the Docker CLI and Compose plugin (`docker compose`, talks to a mounted host socket, see [Volumes](#volumes)), `gh`, `glab`, `tmux`, `vim`/`nano`, and more for interactive shell use.
+- **Runtime stage**: production deps only, plus OS tooling the agents and forge CLIs need — `git`, `openssh-client` + `openssh-server`, `ripgrep`, `fd-find`, `jq`, `curl`, Python + build tools, the Docker CLI, Compose and Buildx plugins (talk to a mounted host socket, see [Volumes](#volumes)), netcat (`nc`), `gh`, `glab`, `tmux`, `vim`/`nano`, and more for interactive shell use.
 - **Global CLIs**: `@anthropic-ai/claude-code` and `@openai/codex` are installed globally for interactive login (`claude /login`, `codex login` over SSH) — separate from Kōbō's own bundled SDK/subprocess usage, which needs no global install.
-- **`git config --system --add safe.directory '*'`**: the container runs as root, but bind-mounted project repos keep the *host* user's UID on disk. Git's ownership check (CVE-2022-24765 mitigation) refuses to touch a repo it doesn't "own" unless told otherwise. This line pre-trusts every mounted path — fine for a single-user dev container, not something you'd do on a multi-tenant host.
+- **`git config --system --add safe.directory '*'`**: legacy Compose examples run as root while mounted repos retain the host UID; the VPS example instead uses a matching non-root UID. The image still pre-trusts mounted Git repositories. This broad trust is for a single-user environment, not a multi-tenant host.
 - **`HEALTHCHECK`**: `curl -f http://localhost:$SERVER_PORT/api/health` every 30s. `/api/health` is exempt from the network-access token gate unconditionally (even with `networkAccessBehindProxy` on) — Docker's `HEALTHCHECK` process has no way to supply the runtime-generated token, and without the exemption a "behind a reverse proxy" container never reports healthy, which makes Traefik's Docker provider filter it out of its router table entirely (Traefik drops unhealthy/starting containers from routing).
 - **`EXPOSE 3000`**, `ENV SERVER_PORT=3000`, entrypoint `docker-entrypoint.sh` → `npm start`.
 
 Build once: `docker build -t kobo:local .`
 
 ### Environment variables (Docker)
+
+The VPS template accepts `KOBO_UID` and `KOBO_GID` (positive numeric IDs, default
+1000); the installer defaults to the invoking host user's IDs. It retains
+`HOME=/root` for volume compatibility and adds the mounted Docker socket's group
+when applicable. Use `docker compose exec kobo kobo-vps-entrypoint --exec <command>`
+for logins, skills and project tooling as that user. It also sets
+`NODE_ENV=development` and `NPM_CONFIG_INCLUDE=dev` for project subprocesses;
+Kōbō continues serving its prebuilt UI/server. The base image retains its
+production default for other deployment layouts.
 
 Beyond the [general environment variables](#environment-variables), these matter specifically for a container deployment:
 
@@ -1481,6 +1493,10 @@ rules survive restarts and can be removed from the workspace's permission UI.
 ## Dev server
 
 Each workspace can run its own dev server. The **Tools** panel shows its status, a clickable URL, the live container count, and a logs button. That works only when your project follows a small contract. This section documents the contract so the panel lights up for *your* project, not just Docker-instance projects.
+
+For remote installations, `localhost` in that link is the browser's computer.
+See [VPS dev-server access](./docs/vps-projects-and-skills.md#reach-a-development-server-from-your-pc)
+for SSH forwarding, separate proxy routes and scoped stop/cleanup commands.
 
 ### What the panel actually does
 

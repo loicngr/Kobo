@@ -20,7 +20,7 @@ spec = importlib.util.spec_from_loader(loader.name, loader)
 updater = importlib.util.module_from_spec(spec)
 loader.exec_module(updater)
 InstallError = updater.UpdateError
-TOOLS = ('kobo-install', 'kobo-update', 'kobo-github-app-token', 'kobo-gh')
+TOOLS = ('kobo-install', 'kobo-update', 'kobo-github-app-token', 'kobo-gh', 'kobo-vps-entrypoint')
 ENV_KEYS = updater.COMPOSE_ENV_KEYS
 
 
@@ -32,6 +32,10 @@ def safe_path(value):
 
 
 def validate_config(config):
+    for name in ('uid', 'gid'):
+        value = str(config.get(name, 1000))
+        if not re.fullmatch(r'[1-9][0-9]{0,9}', value) or int(value) > 2147483647:
+            raise InstallError('UID and GID must be positive non-root numeric IDs.')
     domain = config['domain']
     if (len(domain) > 253 or '.' not in domain or
             not all(re.fullmatch(r'[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?', label)
@@ -49,6 +53,9 @@ def validate_config(config):
         raise InstallError('Projects must be outside container system paths, /app and /root (for example /opt/kobo/projects).')
     if projects.exists() and not projects.is_dir():
         raise InstallError('The projects path must be a directory.')
+    if not projects.exists() and 'uid' in config and os.getuid() not in (0, int(config['uid'])):
+        raise InstallError('A new projects directory requires --uid to match the installer user, or root. '
+                           'Otherwise prepare a directory writable by that UID first.')
     app = [config.get(k) for k in ('github_app_id', 'github_installation_id', 'github_private_key')]
     if any(app):
         if not all(app):
@@ -58,6 +65,10 @@ def validate_config(config):
         key = safe_path(app[2])
         if not key.is_file() or not os.access(key, os.R_OK) or key.stat().st_mode & 0o077:
             raise InstallError('The GitHub private key must be a readable regular file with private permissions (0600).')
+        if 'uid' in config and key.stat().st_uid != int(config['uid']):
+            raise InstallError('The GitHub private key owner must match --uid so the non-root agent can read it.')
+        if 'uid' in config and os.getuid() not in (0, int(config['uid'])):
+            raise InstallError('Run the installer as --uid (or root) to create readable private GitHub configuration.')
     if config['version'] != 'latest':
         updater.normalize_version(config['version'])
 
@@ -81,7 +92,7 @@ def render(config, stack):
                        '        bind:\n          create_host_path: false\n')
         text = text.replace('    networks:\n', mounts + '    networks:\n', 1)
     values = (config['domain'], config['projects_directory'], config['network'],
-              config['entrypoint'], config['certresolver'])
+              config['entrypoint'], config['certresolver'], str(config.get('uid', 1000)), str(config.get('gid', 1000)))
     env = ''.join(f"{key}='{value}'\n" for key, value in zip(ENV_KEYS, values))
     return text, env
 
@@ -180,7 +191,13 @@ class Installer(updater.Updater):
             path = self.stack / name
             path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
             updater.atomic_write(path, data, 0o755 if name.startswith('bin/') else 0o600)
-        Path(config['projects_directory']).mkdir(parents=True, exist_ok=True)
+            if name == 'auth/github-app.json' and os.getuid() == 0:
+                os.chown(path, int(config.get('uid', 1000)), int(config.get('gid', 1000)))
+        projects = Path(config['projects_directory'])
+        projects_existed = projects.exists()
+        projects.mkdir(parents=True, exist_ok=True)
+        if not projects_existed and os.getuid() == 0:
+            os.chown(projects, int(config.get('uid', 1000)), int(config.get('gid', 1000)))
         self.save(phase='configured')
 
     def verify_files(self):
@@ -198,16 +215,19 @@ class Installer(updater.Updater):
         # No files or directories are needed for --check. All substitutions are supplied explicitly.
         text, _ = render(config, self.stack)
         for key, value in zip(ENV_KEYS, (config['domain'], config['projects_directory'], config['network'],
-                                       config['entrypoint'], config['certresolver'])):
+                                       config['entrypoint'], config['certresolver'],
+                                       str(config.get('uid', 1000)), str(config.get('gid', 1000)))):
             text = re.sub(r'\$\{' + key + r'(?::[^}]*)?\}', lambda _: value, text)
         self.run(['docker', 'compose', '--env-file', '/dev/null', '-p', 'kobo', '-f', '-', 'config', '--quiet'],
                  data=text.encode())
 
     def configure_github(self):
-        self.run(self.compose('exec', '-T', 'kobo', '/usr/local/bin/kobo-github-app-token', '--check'))
+        # Legacy prepared installations retain their original root execution.
+        runtime = ['kobo-vps-entrypoint', '--exec'] if 'uid' in self.state.get('config', {}) else []
+        self.run(self.compose('exec', '-T', 'kobo', *runtime, '/usr/local/bin/kobo-github-app-token', '--check'))
         helper = 'credential.https://github.com.helper'
-        self.run(self.compose('exec', '-T', 'kobo', 'git', 'config', '--global', '--replace-all', helper, ''))
-        self.run(self.compose('exec', '-T', 'kobo', 'git', 'config', '--global', '--add', helper,
+        self.run(self.compose('exec', '-T', 'kobo', *runtime, 'git', 'config', '--global', '--replace-all', helper, ''))
+        self.run(self.compose('exec', '-T', 'kobo', *runtime, 'git', 'config', '--global', '--add', helper,
                              '!/usr/local/bin/gh auth git-credential'))
 
     def assert_started(self):
@@ -297,6 +317,8 @@ class Installer(updater.Updater):
 def arguments(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--directory', type=Path, required=True)
+    parser.add_argument('--uid', help='Non-root runtime UID (defaults to the invoking user).')
+    parser.add_argument('--gid', help='Runtime GID (defaults to the invoking user).')
     for name in ('domain', 'projects-directory', 'network', 'entrypoint', 'certresolver', 'version',
                  'github-app-id', 'github-installation-id', 'github-private-key'):
         parser.add_argument('--' + name)
@@ -311,7 +333,7 @@ def arguments(argv=None):
 
 def configure(args, installer):
     names = ('domain', 'projects_directory', 'network', 'entrypoint', 'certresolver', 'version',
-             'github_app_id', 'github_installation_id', 'github_private_key', 'docker_socket')
+             'github_app_id', 'github_installation_id', 'github_private_key', 'docker_socket', 'uid', 'gid')
     config = installer.state.get('config', {}).copy()
     config.update({name: getattr(args, name) for name in names if getattr(args, name) is not None})
     interactive = sys.stdin.isatty() and not args.yes
@@ -339,6 +361,10 @@ def configure(args, installer):
     ask('entrypoint', 'Traefik HTTPS entrypoint')
     ask('certresolver', 'Traefik certificate resolver (empty for preloaded certificate)', '')
     ask('version', 'Stable release version', 'latest')
+    # Do not silently change an already managed deployment's recorded config.
+    if not installer.state:
+        ask('uid', 'Host user ID for Kōbō and agents', str(os.getuid() or 1000))
+        ask('gid', 'Host group ID for Kōbō and agents', str(os.getgid() or 1000))
     if config.get('docker_socket') is None:
         config['docker_socket'] = interactive and input('Give agents Docker access (root-equivalent host control)? [y/N]: ').lower() == 'y'
     if not any(config.get(name) for name in ('github_app_id', 'github_installation_id', 'github_private_key')):
@@ -365,6 +391,7 @@ def main(argv=None):
             return 0
         print(f'Install directory: {installer.stack}\nURL: https://{config["domain"]}\n'
               f'Projects: {config["projects_directory"]}\nDocker socket: {config["docker_socket"]}\n'
+              f'Runtime UID:GID: {config.get("uid", "legacy")}:{config.get("gid", "legacy")}\n'
               f'GitHub App: {bool(config["github_app_id"])}')
         if not args.yes and not installer.state:
             if not sys.stdin.isatty() or input('Create this installation? [y/N]: ').lower() != 'y':

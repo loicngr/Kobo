@@ -12,6 +12,11 @@ No skill plugin, forge CLI, Docker, Notion, Sentry or voice software is needed f
 
 For a remote installation, follow the [VPS and Docker guide](./deployment-vps.md) first: `kobo-install` guides a fresh installation behind existing Traefik and can configure a GitHub App bot. The same guide documents manual setup. The project picker browses the server/container filesystem: select a repository cloned there, not a folder on the PC running your browser. Authenticate the agent and forge tools inside the container too.
 
+The [VPS projects and skills guide](./vps-projects-and-skills.md) explains how to
+prepare environment files/dependencies, open a remote dev server through SSH,
+and install Claude/Codex skills as the non-root agent user. Host/PC installations
+are not automatically inherited by container agents.
+
 ## Start
 
 ```bash

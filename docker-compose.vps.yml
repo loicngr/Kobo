@@ -10,10 +10,16 @@ services:
     init: true
     restart: unless-stopped
     # Use the host's SSH and `docker compose exec`; no container SSH daemon.
-    entrypoint: ["node"]
-    command: ["dist/server/index.js"]
+    # Bootstrap permissions as root, then execute Kōbō/agents as this host UID/GID.
+    entrypoint: ["kobo-vps-entrypoint"]
+    command: ["node", "dist/server/index.js"]
     environment:
-      NODE_ENV: production
+      KOBO_UID: ${KOBO_UID:-1000}
+      KOBO_GID: ${KOBO_GID:-1000}
+      HOME: /root
+      # Kōbō serves its built assets; project commands need development dependencies.
+      NODE_ENV: development
+      NPM_CONFIG_INCLUDE: dev
       SERVER_PORT: "3000"
       KOBO_HOME: /root/.config/kobo
       KOBO_NETWORK_ACCESS_ENABLED: "true"
