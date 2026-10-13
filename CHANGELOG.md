@@ -4,6 +4,11 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads this file.
 
+## 2.1.22
+
+- feat(settings): make agent watchdogs opt-in and progress bars configurable
+- feat(update): refine `kobo-update` to backup only `.config/kobo` and improve migration handling
+
 ## 2.1.21
 
 - feat(vps): introduce non-root runtime launcher and UID/GID support
