@@ -93,6 +93,7 @@ import {
 import type { AgentEvent, StartOptions } from '../server/services/agent/engines/types.js'
 
 const BASE_OPTIONS: StartOptions = {
+  watchdogEnabled: true,
   workspaceId: 'w-drain',
   workingDir: '/tmp',
   prompt: 'go',
@@ -125,6 +126,49 @@ const task = (
 })
 
 describe('claude-code engine — result drain watchdog', () => {
+  it.each([undefined, false])('does not time out a background shell when watchdogs are %s', async (watchdogEnabled) => {
+    vi.useFakeTimers()
+    emitSubagentStarted = true
+    startedMessages = [
+      task('task_started', { task_id: 'ci-poll', tool_use_id: 'bash-ci' }, { task_type: 'local_bash' }),
+    ]
+    try {
+      const events: AgentEvent[] = []
+      const process = await createClaudeCodeEngine().start({ ...BASE_OPTIONS, watchdogEnabled }, (e) => events.push(e))
+      await vi.advanceTimersByTimeAsync(60 * 60_000)
+      expect(events.some((e) => e.kind === 'session:ended' || e.kind === 'error')).toBe(false)
+      expect(abortSignal?.aborted).toBe(false)
+      process.interrupt()
+      expect(abortSignal?.aborted).toBe(true)
+    } finally {
+      completeSubagent?.()
+      await vi.advanceTimersByTimeAsync(0)
+      releaseStream?.()
+      await vi.advanceTimersByTimeAsync(0)
+      resetControls()
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not force-close a stalled result drain without watchdog opt-in', async () => {
+    vi.useFakeTimers()
+    try {
+      const events: AgentEvent[] = []
+      await createClaudeCodeEngine().start({ ...BASE_OPTIONS, watchdogEnabled: undefined }, (e) => events.push(e))
+      await vi.advanceTimersByTimeAsync(60 * 60_000)
+      expect(events).toContainEqual({ kind: 'turn:completed' })
+      expect(events.some((e) => e.kind === 'session:ended' || e.kind === 'error')).toBe(false)
+      expect(abortSignal?.aborted).toBe(false)
+      releaseStream?.()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(events).toContainEqual({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
+    } finally {
+      releaseStream?.()
+      resetControls()
+      vi.useRealTimers()
+    }
+  })
+
   it('delivers a wakeup to the existing stream while only a background task remains', async () => {
     vi.useFakeTimers()
     try {

@@ -47,6 +47,76 @@ afterEach(() => {
   }
 })
 
+describe('agent watchdog setting', () => {
+  it('defaults new installations to disabled', () => {
+    expect(getGlobalSettings().agentWatchdogEnabled).toBe(false)
+  })
+
+  it.each([undefined, null, 'true', 1, false, true])('migrates legacy settings safely (%s)', (value) => {
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        schemaVersion: 63,
+        global: { agentWatchdogEnabled: value, gitConventions: 'Keep this preference' },
+        projects: [],
+      }),
+    )
+    expect(getSettings().global.agentWatchdogEnabled).toBe(value === true)
+    expect(getSettings().global.gitConventions).toBe('Keep this preference')
+    const saved = JSON.parse(fs.readFileSync(settingsPath, 'utf8'))
+    expect(saved.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
+    expect(saved.global.agentWatchdogEnabled).toBe(value === true)
+  })
+
+  it('persists explicit enable/disable and rejects non-boolean updates', () => {
+    updateGlobalSettings({ agentWatchdogEnabled: true })
+    for (const value of ['false', 0, null]) {
+      updateGlobalSettings({ agentWatchdogEnabled: value } as unknown as Partial<GlobalSettings>)
+      expect(getGlobalSettings().agentWatchdogEnabled).toBe(true)
+    }
+    _setSettingsPath(settingsPath)
+    expect(getGlobalSettings().agentWatchdogEnabled).toBe(true)
+    updateGlobalSettings({ agentWatchdogEnabled: false })
+    _setSettingsPath(settingsPath)
+    expect(getGlobalSettings().agentWatchdogEnabled).toBe(false)
+  })
+})
+
+describe('progress visibility setting', () => {
+  it('defaults new installations to visible', () => {
+    expect(getGlobalSettings().showProgressBars).toBe(true)
+  })
+
+  it.each([undefined, null, 'true', 1, false, true])('migrates legacy settings safely (%s)', (value) => {
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        schemaVersion: 64,
+        global: { showProgressBars: value, gitConventions: 'Keep this preference' },
+        projects: [],
+      }),
+    )
+    expect(getSettings().global.showProgressBars).toBe(typeof value === 'boolean' ? value : true)
+    expect(getSettings().global.gitConventions).toBe('Keep this preference')
+    const saved = JSON.parse(fs.readFileSync(settingsPath, 'utf8'))
+    expect(saved.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
+    expect(saved.global.showProgressBars).toBe(typeof value === 'boolean' ? value : true)
+  })
+
+  it('persists explicit enable/disable and rejects non-boolean updates', () => {
+    updateGlobalSettings({ showProgressBars: true })
+    for (const value of ['false', 0, null]) {
+      updateGlobalSettings({ showProgressBars: value } as unknown as Partial<GlobalSettings>)
+      expect(getGlobalSettings().showProgressBars).toBe(true)
+    }
+    _setSettingsPath(settingsPath)
+    expect(getGlobalSettings().showProgressBars).toBe(true)
+    updateGlobalSettings({ showProgressBars: false })
+    _setSettingsPath(settingsPath)
+    expect(getGlobalSettings().showProgressBars).toBe(false)
+  })
+})
+
 describe('getSettings()', () => {
   it('preserves an explicitly saved Auto model instead of replacing it with the fresh-install default', () => {
     getSettings()
@@ -828,7 +898,7 @@ describe('runSettingsMigrations()', () => {
       global: { customValue: 'keep' },
       projects: [{ path: '/repo', customProjectValue: 'also keep' }],
     })
-    expect(missing.schemaVersion).toBe(63)
+    expect(missing.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
     expect(missing.global.memoryMode).toBe('hybrid')
     expect((missing.global as unknown as Record<string, unknown>).customValue).toBe('keep')
     expect((missing.projects[0] as unknown as Record<string, unknown>)?.customProjectValue).toBe('also keep')

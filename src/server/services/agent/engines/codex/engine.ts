@@ -236,6 +236,7 @@ export function createCodexEngine(): AgentEngine {
       // deadline tracks the last activity, not the start of the wait.
       const armSubagentStallWatchdog = (): void => {
         clearSubagentStallWatchdog()
+        if (!options.watchdogEnabled) return
         if (!waitingForBackgroundSubagents || pendingByCallId.size > 0 || activeSubagentThreads.size === 0) return
         subagentStallTimer = setTimeout(() => {
           subagentStallTimer = undefined
@@ -280,6 +281,7 @@ export function createCodexEngine(): AgentEngine {
         }
       }
       const turnLiveness = createTurnLiveness({
+        enabled: options.watchdogEnabled === true,
         timeoutMs: CODEX_TURN_IDLE_TIMEOUT_MS,
         onTimeout() {
           watchdogEnded = true

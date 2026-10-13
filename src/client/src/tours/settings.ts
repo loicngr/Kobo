@@ -39,17 +39,34 @@ export const settingsTour: TourDefinition = {
   steps: [
     ...(Object.keys(SETTINGS_GROUPS) as SettingsGroup[]).flatMap((group): TourStep[] => [
       groupStep(group),
-      ...(group === 'memory'
+      ...(group === 'engines'
         ? [
             {
-              id: 'settings-memory-modes',
-              anchor: 'settings-memory-modes',
-              i18nKey: 'tours.settings.memoryModes',
-              clickTarget: 'settings-nav-memory',
-              beforeShow: () => clickAnchor('settings-nav-memory', 'settings-memory-modes'),
+              id: 'settings-agent-watchdog',
+              anchor: 'settings-agent-watchdog',
+              i18nKey: 'tours.settings.agentWatchdog',
+              clickTarget: 'settings-nav-agents',
+              beforeShow: () => clickAnchor('settings-nav-agents', 'settings-agent-watchdog'),
+            },
+            {
+              id: 'settings-progress-bars',
+              anchor: 'settings-progress-bars',
+              i18nKey: 'tours.settings.progressBars',
+              clickTarget: 'settings-nav-agents',
+              beforeShow: () => clickAnchor('settings-nav-agents', 'settings-progress-bars'),
             },
           ]
-        : []),
+        : group === 'memory'
+          ? [
+              {
+                id: 'settings-memory-modes',
+                anchor: 'settings-memory-modes',
+                i18nKey: 'tours.settings.memoryModes',
+                clickTarget: 'settings-nav-memory',
+                beforeShow: () => clickAnchor('settings-nav-memory', 'settings-memory-modes'),
+              },
+            ]
+          : []),
     ]),
     {
       id: 'settings-mcp',

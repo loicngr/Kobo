@@ -7,6 +7,7 @@ import SessionProgressPanel from '../components/SessionProgressPanel.vue'
 import en from '../i18n/en'
 import fr from '../i18n/fr'
 import { useProgressBarsStore } from '../stores/progress-bars'
+import { useSettingsStore } from '../stores/settings'
 import { apiFetch } from '../utils/api'
 
 vi.mock('../utils/api', () => ({ apiFetch: vi.fn() }))
@@ -53,6 +54,30 @@ afterEach(() => {
   for (const wrapper of wrappers.splice(0)) wrapper.unmount()
   vi.useRealTimers()
   document.body.innerHTML = ''
+})
+it('hides without dismissing and restores current progress while respecting dismissal and expiry', async () => {
+  const wrapper = panel()
+  await flushPromises()
+  const settings = useSettingsStore()
+  const store = useProgressBarsStore()
+  expect(settings.global.showProgressBars).toBe(true)
+  store.apply(bar('active', { current: 1, total: 10 }))
+  await flushPromises()
+  expect(wrapper.get('[role="progressbar"]').attributes('aria-valuenow')).toBe('1')
+  ;(wrapper.get('[data-dismiss="active"]').element as HTMLElement).focus()
+  settings.global.showProgressBars = false
+  await flushPromises()
+  expect(wrapper.find('section').exists()).toBe(false)
+  expect(wrapper.emitted('focusComposer')).toHaveLength(1)
+  store.apply(bar('active', { current: 7, total: 10, revision: 2 }))
+  store.apply(bar('dismissed', { dismissed: true, dismissedAt: now }))
+  store.apply(bar('done', { status: 'succeeded', completedAt: now }))
+  await vi.advanceTimersByTimeAsync(5000)
+  settings.global.showProgressBars = true
+  await flushPromises()
+  expect(wrapper.findAll('[role="progressbar"]')).toHaveLength(1)
+  expect(wrapper.get('[role="progressbar"]').attributes('aria-valuenow')).toBe('7')
+  expect(vi.mocked(apiFetch).mock.calls).toHaveLength(1)
 })
 it('renders nothing empty and three rows with expandable overflow', async () => {
   const wrapper = panel()

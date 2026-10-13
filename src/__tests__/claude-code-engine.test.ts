@@ -313,6 +313,7 @@ describe('claude-code engine — hung SDK generator after result', () => {
       await engine.start(
         {
           workspaceId: 'w-hung',
+          watchdogEnabled: true,
           workingDir: '/tmp',
           prompt: 'go',
           backendUrl: 'http://localhost:3000',

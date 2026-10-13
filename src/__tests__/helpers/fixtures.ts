@@ -167,6 +167,8 @@ export function makeGlobalSettings(overrides: Partial<GlobalSettings> = {}): Glo
     terminalCommand: '',
     autoPurgeOnPrMerged: false,
     autoLoopMaxRetries: 5,
+    agentWatchdogEnabled: false,
+    showProgressBars: true,
     awaitingUserReminderMinutes: 0,
     activityDigestEnabled: true,
     maxConcurrentAgents: 0,

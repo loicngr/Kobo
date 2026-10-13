@@ -56,6 +56,17 @@ Configure integrations only when you need them, in their Settings tabs. Notion a
 
 ## Existing installations
 
+The **Show progress bars** switch in **Settings → Agents** is enabled by default.
+Turn it off and save to hide activity indicators without interrupting their work
+or tracking. Re-enabling it preserves individual dismissals and expiry times.
+
+The **agent inactivity watchdogs** switch is at the top of **Settings → Agents**.
+It is off by default, including after upgrading an existing installation, so a
+long silent task is not stopped by Kōbō's engine inactivity timers. Enable it if
+you want stalled sessions closed automatically. Changes apply on the next agent
+start or resume. The Settings tour explains this option; see
+[session watchdogs](../CONFIGURATION.md#session-watchdogs) for the deadlines.
+
 Upgrades preserve customized prompts, plugin selection, integration toggles, permission modes and resource limits. Existing installations retain legacy automatic Git workflow preferences; review them in Settings if you prefer manual authorization. Existing workspaces receive a snapshot of that historical policy, while new workspaces snapshot the effective global/project/create policy. Changing a global policy does not rewrite existing missions.
 
 Known shipped prompt text and retired sound selections are migrated; custom prompt text is preserved. Audio enablement and volume are retained. Take a complete backup before an upgrade; see [Troubleshooting](./troubleshooting.md).

@@ -254,6 +254,22 @@
               class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
             >
 
+              <div class="q-mb-md" data-tour="settings-agent-watchdog">
+                <q-toggle
+                  v-model="globalAgentWatchdogEnabled"
+                  :label="$t('settings.agentWatchdogEnabled')"
+                  color="primary"
+                />
+                <div class="text-caption text-kobo-3 q-mt-xs">
+                  {{ $t('settings.agentWatchdogHint') }}
+                </div>
+              </div>
+
+              <div class="q-mb-md" data-tour="settings-progress-bars">
+                <q-toggle v-model="globalShowProgressBars" :label="$t('settings.showProgressBars')" color="primary" />
+                <div class="text-caption text-kobo-3 q-mt-xs">{{ $t('settings.showProgressBarsHint') }}</div>
+              </div>
+
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.defaultModelClaude') }}</div>
               <q-select
                 v-model="globalClaudeModel"
@@ -2878,6 +2894,8 @@ const globalFileManagerCommand = ref('')
 const globalTerminalCommand = ref('')
 const globalAutoPurgeOnPrMerged = ref(false)
 const globalAutoLoopMaxRetries = ref(5)
+const globalAgentWatchdogEnabled = ref(false)
+const globalShowProgressBars = ref(true)
 const globalAwaitingUserReminderMinutes = ref(0)
 const globalActivityDigestEnabled = ref(true)
 const globalWsEventsRetentionDays = ref(0)
@@ -3934,6 +3952,8 @@ function readGlobalForm(): Record<string, unknown> {
     terminalCommand: globalTerminalCommand.value,
     autoPurgeOnPrMerged: globalAutoPurgeOnPrMerged.value,
     autoLoopMaxRetries: globalAutoLoopMaxRetries.value,
+    agentWatchdogEnabled: globalAgentWatchdogEnabled.value,
+    showProgressBars: globalShowProgressBars.value,
     awaitingUserReminderMinutes: globalAwaitingUserReminderMinutes.value,
     activityDigestEnabled: globalActivityDigestEnabled.value,
     wsEventsRetentionDays: globalWsEventsRetentionDays.value,
@@ -4068,6 +4088,8 @@ function syncGlobalForm() {
   globalTerminalCommand.value = store.global.terminalCommand ?? ''
   globalAutoPurgeOnPrMerged.value = store.global.autoPurgeOnPrMerged ?? false
   globalAutoLoopMaxRetries.value = store.global.autoLoopMaxRetries ?? 5
+  globalAgentWatchdogEnabled.value = store.global.agentWatchdogEnabled === true
+  globalShowProgressBars.value = store.global.showProgressBars !== false
   globalAwaitingUserReminderMinutes.value = store.global.awaitingUserReminderMinutes ?? 0
   globalActivityDigestEnabled.value = store.global.activityDigestEnabled ?? true
   globalWsEventsRetentionDays.value = store.global.wsEventsRetentionDays ?? 0
@@ -4447,6 +4469,8 @@ async function saveGlobal() {
       terminalCommand: globalTerminalCommand.value,
       autoPurgeOnPrMerged: globalAutoPurgeOnPrMerged.value,
       autoLoopMaxRetries: globalAutoLoopMaxRetries.value,
+      agentWatchdogEnabled: globalAgentWatchdogEnabled.value,
+      showProgressBars: globalShowProgressBars.value,
       awaitingUserReminderMinutes: globalAwaitingUserReminderMinutes.value,
       activityDigestEnabled: globalActivityDigestEnabled.value,
       wsEventsRetentionDays: globalWsEventsRetentionDays.value,

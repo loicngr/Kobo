@@ -78,6 +78,8 @@ export interface EngineProcess {
 }
 
 export interface StartOptions {
+  /** Global inactivity watchdog opt-in. Undefined/false leaves long silent work running. */
+  watchdogEnabled?: boolean
   workspaceId: string
   workingDir: string
   prompt: string

@@ -16,7 +16,11 @@ export interface TurnLiveness {
  * A pending user decision deliberately pauses the deadline: the agent is
  * waiting on a human, not stalled.
  */
-export function createTurnLiveness(input: { timeoutMs: number; onTimeout: () => void }): TurnLiveness {
+export function createTurnLiveness(input: {
+  timeoutMs: number
+  onTimeout: () => void
+  enabled?: boolean
+}): TurnLiveness {
   let timer: ReturnType<typeof setTimeout> | undefined
   let active = false
   let paused = false
@@ -24,7 +28,7 @@ export function createTurnLiveness(input: { timeoutMs: number; onTimeout: () => 
   let currentTimeoutMs = input.timeoutMs
 
   const arm = (): void => {
-    if (!active || paused || timedOut) return
+    if (input.enabled === false || !active || paused || timedOut) return
     if (timer) clearTimeout(timer)
     timer = setTimeout(() => {
       timer = undefined

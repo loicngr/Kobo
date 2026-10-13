@@ -1969,6 +1969,18 @@ export default {
   'settings.autoPurgeOnPrMerged': 'Worktree automatisch löschen, wenn PR gemerged',
   'settings.autoPurgeOnPrMergedHint':
     'Wenn aktiviert, wird der Worktree von der Festplatte gelöscht, sobald die PR gemerged wird (zusätzlich zur automatischen Archivierung). Chat-Verlauf bleibt erhalten.',
+  'settings.showProgressBars': 'Fortschrittsbalken anzeigen',
+  'settings.showProgressBarsHint':
+    'Standardmäßig aktiviert. Das Ausblenden schließt keine Aktivitäten und beendet nicht deren Verfolgung. Änderungen gelten nach dem Speichern.',
+  'tours.settings.progressBars.title': 'Fortschrittsbalken',
+  'tours.settings.progressBars.description':
+    'Blenden Sie die Balken über dem Nachrichtenfeld ein oder aus. Die Verfolgung läuft auch ausgeblendet weiter.',
+  'settings.agentWatchdogEnabled': 'Inaktivitäts-Watchdogs für Agenten aktivieren',
+  'settings.agentWatchdogHint':
+    'Standardmäßig deaktiviert. Wenn aktiviert, kann Kōbō Claude oder Codex nach längerer Stille beenden, einschließlich Tools, Unteragenten und Kontextkomprimierung. Gilt beim nächsten Start oder Fortsetzen des Agenten.',
+  'tours.settings.agentWatchdog.title': 'Inaktivitäts-Watchdogs',
+  'tours.settings.agentWatchdog.description':
+    'Deaktiviert lassen, damit lange Aufgaben ohne sichtbare Aktivität warten können. Aktivieren, um blockierte Sitzungen automatisch zu schließen. Gilt beim nächsten Start oder Fortsetzen des Agenten.',
   'settings.autoLoopMaxRetries': 'Maximale automatische Wiederholungen',
   'settings.awaitingUserReminder': 'Erinnerung an unbeantwortete Frage',
   'settings.awaitingUserReminderHint':

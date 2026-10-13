@@ -114,6 +114,8 @@ interface GlobalSettings {
   /** Opt-in: pr-watcher auto-purges the worktree on PR-merged transition. */
   autoPurgeOnPrMerged: boolean
   autoLoopMaxRetries: number
+  agentWatchdogEnabled: boolean
+  showProgressBars: boolean
   /** Minutes before Kōbō reminds you about an unanswered question. 0 = off. */
   awaitingUserReminderMinutes: number
   /** Show the absence digest and record significant activity. Default true. */
@@ -258,6 +260,8 @@ export const useSettingsStore = defineStore('settings', {
       terminalCommand: '',
       autoPurgeOnPrMerged: false,
       autoLoopMaxRetries: 5,
+      agentWatchdogEnabled: false,
+      showProgressBars: true,
       awaitingUserReminderMinutes: 0,
       activityDigestEnabled: true,
       wsEventsRetentionDays: 0,

@@ -1958,6 +1958,18 @@ export default {
   'settings.autoPurgeOnPrMerged': 'Borrar worktree al mergear la PR',
   'settings.autoPurgeOnPrMergedHint':
     'Cuando está activado, el worktree se borra del disco en cuanto se mergea la PR (además del archivado automático). El historial de mensajes se conserva.',
+  'settings.showProgressBars': 'Mostrar barras de progreso',
+  'settings.showProgressBarsHint':
+    'Activado de forma predeterminada. Ocultar las barras no cierra las actividades ni detiene su seguimiento. Los cambios se aplican al guardar.',
+  'tours.settings.progressBars.title': 'Barras de progreso',
+  'tours.settings.progressBars.description':
+    'Muestra u oculta las barras sobre el campo de mensaje. El seguimiento continúa mientras están ocultas.',
+  'settings.agentWatchdogEnabled': 'Activar los watchdogs de inactividad de los agentes',
+  'settings.agentWatchdogHint':
+    'Desactivados por defecto. Si se activan, Kōbō puede detener Claude o Codex tras un silencio prolongado, incluidas herramientas, subagentes y compactación. Se aplica al iniciar o reanudar el agente.',
+  'tours.settings.agentWatchdog.title': 'Watchdogs de inactividad',
+  'tours.settings.agentWatchdog.description':
+    'Deja esta opción desactivada para permitir esperas largas sin actividad visible. Actívala para cerrar automáticamente sesiones bloqueadas. Se aplica al iniciar o reanudar el agente.',
   'settings.autoLoopMaxRetries': 'Máximo de reintentos automáticos',
   'settings.awaitingUserReminder': 'Recordatorio de pregunta sin responder',
   'settings.awaitingUserReminderHint':

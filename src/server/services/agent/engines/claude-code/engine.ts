@@ -626,6 +626,7 @@ export function createClaudeCodeEngine(): AgentEngine {
       // first SDK message, re-armed on meaningful progress, suspended while a human
       // decision or a background subagent is outstanding, stopped in `finally`.
       const turnLiveness = createTurnLiveness({
+        enabled: options.watchdogEnabled === true,
         timeoutMs: CLAUDE_STREAM_IDLE_TIMEOUT_MS,
         onTimeout() {
           // The armed deadline tracks whether a foreground tool call is in
@@ -673,7 +674,7 @@ export function createClaudeCodeEngine(): AgentEngine {
         compactionStallTimer = undefined
       }
       const armCompactionStallTimer = (): void => {
-        if (compactionStallTimer) return
+        if (!options.watchdogEnabled || compactionStallTimer) return
         compactionStallTimer = setTimeout(() => {
           compactionStallTimer = undefined
           if (!isCompacting) return
@@ -694,7 +695,7 @@ export function createClaudeCodeEngine(): AgentEngine {
         compactionStallTimer.unref?.()
       }
       const armResultDrainWatchdog = (): void => {
-        if (resultDrainTimer) return
+        if (!options.watchdogEnabled || resultDrainTimer) return
         resultDrainTimer = setTimeout(() => {
           console.warn(
             `[claude-engine] SDK generator still open ${RESULT_DRAIN_TIMEOUT_MS}ms after 'result' — forcing session:ended`,
@@ -779,6 +780,7 @@ export function createClaudeCodeEngine(): AgentEngine {
       // Human waits suspend it independently; genuine activity restarts it.
       const armSubagentStallWatchdog = (): void => {
         clearSubagentStallWatchdog()
+        if (!options.watchdogEnabled) return
         if (pendingResolvers.size > 0 || activeSubagentTaskIds.size === 0) return
         const hasAgent = [...activeSubagentTaskIds].some((id) =>
           isSubagentTask({ taskType: mapperState.taskTypes.get(id) }),

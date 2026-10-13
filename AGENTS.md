@@ -201,6 +201,10 @@ Every feature that touches the schema:
 
 ## WebSocket protocol
 
+Global `showProgressBars` defaults to true (settings migration v65). The panel
+honors this preference without resetting its store or dismissing rows: MCP writes,
+revisions and success expiry continue while hidden.
+
 Session progress bars use the separate `progress:changed` ephemeral event with a
 public record payload and workspace/session envelope. Persist the row before
 broadcasting; never append numeric updates to chat history or overload native
@@ -233,7 +237,7 @@ locally queued or unacknowledged messages still block `turn:completed` and
 input closure. UUID-less legacy results retain a conservative one-input
 fallback for already yielded inputs only; a result never credits a future send.
 Backpressure caps unacknowledged yielded inputs at 64, matching the SDK's result
-UUID list bound. Keep the inactivity watchdog for genuinely unanswered work.
+UUID list bound. Keep the opt-in inactivity watchdog for genuinely unanswered work.
 
 Claude SDK `task_*` messages cover agents **and** background jobs. Preserve `task_type` by task/tool identity across progress and terminal messages, which often omit it. The existing `subagent:progress` envelope also carries this lifecycle metadata for compatibility; `local_bash`, `local_workflow` and `mcp_task` must be excluded from agent cards, busy-agent counts, chat agent-name resolution and the selective stop-subagents action. Keep tracking these jobs for engine liveness and whole-session interruption. Legacy/unknown classifications and Codex agents remain supported; never classify from a description or from the agent's last tool (`Bash` can be a real agent's current action).
 
@@ -394,11 +398,18 @@ through `ExitPlanMode`; a permission change requires a new launch.
 
 Two engines live under `src/server/services/agent/engines/`, both implementing the `AgentEngine` contract in `types.ts`:
 
-**Claude Code** (`claude-code/`): consumes the `@anthropic-ai/claude-agent-sdk` async iterator. The SDK manages the Claude runtime; Kōbō does not launch a separate `claude` CLI command. Authentication reuses the user's Claude login or `ANTHROPIC_API_KEY`. A settled result gets a **3 s continuation grace**, then a **15 s result-drain watchdog**. Trailing metadata and child output must not cancel the parent's drain/grace. Silence is bounded at **2 minutes** without tools, **30 minutes** for foreground tools and background shell/workflow/MCP jobs, and **10 minutes** for agents. Compaction has an absolute **10-minute** ceiling; repeated status messages cannot extend it. Human questions/permissions pause inactivity; resolution AND SDK cancellation re-evaluate that pause. Watchdogs request abort plus SDK `query.close()`; neither is proof of closure: controller ownership is released only when `EngineProcess.closed` confirms it. Never fake closure or allow a second writer if the SDK ignores termination. End emission is idempotent and timers are cleared on termination and in `finally`.
+Global `agentWatchdogEnabled` is opt-in (false for fresh and existing installs;
+settings migration v64). The orchestrator snapshots it into `StartOptions.watchdogEnabled`
+on every launch/resume for both engines. Gate stream/tool inactivity, background
+stall, compaction and failed-result-drain watchdogs; retain normal completion,
+manual stop, protocol/startup deadlines and confirmed-dead-process cleanup.
+The toggle is first in Settings → Agents and does not reconfigure active launches.
+
+**Claude Code** (`claude-code/`): consumes the `@anthropic-ai/claude-agent-sdk` async iterator. The SDK manages the Claude runtime; Kōbō does not launch a separate `claude` CLI command. Authentication reuses the user's Claude login or `ANTHROPIC_API_KEY`. A settled result gets a **3 s continuation grace**, then an opt-in **15 s result-drain watchdog**. Trailing metadata and child output must not cancel the parent's drain/grace. When watchdogs are enabled, silence is bounded at **2 minutes** without tools, **30 minutes** for foreground tools and background shell/workflow/MCP jobs, and **10 minutes** for agents. Compaction has an absolute **10-minute** ceiling; repeated status messages cannot extend it. Human questions/permissions pause inactivity; resolution AND SDK cancellation re-evaluate that pause. Watchdogs request abort plus SDK `query.close()`; neither is proof of closure: controller ownership is released only when `EngineProcess.closed` confirms it. Never fake closure or allow a second writer if the SDK ignores termination. End emission is idempotent and timers are cleared on termination and in `finally`.
 
 After the continuation grace, Claude explicitly calls `query.close()`; closing
 the input iterator alone can leave the SDK waiting for an idle notification after
-a successful result. The 15-second drain watchdog is a failed-close backstop,
+a successful result. The opt-in 15-second drain watchdog is a failed-close backstop,
 not normal cleanup. The SDK still constructs its runtime command; Kōbō's
 `spawnClaudeCodeProcess` hook tracks actual child exit and forwards stderr.
 `EngineProcess.closed` waits for both that exit and iterator completion because

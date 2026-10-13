@@ -1920,6 +1920,7 @@ export function startAgent(
   )
   const options: StartOptions = {
     workspaceId,
+    watchdogEnabled: getGlobalSettings().agentWatchdogEnabled === true,
     workingDir,
     prompt: buildAgentPrompt(
       `${ws ? renderWorkflowPolicy(ws.workflowPolicy) : ''}\n${integrationMcpPrompt(integrationServers, unavailableIntegrations)}\n${prompt}`,

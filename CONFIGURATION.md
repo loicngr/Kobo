@@ -859,6 +859,12 @@ External senders can supply `idempotency_key` once per intended message and reus
 
 ## Session progress bars
 
+**Settings → Agents → Show progress bars** (`showProgressBars`) is enabled by
+default. Saving this global preference hides or restores the panel immediately in
+the current client; other clients receive it on their next settings refresh.
+Hiding the panel does not stop reporting, dismiss activities or reset their
+success expiry timer. Individually dismissed bars stay dismissed when re-enabled.
+
 Agents can report long-running tests, builds or reviews through the
 `create_progress_bar`, `update_progress_bar`, `finish_progress_bar` and
 `list_progress_bars` MCP tools. These tools are available through the workspace
@@ -1419,15 +1425,27 @@ The model selector is populated from [`src/shared/models.ts`](./src/shared/model
 
 #### Session watchdogs
 
+**Settings → Agents → Enable agent inactivity watchdogs**, at the top of the tab,
+controls the global `agentWatchdogEnabled` boolean. It is **off by default**, for
+both new and existing installations. Each Claude/Codex launch or resume captures
+the current value; saving the toggle does not interrupt or reconfigure an already
+running agent. Stop and resume that agent to apply the new value.
+
+When off, Kōbō does not force-close a session because of stream/tool silence,
+background agents/jobs, stalled compaction, or a stalled result drain. Long silent
+CI monitoring can continue. Normal completion, manual Stop, provider failures,
+protocol request/startup deadlines and cleanup of confirmed dead processes still
+work; this switch only controls the engine watchdog deadlines described below.
+
 Kōbō distinguishes a finished response from a fully closed SDK session. Once a
 response is settled, it allows 3 seconds for continuation, then explicitly closes
 the SDK query. Normal cleanup is reported as completion, not a watchdog failure.
-A 15-second drain watchdog remains if that close fails to end the iterator.
+When watchdogs are enabled, a 15-second drain watchdog remains if that close fails to end the iterator.
 Metadata alone cannot extend this cleanup deadline. Writer ownership waits for
 both iterator completion and confirmed runtime exit, even if the SDK's own
 bounded cleanup returns earlier.
 
-Silence limits are 2 minutes without a pending tool, 10 minutes for background
+With watchdogs enabled, silence limits are 2 minutes without a pending tool, 10 minutes for background
 agents, and 30 minutes for tools (including background Bash, workflow and MCP
 jobs). A compaction has a separate absolute 10-minute limit. Waiting for your
 answer or permission pauses the inactivity watchdog.

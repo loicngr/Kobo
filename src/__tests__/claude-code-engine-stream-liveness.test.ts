@@ -111,6 +111,7 @@ import {
 import type { AgentEvent, StartOptions } from '../server/services/agent/engines/types.js'
 
 const BASE_OPTIONS: StartOptions = {
+  watchdogEnabled: true,
   workspaceId: 'w-liveness',
   workingDir: '/tmp',
   prompt: 'go',
@@ -120,6 +121,39 @@ const BASE_OPTIONS: StartOptions = {
 }
 
 describe('claude-code engine — shared turn liveness', () => {
+  describe.each([undefined, false])('watchdogs disabled (%s)', (watchdogEnabled) => {
+    it.each(['tool', 'stream', 'subagent', 'compaction'])(
+      'keeps a silent %s alive beyond all idle limits and still allows manual interruption',
+      async (scenario) => {
+        vi.useFakeTimers()
+        emitToolResult = scenario === 'stream'
+        emitSubagentStart = scenario === 'subagent'
+        emitCompactingStatus = scenario === 'compaction'
+        try {
+          const events: AgentEvent[] = []
+          const process = await createClaudeCodeEngine().start({ ...BASE_OPTIONS, watchdogEnabled }, (event) =>
+            events.push(event),
+          )
+          await vi.advanceTimersByTimeAsync(60 * 60_000)
+          expect(events.some((event) => event.kind === 'session:ended' || event.kind === 'error')).toBe(false)
+          expect(abortSignal?.aborted).toBe(false)
+          expect(process.isAlive?.()).toBe(true)
+          process.interrupt()
+          await vi.advanceTimersByTimeAsync(0)
+          await process.closed
+          expect(events).toContainEqual({ kind: 'session:ended', reason: 'killed', exitCode: null })
+        } finally {
+          releaseStream?.()
+          releaseStream = undefined
+          emitToolResult = false
+          emitSubagentStart = false
+          emitCompactingStatus = false
+          vi.useRealTimers()
+        }
+      },
+    )
+  })
+
   it('does not confirm closure while a watchdog-ended SDK iterator still ignores abort', async () => {
     vi.useFakeTimers()
     ignoreAbort = true

@@ -75,6 +75,7 @@ import type { AgentEvent, StartOptions } from '../../server/services/agent/engin
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const BASE_OPTIONS: StartOptions = {
+  watchdogEnabled: true,
   workspaceId: 'ws_1',
   workingDir: '/workspace',
   prompt: 'Hello agent',
@@ -291,8 +292,8 @@ describe('createCodexEngine — happy path', () => {
 })
 
 describe('createCodexEngine — background subagents', () => {
-  async function startBackgroundTurn(events: AgentEvent[], finishParent = true) {
-    const process = await createCodexEngine().start(BASE_OPTIONS, (event) => events.push(event))
+  async function startBackgroundTurn(events: AgentEvent[], finishParent = true, overrides: Partial<StartOptions> = {}) {
+    const process = await createCodexEngine().start({ ...BASE_OPTIONS, ...overrides }, (event) => events.push(event))
     await vi.advanceTimersByTimeAsync(5)
     pushInitializeResponse()
     await vi.advanceTimersByTimeAsync(5)
@@ -323,6 +324,21 @@ describe('createCodexEngine — background subagents', () => {
     await vi.advanceTimersByTimeAsync(1)
     return process
   }
+
+  it.each([undefined, false])('keeps silent background work alive with watchdogs %s', async (watchdogEnabled) => {
+    resetChild()
+    vi.useFakeTimers()
+    try {
+      const events: AgentEvent[] = []
+      await startBackgroundTurn(events, true, { watchdogEnabled })
+      await vi.advanceTimersByTimeAsync(60 * 60_000)
+      expect(events.some((e) => e.kind === 'session:ended' || e.kind === 'error')).toBe(false)
+    } finally {
+      _child.kill('SIGTERM')
+      await vi.advanceTimersByTimeAsync(1)
+      vi.useRealTimers()
+    }
+  })
 
   it('marks child thread output with its origin for the activity drawer', async () => {
     resetChild()
@@ -1513,6 +1529,33 @@ describe('createCodexEngine — turn liveness with multiple pending approvals', 
 })
 
 describe('createCodexEngine — handshake liveness', () => {
+  it.each([undefined, false])(
+    'does not time out an idle initialized turn with watchdogs %s',
+    async (watchdogEnabled) => {
+      resetChild()
+      vi.useFakeTimers()
+      try {
+        const events: AgentEvent[] = []
+        const process = await createCodexEngine().start({ ...BASE_OPTIONS, watchdogEnabled }, (e) => events.push(e))
+        await vi.advanceTimersByTimeAsync(5)
+        pushInitializeResponse()
+        await vi.advanceTimersByTimeAsync(5)
+        pushThreadStartResponse('thr_silent')
+        await vi.advanceTimersByTimeAsync(5)
+        pushTurnStartResponse()
+        await vi.advanceTimersByTimeAsync(60 * 60_000)
+        expect(events.some((e) => e.kind === 'session:ended' || e.kind === 'error')).toBe(false)
+        process.interrupt()
+        await vi.advanceTimersByTimeAsync(CODEX_GRACEFUL_INTERRUPT_TIMEOUT_MS * 2 + 100)
+        expect(events).toContainEqual(expect.objectContaining({ kind: 'session:ended', reason: 'killed' }))
+      } finally {
+        _child.kill('SIGTERM')
+        await vi.advanceTimersByTimeAsync(1)
+        vi.useRealTimers()
+      }
+    },
+  )
+
   it('fails the session when the app-server never answers initialize', async () => {
     resetChild()
     vi.useFakeTimers()

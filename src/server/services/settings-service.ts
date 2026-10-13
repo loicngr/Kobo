@@ -320,6 +320,9 @@ export interface GlobalSettings {
   terminalCommand: string
   autoPurgeOnPrMerged: boolean
   autoLoopMaxRetries: number
+  /** Opt-in agent inactivity watchdogs, captured at each launch/resume. */
+  agentWatchdogEnabled: boolean
+  showProgressBars: boolean
   /**
    * Minutes a workspace may sit in `awaiting-user` before Kōbō reminds you,
    * then again at every further interval. `0` disables the reminder entirely
@@ -1312,6 +1315,20 @@ const settingsMigrations: SettingsMigration[] = [
       if (!isMemoryMode(global.memoryMode)) global.memoryMode = 'hybrid'
     },
   },
+  {
+    version: 64,
+    name: 'opt-in-agent-watchdogs',
+    migrate: ({ global }) => {
+      if (typeof global.agentWatchdogEnabled !== 'boolean') global.agentWatchdogEnabled = false
+    },
+  },
+  {
+    version: 65,
+    name: 'session-progress-visibility',
+    migrate: ({ global }) => {
+      if (typeof global.showProgressBars !== 'boolean') global.showProgressBars = true
+    },
+  },
 ]
 
 /** Current settings schema version — always equals the highest migration version. */
@@ -1400,6 +1417,8 @@ function defaultSettings(): Settings {
       terminalCommand: '',
       autoPurgeOnPrMerged: false,
       autoLoopMaxRetries: 5,
+      agentWatchdogEnabled: false,
+      showProgressBars: true,
       awaitingUserReminderMinutes: 0,
       activityDigestEnabled: true,
       maxConcurrentAgents: 2,
@@ -1556,6 +1575,8 @@ export function runSettingsMigrations(raw: Record<string, unknown>): Settings {
   if (typeof current.global.onboardingComplete !== 'boolean') current.global.onboardingComplete = true
   current.global.workflowPolicy = resolveWorkflowPolicy(current.global.workflowPolicy as Partial<WorkflowPolicy>)
   if (!isMemoryMode(current.global.memoryMode)) current.global.memoryMode = 'hybrid'
+  if (typeof current.global.showProgressBars !== 'boolean') current.global.showProgressBars = true
+  if (typeof current.global.agentWatchdogEnabled !== 'boolean') current.global.agentWatchdogEnabled = false
   for (const project of current.projects as Array<Record<string, unknown>>) {
     if (!isWorkflowPolicy(project.workflowPolicy)) project.workflowPolicy = {}
   }
@@ -1942,6 +1963,12 @@ export function updateGlobalSettings(input: Partial<GlobalSettings>): GlobalSett
       delete (data as Record<string, unknown>).autoLoopMaxRetries
     }
   }
+  if ('showProgressBars' in data && typeof data.showProgressBars !== 'boolean') {
+    delete (data as Record<string, unknown>).showProgressBars
+  }
+  if ('agentWatchdogEnabled' in data && typeof data.agentWatchdogEnabled !== 'boolean') {
+    delete (data as Record<string, unknown>).agentWatchdogEnabled
+  }
   // 0 is a legitimate value here — it means "never remind me" — so the floor is
   // 0, not 1. The ceiling of a day keeps a typo from arming a reminder that
   // never fires and looks like a broken feature.
@@ -2002,6 +2029,8 @@ export function updateGlobalSettings(input: Partial<GlobalSettings>): GlobalSett
     'terminalCommand',
     'autoPurgeOnPrMerged',
     'autoLoopMaxRetries',
+    'agentWatchdogEnabled',
+    'showProgressBars',
     'awaitingUserReminderMinutes',
     'activityDigestEnabled',
     'maxConcurrentAgents',

@@ -148,6 +148,55 @@ afterEach(() => {
 })
 
 describe('settings drafts', () => {
+  it('saves the watchdog toggle at the top of Agents and restores the persisted value', async () => {
+    const { wrapper, store, tab, vm } = await setup()
+    await tab('agents')
+    const control = () => wrapper.getComponent<typeof Field>('[data-tour="settings-agent-watchdog"] input')
+    expect(control().props('modelValue')).toBe(false)
+    const card = wrapper.get('[data-tour="settings-card-agents"]')
+    expect(card.element.firstElementChild?.getAttribute('data-tour')).toBe('settings-agent-watchdog')
+    control().vm.$emit('update:modelValue', true)
+    await flushPromises()
+    expect(hasUnsavedWork()).toBe(true)
+    await vm.savebarSave()
+    await flushPromises()
+    expect(api).toHaveBeenCalledWith(
+      '/api/settings/global',
+      expect.objectContaining({
+        body: expect.objectContaining({ agentWatchdogEnabled: true }),
+      }),
+    )
+    expect(store.global.agentWatchdogEnabled).toBe(true)
+    vm.syncGlobalForm()
+    await flushPromises()
+    expect(control().props('modelValue')).toBe(true)
+    control().vm.$emit('update:modelValue', false)
+    await flushPromises()
+    await vm.savebarSave()
+    await flushPromises()
+    expect(store.global.agentWatchdogEnabled).toBe(false)
+  })
+
+  it('saves progress visibility and restores the persisted preference', async () => {
+    const { wrapper, store, tab, vm } = await setup()
+    await tab('agents')
+    const control = () => wrapper.getComponent<typeof Field>('[data-tour="settings-progress-bars"] input')
+    expect(control().props('modelValue')).toBe(true)
+    control().vm.$emit('update:modelValue', false)
+    await flushPromises()
+    expect(hasUnsavedWork()).toBe(true)
+    await vm.savebarSave()
+    await flushPromises()
+    expect(api).toHaveBeenCalledWith(
+      '/api/settings/global',
+      expect.objectContaining({ body: expect.objectContaining({ showProgressBars: false }) }),
+    )
+    expect(store.global.showProgressBars).toBe(false)
+    vm.syncGlobalForm()
+    await flushPromises()
+    expect(control().props('modelValue')).toBe(false)
+  })
+
   it.each(['notion', 'sentry'])(
     'disables the %s legacy selector while a direct connection is stored and restores it after clearing',
     async (integrationName) => {

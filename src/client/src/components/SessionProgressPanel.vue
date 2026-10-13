@@ -1,6 +1,6 @@
 <template>
   <section
-    v-if="rows.length || store.error === 'dismiss'"
+    v-if="showProgressBars && (rows.length || store.error === 'dismiss')"
     ref="panelRef"
     class="session-progress"
     data-tour="ws-progress"
@@ -53,6 +53,7 @@
 
 <script setup lang="ts">
 import { useProgressBarsStore } from 'src/stores/progress-bars'
+import { useSettingsStore } from 'src/stores/settings'
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
@@ -60,6 +61,8 @@ const props = defineProps<{ workspaceId: string; sessionId: string | null }>()
 const emit = defineEmits<{ focusComposer: [] }>()
 const { t } = useI18n()
 const store = useProgressBarsStore()
+const settings = useSettingsStore()
+const showProgressBars = computed(() => settings.global.showProgressBars !== false)
 const expanded = ref(false)
 const panelRef = ref<HTMLElement>()
 const announcement = ref('')
@@ -67,6 +70,13 @@ const rows = computed(() =>
   store.workspaceId === props.workspaceId && store.sessionId === props.sessionId ? store.visible : [],
 )
 const displayed = computed(() => (expanded.value ? rows.value : rows.value.slice(0, 3)))
+watch(showProgressBars, (visible) => {
+  announcement.value = ''
+  if (!visible) {
+    expanded.value = false
+    if (panelRef.value?.contains(document.activeElement)) emit('focusComposer')
+  }
+})
 watch(
   () => [props.workspaceId, props.sessionId] as const,
   ([workspaceId, sessionId]) => {
@@ -82,6 +92,7 @@ watch(
 watch(
   () => rows.value.map((item) => ({ id: item.id, status: item.status, label: item.label })),
   (current, previous) => {
+    if (!showProgressBars.value) return
     const ended = current.filter(
       (item) => item.status !== 'running' && previous.some((old) => old.id === item.id && old.status === 'running'),
     )

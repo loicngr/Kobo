@@ -72,6 +72,7 @@ async function start() {
   process = await createClaudeCodeEngine().start(
     {
       workspaceId: 'watchdog-regression',
+      watchdogEnabled: true,
       workingDir: '/tmp',
       prompt: 'first',
       backendUrl: 'http://localhost:3000',

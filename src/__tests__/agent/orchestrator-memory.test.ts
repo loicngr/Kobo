@@ -3,6 +3,7 @@ import type { AgentEngine, AgentEvent, EngineProcess, StartOptions } from '../..
 import { resetDb } from '../helpers/reset-db.js'
 
 const networkSettings = vi.hoisted(() => ({
+  agentWatchdogEnabled: false,
   networkAccessEnabled: true,
   networkAccessBehindProxy: false,
   networkAccessToken: 'test-network-token',
@@ -106,8 +107,27 @@ describe('orchestrator memory context', () => {
     vi.resetModules()
     vi.clearAllMocks()
     networkSettings.networkAccessBehindProxy = false
+    networkSettings.agentWatchdogEnabled = false
     await resetDb()
   })
+
+  it.each(['claude-code', 'codex'] as const)(
+    'captures the global watchdog setting on each %s launch',
+    async (engineId) => {
+      const workspace = await createWorkspace(engineId)
+      const capture = makeEngine(engineId)
+      const { _registerEngineForTest } = await import('../../server/services/agent/engines/registry.js')
+      _registerEngineForTest(capture.engine)
+      const orchestrator = await import('../../server/services/agent/orchestrator.js')
+      for (const enabled of [false, true, false]) {
+        networkSettings.agentWatchdogEnabled = enabled
+        orchestrator.startAgent(workspace.id, workspace.projectPath, 'Run task')
+        await flush()
+        expect(capture.starts.at(-1)?.watchdogEnabled).toBe(enabled)
+        await orchestrator.stopAgentAndWait(workspace.id)
+      }
+    },
+  )
 
   it.each([
     ['claude-code', false],
