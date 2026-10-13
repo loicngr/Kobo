@@ -69,6 +69,13 @@ export const settingsTour: TourDefinition = {
           : []),
     ]),
     {
+      id: 'settings-shutdown',
+      anchor: 'settings-shutdown',
+      i18nKey: 'tours.settings.shutdown',
+      clickTarget: 'settings-nav-scripts',
+      beforeShow: () => clickAnchor('settings-nav-scripts', 'settings-shutdown'),
+    },
+    {
       id: 'settings-mcp',
       anchor: 'settings-mcp',
       i18nKey: 'tours.settings.mcp',

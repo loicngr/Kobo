@@ -310,11 +310,21 @@ request fails, fall back to the saved database status.
 **Output:** `DevServerStatus` — status, instance/project names, HTTP port, URL, and matched containers. See the [Docker status contract](../../CONFIGURATION.md#dev-server).
 Without a configured start command, the backend returns `not_configured` with
 `configured: false`. The database fallback returns `{ workspaceId, status }`.
+`running` describes lifecycle state, not application readiness. Before dependent
+tests, check the project's documented health endpoint or another non-mutating
+service probe with a timeout and bounded retries; inspect logs on failure.
 
 ---
 
 #### `start_dev_server`
 Start the dev server configured for the current workspace (via backend).
+Use it when an authorized task needs workspace services for backend, frontend,
+integration or E2E tests and `get_dev_server_status` reports `stopped`. Reuse an
+existing instance. Do not invoke the configured startup script or Docker Compose
+directly: the backend owns lifecycle tracking. Read-only launches cannot start
+services. Missing configuration or startup failure is a blocker to diagnose with
+status/log tools, not permission to launch a separate stack. Delegates follow the
+same rule and ask their parent to coordinate if they lack these MCP tools.
 
 **Input:** none
 **Output:** `DevServerStatus`
@@ -323,6 +333,9 @@ Start the dev server configured for the current workspace (via backend).
 
 #### `stop_dev_server`
 Stop the dev server of the current workspace (via backend).
+Use this tool for an explicitly requested stop or a necessary authorized restart,
+instead of direct shell shutdown commands. Finishing tests alone is not a reason
+to stop the workspace instance. Read-only launches cannot stop services.
 
 **Input:** none
 **Output:** `DevServerStatus`

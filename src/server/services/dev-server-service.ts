@@ -53,12 +53,18 @@ export interface InstanceConfig {
 const trackedProcesses = new Map<string, ChildProcess>()
 const stoppingProcesses = new Map<string, Promise<DevServerStatus>>()
 const generations = new Map<string, number>()
+let shuttingDown = false
+
+export function beginDevServerShutdown(): void {
+  shuttingDown = true
+}
 
 /** Test-only: clear the tracked-processes map between tests. */
 export function _resetTrackedProcessesForTests(): void {
   trackedProcesses.clear()
   stoppingProcesses.clear()
   generations.clear()
+  shuttingDown = false
 }
 
 // ── Pure helpers ───────────────────────────────────────────────────────────────
@@ -233,6 +239,7 @@ export async function getStatus(
  * Start the dev-server for a workspace.
  */
 export function startDevServer(workspaceId: string): DevServerStatus {
+  if (shuttingDown) throw new Error('Kōbō is shutting down')
   assertWorkspaceLifecycleAvailable(workspaceId)
   const workspace = getWorkspace(workspaceId)
   if (!workspace) {
@@ -292,7 +299,7 @@ export function startDevServer(workspaceId: string): DevServerStatus {
         if (trackedProcesses.get(workspaceId) !== proc || stoppingProcesses.has(workspaceId)) return
         trackedProcesses.delete(workspaceId)
         const currentStatus = await getStatus(workspace.projectPath, workspace.workingBranch)
-        if (generations.get(workspaceId) !== generation || stoppingProcesses.has(workspaceId)) return
+        if (shuttingDown || generations.get(workspaceId) !== generation || stoppingProcesses.has(workspaceId)) return
         updateDevServerStatus(workspaceId, currentStatus.status)
         emitEphemeral(workspaceId, 'devserver:status', currentStatus)
         return
@@ -304,7 +311,8 @@ export function startDevServer(workspaceId: string): DevServerStatus {
   })
 
   proc.on('error', (err) => {
-    if (trackedProcesses.get(workspaceId) !== proc) return
+    if (shuttingDown || trackedProcesses.get(workspaceId) !== proc || generations.get(workspaceId) !== generation)
+      return
     // A signal failure is also an 'error' event; it does not prove process exit.
     if (!proc.pid) trackedProcesses.delete(workspaceId)
     updateDevServerStatus(workspaceId, 'error')
@@ -426,6 +434,14 @@ function signalAndWait(proc: ChildProcess, signal: NodeJS.Signals, timeoutMs: nu
   })
 }
 
+async function stopTrackedProcess(workspaceId: string): Promise<void> {
+  const tracked = trackedProcesses.get(workspaceId)
+  if (!tracked) return
+  const exited = (await signalAndWait(tracked, 'SIGTERM', 3_000)) || (await signalAndWait(tracked, 'SIGKILL', 1_000))
+  if (!exited) throw new Error('Dev server stop is not confirmed; retry after the process exits')
+  if (trackedProcesses.get(workspaceId) === tracked) trackedProcesses.delete(workspaceId)
+}
+
 async function stopDevServerOwned(workspaceId: string): Promise<DevServerStatus> {
   const workspace = getWorkspace(workspaceId)
   if (!workspace) {
@@ -438,12 +454,7 @@ async function stopDevServerOwned(workspaceId: string): Promise<DevServerStatus>
   const cwd = worktreePath && existsSync(worktreePath) ? worktreePath : workspace.projectPath
 
   // Kill tracked process first (covers Node servers and any spawned process)
-  const tracked = trackedProcesses.get(workspaceId)
-  if (tracked) {
-    const exited = (await signalAndWait(tracked, 'SIGTERM', 3_000)) || (await signalAndWait(tracked, 'SIGKILL', 1_000))
-    if (!exited) throw new Error('Dev server stop is not confirmed; retry after the process exits')
-    if (trackedProcesses.get(workspaceId) === tracked) trackedProcesses.delete(workspaceId)
-  }
+  await stopTrackedProcess(workspaceId)
 
   const settings = getProjectSettings(workspace.projectPath)
 
@@ -508,13 +519,30 @@ async function stopDevServerOwned(workspaceId: string): Promise<DevServerStatus>
   return status
 }
 
-/** Stop direct and Docker dev servers for every persisted workspace. */
-export async function stopAllDevServers(): Promise<void> {
+/** Shut down local processes; optionally leave independently running Docker services alone. */
+export async function stopAllDevServers(options: { preserveDocker?: boolean } = {}): Promise<void> {
+  beginDevServerShutdown()
   const workspaceIds = new Set([...listWorkspaces(true).map((workspace) => workspace.id), ...trackedProcesses.keys()])
   await Promise.all(
     [...workspaceIds].map(async (workspaceId) => {
       try {
-        await stopDevServer(workspaceId)
+        if (!options.preserveDocker) {
+          await stopDevServer(workspaceId)
+        } else {
+          // A stop already requested by the user must still finish.
+          const stopping = stoppingProcesses.get(workspaceId)
+          if (stopping) {
+            await stopping
+            return
+          }
+          const hadProcess = trackedProcesses.has(workspaceId)
+          await stopTrackedProcess(workspaceId)
+          const workspace = getWorkspace(workspaceId)
+          // Preserve Docker state; getStatus re-inspects Compose after restart.
+          if (hadProcess && workspace && !resolveInstance(workspace.projectPath, workspace.workingBranch)) {
+            updateDevServerStatus(workspaceId, 'stopped')
+          }
+        }
       } catch (err) {
         console.error(`[dev-server] Failed to stop '${workspaceId}' during shutdown:`, err)
       }

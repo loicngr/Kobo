@@ -19,6 +19,8 @@ import uuid
 from datetime import datetime, timezone
 
 REPO = 'https://github.com/loicngr/kobo.git'
+# Allow Kōbō's bounded shutdown hooks and subsequent dev-service teardown to finish.
+STOP_GRACE_SECONDS = 180
 VERSION = re.compile(r'\d+\.\d+\.\d+')
 COMPOSE_ENV_KEYS = ('KOBO_DOMAIN', 'KOBO_PROJECTS_DIR', 'TRAEFIK_NETWORK',
                     'TRAEFIK_ENTRYPOINT', 'TRAEFIK_CERTRESOLVER', 'KOBO_UID', 'KOBO_GID')
@@ -388,7 +390,8 @@ class Updater:
             self.record('stopping')
             stopped = True  # Also recover if the stop command itself fails/interruption arrives.
             say('Stopping Kōbō, backing up only /root/.config/kobo and testing migrations on a database copy…')
-            self.run(self.compose('stop', '-t', '60', 'kobo'))
+            self.run(self.compose('stop', '-t', str(STOP_GRACE_SECONDS), 'kobo'),
+                     timeout=STOP_GRACE_SECONDS + 30)
             info = json.loads(self.run(['docker', 'inspect', self.container]))[0]
             if info['State']['Running']:
                 raise UpdateError('The container did not stop.')
@@ -414,7 +417,8 @@ class Updater:
                     # Keep admission reserved until the old process is confirmed gone.
                     info = json.loads(self.run(['docker', 'inspect', self.container]))[0]
                     if info['State']['Running']:
-                        self.run(['docker', 'stop', '-t', '60', self.container])
+                        self.run(['docker', 'stop', '-t', str(STOP_GRACE_SECONDS), self.container],
+                                 timeout=STOP_GRACE_SECONDS + 30)
                         info = json.loads(self.run(['docker', 'inspect', self.container]))[0]
                         if info['State']['Running']:
                             raise UpdateError('Previous process shutdown is unconfirmed.')

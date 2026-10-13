@@ -233,3 +233,28 @@ describe('lifecycle hook entry points', () => {
     warnSpy.mockRestore()
   })
 })
+
+it('passes the exact Docker instance identity to the shutdown script in its worktree', async () => {
+  const project = path.join(tmpDir, 'base-project')
+  fs.mkdirSync(path.join(project, '.container/instances'), { recursive: true })
+  fs.writeFileSync(
+    path.join(project, '.container/instances/x.env'),
+    'INSTANCE_NAME=feature-x\nPROJECT_NAME=sekur-feature-x\nHTTP_PORT=8710\n',
+  )
+  workspaceRow = { ...workspaceRow, project_path: project }
+  effectiveSettings.shutdownScript = DUMP_ENV
+  expect(await runLifecycleHook('kobo-shutdown', 'ws-1', { KOBO_SHUTDOWN_SIGNAL: 'SIGTERM' })).toEqual({ exitCode: 0 })
+  const env = readDump()
+  expect(env.PROJECT_NAME).toBe('sekur-feature-x')
+  expect(env.INSTANCE).toBe('feature-x')
+  expect(env.PWD).toBe(tmpDir)
+  expect(env.KOBO_SHUTDOWN_SIGNAL).toBe('SIGTERM')
+  expect(env.KOBO_HOOK_EVENT).toBe('kobo-shutdown')
+})
+
+it('does not guess a Docker project when the instance is unknown', async () => {
+  workspaceRow = { ...workspaceRow, project_path: path.join(tmpDir, 'no-instance') }
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: bash parameter expansion, not JavaScript
+  effectiveSettings.shutdownScript = 'test -n "${PROJECT_NAME:?Missing Docker project}"'
+  expect(await runLifecycleHook('kobo-shutdown', 'ws-1', { KOBO_SHUTDOWN_SIGNAL: 'SIGINT' })).toEqual({ exitCode: 1 })
+})

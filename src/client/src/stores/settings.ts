@@ -55,6 +55,7 @@ interface ProjectSettings {
   changeSourceBranchScript: string
   /** Per-project overrides of the lifecycle hooks. Empty = inherit global. */
   sessionEndedScript: string
+  shutdownScript: string
   prMergedScript: string
   autoLoopDisabledScript: string
   devServer: DevServerConfig
@@ -99,6 +100,7 @@ interface GlobalSettings {
   changeSourceBranchScript: string
   /** Shell script run when an agent session ends, whatever the reason (empty = disabled). */
   sessionEndedScript: string
+  shutdownScript: string
   /** Shell script run when a PR is merged, before archive/purge (empty = disabled). */
   prMergedScript: string
   /** Shell script run when auto-loop turns itself off (empty = disabled). */
@@ -116,6 +118,7 @@ interface GlobalSettings {
   autoLoopMaxRetries: number
   agentWatchdogEnabled: boolean
   showProgressBars: boolean
+  stopDevServersOnShutdown: boolean
   /** Minutes before Kōbō reminds you about an unanswered question. 0 = off. */
   awaitingUserReminderMinutes: number
   /** Show the absence digest and record significant activity. Default true. */
@@ -262,6 +265,7 @@ export const useSettingsStore = defineStore('settings', {
       autoLoopMaxRetries: 5,
       agentWatchdogEnabled: false,
       showProgressBars: true,
+      stopDevServersOnShutdown: true,
       awaitingUserReminderMinutes: 0,
       activityDigestEnabled: true,
       wsEventsRetentionDays: 0,
@@ -304,6 +308,7 @@ export const useSettingsStore = defineStore('settings', {
       archiveScript: '',
       changeSourceBranchScript: '',
       sessionEndedScript: '',
+      shutdownScript: '',
       prMergedScript: '',
       autoLoopDisabledScript: '',
       worktreesPath: WORKTREES_PATH,

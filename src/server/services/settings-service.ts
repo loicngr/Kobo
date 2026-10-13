@@ -211,6 +211,7 @@ export interface ProjectSettings {
    * global value, exactly like every other script above. Seeded by v55.
    */
   sessionEndedScript: string
+  shutdownScript: string
   prMergedScript: string
   autoLoopDisabledScript: string
   devServer: DevServerConfig
@@ -291,6 +292,7 @@ export interface GlobalSettings {
    * disabled. Projects may override; see `ProjectSettings.sessionEndedScript`.
    */
   sessionEndedScript: string
+  shutdownScript: string
   /**
    * Shell script run when the pr-watcher sees a PR go to MERGED. Runs before
    * the workspace is archived or purged, so the worktree is still on disk.
@@ -323,6 +325,7 @@ export interface GlobalSettings {
   /** Opt-in agent inactivity watchdogs, captured at each launch/resume. */
   agentWatchdogEnabled: boolean
   showProgressBars: boolean
+  stopDevServersOnShutdown: boolean
   /**
    * Minutes a workspace may sit in `awaiting-user` before Kōbō reminds you,
    * then again at every further interval. `0` disables the reminder entirely
@@ -1329,6 +1332,17 @@ const settingsMigrations: SettingsMigration[] = [
       if (typeof global.showProgressBars !== 'boolean') global.showProgressBars = true
     },
   },
+  {
+    version: 66,
+    name: 'shutdown-services-and-hooks',
+    migrate: ({ global, projects }) => {
+      if (typeof global.stopDevServersOnShutdown !== 'boolean') global.stopDevServersOnShutdown = true
+      if (typeof global.shutdownScript !== 'string') global.shutdownScript = ''
+      for (const project of projects) {
+        if (typeof project.shutdownScript !== 'string') project.shutdownScript = ''
+      }
+    },
+  },
 ]
 
 /** Current settings schema version — always equals the highest migration version. */
@@ -1354,6 +1368,7 @@ export interface EffectiveSettings {
   archiveScript: string
   changeSourceBranchScript: string
   sessionEndedScript: string
+  shutdownScript: string
   prMergedScript: string
   autoLoopDisabledScript: string
   notionStatusProperty: string
@@ -1410,6 +1425,7 @@ function defaultSettings(): Settings {
       archiveScript: '',
       changeSourceBranchScript: DEFAULT_CHANGE_SOURCE_BRANCH_SCRIPT,
       sessionEndedScript: '',
+      shutdownScript: '',
       prMergedScript: '',
       autoLoopDisabledScript: '',
       editorCommand: '',
@@ -1419,6 +1435,7 @@ function defaultSettings(): Settings {
       autoLoopMaxRetries: 5,
       agentWatchdogEnabled: false,
       showProgressBars: true,
+      stopDevServersOnShutdown: true,
       awaitingUserReminderMinutes: 0,
       activityDigestEnabled: true,
       maxConcurrentAgents: 2,
@@ -1523,6 +1540,7 @@ function defaultProjectSettings(projectPath: string): ProjectSettings {
     archiveScript: '',
     changeSourceBranchScript: '',
     sessionEndedScript: '',
+    shutdownScript: '',
     prMergedScript: '',
     autoLoopDisabledScript: '',
     devServer: {
@@ -1576,8 +1594,11 @@ export function runSettingsMigrations(raw: Record<string, unknown>): Settings {
   current.global.workflowPolicy = resolveWorkflowPolicy(current.global.workflowPolicy as Partial<WorkflowPolicy>)
   if (!isMemoryMode(current.global.memoryMode)) current.global.memoryMode = 'hybrid'
   if (typeof current.global.showProgressBars !== 'boolean') current.global.showProgressBars = true
+  if (typeof current.global.stopDevServersOnShutdown !== 'boolean') current.global.stopDevServersOnShutdown = true
+  if (typeof current.global.shutdownScript !== 'string') current.global.shutdownScript = ''
   if (typeof current.global.agentWatchdogEnabled !== 'boolean') current.global.agentWatchdogEnabled = false
   for (const project of current.projects as Array<Record<string, unknown>>) {
+    if (typeof project.shutdownScript !== 'string') project.shutdownScript = ''
     if (!isWorkflowPolicy(project.workflowPolicy)) project.workflowPolicy = {}
   }
   current.global.worktreesPath = sanitizeWorktreesPath(current.global.worktreesPath)
@@ -1880,6 +1901,7 @@ export function getEffectiveSettings(projectPath: string): EffectiveSettings {
       archiveScript: settings.global.archiveScript,
       changeSourceBranchScript: settings.global.changeSourceBranchScript,
       sessionEndedScript: settings.global.sessionEndedScript,
+      shutdownScript: settings.global.shutdownScript,
       prMergedScript: settings.global.prMergedScript,
       autoLoopDisabledScript: settings.global.autoLoopDisabledScript,
       notionStatusProperty: settings.global.notionStatusProperty,
@@ -1912,6 +1934,7 @@ export function getEffectiveSettings(projectPath: string): EffectiveSettings {
     archiveScript: project.archiveScript || settings.global.archiveScript,
     changeSourceBranchScript: project.changeSourceBranchScript || settings.global.changeSourceBranchScript,
     sessionEndedScript: project.sessionEndedScript || settings.global.sessionEndedScript,
+    shutdownScript: project.shutdownScript || settings.global.shutdownScript,
     prMergedScript: project.prMergedScript || settings.global.prMergedScript,
     autoLoopDisabledScript: project.autoLoopDisabledScript || settings.global.autoLoopDisabledScript,
     notionStatusProperty: settings.global.notionStatusProperty,
@@ -1962,6 +1985,12 @@ export function updateGlobalSettings(input: Partial<GlobalSettings>): GlobalSett
       console.warn(`[settings] Invalid autoLoopMaxRetries value rejected: ${data.autoLoopMaxRetries}`)
       delete (data as Record<string, unknown>).autoLoopMaxRetries
     }
+  }
+  if ('shutdownScript' in data && typeof data.shutdownScript !== 'string') {
+    delete (data as Record<string, unknown>).shutdownScript
+  }
+  if ('stopDevServersOnShutdown' in data && typeof data.stopDevServersOnShutdown !== 'boolean') {
+    delete (data as Record<string, unknown>).stopDevServersOnShutdown
   }
   if ('showProgressBars' in data && typeof data.showProgressBars !== 'boolean') {
     delete (data as Record<string, unknown>).showProgressBars
@@ -2022,6 +2051,7 @@ export function updateGlobalSettings(input: Partial<GlobalSettings>): GlobalSett
     'archiveScript',
     'changeSourceBranchScript',
     'sessionEndedScript',
+    'shutdownScript',
     'prMergedScript',
     'autoLoopDisabledScript',
     'editorCommand',
@@ -2031,6 +2061,7 @@ export function updateGlobalSettings(input: Partial<GlobalSettings>): GlobalSett
     'autoLoopMaxRetries',
     'agentWatchdogEnabled',
     'showProgressBars',
+    'stopDevServersOnShutdown',
     'awaitingUserReminderMinutes',
     'activityDigestEnabled',
     'maxConcurrentAgents',
@@ -2240,6 +2271,7 @@ export function upsertProject(projectPath: string, data: Partial<Omit<ProjectSet
     }
   }
   if ('workflowPolicy' in data && !isWorkflowPolicy(data.workflowPolicy)) throw new Error('Invalid workflowPolicy')
+  if ('shutdownScript' in data && typeof data.shutdownScript !== 'string') throw new Error('Invalid shutdownScript')
   const allowedProjectKeys = [
     'workflowPolicy',
     'displayName',
@@ -2259,6 +2291,7 @@ export function upsertProject(projectPath: string, data: Partial<Omit<ProjectSet
     'archiveScript',
     'changeSourceBranchScript',
     'sessionEndedScript',
+    'shutdownScript',
     'prMergedScript',
     'autoLoopDisabledScript',
     'devServer',

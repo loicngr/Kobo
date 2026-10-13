@@ -177,6 +177,34 @@ describe('settings drafts', () => {
     expect(store.global.agentWatchdogEnabled).toBe(false)
   })
 
+  it('saves shutdown options and restores the persisted draft', async () => {
+    const { wrapper, store, tab, vm } = await setup()
+    await tab('scripts')
+    const controls = () => [
+      wrapper.getComponent<typeof Field>('[data-tour="settings-shutdown"] .q-mb-md input'),
+      wrapper.getComponent<typeof Field>('[data-tour="settings-shutdown"] > input'),
+    ]
+    expect(controls()[0]!.props('modelValue')).toBe(true)
+    controls()[0]!.vm.$emit('update:modelValue', false)
+    controls()[1]!.vm.$emit('update:modelValue', 'echo stopping')
+    await flushPromises()
+    expect(hasUnsavedWork()).toBe(true)
+    await vm.savebarSave()
+    await flushPromises()
+    expect(api).toHaveBeenCalledWith(
+      '/api/settings/global',
+      expect.objectContaining({
+        body: expect.objectContaining({ stopDevServersOnShutdown: false, shutdownScript: 'echo stopping' }),
+      }),
+    )
+    expect(store.global.stopDevServersOnShutdown).toBe(false)
+    expect(store.global.shutdownScript).toBe('echo stopping')
+    vm.syncGlobalForm()
+    await flushPromises()
+    expect(controls()[0]!.props('modelValue')).toBe(false)
+    expect(controls()[1]!.props('modelValue')).toBe('echo stopping')
+  })
+
   it('saves progress visibility and restores the persisted preference', async () => {
     const { wrapper, store, tab, vm } = await setup()
     await tab('agents')

@@ -38,6 +38,7 @@ services:
   kobo:
     image: kobo:local
     restart: unless-stopped
+    stop_grace_period: 180s
     environment:
       - KOBO_HOME=/root/.config/kobo
       - GH_TOKEN=${GH_TOKEN}

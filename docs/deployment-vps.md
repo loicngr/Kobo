@@ -351,6 +351,17 @@ An `npm` development process does not require the Docker socket. Development
 server URLs are separate from Kōbō's dashboard URL; configure their own reachable
 ports or proxy routes. See the [dev-server contract](../CONFIGURATION.md#dev-server).
 
+To keep project Docker containers running during `bin/kobo-update`, disable
+**Settings → Scripts → Stop development servers when Kōbō exits** before updating.
+Use detached Docker services and retain the instance configuration in the mounted
+base repository so Kōbō can rediscover their status/URL after restart. Local child
+processes still stop. The optional global/per-project **Kōbō shutdown** script runs
+once per existing workspace worktree (including archived ones), before automatic
+Docker teardown, with a 1-minute timeout. It can explicitly stop/remove containers
+regardless of the toggle. See [shutdown configuration and variables](../CONFIGURATION.md#kōbō-shutdown).
+The VPS example and updater allow 180 seconds for a graceful stop; keep at least
+that allowance in custom supervisors for shutdown hooks to finish.
+
 For project dependencies, private registry login, SSH tunnels, stop/cleanup commands,
 file-watcher troubleshooting and installing Claude/Codex extensions, follow
 [Projects, development servers and skills on a VPS](./vps-projects-and-skills.md).

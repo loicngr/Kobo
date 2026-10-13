@@ -611,6 +611,7 @@ function readEffectiveSettingsSafe(projectPath: string): ReturnType<typeof getEf
       archiveScript: '',
       changeSourceBranchScript: '',
       sessionEndedScript: '',
+      shutdownScript: '',
       prMergedScript: '',
       autoLoopDisabledScript: '',
       notionStatusProperty: '',

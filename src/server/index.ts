@@ -39,6 +39,7 @@ import workspaceMessagesRouter from './routes/workspace-messages.js'
 import workspaceTemplatesRouter from './routes/workspace-templates.js'
 import workspacesRouter from './routes/workspaces.js'
 import {
+  getActiveSessionId,
   getAvailableSkills,
   reconcileOrphanSessions,
   restoreRetryCountsFromDb,
@@ -59,7 +60,13 @@ import {
   createPreMigrationBackup,
   startDailyDbBackupScheduler,
 } from './services/db-backup-service.js'
-import { startDevServer, stopAllDevServers, stopDevServer } from './services/dev-server-service.js'
+import {
+  beginDevServerShutdown,
+  startDevServer,
+  stopAllDevServers,
+  stopDevServer,
+} from './services/dev-server-service.js'
+import { onKoboShutdown } from './services/lifecycle-hook-service.js'
 import { reconcileMessageRequests } from './services/mcp-message-request-service.js'
 import { reconcileMemoryContextsOnStartup } from './services/memory-context-service.js'
 import {
@@ -516,6 +523,8 @@ let isShuttingDown = false
 async function gracefulShutdown(signal: string, exitCode = 0): Promise<void> {
   if (isShuttingDown) return
   isShuttingDown = true
+  beginDevServerShutdown()
+  const stopDevServersOnShutdown = getGlobalSettings().stopDevServersOnShutdown !== false
   stopUpdateChecker()
   const groupMessagesStopped = stopGroupMessageBatches()
 
@@ -524,7 +533,7 @@ async function gracefulShutdown(signal: string, exitCode = 0): Promise<void> {
   const forceExitTimer = setTimeout(() => {
     console.error('[kobo] Graceful shutdown timed out; forcing exit')
     process.exit(1)
-  }, 5_000)
+  }, 150_000)
   forceExitTimer.unref()
 
   // Ask WebSocket clients to leave so their upgraded HTTP connections do not
@@ -566,12 +575,22 @@ async function gracefulShutdown(signal: string, exitCode = 0): Promise<void> {
 
   clearInterval(retentionTimer)
 
-  // Stop managed agents and both direct/Docker dev servers before closing DB.
+  // Stop local writers before user hooks, leaving Docker available to those hooks.
   try {
-    await Promise.all([stopAllAgents(), stopAllDevServers()])
-    console.log('[kobo] Agents and dev servers stopped')
+    await Promise.all([stopAllAgents(), stopAllDevServers({ preserveDocker: true })])
+    await onKoboShutdown(signal, (workspaceId) => getActiveSessionId(workspaceId) !== undefined)
   } catch {
     // Best-effort
+  }
+  try {
+    if (stopDevServersOnShutdown) {
+      await stopAllDevServers()
+      console.log('[kobo] Dev servers stopped')
+    } else {
+      console.log('[kobo] Local dev processes stopped; Docker services left to the configured shutdown hooks')
+    }
+  } catch (err) {
+    console.error('[kobo] Dev-server shutdown failed:', err)
   }
 
   // Stop accepting new HTTP/WS work, then let in-flight handlers finish before

@@ -234,6 +234,8 @@ Projects override a subset of global settings. Anything you set here takes prece
 | `taskPromptTemplate` | `string` | Prompt used to prefill the mission description when this project is selected. Empty leaves the description without a project-provided prompt. |
 | `forge` | `'auto' \| 'github' \| 'gitlab' \| 'bitbucket-community' \| 'none'` | Which forge provides PR/MR features. `auto` detects from the git remote URL. See [Forge integration](#forge-integration). |
 | `devServer.startCommand` / `stopCommand` | `string` | Per-workspace dev server commands. Docker, npm, or any shell-startable process. See [Dev server](#dev-server) for the status/URL contract. |
+| `stopDevServersOnShutdown` | `boolean` | Global, default `true`. Disable to leave Docker services running when Kōbō exits or updates. Tracked local processes always stop. Explicit Stop and workspace teardown still stop services. |
+| `shutdownScript` | `string` | Optional global/per-project shutdown hook, run in each existing workspace worktree before automatic Docker teardown. Empty project value inherits; whitespace disables. See [Kōbō shutdown](#kōbō-shutdown). |
 | `e2e.framework` | `'cypress' \| 'playwright' \| 'jest' \| 'vitest' \| 'other' \| ''` | E2E framework auto-loop grooming should target. |
 | `e2e.skill` | `string` | Optional skill name injected into the E2E grooming prompt. |
 | `e2e.prompt` | `string` | Free-form prompt appended to every `[E2E] ` sub-task. |
@@ -1597,6 +1599,48 @@ logs contract does not provide general process health monitoring.
 **No instance file at all**: Start/Stop run your commands; the panel uses the
 saved status when available, otherwise `unknown`, with no URL or Docker logs.
 
+### Kōbō shutdown
+
+In **Settings → Scripts**, **Stop development servers when Kōbō exits** defaults
+to enabled. Disable it to preserve independently running Docker containers during
+an update/restart. Kōbō still terminates its tracked local processes, including
+startup commands. Use detached Docker services (`docker compose up -d`); a
+foreground Compose process or a custom signal trap can itself stop containers.
+After restart, the existing instance-file/Compose-label contract lets the panel
+inspect those containers and recover their URL and logs without starting them.
+The setting does not change manual Stop, workspace deletion/purge, or user hooks.
+
+The optional **Hook: Kōbō shutdown** uses the global script by default. A project
+script replaces it; an empty project field inherits and whitespace disables it.
+It runs **once per workspace, in that workspace's worktree**, including archived
+workspaces with an existing checkout. Purged/missing worktrees and workspaces
+whose agent stop is unconfirmed are skipped. Scripts run after tracked agent/local
+process shutdown and before automatic Docker teardown, even when automatic Docker
+shutdown is disabled. Each script has a **1-minute timeout**; failures are logged
+and do not cancel shutdown. Output is recorded under `hook:kobo-shutdown`.
+
+Available variables include `WORKSPACE_ID`, `WORKSPACE_NAME`, `BRANCH_NAME`,
+`SOURCE_BRANCH`, `PROJECT_PATH`, `KOBO_HOOK_EVENT=kobo-shutdown`, and
+`KOBO_SHUTDOWN_SIGNAL` (`SIGTERM`, `SIGINT`, etc.). `INSTANCE` and `PROJECT_NAME`
+come from that workspace's dev-server instance configuration. `PROJECT_NAME` is
+empty when no matching Docker instance is known; never guess a shared stack name.
+
+For explicit destructive cleanup of the workspace's Compose resources:
+
+```bash
+docker compose -p "${PROJECT_NAME:?Missing Docker project}" down --remove-orphans --volumes --rmi local
+```
+
+This removes Compose-managed volumes and images without custom tags; external
+volumes and tagged images remain. It can stop containers **even with automatic
+Docker shutdown disabled**, because the hook is an explicit user command. Supply
+any `-f` or `--env-file` arguments your project's Compose setup requires.
+
+These hooks require a graceful Kōbō shutdown; they cannot run after `SIGKILL`,
+a host power loss or a crash that bypasses teardown. Kōbō's total shutdown deadline
+is 150 seconds. Allow at least 180 seconds in a container/process supervisor
+(`stop_grace_period: 180s` in the Compose examples).
+
 ### Example: the full convention end-to-end
 
 The reference implementation is the `sekur` project. Its Kōbō `startCommand` is effectively `make dev-docker`, where the `Makefile` calls `./sh/dev-docker.sh $(INSTANCE)` and `$(INSTANCE)` reads the `INSTANCE` env var Kōbō injects. The script:
@@ -2183,6 +2227,51 @@ Notion token environment overrides are applied consistently to both token variab
 ### Initial Kōbō instructions
 
 New workspaces receive the mission, repository context, current permissions, current phase and expected result. Agents first consult the available managed MCP tool descriptions and schemas, then prefer relevant Kōbō tools for workspace operations. This is not a request to call every tool or poll. Long tasks and delegated work use labeled progress bars; dismissing a bar hides only that activity and does not cancel its work.
+
+For tasks, development services, shared memory, workspace messages and state,
+agents prefer the dedicated managed MCP tool and check its result. Writable
+launches keep existing tasks current during work: `in_progress` when starting,
+blockers promptly reported in the conversation with the affected task, and done
+only after required checks pass. Task requirements and evidence are preserved.
+Blocked tasks stay unfinished; no unsupported field or status is invented.
+Delegates receive the objective, exact worktree path, user constraints, launch
+permissions, test runtime and applicable MCP/reporting rules. When a delegate
+lacks the tools, its parent coordinates the operation under the same permissions.
+The final report identifies changes/findings, checks actually executed and their
+results, and remaining blockers or ongoing work. Delegated results are attributed;
+progress bars finish only for activities with a known outcome, and completing a
+phase or review does not imply the whole mission is done.
+
+Agents explicitly use Kōbō internal memory for shared knowledge across sessions,
+workspaces and engines. At task start/resume, they consult injected facts before
+targeted retrieval of missing decisions, conventions and known pitfalls. When
+permitted, they save confirmed reusable facts through `remember` in the narrowest
+scope, updating existing entries rather than duplicating them. Native provider
+memory does not replace this shared store. Retrieval budgets, Manual/read-only
+restrictions and Hybrid approval requirements still apply; secrets, raw logs and
+routine progress are not memory entries.
+
+Development services have an explicit managed lifecycle rule: before backend,
+frontend, integration or E2E checks that need workspace services, inspect
+`get_dev_server_status` and reuse the existing instance. Authorized writable
+launches start/stop it through the Kōbō MCP tools, never by invoking the startup
+script, `make dev-docker` or Docker Compose directly. Diagnose failures with
+`get_dev_server_logs`; unavailable tools or configuration are reported as blockers.
+Delegates follow the same rule. Read-only launches cannot start/stop services;
+test execution inside an existing container still follows current permissions.
+
+Agents choose test commands and runtimes from the project Makefile, scripts and
+documentation. Missing dependencies in the agent environment do not establish a
+project configuration defect when tests belong in a service container. A running
+dev server is not proof of application readiness: dependent checks require a
+documented health check or non-mutating URL probe with a timeout and bounded
+retries. Independent unit tests need not wait for application readiness.
+
+After interruption/resume, agents verify relevant task/Git state and ongoing
+jobs, tests and containers before repeating work. MCP failures must be reported
+as failures, with safe diagnostics; authentication/permission errors never justify
+modifying credentials or Kōbō storage to bypass the tools. Ambiguous mutation
+outcomes require checking available status/receipts before retrying.
 
 Plan launches remain conversation-only. Writable auto-loop launches prepare the plan and task list before returning control to the loop; writable manual launches implement after plan approval, under the configured Git policy. Custom brainstorming, Notion and Sentry templates are preserved; they cannot expand launch permissions or authorize commits automatically. Review returns and handoff reports remain read-only, with only their scoped report and operational progress tools allowed. Plan approval does not change permissions; explicitly select an execution mode in Kōbō and start a new launch to implement.
 

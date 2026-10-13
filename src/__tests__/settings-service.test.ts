@@ -117,6 +117,41 @@ describe('progress visibility setting', () => {
   })
 })
 
+describe('shutdown dev server setting', () => {
+  it('defaults new installations to stopping services', () => {
+    expect(getGlobalSettings().stopDevServersOnShutdown).toBe(true)
+  })
+
+  it.each([undefined, null, 'true', 1, false, true])('migrates legacy settings safely (%s)', (value) => {
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        schemaVersion: 65,
+        global: { stopDevServersOnShutdown: value, gitConventions: 'Keep this preference' },
+        projects: [],
+      }),
+    )
+    expect(getSettings().global.stopDevServersOnShutdown).toBe(typeof value === 'boolean' ? value : true)
+    expect(getSettings().global.gitConventions).toBe('Keep this preference')
+    const saved = JSON.parse(fs.readFileSync(settingsPath, 'utf8'))
+    expect(saved.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
+    expect(saved.global.stopDevServersOnShutdown).toBe(typeof value === 'boolean' ? value : true)
+  })
+
+  it('persists explicit enable/disable and rejects non-boolean updates', () => {
+    updateGlobalSettings({ stopDevServersOnShutdown: true })
+    for (const value of ['false', 0, null]) {
+      updateGlobalSettings({ stopDevServersOnShutdown: value } as unknown as Partial<GlobalSettings>)
+      expect(getGlobalSettings().stopDevServersOnShutdown).toBe(true)
+    }
+    _setSettingsPath(settingsPath)
+    expect(getGlobalSettings().stopDevServersOnShutdown).toBe(true)
+    updateGlobalSettings({ stopDevServersOnShutdown: false })
+    _setSettingsPath(settingsPath)
+    expect(getGlobalSettings().stopDevServersOnShutdown).toBe(false)
+  })
+})
+
 describe('getSettings()', () => {
   it('preserves an explicitly saved Auto model instead of replacing it with the fresh-install default', () => {
     getSettings()
@@ -3020,6 +3055,37 @@ describe('workflow settings inheritance', () => {
     expect(getProjectSettings('/repo')?.workflowPolicy).toEqual({ push: 'automatic' })
     expect(() => updateGlobalSettings({ workflowPolicy: { merge: 'automatic' } as never })).toThrow(
       'Invalid workflowPolicy',
+    )
+  })
+})
+
+describe('shutdown script inheritance', () => {
+  it('persists the global default, project override and explicit disable', () => {
+    updateGlobalSettings({ shutdownScript: 'global-stop' })
+    upsertProject('/tmp/shutdown-project', { shutdownScript: '' })
+    expect(getEffectiveSettings('/tmp/shutdown-project').shutdownScript).toBe('global-stop')
+    upsertProject('/tmp/shutdown-project', { shutdownScript: 'project-stop' })
+    _setSettingsPath(settingsPath)
+    expect(getEffectiveSettings('/tmp/shutdown-project').shutdownScript).toBe('project-stop')
+    upsertProject('/tmp/shutdown-project', { shutdownScript: ' ' })
+    expect(getEffectiveSettings('/tmp/shutdown-project').shutdownScript).toBe(' ')
+    expect(getEffectiveSettings('/tmp/unconfigured-project').shutdownScript).toBe('global-stop')
+  })
+
+  it('preserves configured hooks when migrating and rejects invalid scripts', () => {
+    const migrated = runSettingsMigrations({
+      schemaVersion: 65,
+      global: { shutdownScript: 'global-stop', stopDevServersOnShutdown: false },
+      projects: [{ path: '/tmp/project', shutdownScript: 'project-stop' }, { path: '/tmp/legacy' }],
+    })
+    expect(migrated.global.shutdownScript).toBe('global-stop')
+    expect(migrated.global.stopDevServersOnShutdown).toBe(false)
+    expect(migrated.projects.map((project) => project.shutdownScript)).toEqual(['project-stop', ''])
+    updateGlobalSettings({ shutdownScript: 'global-stop' })
+    updateGlobalSettings({ shutdownScript: 42 } as unknown as Partial<GlobalSettings>)
+    expect(getGlobalSettings().shutdownScript).toBe('global-stop')
+    expect(() => upsertProject('/tmp/project', { shutdownScript: 42 } as unknown as Partial<ProjectSettings>)).toThrow(
+      'Invalid shutdownScript',
     )
   })
 })

@@ -279,6 +279,26 @@ Two emit flavors in `websocket-service.ts`:
 
 ## External integrations
 
+### Graceful shutdown and development services
+
+`stopDevServersOnShutdown` is a global boolean, default `true` (JSON settings
+migration v66). Shutdown first rejects new dev-server starts and stops tracked
+local processes/agents. Disabling the setting skips configured dev stop commands
+and Compose teardown, preserving independent Docker services; manual Stop and
+workspace deletion/purge remain unchanged. Status recovery uses the existing
+instance-file and exact Compose-label inspection, never a duplicate startup.
+
+`shutdownScript` follows the global/project script cascade: empty inherits,
+whitespace disables. The `kobo-shutdown` lifecycle hook runs once per persisted
+workspace with an existing, non-purged worktree (including archived workspaces),
+after local writers stop and before optional Docker teardown. Skip unconfirmed
+agent stops. Each hook has a 1-minute timeout, and the outer shutdown deadline
+is 150 seconds (supervisors need at least 180 seconds). Inject `PROJECT_NAME` from
+the workspace instance config, empty if unavailable, and `INSTANCE`; never guess
+a Compose project. User hooks may explicitly remove Docker resources even when
+automatic shutdown is disabled. Preserve hook outputs and keep SQLite open until
+hooks settle. Do not run scripts on abrupt exits or claim they survive SIGKILL.
+
 ### VPS deployment tooling
 
 `docker-compose.vps.yml` is the standalone fresh-instance example for an existing
@@ -380,6 +400,33 @@ a duplicate catalogue. Keep Plan conversation-only; template approval cannot
 expand tool permissions. Initial writable auto-loop launches seed tasks and end;
 manual launches implement under the workflow policy. Preserve custom templates
 and frozen migration text when changing generated guidance.
+
+Prefer dedicated managed MCP operations and require checking their results.
+Writable launches synchronize task progress and blockers during work using only
+supported statuses; restricted launches must not receive task mutation guidance.
+Delegation passes the objective, worktree path, constraints, permissions, test
+runtime and applicable MCP/reporting rules explicitly. Keep final reporting
+evidence-based and phase-aware: distinguish actual checks, delegated results,
+blocked/unverified work and jobs still running. Reuse the shared progress lifecycle
+instead of duplicating it or finishing ongoing work at the end of a turn.
+
+Dev-server lifecycle guidance must cover backend/integration dependencies as well
+as frontend/E2E checks. Agents and delegates inspect/reuse the managed instance,
+start/stop only through its MCP tools under writable launch permissions, and
+report unavailable tools/configuration or startup failures instead of bypassing
+Kōbō with direct shell startup commands. Keep tool descriptions in sync.
+Distinguish the agent runtime from project containers, running status from
+application readiness, and interrupted reporting from terminated work. Keep
+readiness probes bounded and do not suggest bypassing failed MCP authentication
+or replaying an ambiguous mutation without checking its outcome.
+
+Launch guidance explicitly directs agents to consult injected Kōbō
+memory before targeted retrieval, and to save confirmed reusable facts through
+`remember` only under the current mode/permissions. Preserve retrieval budgets,
+scope selection and Hybrid proposal semantics; native provider memory is not a
+replacement for this shared store.
+Keep detailed workflow guidance in the application launch instructions: the
+separate mode-specific memory bootstrap has a strict total retrieval budget.
 
 The engine's `onPromptPrepared` callback supplies only its textual Kōbō prefix and
 system append. Initial creation and pending initial retries opt into a single

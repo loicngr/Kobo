@@ -1628,6 +1628,26 @@ where ffmpeg</pre>
               />
             </div>
 
+            <!-- Lifecycle hook: shutdown -->
+            <div v-if="activeTab === 'scripts'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md" data-tour="settings-shutdown">
+              <div class="q-mb-md">
+                <q-toggle v-model="globalStopDevServersOnShutdown" :label="$t('settings.stopDevServersOnShutdown')" color="primary" />
+                <div class="text-caption text-kobo-3 q-mt-xs">{{ $t('settings.stopDevServersOnShutdownHint') }}</div>
+              </div>
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.hook.shutdownTitle') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.hook.shutdownHint') }}</div>
+              <q-input
+                v-model="globalShutdownScript"
+                type="textarea"
+                dark
+                outlined
+                autogrow
+                :input-style="{ minHeight: '100px' }"
+                :placeholder="$t('settings.hook.shutdownPlaceholder')"
+                class="settings-input mono-textarea"
+              />
+            </div>
+
             <!-- Lifecycle hook: sessionEnded -->
             <div v-if="activeTab === 'scripts'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.hook.sessionEndedTitle') }}</div>
@@ -2338,6 +2358,20 @@ where ffmpeg</pre>
                     </div>
 
                     <div>
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-kobo-3">{{ $t('settings.hook.shutdownTitle') }}</div>
+                      <div class="text-caption text-kobo-3 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
+                      <q-input
+                        v-model="projectForm.shutdownScript"
+                        type="textarea"
+                        outlined
+                        autogrow
+                        :input-style="{ minHeight: '100px' }"
+                        :placeholder="$t('settings.hook.shutdownPlaceholder')"
+                        class="settings-input mono-textarea"
+                      />
+                    </div>
+
+                    <div>
                       <div class="field-label text-body2 text-weight-medium q-mb-xs text-kobo-3">{{ $t('settings.hook.sessionEndedTitle') }}</div>
                       <div class="text-caption text-kobo-3 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
                       <q-input
@@ -2896,6 +2930,7 @@ const globalAutoPurgeOnPrMerged = ref(false)
 const globalAutoLoopMaxRetries = ref(5)
 const globalAgentWatchdogEnabled = ref(false)
 const globalShowProgressBars = ref(true)
+const globalStopDevServersOnShutdown = ref(true)
 const globalAwaitingUserReminderMinutes = ref(0)
 const globalActivityDigestEnabled = ref(true)
 const globalWsEventsRetentionDays = ref(0)
@@ -3156,6 +3191,7 @@ const globalCleanupScriptMode = ref<'idle' | 'no-tasks'>('no-tasks')
 const globalCleanupScriptOnlyOnChanges = ref(false)
 const globalArchiveScript = ref('')
 const globalSessionEndedScript = ref('')
+const globalShutdownScript = ref('')
 const globalPrMergedScript = ref('')
 const globalAutoLoopDisabledScript = ref('')
 const globalChangeSourceBranchScript = ref('')
@@ -3395,6 +3431,7 @@ const projectForm = ref({
   changeSourceBranchScript: '',
   // Empty = inherit the matching global lifecycle hook.
   sessionEndedScript: '',
+  shutdownScript: '',
   prMergedScript: '',
   autoLoopDisabledScript: '',
   devServer: { startCommand: '', stopCommand: '' },
@@ -3422,6 +3459,7 @@ const COPYABLE_FIELDS = [
   'archiveScript',
   'changeSourceBranchScript',
   'sessionEndedScript',
+  'shutdownScript',
   'prMergedScript',
   'autoLoopDisabledScript',
   'devServer',
@@ -3489,6 +3527,7 @@ function isFormPristine(): boolean {
     archiveScript: '',
     changeSourceBranchScript: '',
     sessionEndedScript: '',
+    shutdownScript: '',
     prMergedScript: '',
     autoLoopDisabledScript: '',
     devServer: { startCommand: '', stopCommand: '' },
@@ -3954,6 +3993,7 @@ function readGlobalForm(): Record<string, unknown> {
     autoLoopMaxRetries: globalAutoLoopMaxRetries.value,
     agentWatchdogEnabled: globalAgentWatchdogEnabled.value,
     showProgressBars: globalShowProgressBars.value,
+    stopDevServersOnShutdown: globalStopDevServersOnShutdown.value,
     awaitingUserReminderMinutes: globalAwaitingUserReminderMinutes.value,
     activityDigestEnabled: globalActivityDigestEnabled.value,
     wsEventsRetentionDays: globalWsEventsRetentionDays.value,
@@ -4000,6 +4040,7 @@ function readGlobalForm(): Record<string, unknown> {
     archiveScript: globalArchiveScript.value,
     changeSourceBranchScript: globalChangeSourceBranchScript.value,
     sessionEndedScript: globalSessionEndedScript.value,
+    shutdownScript: globalShutdownScript.value,
     prMergedScript: globalPrMergedScript.value,
     autoLoopDisabledScript: globalAutoLoopDisabledScript.value,
     worktreesPath: globalWorktreesPath.value,
@@ -4090,6 +4131,7 @@ function syncGlobalForm() {
   globalAutoLoopMaxRetries.value = store.global.autoLoopMaxRetries ?? 5
   globalAgentWatchdogEnabled.value = store.global.agentWatchdogEnabled === true
   globalShowProgressBars.value = store.global.showProgressBars !== false
+  globalStopDevServersOnShutdown.value = store.global.stopDevServersOnShutdown !== false
   globalAwaitingUserReminderMinutes.value = store.global.awaitingUserReminderMinutes ?? 0
   globalActivityDigestEnabled.value = store.global.activityDigestEnabled ?? true
   globalWsEventsRetentionDays.value = store.global.wsEventsRetentionDays ?? 0
@@ -4168,6 +4210,7 @@ function syncGlobalForm() {
   globalCleanupScriptOnlyOnChanges.value = store.global.cleanupScriptOnlyOnChanges ?? false
   globalArchiveScript.value = store.global.archiveScript ?? ''
   globalSessionEndedScript.value = store.global.sessionEndedScript ?? ''
+  globalShutdownScript.value = store.global.shutdownScript ?? ''
   globalPrMergedScript.value = store.global.prMergedScript ?? ''
   globalAutoLoopDisabledScript.value = store.global.autoLoopDisabledScript ?? ''
   globalChangeSourceBranchScript.value = store.global.changeSourceBranchScript ?? ''
@@ -4228,6 +4271,7 @@ function syncProjectForm(project: ProjectSettings | null) {
       archiveScript: '',
       changeSourceBranchScript: '',
       sessionEndedScript: '',
+      shutdownScript: '',
       prMergedScript: '',
       autoLoopDisabledScript: '',
       devServer: { startCommand: '', stopCommand: '' },
@@ -4259,6 +4303,7 @@ function syncProjectForm(project: ProjectSettings | null) {
     archiveScript: project.archiveScript ?? '',
     changeSourceBranchScript: project.changeSourceBranchScript ?? '',
     sessionEndedScript: project.sessionEndedScript ?? '',
+    shutdownScript: project.shutdownScript ?? '',
     prMergedScript: project.prMergedScript ?? '',
     autoLoopDisabledScript: project.autoLoopDisabledScript ?? '',
     devServer: {
@@ -4471,6 +4516,7 @@ async function saveGlobal() {
       autoLoopMaxRetries: globalAutoLoopMaxRetries.value,
       agentWatchdogEnabled: globalAgentWatchdogEnabled.value,
       showProgressBars: globalShowProgressBars.value,
+      stopDevServersOnShutdown: globalStopDevServersOnShutdown.value,
       awaitingUserReminderMinutes: globalAwaitingUserReminderMinutes.value,
       activityDigestEnabled: globalActivityDigestEnabled.value,
       wsEventsRetentionDays: globalWsEventsRetentionDays.value,
@@ -4518,6 +4564,7 @@ async function saveGlobal() {
       archiveScript: globalArchiveScript.value,
       changeSourceBranchScript: globalChangeSourceBranchScript.value,
       sessionEndedScript: globalSessionEndedScript.value,
+      shutdownScript: globalShutdownScript.value,
       prMergedScript: globalPrMergedScript.value,
       autoLoopDisabledScript: globalAutoLoopDisabledScript.value,
       worktreesPath: globalWorktreesPath.value,
@@ -4655,6 +4702,7 @@ async function saveProject() {
       archiveScript: projectForm.value.archiveScript,
       changeSourceBranchScript: projectForm.value.changeSourceBranchScript,
       sessionEndedScript: projectForm.value.sessionEndedScript,
+      shutdownScript: projectForm.value.shutdownScript,
       prMergedScript: projectForm.value.prMergedScript,
       autoLoopDisabledScript: projectForm.value.autoLoopDisabledScript,
       devServer: projectForm.value.devServer,

@@ -1104,6 +1104,16 @@ export default {
   'settings.archiveScriptHint':
     'Shell script run server-side in the worktree when a workspace is archived. Leave empty to disable.',
   'settings.archiveScriptPlaceholder': 'e.g. clean up containers, free disk space…',
+  'settings.stopDevServersOnShutdown': 'Stop development servers when Kōbō exits',
+  'settings.stopDevServersOnShutdownHint':
+    'Enabled by default. Disable to keep Docker containers running through updates. Local processes always stop. Shutdown scripts still run.',
+  'settings.hook.shutdownTitle': 'Hook: Kōbō shutdown',
+  'settings.hook.shutdownHint':
+    'Runs in each existing worktree, including archived ones, after agents and local processes stop, before automatic Docker shutdown. Limit: 1 minute per script. PROJECT_NAME and INSTANCE identify its Docker stack; PROJECT_NAME is empty when no instance is known. A project override replaces this script. Docker commands here can stop containers even when automatic shutdown is disabled.',
+  'settings.hook.shutdownPlaceholder': 'e.g. stop this workspace’s Docker containers…',
+  'tours.settings.shutdown.title': 'Kōbō shutdown',
+  'tours.settings.shutdown.description':
+    'Choose whether Kōbō stops Docker containers when it exits. The global hook runs in each existing worktree (1-minute limit); a project script can override it. Local processes always stop.',
   'settings.hook.sessionEndedTitle': 'Hook: session ended',
   'settings.hook.sessionEndedHint':
     'Runs when an agent session ends, whatever the reason. Reads KOBO_SESSION_END_REASON (completed / error / killed / watchdog), KOBO_SESSION_STOP_CAUSE, KOBO_AUTOLOOP_ACTIVE, KOBO_SESSION_ID and KOBO_SESSION_EXIT_CODE. Empty = disabled.',

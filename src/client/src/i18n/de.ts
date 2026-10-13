@@ -1117,6 +1117,16 @@ export default {
   'settings.archiveScriptHint':
     'Shell-Skript, das serverseitig im Worktree ausgeführt wird, wenn ein Workspace archiviert wird. Leer lassen zum Deaktivieren.',
   'settings.archiveScriptPlaceholder': 'z. B. Container aufräumen, Speicherplatz freigeben…',
+  'settings.stopDevServersOnShutdown': 'Entwicklungsserver beim Beenden von Kōbō stoppen',
+  'settings.stopDevServersOnShutdownHint':
+    'Standardmäßig aktiviert. Deaktivieren, um Docker-Container bei Updates weiterlaufen zu lassen. Lokale Prozesse werden immer beendet. Shutdown-Skripte werden weiterhin ausgeführt.',
+  'settings.hook.shutdownTitle': 'Hook: Kōbō beenden',
+  'settings.hook.shutdownHint':
+    'Läuft in jedem vorhandenen Worktree, auch archivierten, nach dem Stoppen der Agenten und lokalen Prozesse und vor dem automatischen Docker-Stopp. Limit: 1 Minute pro Skript. PROJECT_NAME und INSTANCE identifizieren den Docker-Stack; ohne bekannte Instanz bleibt PROJECT_NAME leer. Ein Projektskript ersetzt dieses Skript. Docker-Befehle können Container auch bei deaktiviertem automatischem Stopp beenden.',
+  'settings.hook.shutdownPlaceholder': 'z. B. die Docker-Container dieses Workspaces stoppen…',
+  'tours.settings.shutdown.title': 'Kōbō beenden',
+  'tours.settings.shutdown.description':
+    'Wählen Sie, ob Docker-Container beim Beenden gestoppt werden. Der globale Hook läuft in jedem vorhandenen Worktree (maximal 1 Minute); ein Projektskript kann ihn ersetzen. Lokale Prozesse werden immer beendet.',
   'settings.hook.sessionEndedTitle': 'Hook: Sitzung beendet',
   'settings.hook.sessionEndedHint':
     'Läuft, wenn eine Agenten-Sitzung endet, aus welchem Grund auch immer. Liest KOBO_SESSION_END_REASON (completed / error / killed / watchdog), KOBO_SESSION_STOP_CAUSE, KOBO_AUTOLOOP_ACTIVE, KOBO_SESSION_ID und KOBO_SESSION_EXIT_CODE. Leer = deaktiviert.',

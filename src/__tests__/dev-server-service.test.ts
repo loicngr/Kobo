@@ -721,3 +721,70 @@ it('retains ownership when the process group cannot be inspected', async () => {
     kill.mockRestore()
   }
 })
+
+it('preserves Docker services on shutdown and discovers them again after restart', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kobo-preserve-dev-'))
+  try {
+    fs.mkdirSync(path.join(dir, '.container/instances'), { recursive: true })
+    fs.writeFileSync(
+      path.join(dir, '.container/instances/foo.env'),
+      'INSTANCE_NAME=foo\nPROJECT_NAME=foo\nHTTP_PORT=8710\n',
+    )
+    const workspace = makeWorkspace({ id: 'preserved', projectPath: dir, worktreePath: dir, workingBranch: 'foo' })
+    vi.mocked(listWorkspaces).mockReturnValue([workspace])
+    vi.mocked(getWorkspace).mockReturnValue(workspace)
+    vi.mocked(getProjectSettings).mockReturnValue(
+      makeProjectSettings({ devServer: { startCommand: 'docker compose up -d', stopCommand: 'custom-stop' } }),
+    )
+    mockCommandOutput('foo-web\tfoo\n')
+    await stopAllDevServers({ preserveDocker: true })
+    expect(execFile).not.toHaveBeenCalled()
+    expect(emitEphemeral).not.toHaveBeenCalled()
+    _resetTrackedProcessesForTests()
+    expect(await getStatus(dir, 'foo', 'preserved')).toMatchObject({
+      status: 'running',
+      containers: ['foo-web'],
+      url: 'http://localhost:8710',
+    })
+    vi.mocked(execFile).mockClear()
+    await stopDevServer('preserved')
+    expect(execFile).toHaveBeenCalledWith('bash', ['-c', 'custom-stop'], expect.anything(), expect.any(Function))
+    expect(execFile).toHaveBeenCalledWith(
+      'docker',
+      ['compose', '-p', 'foo', 'down'],
+      expect.anything(),
+      expect.any(Function),
+    )
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+it('still terminates tracked local processes without stop scripts when preserving Docker', async () => {
+  const workspace = makeWorkspace({ id: 'local', projectPath: '/tmp/no-instance', worktreePath: '/tmp/no-instance' })
+  const proc = Object.assign(new EventEmitter(), {
+    stdout: null,
+    stderr: null,
+    exitCode: null as number | null,
+    signalCode: null,
+    kill: vi.fn(),
+  })
+  vi.mocked(listWorkspaces).mockReturnValue([workspace])
+  vi.mocked(getWorkspace).mockReturnValue(workspace)
+  vi.mocked(getProjectSettings).mockReturnValue(
+    makeProjectSettings({ devServer: { startCommand: 'npm run dev', stopCommand: 'custom-stop' } }),
+  )
+  vi.mocked(spawn).mockReturnValue(proc as never)
+  startDevServer('local')
+  const stopping = stopAllDevServers({ preserveDocker: true })
+  expect(proc.kill).toHaveBeenCalledWith('SIGTERM')
+  proc.exitCode = 0
+  proc.emit('exit', 0)
+  await stopping
+  expect(execFile).not.toHaveBeenCalled()
+  vi.mocked(emitEphemeral).mockClear()
+  proc.emit('error', new Error('late error'))
+  proc.emit('exit', 1)
+  await Promise.resolve()
+  expect(emitEphemeral).not.toHaveBeenCalled()
+})

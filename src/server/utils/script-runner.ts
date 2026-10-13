@@ -14,6 +14,9 @@ export interface ScriptEnv {
   branchName: string
   sourceBranch: string
   projectPath: string
+  /** Docker identity, supplied by Kōbō for workspace shutdown hooks only. */
+  projectName?: string
+  instanceName?: string
 }
 
 export interface RunScriptOptions {
@@ -77,6 +80,8 @@ export function runScript(opts: RunScriptOptions): Promise<{ exitCode: number }>
         BRANCH_NAME: env?.branchName ?? '',
         SOURCE_BRANCH: env?.sourceBranch ?? '',
         PROJECT_PATH: env?.projectPath ?? '',
+        ...(env?.projectName !== undefined ? { PROJECT_NAME: env.projectName } : {}),
+        ...(env?.instanceName !== undefined ? { INSTANCE: env.instanceName } : {}),
       },
       stdio: ['ignore', 'pipe', 'pipe'],
       // Detached so this is the leader of its own process group: a script
@@ -100,7 +105,7 @@ export function runScript(opts: RunScriptOptions): Promise<{ exitCode: number }>
       proc.stdout?.destroy()
       proc.stderr?.destroy()
       wsService.emit(workspaceId, `${eventPrefix}:output`, {
-        text: `[kobo] Script timed out after ${Math.round(timeoutMs / 60000)} minutes`,
+        text: `[kobo] Script timed out after ${timeoutMs < 60000 ? `${Math.round(timeoutMs / 1000)} seconds` : `${Math.round(timeoutMs / 60000)} minutes`}`,
       })
       // SIGKILL on the process group gives a running `git commit` no chance to
       // release its index lock. Name the file here, while the user is looking

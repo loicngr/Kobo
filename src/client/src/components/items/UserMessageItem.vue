@@ -8,7 +8,7 @@
     header-class="text-kobo-2 text-caption"
   >
     <!-- eslint-disable-next-line vue/no-v-html -->
-    <div class="q-py-xs markdown-user-prompt" v-html="html" />
+    <div class="q-py-xs markdown-message markdown-user-prompt" v-html="html" />
   </q-expansion-item>
 
   <!-- Regular user chat message: plain markdown inside the user turn card.

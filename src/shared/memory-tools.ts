@@ -18,7 +18,8 @@ export interface MemoryToolDefinition {
 export const MEMORY_TOOL_DEFINITIONS: MemoryToolDefinition[] = [
   {
     name: 'list_memory_scopes',
-    description: 'List the global, project and workspace memory scopes available to this workspace.',
+    description:
+      'Discover the global, project and workspace scopes of Kōbō internal shared memory before targeted retrieval or permitted saving. Use returned scope IDs and generations; do not guess them. Scope discovery remains available when the retrieval budget is exhausted, but must not be polled.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -94,7 +95,7 @@ export const MEMORY_TOOL_DEFINITIONS: MemoryToolDefinition[] = [
   {
     name: 'remember',
     description:
-      'Create or update a concise memory; current mode may deny, apply, or propose the change. Available even when the retrieval budget is exhausted; never echoes the saved body.',
+      'Save a confirmed reusable decision, convention, environment requirement or root cause in Kōbō internal shared memory. Choose the narrowest applicable scope and update an existing matching entry instead of duplicating it. Do not store secrets, raw logs or routine progress. Current mode and launch permissions may deny, apply, or propose the change; a proposal still needs approval. Available even when the retrieval budget is exhausted; never echoes the saved body.',
     inputSchema: {
       type: 'object',
       properties: {

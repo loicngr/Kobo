@@ -1112,6 +1112,16 @@ export default {
   'settings.archiveScriptHint':
     'Script di shell eseguito lato server nel worktree quando un workspace viene archiviato. Lascia vuoto per disattivare.',
   'settings.archiveScriptPlaceholder': 'es. pulire container, liberare spazio su disco…',
+  'settings.stopDevServersOnShutdown': 'Arresta i server di sviluppo alla chiusura di Kōbō',
+  'settings.stopDevServersOnShutdownHint':
+    'Attivo per impostazione predefinita. Disattiva per mantenere i container Docker durante gli aggiornamenti. I processi locali vengono sempre arrestati. Gli script di chiusura vengono comunque eseguiti.',
+  'settings.hook.shutdownTitle': 'Hook: chiusura di Kōbō',
+  'settings.hook.shutdownHint':
+    'Eseguito in ogni worktree esistente, anche archiviato, dopo gli agenti e i processi locali e prima dell’arresto automatico di Docker. Limite: 1 minuto per script. PROJECT_NAME e INSTANCE identificano lo stack Docker; PROJECT_NAME è vuoto senza un’istanza nota. Lo script del progetto sostituisce questo script. I comandi Docker possono fermare i container anche se l’arresto automatico è disattivato.',
+  'settings.hook.shutdownPlaceholder': 'es. arrestare i container Docker di questo workspace…',
+  'tours.settings.shutdown.title': 'Chiusura di Kōbō',
+  'tours.settings.shutdown.description':
+    'Scegli se arrestare i container Docker alla chiusura. L’hook globale viene eseguito in ogni worktree esistente (massimo 1 minuto); uno script del progetto può sostituirlo. I processi locali vengono sempre arrestati.',
   'settings.hook.sessionEndedTitle': 'Hook: sessione terminata',
   'settings.hook.sessionEndedHint':
     "Viene eseguito quando una sessione dell'agente finisce, per qualsiasi motivo. Legge KOBO_SESSION_END_REASON (completed / error / killed / watchdog), KOBO_SESSION_STOP_CAUSE, KOBO_AUTOLOOP_ACTIVE, KOBO_SESSION_ID e KOBO_SESSION_EXIT_CODE. Vuoto = disattivato.",

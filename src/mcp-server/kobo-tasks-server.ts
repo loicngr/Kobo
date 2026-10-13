@@ -468,27 +468,28 @@ const WORKSPACE_SCOPED_TOOLS: Tool[] = [
   {
     name: 'get_dev_server_status',
     description:
-      'CALL BEFORE asking the user whether the app is running, or when your change is dev-server-sensitive. Returns `not_configured` when this project has no dev server: do not start one manually in that case. Otherwise returns running/stopped/starting/error + URL, port, container names.',
+      'CALL BEFORE backend, frontend, integration or E2E tests that need workspace services, or before asking the user whether the app is running. Reuse the existing instance and its returned URL/container names. Returns `not_configured` when this project has no dev server: report the blocker, do not launch one manually. Otherwise returns running/stopped/starting/error + URL, port, container names. Running is lifecycle status, not application readiness: use the documented health check with bounded retries before dependent tests.',
     inputSchema: { type: 'object', properties: {}, required: [] },
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
   {
     name: 'start_dev_server',
-    description: 'CALL WHEN the user asks you to test the running app and the dev server is stopped.',
+    description:
+      'CALL WHEN an authorized task needs workspace services for app checks or backend/frontend/integration/E2E tests and get_dev_server_status reports stopped. Kōbō runs the configured startup command and tracks the instance. Use this tool instead of shell lifecycle commands such as make dev-docker, sh/dev-docker.sh, docker compose up or npm run dev. Respect launch permissions; read-only sessions cannot start services. On failure, inspect get_dev_server_logs and report the blocker, without a manual shell fallback.',
     inputSchema: { type: 'object', properties: {}, required: [] },
     annotations: { destructiveHint: false, openWorldHint: false },
   },
   {
     name: 'stop_dev_server',
     description:
-      'CALL WHEN the user explicitly asks to stop the dev server, or before destructive operations that require a clean boot.',
+      'CALL WHEN the user explicitly asks to stop the dev server, or when an authorized operation requires a restart. Use this tool instead of shell shutdown commands such as docker compose down or killing the server process directly. Respect launch permissions; read-only sessions cannot stop services. Do not stop a shared workspace instance merely because your tests finished.',
     inputSchema: { type: 'object', properties: {}, required: [] },
     annotations: { destructiveHint: false, openWorldHint: false },
   },
   {
     name: 'get_dev_server_logs',
     description:
-      'CALL WHEN debugging a runtime issue the user describes as happening in the running app. Returns the last N lines of logs (default 200). Cheaper than asking the user to paste them.',
+      'CALL WHEN diagnosing a dev-server startup failure or a runtime issue during app checks or tests. Returns the last N lines of logs (default 200). Use these logs with get_dev_server_status before reporting a blocker; do not bypass a failed managed startup with a shell launch.',
     inputSchema: {
       type: 'object',
       properties: {

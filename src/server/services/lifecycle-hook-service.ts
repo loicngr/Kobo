@@ -3,23 +3,24 @@ import { getDb } from '../db/index.js'
 import { slugifyProjectName } from '../utils/project-slug.js'
 import { runScript } from '../utils/script-runner.js'
 import { resolveWorkspaceWorktreePath } from '../utils/worktree-paths.js'
+import { resolveInstance, sanitizeBranchName } from './dev-server-service.js'
 import { getEffectiveSettings, getGlobalSettings, getProjectSettings } from './settings-service.js'
+import { listWorkspaces } from './workspace-service.js'
 
-/**
- * Lifecycle moments a user script can be attached to.
- *
- * Kōbō already ran user scripts on setup, cleanup, archive and
- * change-source-branch. These are the three moments that had no hook and that
- * the machine cannot act on by itself: a session ending, a PR being merged,
- * auto-loop giving up.
- */
-export type LifecycleHookEvent = 'session-ended' | 'pr-merged' | 'autoloop-disabled'
+/** Workspace lifecycle events and graceful Kōbō shutdown with optional user scripts. */
+export type LifecycleHookEvent = 'session-ended' | 'pr-merged' | 'autoloop-disabled' | 'kobo-shutdown'
+
+export const SHUTDOWN_SCRIPT_TIMEOUT_MS = 60_000
 
 /** Which effective-settings key holds the script for each event. */
-const SCRIPT_KEY: Record<LifecycleHookEvent, 'sessionEndedScript' | 'prMergedScript' | 'autoLoopDisabledScript'> = {
+const SCRIPT_KEY: Record<
+  LifecycleHookEvent,
+  'sessionEndedScript' | 'prMergedScript' | 'autoLoopDisabledScript' | 'shutdownScript'
+> = {
   'session-ended': 'sessionEndedScript',
   'pr-merged': 'prMergedScript',
   'autoloop-disabled': 'autoLoopDisabledScript',
+  'kobo-shutdown': 'shutdownScript',
 }
 
 interface HookWorkspaceRow {
@@ -61,7 +62,7 @@ export async function runLifecycleHook(
     const script = getEffectiveSettings(row.project_path)[SCRIPT_KEY[event]]
     // Empty (or blank) means the user never wrote one. Hooks are opt-in: they
     // run arbitrary shell, so absence of configuration is absence of a hook.
-    if (!script.trim()) return null
+    if (!script?.trim()) return null
 
     const global = getGlobalSettings()
     const projectSettings = getProjectSettings(row.project_path)
@@ -84,19 +85,27 @@ export async function runLifecycleHook(
       return null
     }
 
+    const instance = event === 'kobo-shutdown' ? resolveInstance(row.project_path, row.working_branch) : null
     return await runScript({
       workspaceId,
       worktreePath,
       script,
-      // Namespaced per event: three hooks streaming into one `hook:output` feed
+      // Namespaced per event: multiple hooks streaming into one `hook:output` feed
       // would be indistinguishable in the UI.
       eventPrefix: `hook:${event}`,
       tmpFileName: `.hook-${event}.tmp`,
+      ...(event === 'kobo-shutdown' ? { timeoutMs: SHUTDOWN_SCRIPT_TIMEOUT_MS } : {}),
       env: {
         workspaceName: row.name,
         branchName: row.working_branch,
         sourceBranch: row.source_branch,
         projectPath: row.project_path,
+        ...(event === 'kobo-shutdown'
+          ? {
+              projectName: instance?.projectName ?? '',
+              instanceName: instance?.instanceName ?? sanitizeBranchName(row.working_branch),
+            }
+          : {}),
       },
       extraEnv: { ...extraEnv, KOBO_HOOK_EVENT: event },
     })
@@ -104,6 +113,27 @@ export async function runLifecycleHook(
     console.error(`[lifecycle-hook] '${event}' hook failed for workspace '${workspaceId}':`, err)
     return null
   }
+}
+
+/** Called once by graceful shutdown, after stopping writers and before Docker teardown. */
+export async function onKoboShutdown(
+  signal: string,
+  isAgentStillRunning: (workspaceId: string) => boolean,
+): Promise<void> {
+  await Promise.all(
+    listWorkspaces(true)
+      .filter((workspace) => !workspace.worktreePurgedAt)
+      .map(async (workspace) => {
+        if (isAgentStillRunning(workspace.id)) {
+          console.warn(`[lifecycle-hook] 'kobo-shutdown' skipped for '${workspace.id}': agent stop unconfirmed`)
+          return
+        }
+        const result = await runLifecycleHook('kobo-shutdown', workspace.id, { KOBO_SHUTDOWN_SIGNAL: signal })
+        if (result && result.exitCode !== 0) {
+          console.error(`[lifecycle-hook] 'kobo-shutdown' failed for '${workspace.id}' with code ${result.exitCode}`)
+        }
+      }),
+  )
 }
 
 /**

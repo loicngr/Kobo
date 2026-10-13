@@ -48,7 +48,7 @@ services:
       traefik.http.routers.kobo.tls.certresolver: ${TRAEFIK_CERTRESOLVER:-letsencrypt}
       traefik.http.services.kobo.loadbalancer.server.port: "3000"
     # No published HTTP or SSH ports. Traefik handles HTTP and WebSockets.
-    stop_grace_period: 60s
+    stop_grace_period: 180s
     healthcheck:
       start_period: 60s
     logging:
