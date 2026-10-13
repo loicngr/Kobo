@@ -4,6 +4,10 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads this file.
 
+## 2.1.23
+
+- feat: configure shutdown hooks and improve agent guidance
+
 ## 2.1.22
 
 - feat(settings): make agent watchdogs opt-in and progress bars configurable
