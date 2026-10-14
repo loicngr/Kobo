@@ -4,6 +4,10 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads this file.
 
+## 2.1.26
+
+- feat: switch Claude and Codex accounts with ccswap
+
 ## 2.1.25
 
 - feat: improve merge options, diff controls and progress reporting
