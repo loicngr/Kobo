@@ -292,10 +292,14 @@ const forcingQueue = ref(false)
 
 const showInterrupt = computed(() => isBusyStatus(store.selectedWorkspace?.status))
 
-// QuotaFooter is rendered only when the workspace's engine emits structured
-// rate-limit info Kōbō can display. Codex SDK doesn't surface it → hiding the
-// footer instead of leaving it stuck on "Loading…" forever.
-const quotaStatusVisible = computed(() => supportsQuotaStatus(store.selectedWorkspace?.engine))
+// The footer discovers optional provider accounts independently of quota snapshots.
+const quotaStatusVisible = computed(() =>
+  supportsQuotaStatus(
+    store.sessions.find(
+      (session) => session.id === store.selectedSessionId && session.workspaceId === store.selectedWorkspace?.id,
+    )?.engine ?? store.selectedWorkspace?.engine,
+  ),
+)
 
 async function handleInterrupt() {
   if (!props.workspaceId || isHandoffBlocking.value) return

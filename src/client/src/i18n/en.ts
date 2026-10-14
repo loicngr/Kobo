@@ -1765,6 +1765,22 @@ export default {
   // Rate-limit usage labels (shared by QuotaFooter)
   'stats.resetsAt': 'Resets {value}',
   'stats.usageBucket': 'Usage bucket {n}',
+  'quotaFooter.popover.codexTitle': 'Codex accounts',
+  'quotaFooter.accounts.trigger': 'Accounts',
+  'quotaFooter.accounts.current': 'Configured account',
+  'quotaFooter.accounts.unknown': 'Current login is not recognized among the saved accounts.',
+  'quotaFooter.accounts.empty':
+    'No saved {provider} accounts. Add an account with ccswap in the Kōbō runtime environment.',
+  'quotaFooter.accounts.choose': 'Switch to account',
+  'quotaFooter.accounts.scopeHint':
+    'Changes the credentials shared by all {provider} workspaces. Running sessions may need to be stopped and resumed to use the new account.',
+  'quotaFooter.accounts.switch': 'Switch account',
+  'quotaFooter.accounts.reload': 'Reload accounts',
+  'quotaFooter.accounts.unsupportedEnvironment':
+    'This authentication configuration does not support account switching with ccswap. See the documentation.',
+  'quotaFooter.accounts.loadError': 'Could not load accounts. Reload the list to try again.',
+  'quotaFooter.accounts.switchError':
+    'Could not confirm the account switch. Check the refreshed account list before trying again.',
   'quotaFooter.lastUpdated': 'Last update: {time}',
   'quotaFooter.empty': 'Loading…',
   'quotaFooter.popover.title': 'Claude Code usage',

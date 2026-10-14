@@ -1549,6 +1549,65 @@ When a Codex session is already working, **Send now** sends a queued chat messag
 
 The selector reads [`src/shared/codex-models.ts`](./src/shared/codex-models.ts). This checkout lists GPT-6 Astra, GPT-5.6 Sol/Terra/Luna, GPT-5.5 and older variants; availability depends on your account and authentication. Kōbō exposes effort values `auto`, `none`, `low`, `medium`, `high`, `xhigh`, and `max`, as declared in the engine's capabilities. The runtime must support the selected model/effort combination. Both selectors switch when you change the engine.
 
+### Switch Claude Code and Codex accounts with ccswap
+
+The usage popover in the chat footer can show the current **managed account**
+and switch to another account registered in [ccswap](https://github.com/errhythm/ccswap).
+It follows the selected session's engine, falling back to the workspace engine.
+Choose an account and explicitly click **Switch account**. Claude Code and Codex
+have separate account lists; switching one does not switch the other.
+
+ccswap is optional and is not bundled with Kōbō. Without its executable, Kōbō
+shows no account selector or installation notice; existing Claude usage indicators
+continue to work. Codex account controls do not imply that Claude-style quota
+buckets are available for Codex.
+
+Install and register accounts **as the same operating-system user and in the
+same environment as the Kōbō server**. The integration uses ccswap's JSON CLI
+(tested with 0.37.0). With `uv` already installed:
+
+```bash
+uv tool install ccswap
+# After logging into Claude Code with each account:
+ccswap add
+# After `codex login` with each Codex account:
+ccswap codex add
+ccswap list --provider claude
+ccswap codex list
+```
+
+Register the current login before switching so ccswap can preserve it. Account
+registration, login renewal, aliases and removal remain CLI operations. A disabled
+account cannot be selected in Kōbō. If no managed account matches the current
+login, the panel reports an unknown account rather than guessing from a slot.
+
+**Scope:** switching changes that provider's active credentials for the server
+user, shared by all Kōbō workspaces and other tools using that same login store.
+It is not a per-workspace account assignment. Kōbō keeps its worktrees, conversation
+history, settings and skills; it does not copy profiles or automatically restart
+agents. The displayed account identifies the active credential store, not proof
+that an already-running process has adopted it. Stop and resume the affected
+sessions if they still use the previous account, especially with Codex. Existing
+API-key or custom-provider authentication can take precedence over a saved login.
+
+The adapter inherits absolute `CLAUDE_CONFIG_DIR` on Linux and `CODEX_HOME`.
+Empty or relative authentication-directory overrides are refused: server and workspace
+processes can have different working directories. Claude switching is also refused
+with `CLAUDE_SECURESTORAGE_CONFIG_DIR` set, or with any nonempty `CLAUDE_CONFIG_DIR`
+on macOS (even the explicit default path), because the corresponding Keychain
+write is not verified by this integration. Use the native login workflow for
+those configurations.
+
+Claude usage is invalidated and refreshed after a switch. A failed refresh is
+not shown as the new account's old quota. Switching failures do not trigger an
+automatic retry: refresh the account list to check the actual state before trying
+again. The server exposes display metadata only, never ccswap's credential files
+or raw command output.
+
+For Docker/VPS, installing ccswap on your PC or on the VPS host is insufficient:
+it must be reachable on **Kōbō's container PATH**, with the same runtime home and
+credential-directory environment. See [VPS account setup](./docs/vps-projects-and-skills.md#switch-engine-accounts-inside-the-container).
+
 ### Permission modes
 
 Claude Code uses SDK permission modes; Codex uses sandbox and approval flags. These controls differ by engine. A Git worktree itself is not a security boundary.

@@ -192,6 +192,51 @@ do not blindly enable all hooks. Repository skills live in worktrees; personal
 skills and instructions live in the home volume. Copy only relevant personal/team
 rules, never all private PC configuration into a project repository.
 
+## Switch engine accounts inside the container
+
+Kōbō integrates the optional [ccswap CLI](https://github.com/errhythm/ccswap) in
+its usage popover for **Claude Code and Codex**. Install it in the container,
+not on the VPS host or your PC. Open the same non-root environment as the agents:
+
+```bash
+cd /opt/stacks/kobo
+docker compose exec kobo kobo-vps-entrypoint --exec bash
+```
+
+Inside that shell, check `id -u`, `echo "$HOME"` and `command -v ccswap`.
+The standard launcher keeps `/root` as HOME and adds `/root/.local/bin` to PATH.
+With `uv` available, install a user-local CLI and register each login:
+
+```bash
+uv tool install ccswap
+# Log in with Claude Code, then save this login (repeat for each account):
+ccswap add
+# Log in with `codex login`, then save this login (repeat for each account):
+ccswap codex add
+ccswap list --provider claude
+ccswap codex list
+```
+
+Use the same `CLAUDE_CONFIG_DIR`, `CODEX_HOME` and XDG settings as the server if
+you customize these paths; authentication-directory overrides must be absolute and nonempty. Shell aliases are not executable commands. Installing
+as container root can leave credential files unwritable by the agent UID; use
+the launcher for every login and account-management command. Do not mount the
+host's entire home just to share accounts.
+
+In the workspace, open the usage/account popover, choose an account and click
+**Switch account**. Missing ccswap hides account controls entirely. The selected
+session determines which provider's accounts are offered. The switch affects
+**all workspaces using that provider's credential store**, not only the open one.
+Existing processes are not restarted automatically; stop and resume a session if
+it retains the previous login. Skills, instructions and Kōbō history are unchanged.
+See [account switching behavior](../CONFIGURATION.md#switch-claude-code-and-codex-accounts-with-ccswap).
+
+With the default Linux layout, user-local tools and ccswap's account store
+(`~/.local/share/claude-swap`) persist in the `/root` volume, alongside the engine
+login directories. Preserve custom external paths separately. The updater's
+Kōbō-only backup does **not** include these logins or ccswap backups. Account
+stores contain secrets: do not put them in Git, image layers or diagnostic output.
+
 ## What survives kobo-update
 
 | Location | Container restart | Container replacement |

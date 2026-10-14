@@ -64,7 +64,8 @@ Kōbō's production build is an installable PWA — use your browser's **Install
 - **Interactive Q&A**: an agent can pause mid-session to ask you a question through the UI instead of guessing.
 
   ![Agent asking a clarifying question, awaiting the user's answer](docs/assets/images/agent-question.png)
-- **Quota-aware**: 5-hour / 7-day Claude usage and Codex rate-limit buckets live in the footer; auto-loops can resume after a reset. Explicit cron/wakeup schedules can also resume work; a manual workspace does not restart solely because its quota resets.
+- **Quota-aware**: 5-hour / 7-day Claude usage is shown in the footer; engine-reported rate limits guide quota waits; auto-loops can resume after a reset. Explicit cron/wakeup schedules can also resume work; a manual workspace does not restart solely because its quota resets.
+- **Account switching**: with optional [ccswap](https://github.com/errhythm/ccswap), view and switch the active Claude Code or Codex account from the usage popover. Credentials are shared across workspaces using that engine; [setup and session behavior](./CONFIGURATION.md#switch-claude-code-and-codex-accounts-with-ccswap).
 - **Disk-space purge**: reclaim a merged workspace's `node_modules`/`vendor` weight without losing its chat history — see [`CONFIGURATION.md`](./CONFIGURATION.md#auto-purge-worktree-on-pr-merged).
 - **Lifecycle scripts**: shell scripts run on setup, cleanup, archive, session end, PR merge, or auto-loop stop, with output streamed into the chat.
 - **Observability**: a per-session timeline (duration, tools, tokens, errors) and a downloadable redacted diagnostic JSON.

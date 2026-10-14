@@ -149,6 +149,30 @@ src/
 
 Tasks have `role` (`work | finalization`) and structured `verification`. MCP and HTTP share transactional task mutations. An auto-loop task cannot become done without passing reported checks. Finalization runs after all other tasks/criteria, is invalidated by scope changes, and is mandatory before completion. The proof is agent-reported evidence, not server-side execution of arbitrary commands.
 
+## Provider account switching
+
+The usage popover integrates optional `ccswap` for Claude Code and Codex. Select
+accounts for the viewed session's engine, falling back to the workspace engine.
+Missing executable hides account controls; it must not hide existing Claude
+usage. Codex account support is separate from quota snapshot support.
+
+`provider-accounts-service.ts` owns subprocess invocation and sanitization. Use
+provider allowlists, numeric slots and bounded `execFile`, never shell text. Keep
+credential mutations serialized with their validation. Return only display
+metadata; do not forward raw CLI JSON, stderr, tokens or credential paths. Inherit
+the Kōbō process user, HOME, PATH and credential-directory environment: in Docker,
+the CLI must run inside that container, not on the host. Do not install tools or
+perform real switches in tests.
+
+A switch changes the provider-wide credential store, not a workspace identity.
+Do not automatically stop agents, migrate conversations, copy settings/skills or
+promise that an existing process hot-reloads authentication. Invalidate Claude
+quota data around switches and reject results from earlier in-flight polls.
+Keep frontend requests scoped across provider/session changes and handle missing,
+empty, disabled, unrecognized and failed account states without automatic retries.
+See [configuration](./CONFIGURATION.md#switch-claude-code-and-codex-accounts-with-ccswap)
+and [VPS setup](./docs/vps-projects-and-skills.md#switch-engine-accounts-inside-the-container).
+
 ## Persistent memory
 
 Kōbō memory is independent of provider chat history/native memory and shared by Claude Code and Codex. `memoryMode` is a global setting defaulting to `hybrid`: Manual permits reads only; Hybrid applies workspace writes and proposes project/global writes; Automatic applies writes to the explicitly targeted scope. Mode is checked per operation, so a setting change affects existing agent sessions; pending/rejected proposals are never automatically approved or revived. Plan/review/report-only capabilities cannot write.

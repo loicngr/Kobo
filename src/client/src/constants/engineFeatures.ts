@@ -26,8 +26,8 @@ export function supportsSubagents(engineId: string | undefined): boolean {
 
 export const SUPPORTS_QUOTA_STATUS_BY_ENGINE: Record<string, boolean> = {
   'claude-code': true,
-  // App-server emits `thread/tokenUsage/updated` with structured per-turn and
-  // total token counts → QuotaFooter can render real data.
+  // The footer can expose optional account controls without a provider quota
+  // snapshot. Per-turn token usage is distinct from provider-wide quotas.
   codex: true,
 }
 

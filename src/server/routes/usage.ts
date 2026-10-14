@@ -1,5 +1,11 @@
 import { Hono } from 'hono'
 import { getDb } from '../db/index.js'
+import {
+  listProviderAccounts,
+  ProviderAccountsError,
+  switchProviderAccount,
+  validateAccountId,
+} from '../services/provider-accounts-service.js'
 import { refreshNow } from '../services/usage/poller.js'
 import {
   clearReliabilityReset,
@@ -44,6 +50,32 @@ app.delete('/reliability/reset', (c) => {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)
+  }
+})
+
+function accountError(error: unknown): ProviderAccountsError {
+  return error instanceof ProviderAccountsError ? error : new ProviderAccountsError('accounts_command_failed')
+}
+
+app.get('/:providerId/accounts', async (c) => {
+  try {
+    return c.json(await listProviderAccounts(c.req.param('providerId')))
+  } catch (error) {
+    const safe = accountError(error)
+    return c.json({ error: safe.message, code: safe.code }, safe.status)
+  }
+})
+
+app.post('/:providerId/accounts/switch', async (c) => {
+  try {
+    const body: unknown = await c.req.json().catch(() => null)
+    const accountId = validateAccountId(
+      typeof body === 'object' && body !== null && 'accountId' in body ? body.accountId : undefined,
+    )
+    return c.json(await switchProviderAccount(c.req.param('providerId'), accountId))
+  } catch (error) {
+    const safe = accountError(error)
+    return c.json({ error: safe.message, code: safe.code }, safe.status)
   }
 })
 

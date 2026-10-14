@@ -1783,6 +1783,22 @@ export default {
   // Rate-limit usage labels (shared by QuotaFooter)
   'stats.resetsAt': 'Reset {value}',
   'stats.usageBucket': 'Bucket de uso {n}',
+  'quotaFooter.popover.codexTitle': 'Cuentas de Codex',
+  'quotaFooter.accounts.trigger': 'Cuentas',
+  'quotaFooter.accounts.current': 'Cuenta configurada',
+  'quotaFooter.accounts.unknown': 'La sesión actual no corresponde a ninguna cuenta guardada.',
+  'quotaFooter.accounts.empty':
+    'No hay cuentas de {provider} guardadas. Añada una cuenta con ccswap en el entorno de ejecución de Kōbō.',
+  'quotaFooter.accounts.choose': 'Cambiar a la cuenta',
+  'quotaFooter.accounts.scopeHint':
+    'Cambia las credenciales compartidas por todos los espacios de {provider}. Puede ser necesario detener y reanudar las sesiones en curso para usar la nueva cuenta.',
+  'quotaFooter.accounts.switch': 'Cambiar cuenta',
+  'quotaFooter.accounts.reload': 'Recargar cuentas',
+  'quotaFooter.accounts.unsupportedEnvironment':
+    'Esta configuración de autenticación no permite cambiar de cuenta con ccswap. Consulte la documentación.',
+  'quotaFooter.accounts.loadError': 'No se pudieron cargar las cuentas. Recargue la lista para volver a intentarlo.',
+  'quotaFooter.accounts.switchError':
+    'No se pudo confirmar el cambio de cuenta. Revise la lista actualizada antes de volver a intentarlo.',
   'quotaFooter.lastUpdated': 'Última actualización: {time}',
   'quotaFooter.empty': 'Cargando…',
   'quotaFooter.popover.title': 'Uso de Claude Code',

@@ -11,6 +11,7 @@ import {
   refreshNow,
   startUsagePoller,
   stopUsagePoller,
+  withUsageAccountSwitch,
 } from '../server/services/usage/poller.js'
 import type { UsageProvider, UsageSnapshot } from '../server/services/usage/types.js'
 
@@ -160,5 +161,60 @@ describe('usage poller', () => {
     // @ts-expect-error testing runtime guard with an invalid id
     const snap = await refreshNow('codex')
     expect(snap).toBeNull()
+  })
+  it('invalidates cached quota during a switch and discards older in-flight refresh results', async () => {
+    let resolveOld!: (snapshot: UsageSnapshot) => void
+    let finishSwitch!: () => void
+    const oldSnapshot: UsageSnapshot = {
+      providerId: 'claude-code',
+      status: 'ok',
+      buckets: [{ id: 'five_hour', usedPct: 99 }],
+      fetchedAt: '2026-10-14T10:00:00Z',
+    }
+    const freshSnapshot = { ...oldSnapshot, buckets: [{ id: 'five_hour', usedPct: 5 }] }
+    const provider = makeFakeProvider({
+      fetchSnapshot: vi
+        .fn()
+        .mockResolvedValueOnce(oldSnapshot)
+        .mockImplementationOnce(
+          () =>
+            new Promise<UsageSnapshot>((resolve) => {
+              resolveOld = resolve
+            }),
+        )
+        .mockResolvedValue(freshSnapshot),
+    })
+    _setProvidersForTest([provider])
+    await refreshNow('claude-code')
+    const oldRefresh = refreshNow('claude-code')
+    const switching = withUsageAccountSwitch(
+      'claude-code',
+      () =>
+        new Promise<void>((resolve) => {
+          finishSwitch = resolve
+        }),
+    )
+    expect(getAllPersistedSnapshots()[0]?.buckets).toEqual([])
+    const duringSwitch = await refreshNow('claude-code')
+    expect(duringSwitch?.buckets).toEqual([])
+    expect(provider.fetchSnapshot).toHaveBeenCalledTimes(2)
+    finishSwitch()
+    await switching
+    resolveOld(oldSnapshot)
+    expect((await oldRefresh)?.buckets).toEqual(freshSnapshot.buckets)
+    expect(getAllPersistedSnapshots()[0]?.buckets).toEqual(freshSnapshot.buckets)
+    expect(vi.mocked(broadcastAll).mock.calls.at(-1)?.[1]).toMatchObject({ snapshot: freshSnapshot })
+  })
+
+  it('also refreshes after an uncertain failed switch without replacing its error', async () => {
+    const provider = makeFakeProvider()
+    _setProvidersForTest([provider])
+    await expect(
+      withUsageAccountSwitch('claude-code', async () => {
+        throw new Error('switch failed')
+      }),
+    ).rejects.toThrow('switch failed')
+    expect(provider.fetchSnapshot).toHaveBeenCalledTimes(1)
+    expect(getAllPersistedSnapshots()[0]?.status).toBe('ok')
   })
 })
