@@ -4,6 +4,11 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads this file.
 
+## 2.1.27
+
+- fix(security): harden authentication and mcp access
+- feat(models): Add Haiku 5.5
+
 ## 2.1.26
 
 - feat: switch Claude and Codex accounts with ccswap
