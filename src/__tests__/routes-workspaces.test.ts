@@ -262,6 +262,7 @@ vi.mock('../server/utils/git-ops.js', async (importOriginal) => ({
   EMPTY_TREE_SHA: '4b825dc642cb6eb9a060e54bf8d69288fbee4904',
   getUnpushedChangedFiles: vi.fn().mockReturnValue([]),
   getUnpushedChangedFilesAsync: vi.fn().mockResolvedValue([]),
+  resolveUnpushedBaseAsync: vi.fn().mockResolvedValue('origin/feature/x'),
   listBranchCommitsAsync: vi.fn().mockResolvedValue([]),
   listBranchCommits: vi.fn().mockReturnValue([]),
   listCommitsBehindAsync: vi.fn().mockResolvedValue([]),
@@ -339,7 +340,13 @@ vi.mock('../server/services/change-source-branch-service.js', () => ({
 vi.mock('../server/services/forge/registry.js', () => ({
   getForgeProvider: vi.fn(() => ({
     id: 'github',
-    capabilities: { canCreatePr: true, canChangePrBase: true, canMergeRequest: true, requestTermShort: 'PR' },
+    capabilities: {
+      canCreatePr: true,
+      canChangePrBase: true,
+      canMergeRequest: true,
+      mergeMethods: ['merge', 'squash', 'rebase'],
+      requestTermShort: 'PR',
+    },
     isAvailable: vi.fn(async () => ({ available: true })),
     changePrBase: changePrBaseMock,
     mergeRequest: mergeRequestMock,
@@ -5450,7 +5457,12 @@ describe('GET /api/workspaces/:id/diff', () => {
     const body = await res.json()
     expect(body.mode).toBe('unpushed')
     expect(body.files).toEqual(unpushedFiles)
-    expect(gitOps.getUnpushedChangedFilesAsync).toHaveBeenCalledWith(expect.any(String), 'feature/x')
+    expect(gitOps.getUnpushedChangedFilesAsync).toHaveBeenCalledWith(
+      expect.any(String),
+      'feature/x',
+      'origin',
+      'develop',
+    )
     expect(gitOps.getChangedFilesAsync).not.toHaveBeenCalled()
   })
 
@@ -7417,6 +7429,60 @@ describe('POST /api/workspaces/:id/merge-pr', () => {
 
     expect(res.status).toBe(200)
     expect(mergeRequestMock).toHaveBeenCalledWith(expect.any(String), 42)
+  })
+
+  it.each(['merge', 'squash', 'rebase'])('forwards the selected %s method', async (method) => {
+    getPrStatusMock.mockResolvedValueOnce({ number: 42, state: 'OPEN', readyToMerge: true })
+    const res = await app.request('/api/workspaces/ws-1/merge-pr', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ method }),
+    })
+    expect(res.status).toBe(200)
+    expect(mergeRequestMock).toHaveBeenCalledWith(expect.any(String), 42, method)
+  })
+
+  it.each(['{', 'null', '[]', '{"method":"--admin"}', '{"method":null}', '{"method":3}'])(
+    'rejects invalid input %s',
+    async (body) => {
+      const res = await app.request('/api/workspaces/ws-1/merge-pr', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body,
+      })
+      expect(res.status).toBe(400)
+      expect(mergeRequestMock).not.toHaveBeenCalled()
+      expect(getPrStatusMock).not.toHaveBeenCalled()
+    },
+  )
+
+  it('rejects explicit methods on providers that do not advertise them', async () => {
+    const provider = getForgeProvider('github')
+    vi.mocked(getForgeProvider).mockReturnValueOnce({
+      ...provider,
+      capabilities: { ...provider.capabilities, mergeMethods: undefined },
+    })
+    const res = await app.request('/api/workspaces/ws-1/merge-pr', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ method: 'squash' }),
+    })
+    expect(res.status).toBe(409)
+    expect(await res.json()).toMatchObject({ code: 'merge_method_unsupported' })
+    expect(mergeRequestMock).not.toHaveBeenCalled()
+    expect(getPrStatusMock).not.toHaveBeenCalled()
+  })
+
+  it('returns a forge failure without retrying another method', async () => {
+    getPrStatusMock.mockResolvedValueOnce({ number: 42, state: 'OPEN', readyToMerge: true })
+    mergeRequestMock.mockRejectedValueOnce(new Error('Squash merges are not allowed'))
+    const res = await app.request('/api/workspaces/ws-1/merge-pr', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ method: 'squash' }),
+    })
+    expect(res.status).toBe(500)
+    expect(mergeRequestMock).toHaveBeenCalledExactlyOnceWith(expect.any(String), 42, 'squash')
   })
 
   it('refuses to merge a PR that is no longer ready', async () => {

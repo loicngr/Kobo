@@ -1292,7 +1292,7 @@ export default {
     'Pulsa el título para elegir, crear o renombrar una sesión, o copiar su identificador.',
   'tours.workspace.actions.title': 'Acciones del workspace',
   'tours.workspace.actions.description':
-    'El menú ⋯ reúne la vista en paralelo, la paleta de comandos, el panel lateral y la visita guiada.',
+    'El menú ⋯ reúne la vista en paralelo, la paleta de comandos y la visita guiada. El botón justo a su derecha abre o cierra el panel lateral.',
   'tours.workspace.title': 'Dentro de un workspace',
   'tours.workspace.chat.title': 'Conversación',
   'tours.workspace.chat.description':
@@ -1305,7 +1305,8 @@ export default {
   'tours.workspace.status.title': 'Estado',
   'tours.workspace.status.description': 'El estado de la sesión actual; detenla aquí cuando haga falta.',
   'tours.workspace.git.title': 'Git',
-  'tours.workspace.git.description': 'Commits, diff, push, rebase y la PR de esta rama.',
+  'tours.workspace.git.description':
+    'Commits, diff, push, rebase y la PR de esta rama. El diff se abre en línea. La edición se desactiva mientras un agente trabaja; Sin push incluye commits locales y archivos sin commit.',
   'tours.workspace.tasks.title': 'Tareas',
   'tours.workspace.tasks.description': 'Lo que el agente planea hacer, y los criterios de aceptación que debe cumplir.',
   'tours.workspace.timeline.title': 'Cronología',
@@ -1330,7 +1331,7 @@ export default {
     'Resultado de la CI, decisión de la review y reviewers, actualizados cada 30 segundos.',
   'tours.gitPr.actions.title': 'Acciones Git',
   'tours.gitPr.actions.description':
-    'Push, pull, rebase o cambiar la rama base. Durante un conflicto, un botón deja que el agente lo resuelva.',
+    'Push, pull, rebase o cambiar la rama base. Durante un conflicto, un botón deja que el agente lo resuelva. Para PR de GitHub, elige commit de fusión, squash o rebase al confirmar la fusión.',
   'tours.gitPr.attention.title': 'Badges de atención',
   'tours.gitPr.attention.description':
     'La tarjeta muestra una CI fallida, cambios solicitados o una PR lista para merge.',
@@ -1654,6 +1655,9 @@ export default {
   'git.changePrBaseSuccess': 'Rama base de la {request} actualizada',
   'git.changePrBaseFailed': 'No se pudo cambiar la rama base de la {request}',
   'git.mergeRequest': 'Fusionar {request}',
+  'git.mergeMethod.merge': 'Crear un commit de fusión — conservar todos los commits',
+  'git.mergeMethod.squash': 'Squash y fusión — combinar en un solo commit',
+  'git.mergeMethod.rebase': 'Rebase y fusión — reaplicar los commits sin commit de fusión',
   'git.mergeRequestConfirmTitle': '¿Fusionar {request}?',
   'git.mergeRequestConfirmMessage': 'Esto fusionará la {request} abierta en su rama de destino.',
   'git.mergeRequestSuccess': '{request} fusionada',
@@ -1904,6 +1908,7 @@ export default {
   'diff.reviewSubmitted': 'Revisión enviada al agente',
   'diff.reviewSubmitFailed': 'No se pudo enviar la revisión: {error}',
   'diff.scopeBranch': 'Branch',
+  'diff.workingTree': 'Copia de trabajo',
   'diff.scopeUnpushed': 'Sin pushear',
   'diff.noChanges': 'Sin cambios',
   'diff.searchFiles': 'Buscar archivos…',
@@ -1948,7 +1953,7 @@ export default {
   'diffViewer.fileTreeShow': 'Mostrar el árbol de archivos',
   'diffViewer.fileTreeHide': 'Ocultar el árbol de archivos',
   'diffViewer.closeConfirm.saveAndClose': 'Guardar y cerrar',
-  'diffViewer.agentRunning': 'El agente está activo — detenlo para editar',
+  'diffViewer.agentRunning': 'Un agente está trabajando. Detenlo para habilitar la edición.',
   'diffViewer.fileDeleted': 'Archivo eliminado',
 
   // Notifications
@@ -2599,6 +2604,10 @@ export default {
   'tours.home.activity.description':
     'Al pie del panel izquierdo encontrarás preguntas, sesiones finalizadas, errores y cambios de PR desde tu última visita.',
   'progress.title': 'Actividades',
+  'progress.unmeasured': 'Progreso sin cuantificar',
+  'progress.stale': 'Sin actualizaciones desde hace {minutes} min',
+  'progress.staleHint':
+    'No se ha recibido un nuevo informe de progreso. Esto no significa que el trabajo se haya detenido.',
   'progress.status.running': 'En curso',
   'progress.status.succeeded': 'Completada',
   'progress.status.failed': 'Fallida',

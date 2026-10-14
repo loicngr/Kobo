@@ -28,6 +28,7 @@ import { CLAUDE_CODE_CAPABILITIES } from './capabilities.js'
 import { createMapperState, mapSdkMessage, QUOTA_PATTERN, tryEmitQuota } from './event-mapper.js'
 import { buildClaudeOptions } from './options-builder.js'
 import { buildCompactionSessionStartOutput } from './precompact-hook.js'
+import { createProgressReportingHook } from './progress-reporting-hook.js'
 import { resolveClaudeBinaryPath } from './resolve-binary.js'
 import { buildStopHookOutput } from './stop-hook.js'
 
@@ -394,6 +395,7 @@ export function createClaudeCodeEngine(): AgentEngine {
       const hooks: Options['hooks'] = {
         ...(options.mcpServers?.some((server) => server.name === 'kobo-tasks' && server.env.KOBO_PROGRESS_SESSION_TOKEN)
           ? {
+              PostToolUse: [{ hooks: [createProgressReportingHook()] }],
               SubagentStart: [
                 {
                   hooks: [

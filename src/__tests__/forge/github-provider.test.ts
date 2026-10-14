@@ -32,6 +32,7 @@ describe('github forge provider', () => {
       canCreatePr: true,
       canChangePrBase: true,
       canMergeRequest: true,
+      mergeMethods: ['merge', 'squash', 'rebase'],
       canDeleteRemoteBranch: true,
       canListPullRequests: true,
       requestTermShort: 'PR',
@@ -42,6 +43,12 @@ describe('github forge provider', () => {
     execFileMock.mockResolvedValueOnce('')
     await githubProvider.mergeRequest('/repo', 42)
     expect(execFileMock).toHaveBeenCalledWith('gh', ['pr', 'merge', '42', '--merge'])
+  })
+
+  it.each(['merge', 'squash', 'rebase'] as const)('uses the requested %s strategy', async (method) => {
+    execFileMock.mockResolvedValueOnce('')
+    await githubProvider.mergeRequest('/repo', 42, method)
+    expect(execFileMock).toHaveBeenLastCalledWith('gh', ['pr', 'merge', '42', `--${method}`])
   })
 
   it('isAvailable returns available when gh auth status succeeds', async () => {

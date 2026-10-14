@@ -1130,28 +1130,33 @@ export function getChangedFiles(repoPath: string, base: string, includeUntracked
   return files
 }
 
-/**
- * List committed files between `origin/<branch>` and local HEAD — the set
- * of files the next `git push` would send. Working tree changes are NOT
- * included: uncommitted edits aren't about to be pushed. Returns an empty
- * list if there is no remote tracking branch yet.
- */
-export function getUnpushedChangedFiles(repoPath: string, branchName: string, remote = 'origin'): DiffFile[] {
-  const remoteRef = `${remote}/${branchName}`
-  // Bail out cleanly if the remote branch doesn't exist (branch never pushed).
+/** Local changes relative to the pushed branch, including staged and working-tree edits. */
+export function getUnpushedChangedFiles(
+  repoPath: string,
+  branchName: string,
+  remote = 'origin',
+  sourceBranch = 'HEAD',
+): DiffFile[] {
+  let ref = `${remote}/${branchName}`
   try {
-    git(repoPath, ['rev-parse', '--verify', remoteRef])
+    git(repoPath, ['rev-parse', '--verify', ref])
   } catch {
-    return []
+    ref = resolveBase(repoPath, sourceBranch)
   }
+  const files = parseNameStatus(git(repoPath, ['diff', '--name-status', '-z', ref, '--']))
+  const untracked = git(repoPath, ['ls-files', '--others', '--exclude-standard', '-z'])
+  return withUntrackedFiles(files, untracked)
+}
 
-  const files: DiffFile[] = []
-  try {
-    files.push(...parseNameStatus(git(repoPath, ['diff', '--name-status', '-z', `${remoteRef}..HEAD`])))
-  } catch {
-    // Unlikely after the rev-parse check, but keep the happy path robust.
+/** Preserve NUL-delimited filenames and deduplicate tracked/untracked transitions. */
+function withUntrackedFiles(files: DiffFile[], output: string): DiffFile[] {
+  const seen = new Set(files.map((file) => file.path))
+  for (const filePath of output.split('\0')) {
+    if (filePath && !seen.has(filePath)) {
+      files.push({ path: filePath, status: 'untracked' })
+      seen.add(filePath)
+    }
   }
-
   return files
 }
 
@@ -1689,18 +1694,34 @@ export async function getChangedFilesBetweenAsync(
   }
 }
 
+/** Use the source branch until this working branch has been pushed for the first time. */
+export async function resolveUnpushedBaseAsync(
+  repoPath: string,
+  branchName: string,
+  sourceBranch = 'HEAD',
+  remote = 'origin',
+): Promise<string> {
+  const ref = `${remote}/${branchName}`
+  try {
+    await gitAsync(repoPath, ['rev-parse', '--verify', ref])
+    return ref
+  } catch {
+    return resolveBaseAsync(repoPath, sourceBranch)
+  }
+}
+
 export async function getUnpushedChangedFilesAsync(
   repoPath: string,
   branchName: string,
   remote = 'origin',
+  sourceBranch = 'HEAD',
 ): Promise<DiffFile[]> {
-  const ref = `${remote}/${branchName}`
-  try {
-    await gitAsync(repoPath, ['rev-parse', '--verify', ref])
-    return parseNameStatus(await gitAsync(repoPath, ['diff', '--name-status', '-z', `${ref}..HEAD`]))
-  } catch {
-    return []
-  }
+  const ref = await resolveUnpushedBaseAsync(repoPath, branchName, sourceBranch, remote)
+  const [changes, untracked] = await Promise.all([
+    gitAsync(repoPath, ['diff', '--name-status', '-z', ref, '--']),
+    gitAsync(repoPath, ['ls-files', '--others', '--exclude-standard', '-z']),
+  ])
+  return withUntrackedFiles(parseNameStatus(changes), untracked)
 }
 
 export async function getChangedFilesAsync(

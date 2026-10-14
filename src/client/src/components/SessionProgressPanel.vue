@@ -14,6 +14,8 @@
             <span class="progress-status">{{ t(`progress.status.${item.status}`) }}</span>
           </div>
           <div v-if="item.step" class="progress-step">{{ item.step }}</div>
+          <div v-if="item.total === null && item.status === 'running'" class="progress-step">{{ t('progress.unmeasured') }}</div>
+          <div v-if="staleMinutes(item) >= 2" class="progress-step" :title="t('progress.staleHint')">{{ t('progress.stale', { minutes: staleMinutes(item) }) }}</div>
           <div class="progress-meter-row">
             <div
               class="progress-track"
@@ -23,7 +25,7 @@
               :aria-valuemin="item.total === null ? undefined : 0"
               :aria-valuemax="item.total ?? undefined"
               :aria-valuenow="item.total === null ? undefined : (item.current ?? 0)"
-              :aria-valuetext="item.total === null ? t(`progress.status.${item.status}`) : undefined"
+              :aria-valuetext="item.total === null ? (item.status === 'running' ? t('progress.unmeasured') : t(`progress.status.${item.status}`)) : undefined"
             >
               <div v-if="item.total !== null" class="progress-fill" :style="{ width: `${Math.min(100, (item.current ?? 0) / item.total * 100)}%` }" />
             </div>
@@ -56,6 +58,7 @@ import { useProgressBarsStore } from 'src/stores/progress-bars'
 import { useSettingsStore } from 'src/stores/settings'
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import type { ProgressBar } from '../../../shared/progress-bars'
 
 const props = defineProps<{ workspaceId: string; sessionId: string | null }>()
 const emit = defineEmits<{ focusComposer: [] }>()
@@ -70,6 +73,30 @@ const rows = computed(() =>
   store.workspaceId === props.workspaceId && store.sessionId === props.sessionId ? store.visible : [],
 )
 const displayed = computed(() => (expanded.value ? rows.value : rows.value.slice(0, 3)))
+const displayNow = ref(store.serverNow())
+let freshnessTimer: ReturnType<typeof setInterval> | undefined
+function staleMinutes(item: ProgressBar): number {
+  return item.status === 'running'
+    ? Math.max(0, Math.floor((displayNow.value - Date.parse(item.updatedAt)) / 60_000))
+    : 0
+}
+// Local display clock only. Reporting timestamps change exclusively through server updates.
+watch(
+  [showProgressBars, rows],
+  ([visible, items]) => {
+    displayNow.value = store.serverNow()
+    const needed = visible && items.some((item) => item.status === 'running')
+    if (needed && !freshnessTimer)
+      freshnessTimer = setInterval(() => {
+        displayNow.value = store.serverNow()
+      }, 30_000)
+    if (!needed) {
+      clearInterval(freshnessTimer)
+      freshnessTimer = undefined
+    }
+  },
+  { immediate: true },
+)
 watch(showProgressBars, (visible) => {
   announcement.value = ''
   if (!visible) {
@@ -120,7 +147,10 @@ watch(
     })
   },
 )
-onBeforeUnmount(() => store.reset())
+onBeforeUnmount(() => {
+  clearInterval(freshnessTimer)
+  store.reset()
+})
 </script>
 
 <style scoped lang="scss">

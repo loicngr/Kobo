@@ -1282,7 +1282,7 @@ export default {
     'Click the title to choose, create or rename a session, or copy its identifier.',
   'tours.workspace.actions.title': 'Workspace actions',
   'tours.workspace.actions.description':
-    'The ⋯ menu groups side-by-side view, the command palette, the side panel and the guided tour.',
+    'The ⋯ menu groups side-by-side view, the command palette and the guided tour. The button immediately to its right opens or closes the side panel.',
   'tours.workspace.title': 'Inside a workspace',
   'tours.workspace.chat.title': 'Conversation',
   'tours.workspace.chat.description': 'The agent output, live: messages, tool calls, questions and errors.',
@@ -1294,7 +1294,8 @@ export default {
   'tours.workspace.status.title': 'Status',
   'tours.workspace.status.description': 'The current session state; stop it here when needed.',
   'tours.workspace.git.title': 'Git',
-  'tours.workspace.git.description': 'Commits, diff, push, rebase and the PR for this branch.',
+  'tours.workspace.git.description':
+    'Commits, diff, push, rebase and the PR for this branch. The diff opens inline. Editing is disabled while an agent runs; Unpushed includes local commits and uncommitted files.',
   'tours.workspace.tasks.title': 'Tasks',
   'tours.workspace.tasks.description': 'What the agent plans to do, and the acceptance criteria it must meet.',
   'tours.workspace.timeline.title': 'Timeline',
@@ -1318,7 +1319,7 @@ export default {
   'tours.gitPr.panel.description': 'CI result, review decision and reviewers, refreshed every 30 seconds.',
   'tours.gitPr.actions.title': 'Git actions',
   'tours.gitPr.actions.description':
-    'Push, pull, rebase or change the base branch. During a conflict a button lets the agent resolve it.',
+    'Push, pull, rebase or change the base branch. During a conflict a button lets the agent resolve it. For GitHub PRs, choose merge commit, squash or rebase in the merge confirmation.',
   'tours.gitPr.attention.title': 'Attention badges',
   'tours.gitPr.attention.description': 'The card shows a failing CI, requested changes or a PR ready to merge.',
   'tours.settings.title': 'Settings',
@@ -1636,6 +1637,9 @@ export default {
   'git.changePrBaseSuccess': '{request} base branch updated',
   'git.changePrBaseFailed': 'Failed to change {request} base branch',
   'git.mergeRequest': 'Merge {request}',
+  'git.mergeMethod.merge': 'Create a merge commit — preserve all commits',
+  'git.mergeMethod.squash': 'Squash and merge — combine into one commit',
+  'git.mergeMethod.rebase': 'Rebase and merge — replay commits without a merge commit',
   'git.mergeRequestConfirmTitle': 'Merge {request}?',
   'git.mergeRequestConfirmMessage': 'This merges the open {request} into its target branch.',
   'git.mergeRequestSuccess': '{request} merged',
@@ -1882,6 +1886,7 @@ export default {
   'diff.reviewSubmitted': 'Review submitted to agent',
   'diff.reviewSubmitFailed': 'Failed to submit review: {error}',
   'diff.scopeBranch': 'Branch',
+  'diff.workingTree': 'Working tree',
   'diff.scopeUnpushed': 'Unpushed',
   'diff.noChanges': 'No changes',
   'diff.searchFiles': 'Search files…',
@@ -1926,7 +1931,7 @@ export default {
   'diffViewer.fileTreeShow': 'Show the file tree',
   'diffViewer.fileTreeHide': 'Hide the file tree',
   'diffViewer.closeConfirm.saveAndClose': 'Save and close',
-  'diffViewer.agentRunning': 'Agent runs — stop it to edit',
+  'diffViewer.agentRunning': 'An agent is working. Stop it to enable editing.',
   'diffViewer.fileDeleted': 'File deleted',
 
   // Notifications
@@ -2569,6 +2574,9 @@ export default {
   'tours.home.activity.description':
     'At the bottom of the left drawer, find questions, session endings, errors and PR changes since your last visit.',
   'progress.title': 'Activities',
+  'progress.unmeasured': 'Progress not quantified',
+  'progress.stale': 'No update for {minutes} min',
+  'progress.staleHint': 'No new progress report received. This does not mean the work has stopped.',
   'progress.status.running': 'Running',
   'progress.status.succeeded': 'Succeeded',
   'progress.status.failed': 'Failed',

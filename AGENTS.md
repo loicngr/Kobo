@@ -223,6 +223,13 @@ reopen a closed database. Startup reconciles lost internal reporters while
 preserving external ones. An interrupted reporter is not proof of cancelled
 background work. Operational reporting never satisfies auto-loop verification.
 
+Progress without measured counts is labelled explicitly, and the panel shows the
+age of a report after two minutes without a newer one. This local clock must not
+poll or mutate progress. Claude's per-launch PostToolUse advisory tracks only
+observed managed progress responses, separates parent/subagent producers, and
+limits reminders by action count and elapsed time. Do not infer percentages,
+automatically complete bars, or block agent shutdown for missing reports.
+
 Retain scoped activity-key fingerprints, producer sequences and dismissed rows
 for retries; subsequent updates cannot resurrect a dismissed indicator or undo a
 terminal state. Bound labels, steps, page size, active/retained records and update
@@ -746,6 +753,14 @@ Snapshot each target and its delivery mode before scheduling: auto-loop uses `ne
 `GET /api/workspaces/info` returns `{ workspaces, prSnapshots, gitStats }` in one shot. The client polls this endpoint every 15 s so every non-archived workspace stays ≤ 15 s fresh without a per-card stats request. The poll is skipped while the browser tab is hidden and fires once immediately when the tab becomes visible again. The server-side pr-watcher feeds the same caches (`lastKnownGitStats` map, PR snapshots) so the work is shared between the polling client and the watchdog loop.
 
 ### File editing in the diff viewer
+
+The diff defaults to inline view. Busy workspace status or known live controller disables
+Edit with an explanatory tooltip, and updates Monaco to read-only without discarding
+the current buffer. Historical commit comparisons remain read-only. Unpushed mode
+lists local commits plus working-tree changes (including non-ignored untracked files)
+against the branch remote ref, falling back to the source branch before the first push.
+The list and file-content routes must use the same baseline semantics; failed Git
+reads must not be reported as an empty, clean diff.
 
 The right panel of `DiffViewer.vue` is editable when the workspace agent is stopped and the file is not in `deleted` status. `Ctrl/Cmd+S` or the explicit Save button persists the file via `POST /api/workspaces/:id/save-file`, sending `{ path, content, baseSha }` where `baseSha` is the sha256 captured at `GET /diff-file` time. The route refuses with **412 Precondition Failed** + `{ currentSha }` if the on-disk content has changed; the client shows a Reload / Keep mine dialog. Worktree-traversal guards (including parent-symlink escapes) and a 1 MB size cap live in `file-editor-service.ts`. Changing files in the tree while dirty pops an "Unsaved changes" prompt.
 

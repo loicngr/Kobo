@@ -949,6 +949,20 @@ resume, not retroactively to an already running agent.
 
 The service retains at most 1,000 indicators per session, with at most 32 running
 at once. Hidden records are retained so retries cannot recreate dismissed bars.
+When a bar has no numeric total, the UI explicitly says **Progress not quantified**.
+After two minutes without a newer report it shows **No update for N min**. This
+is the age of the last received report, not proof that work stopped. The display
+clock does not poll the server or manufacture progress.
+
+Claude launches with progress tools also receive a bounded `PostToolUse` reminder:
+once on creation, then after at least eight subsequent tool completions and one
+minute without a report. Reminders are scoped to the producing agent/subagent,
+use the last observed sequence, and follow an explicit reporting handoff. They
+are advisory: no extra tool calls, automatic percentages or blocking stop hooks.
+Codex and external clients retain the shared MCP reporting guidance. Agents must
+supply measured counts when a real test total or fixed checklist is available;
+step-only updates correctly change the description without filling the gauge.
+
 The [MCP progress guide](src/mcp-server/README.md#session-progress-tools) documents
 arguments, ordering, retry behavior and update limits.
 
@@ -1787,6 +1801,40 @@ Adapt the port stride, the `APP_NAME`, and any extra `*_PORT` keys to your stack
 ## Forge integration
 
 Kōbō can open pull requests (GitHub or Bitbucket) or merge requests (GitLab) directly from the Git panel. The **forge** setting controls which service is used for a given project.
+
+### Review and edit a diff
+
+The diff viewer opens in **Inline** view. Use **Side by side** to change the layout.
+While an agent is working, **Edit** is disabled and its tooltip explains why;
+the diff remains readable and review comments remain available. The editor also
+becomes read-only if an agent starts while the diff is open. Stop the agent to
+resume editing. Server-side save checks remain in force.
+
+**Unpushed** compares the current working tree with `origin/<workingBranch>`:
+it includes local commits, staged and unstaged changes, deletions, and non-ignored
+untracked files. Before the first push, it uses the source branch instead. The
+header shows the comparison base. **Branch** retains its separate opt-in for
+untracked files. Comparing historical commits remains read-only.
+
+### Merge a pull request
+
+In the Git panel, **Merge PR** opens a confirmation. For GitHub, choose:
+
+- **Merge commit** (default): preserve the commits and create a merge commit.
+- **Squash and merge**: combine the changes into one commit on the target branch.
+- **Rebase and merge**: replay the commits on the target branch without a merge commit.
+
+The selection applies to this operation only. Kōbō rechecks PR readiness before
+calling the forge. Repository policies still apply: a disallowed method is
+reported as an error, with no automatic fallback or protection bypass. The
+source branch is kept; after a confirmed merge, remote deletion remains a
+separate confirmation. GitLab and Bitbucket retain their existing merge behavior.
+
+`POST /api/workspaces/:id/merge-pr` accepts optional JSON
+`{ "method": "merge" | "squash" | "rebase" }` for integrations advertising the
+corresponding `forge.capabilities.mergeMethods`. An omitted body keeps the
+existing provider default. Invalid values return 400; unsupported methods return
+409 before any merge command runs.
 
 ### Modes
 

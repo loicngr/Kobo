@@ -641,6 +641,14 @@ For example, an external client can create an activity with:
 
 Keep the returned `id` and `sequence`. Update **the same bar** at actual phase
 changes and meaningful completed milestones, including during a long phase.
+If a test runner reports a total, or a fixed checklist defines the activity,
+report completed items as `current` and that known count as `total`. A step-only
+update changes the description, not the gauge. Both numbers null means the UI
+shows “Progress not quantified”; it does not infer a percentage from tool calls.
+After two minutes without a new received report, the UI displays its age without
+assuming that work stopped. Claude's managed launch adds bounded advisory
+reminders to the reporting agent/subagent, but still relies on these MCP updates.
+
 Report absolute progress with `update_progress_bar`:
 
 ```json

@@ -1,6 +1,7 @@
 // src/server/services/forge/github/provider.ts
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { MERGE_METHODS, type MergeMethod } from '../../../../shared/forge-merge.js'
 import { parseCliJson } from '../parse-cli-json.js'
 import type {
   CreatePrOptions,
@@ -191,6 +192,7 @@ export const githubProvider: ForgeProvider = {
     canCreatePr: true,
     canChangePrBase: true,
     canMergeRequest: true,
+    mergeMethods: MERGE_METHODS,
     canDeleteRemoteBranch: true,
     canListPullRequests: true,
     requestTermShort: 'PR',
@@ -231,8 +233,8 @@ export const githubProvider: ForgeProvider = {
     await execFileAsync('gh', ['pr', 'edit', '--base', base], cliOptions(repoPath))
   },
 
-  async mergeRequest(repoPath: string, number: number): Promise<void> {
-    await execFileAsync('gh', ['pr', 'merge', String(number), '--merge'], cliOptions(repoPath))
+  async mergeRequest(repoPath: string, number: number, method: MergeMethod = 'merge'): Promise<void> {
+    await execFileAsync('gh', ['pr', 'merge', String(number), `--${method}`], cliOptions(repoPath))
   },
   async deleteRemoteBranch(repoPath: string, branch: string): Promise<void> {
     await execFileAsync('git', ['push', 'origin', '--delete', branch], cliOptions(repoPath))

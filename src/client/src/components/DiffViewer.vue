@@ -22,9 +22,9 @@
           <span class="text-green-4">{{ workingBranch }}</span>
         </template>
         <template v-else>
-          <span class="text-kobo-3">origin/{{ workingBranch }}</span>
+          <span class="text-kobo-3">{{ unpushedBaseRef }}</span>
           <q-icon name="arrow_forward" size="11px" color="kobo-3" class="q-mx-xs" />
-          <span class="text-green-4">HEAD</span>
+          <span class="text-green-4">{{ $t('diff.workingTree') }}</span>
         </template>
       </span>
       <span
@@ -88,6 +88,7 @@
         ]"
         class="q-mr-sm"
       />
+      <div class="q-mr-sm">
       <q-btn-toggle
         v-model="reviewMode"
         dense
@@ -97,11 +98,13 @@
         color="kobo-surface-2"
         text-color="kobo-2"
         :options="[
-          { label: $t('diff.modeInspect'), value: 'inspect' },
+          { label: $t('diff.modeInspect'), value: 'inspect', disable: agentEditingBlocked || isCommitsMode },
           { label: $t('diff.modeReview'), value: 'review' },
         ]"
-        class="q-mr-sm"
       />
+        <q-tooltip v-if="agentEditingBlocked">{{ $t('diffViewer.agentRunning') }}</q-tooltip>
+        <q-tooltip v-else-if="isCommitsMode">{{ $t('diff.commitsReadOnly') }}</q-tooltip>
+      </div>
       <q-btn-toggle
         v-model="viewMode"
         dense
@@ -577,6 +580,7 @@ interface DiffFile {
 const files = ref<DiffFile[]>([])
 const sourceBranch = ref('')
 const workingBranch = ref('')
+const unpushedBaseRef = ref('')
 const selectedFile = ref<string | null>(null)
 const loading = ref(false)
 const loadingFile = ref(false)
@@ -588,7 +592,7 @@ const fileListError = ref<string | null>(null)
 const filesRequest = createLatestRequest()
 const fileDiffRequest = createLatestRequest()
 const editorContainer = ref<HTMLElement | null>(null)
-const viewMode = ref<'side' | 'inline'>('side')
+const viewMode = ref<'side' | 'inline'>('inline')
 // Compact mode: collapse unchanged regions in the Monaco diff editor so the
 // reader only sees what actually differs. Enabled by default; the user
 // preference is persisted across sessions and only OFF when explicitly
@@ -599,15 +603,15 @@ const hideUnchanged = ref(localStorage.getItem(HIDE_UNCHANGED_KEY) !== '0')
 // Opt-in: include untracked files in the diff viewer. Default OFF — they
 // would not ship in the next commit/PR, so showing them is misleading. The
 // toggle only appears in `branch` mode (untracked is meaningless for the
-// `unpushed` scope, which is committed-only).
+// `unpushed` scope, which always includes non-ignored untracked files).
 const INCLUDE_UNTRACKED_KEY = 'kobo:diff:includeUntracked'
 const includeUntracked = ref(localStorage.getItem(INCLUDE_UNTRACKED_KEY) === '1')
 
 /**
  * Diff scope:
  *  - `branch`   → working branch vs sourceBranch (= what the PR will contain)
- *  - `unpushed` → committed-only changes vs origin/<workingBranch>
- *                 (= what the next `git push` will send)
+ *  - `unpushed` → local commits and worktree changes vs origin/<workingBranch>
+ *                 (source branch before the first push), including untracked files
  */
 const diffMode = ref<'branch' | 'unpushed'>('branch')
 
@@ -992,13 +996,18 @@ const dirty = ref<boolean>(false)
 const savingFile = ref<boolean>(false)
 let modifiedModelDispose: (() => void) | null = null
 
+const agentEditingBlocked = computed(() => {
+  const workspace = workspaceStore.workspaces.find((w) => w.id === props.workspaceId)
+  return isBusyStatus(workspace?.status) || !!workspaceStore.agentLiveness[props.workspaceId]
+})
+
 const canEdit = computed<boolean>(() => {
   if (isCommitsMode.value) return false
   if (reviewMode.value !== 'inspect') return false
   const ws = workspaceStore.workspaces.find((w) => w.id === props.workspaceId)
   if (!ws) return false
   if (ws.archivedAt) return false
-  if (isBusyStatus(ws.status)) return false
+  if (agentEditingBlocked.value) return false
   const currentFile = selectedFile.value
   const fileMeta = currentFile ? files.value.find((f) => f.path === currentFile) : null
   if (fileMeta?.status === 'deleted') return false
@@ -1156,7 +1165,7 @@ async function loadFiles() {
       params.set('includeUntracked', '1')
     }
     const signal = filesRequest.begin()
-    const data = await apiFetch<{ files: DiffFile[]; sourceBranch?: string; workingBranch?: string }>(
+    const data = await apiFetch<{ files: DiffFile[]; sourceBranch?: string; workingBranch?: string; baseRef?: string }>(
       `/api/workspaces/${props.workspaceId}/diff?${params}`,
       { cache: 'no-store', signal },
     )
@@ -1166,6 +1175,7 @@ async function loadFiles() {
     files.value = data.files
     sourceBranch.value = data.sourceBranch ?? ''
     workingBranch.value = data.workingBranch ?? ''
+    unpushedBaseRef.value = data.baseRef ?? `origin/${workingBranch.value}`
     fileListError.value = null
   } catch (err) {
     // A cancelled request is the expected outcome of a fast second call, not
@@ -1315,7 +1325,7 @@ async function saveCurrentFile(): Promise<
   // false, so this is already unreachable from the UI). Guard the save path
   // itself so a future regression can never write a historical commit's
   // content back into the worktree via the branch/unpushed save endpoint.
-  if (isCommitsMode.value) return { ok: false, status: 0 }
+  if (!canEdit.value) return { ok: false, status: 0 }
   if (!diffEditor) return { ok: false, status: 0 }
   const modifiedModel = diffEditor.getModel()?.modified
   if (!modifiedModel || !selectedFile.value) return { ok: false, status: 0 }

@@ -7,7 +7,10 @@ type CanUseTool = (
 ) => Promise<{ behavior: string; message?: string; interrupt?: boolean }>
 
 let capturedHooks:
-  | { SubagentStart?: Array<{ hooks: Array<() => Promise<{ hookSpecificOutput: { additionalContext: string } }>> }> }
+  | {
+      SubagentStart?: Array<{ hooks: Array<() => Promise<{ hookSpecificOutput: { additionalContext: string } }>> }>
+      PostToolUse?: Array<{ hooks: unknown[] }>
+    }
   | undefined
 let capturedCanUseTool: CanUseTool | undefined
 let releaseStream: (() => void) | undefined
@@ -126,11 +129,15 @@ it('allows only launch-scoped progress metadata in read-only sessions', async ()
     )
     try {
       if (scoped) {
+        expect(capturedHooks?.PostToolUse?.[0].hooks).toHaveLength(1)
         const guidance = (await capturedHooks!.SubagentStart![0].hooks[0]()).hookSpecificOutput.additionalContext
         expect(guidance).toContain('Pass this requirement to all subagents')
         expect(guidance).toContain('update the same bar at each actual phase change or meaningful completed milestone')
         expect(guidance).toContain('before your final report')
-      } else expect(capturedHooks?.SubagentStart).toBeUndefined()
+      } else {
+        expect(capturedHooks?.SubagentStart).toBeUndefined()
+        expect(capturedHooks?.PostToolUse).toBeUndefined()
+      }
       const ctx = { signal: new AbortController().signal, toolUseID: 'progress' }
       for (const name of ['create_progress_bar', 'update_progress_bar', 'finish_progress_bar', 'list_progress_bars'])
         expect(await capturedCanUseTool!(`mcp__kobo-tasks__${name}`, {}, ctx)).toMatchObject({

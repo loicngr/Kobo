@@ -2,6 +2,7 @@ import { execFile as execFileCb, execFileSync, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import { nanoid } from 'nanoid'
 import type { AutoLoopReviewConfiguration } from '../../shared/auto-loop-review.js'
+import { isMergeMethod } from '../../shared/forge-merge.js'
 import type { HandoffDecision } from '../../shared/session-handoff.js'
 import {
   isWorkflowPolicy,
@@ -3925,15 +3926,14 @@ app.get('/:id/git-stats', async (c) => {
 //   `origin/<sourceBranch>` (which can be ahead of the local ref when
 //   upstream landed merges Kōbō hasn't pulled). The handler refreshes
 //   `origin/<sourceBranch>` synchronously so the diff is never stale.
-// - `unpushed`: committed-only changes vs `origin/<workingBranch>`,
-//   i.e. what the next `git push` will send.
+// - `unpushed`: local commits + current worktree changes (including untracked)
+//   vs `origin/<workingBranch>`, falling back to the source branch before the first push.
 app.get('/:id/diff', async (c) => {
   try {
     const id = c.req.param('id')
     const rawMode = c.req.query('mode')
     const mode = rawMode === 'unpushed' ? 'unpushed' : rawMode === 'commits' ? 'commits' : 'branch'
-    // Opt-in flag from the diff viewer toggle. Only meaningful in `branch`
-    // mode — `unpushed` is committed-only by definition.
+    // Branch mode keeps its untracked opt-in; unpushed always includes local untracked files.
     const includeUntracked = c.req.query('includeUntracked') === '1'
     const workspace = workspaceService.getWorkspace(id)
     if (!workspace) {
@@ -3971,7 +3971,12 @@ app.get('/:id/diff', async (c) => {
     }
     const files =
       mode === 'unpushed'
-        ? await gitOps.getUnpushedChangedFilesAsync(worktreePath, workspace.workingBranch)
+        ? await gitOps.getUnpushedChangedFilesAsync(
+            worktreePath,
+            workspace.workingBranch,
+            'origin',
+            workspace.sourceBranch,
+          )
         : await gitOps.getChangedFilesAsync(worktreePath, workspace.sourceBranch, includeUntracked)
 
     c.header('Cache-Control', 'no-store')
@@ -3980,6 +3985,15 @@ app.get('/:id/diff', async (c) => {
       mode,
       sourceBranch: workspace.sourceBranch,
       workingBranch: workspace.workingBranch,
+      ...(mode === 'unpushed'
+        ? {
+            baseRef: await gitOps.resolveUnpushedBaseAsync(
+              worktreePath,
+              workspace.workingBranch,
+              workspace.sourceBranch,
+            ),
+          }
+        : {}),
     })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
@@ -4041,7 +4055,10 @@ app.get('/:id/diff-file', async (c) => {
       })
     }
 
-    const baseRef = mode === 'unpushed' ? `origin/${workspace.workingBranch}` : workspace.sourceBranch
+    const baseRef =
+      mode === 'unpushed'
+        ? await gitOps.resolveUnpushedBaseAsync(worktreePath, workspace.workingBranch, workspace.sourceBranch)
+        : workspace.sourceBranch
     const original = await gitOps.getFileAtRefAsync(worktreePath, baseRef, filePath)
     const modified = gitOps.getFileContent(worktreePath, filePath)
 
@@ -4741,9 +4758,34 @@ app.post('/:id/merge-pr', async (c) => {
     const workspace = workspaceService.getWorkspace(id)
     if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
 
+    const rawBody = await c.req.text()
+    let body: Record<string, unknown> = {}
+    if (rawBody.length > 0) {
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(rawBody)
+      } catch {
+        return c.json({ error: 'Request body must be valid JSON' }, 400)
+      }
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return c.json({ error: 'Request body must be a JSON object' }, 400)
+      }
+      body = parsed as Record<string, unknown>
+    }
+    const method = body.method
+    if (method !== undefined && !isMergeMethod(method)) {
+      return c.json({ error: 'method must be merge, squash or rebase' }, 400)
+    }
+
     const provider = getForgeProvider(resolveForge(workspace.projectPath))
     if (!provider.capabilities.canMergeRequest) {
       return c.json({ error: 'This project has no forge that can merge the PR', code: 'forge_unsupported' }, 409)
+    }
+    if (method !== undefined && !provider.capabilities.mergeMethods?.includes(method)) {
+      return c.json(
+        { error: 'This forge does not support the requested merge method', code: 'merge_method_unsupported' },
+        409,
+      )
     }
     const availability = await provider.isAvailable(workspace.worktreePath)
     if (!availability.available) {
@@ -4764,7 +4806,11 @@ app.post('/:id/merge-pr', async (c) => {
       return c.json({ error: 'This PR is not ready to merge', code: 'pr_not_ready' }, 409)
     }
 
-    await provider.mergeRequest(workspace.worktreePath, snapshot.number)
+    if (method === undefined) {
+      await provider.mergeRequest(workspace.worktreePath, snapshot.number)
+    } else {
+      await provider.mergeRequest(workspace.worktreePath, snapshot.number, method)
+    }
     const merged = await provider.getPrStatus(workspace.worktreePath, workspace.workingBranch)
     return c.json({ success: true, merged: merged?.state === 'MERGED', branch: workspace.workingBranch })
   } catch (err) {

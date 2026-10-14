@@ -42,6 +42,40 @@ describe('asynchronous interactive Git reads', () => {
     )
   })
 
+  it('includes committed, staged, unstaged, deleted and untracked files in unpushed changes', async () => {
+    repo.commit('delete.txt', 'delete me', 'baseline')
+    repo.git(['push', 'origin', 'main'])
+    repo.commit('committed.txt', 'local commit', 'not pushed')
+    fs.appendFileSync(path.join(repo.path, 'README.md'), 'unstaged change')
+    fs.unlinkSync(path.join(repo.path, 'delete.txt'))
+    fs.writeFileSync(path.join(repo.path, 'staged.txt'), 'staged')
+    repo.git(['add', 'staged.txt'])
+    fs.writeFileSync(path.join(repo.path, 'untracked space.txt'), 'untracked')
+    fs.writeFileSync(path.join(repo.path, '.git', 'info', 'exclude'), 'ignored.txt\n')
+    fs.writeFileSync(path.join(repo.path, 'ignored.txt'), 'ignored')
+    const expected = [
+      { path: 'README.md', status: 'modified' },
+      { path: 'committed.txt', status: 'added' },
+      { path: 'delete.txt', status: 'deleted' },
+      { path: 'staged.txt', status: 'added' },
+      { path: 'untracked space.txt', status: 'untracked' },
+    ]
+    expect(await git.getUnpushedChangedFilesAsync(repo.path, 'main')).toEqual(expected)
+    expect(git.getUnpushedChangedFiles(repo.path, 'main')).toEqual(expected)
+  })
+
+  it('compares never-pushed branches with their source branch, including local edits', async () => {
+    repo.git(['checkout', '-b', 'feature/new'])
+    repo.commit('new.txt', 'local', 'first local commit')
+    fs.appendFileSync(path.join(repo.path, 'README.md'), 'local edit')
+    const expected = [
+      { path: 'README.md', status: 'modified' },
+      { path: 'new.txt', status: 'added' },
+    ]
+    expect(await git.getUnpushedChangedFilesAsync(repo.path, 'feature/new', 'origin', 'main')).toEqual(expected)
+    expect(git.getUnpushedChangedFiles(repo.path, 'feature/new', 'origin', 'main')).toEqual(expected)
+  })
+
   it('returns porcelain and diff stats without substituting clean state on errors', async () => {
     fs.appendFileSync(path.join(repo.path, 'README.md'), 'modified\n')
     expect(await git.getWorkingTreePorcelainAsync(repo.path)).toContain('README.md')

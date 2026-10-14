@@ -1299,7 +1299,7 @@ export default {
     'Klicke auf den Titel, um eine Sitzung auszuwählen, anzulegen, umzubenennen oder ihre Kennung zu kopieren.',
   'tours.workspace.actions.title': 'Workspace-Aktionen',
   'tours.workspace.actions.description':
-    'Das Menü ⋯ enthält die geteilte Ansicht, die Befehlspalette, das Seitenpanel und die Führung.',
+    'Das Menü ⋯ enthält die geteilte Ansicht, die Befehlspalette und die Führung. Die Schaltfläche direkt rechts daneben öffnet oder schließt das Seitenpanel.',
   'tours.workspace.title': 'In einem Workspace',
   'tours.workspace.chat.title': 'Gespräch',
   'tours.workspace.chat.description': 'Die Ausgabe des Agenten, live: Nachrichten, Tool-Aufrufe, Fragen und Fehler.',
@@ -1312,7 +1312,8 @@ export default {
   'tours.workspace.status.title': 'Status',
   'tours.workspace.status.description': 'Der Zustand der aktuellen Session; hier kannst du sie bei Bedarf stoppen.',
   'tours.workspace.git.title': 'Git',
-  'tours.workspace.git.description': 'Commits, Diff, Push, Rebase und der PR dieses Branches.',
+  'tours.workspace.git.description':
+    'Commits, Diff, Push, Rebase und der PR dieses Branches. Der Diff öffnet sich in der Inline-Ansicht. Während ein Agent arbeitet, ist die Bearbeitung gesperrt; Nicht gepusht enthält lokale Commits und nicht committete Dateien.',
   'tours.workspace.tasks.title': 'Aufgaben',
   'tours.workspace.tasks.description': 'Was der Agent vorhat, und die Akzeptanzkriterien, die er erfüllen muss.',
   'tours.workspace.timeline.title': 'Zeitachse',
@@ -1338,7 +1339,7 @@ export default {
   'tours.gitPr.panel.description': 'CI-Ergebnis, Review-Entscheidung und Reviewer, alle 30 Sekunden aktualisiert.',
   'tours.gitPr.actions.title': 'Git-Aktionen',
   'tours.gitPr.actions.description':
-    'Push, Pull, Rebase oder Basis-Branch wechseln. Bei einem Konflikt lässt ein Button den Agenten ihn lösen.',
+    'Push, Pull, Rebase oder Basis-Branch wechseln. Bei einem Konflikt lässt ein Button den Agenten ihn lösen. Bei GitHub-PRs können Sie in der Merge-Bestätigung Merge-Commit, Squash oder Rebase wählen.',
   'tours.gitPr.attention.title': 'Aufmerksamkeits-Badges',
   'tours.gitPr.attention.description':
     'Die Karte zeigt eine fehlgeschlagene CI, angeforderte Änderungen oder einen merge-bereiten PR.',
@@ -1663,6 +1664,9 @@ export default {
   'git.changePrBaseSuccess': '{request}-Zielbranch aktualisiert',
   'git.changePrBaseFailed': '{request}-Zielbranch konnte nicht geändert werden',
   'git.mergeRequest': '{request} mergen',
+  'git.mergeMethod.merge': 'Merge-Commit erstellen — alle Commits behalten',
+  'git.mergeMethod.squash': 'Squash und Merge — zu einem Commit zusammenfassen',
+  'git.mergeMethod.rebase': 'Rebase und Merge — Commits ohne Merge-Commit neu anwenden',
   'git.mergeRequestConfirmTitle': '{request} mergen?',
   'git.mergeRequestConfirmMessage': 'Dadurch wird die offene {request} in ihren Zielbranch gemergt.',
   'git.mergeRequestSuccess': '{request} gemergt',
@@ -1914,6 +1918,7 @@ export default {
   'diff.reviewSubmitted': 'Review an den Agenten gesendet',
   'diff.reviewSubmitFailed': 'Review konnte nicht gesendet werden: {error}',
   'diff.scopeBranch': 'Branch',
+  'diff.workingTree': 'Arbeitsverzeichnis',
   'diff.scopeUnpushed': 'Ungepusht',
   'diff.noChanges': 'Keine Änderungen',
   'diff.searchFiles': 'Dateien suchen…',
@@ -1959,7 +1964,7 @@ export default {
   'diffViewer.fileTreeShow': 'Dateibaum einblenden',
   'diffViewer.fileTreeHide': 'Dateibaum ausblenden',
   'diffViewer.closeConfirm.saveAndClose': 'Speichern und schließen',
-  'diffViewer.agentRunning': 'Agent läuft — stoppe ihn zum Bearbeiten',
+  'diffViewer.agentRunning': 'Ein Agent arbeitet. Stoppen Sie ihn, um die Bearbeitung zu aktivieren.',
   'diffViewer.fileDeleted': 'Datei gelöscht',
 
   // Notifications
@@ -2615,6 +2620,10 @@ export default {
   'tours.home.activity.description':
     'Unten in der linken Seitenleiste findest du Fragen, Sitzungsenden, Fehler und PR-Änderungen seit deinem letzten Besuch.',
   'progress.title': 'Aktivitäten',
+  'progress.unmeasured': 'Fortschritt nicht beziffert',
+  'progress.stale': 'Keine Aktualisierung seit {minutes} Min.',
+  'progress.staleHint':
+    'Kein neuer Fortschrittsbericht empfangen. Dies bedeutet nicht, dass die Arbeit gestoppt wurde.',
   'progress.status.running': 'Läuft',
   'progress.status.succeeded': 'Erfolgreich',
   'progress.status.failed': 'Fehlgeschlagen',

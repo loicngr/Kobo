@@ -234,3 +234,32 @@ it('does not take focus from outside the panel when overflow disappears', async 
   expect(document.activeElement).toBe(outside)
   expect(wrapper.emitted('focusComposer')).toBeUndefined()
 })
+
+it('distinguishes unmeasured progress and stale reports, then refreshes on an update', async () => {
+  const wrapper = panel('fr')
+  const store = useProgressBarsStore()
+  store.apply(bar('1'))
+  await flushPromises()
+  expect(wrapper.text()).toContain('Progression non chiffrée')
+  await vi.advanceTimersByTimeAsync(120_000)
+  expect(wrapper.text()).toContain('Aucune mise à jour depuis 2 min')
+  const calls = vi.mocked(apiFetch).mock.calls.length
+  store.apply(
+    bar('1', {
+      revision: 2,
+      sequence: 1,
+      step: 'Tests terminés, documentation en cours',
+      updatedAt: new Date().toISOString(),
+      current: 3,
+      total: 4,
+    }),
+  )
+  await flushPromises()
+  expect(wrapper.text()).toContain('Tests terminés, documentation en cours')
+  expect(wrapper.text()).toContain('3 / 4')
+  expect(wrapper.text()).not.toContain('Aucune mise à jour')
+  expect(wrapper.text()).not.toContain('Progression non chiffrée')
+  expect(vi.mocked(apiFetch).mock.calls.length).toBe(calls)
+  wrapper.unmount()
+  expect(vi.getTimerCount()).toBe(0)
+})

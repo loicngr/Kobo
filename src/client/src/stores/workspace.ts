@@ -6,6 +6,7 @@ import { apiFetch, apiFetchOk, apiFetchResponse, apiFetchResponseForStatus, apiR
 import { isAbortError } from 'src/utils/latest-request'
 import type { AutoLoopFinalReviewStatus, AutoLoopReviewConfiguration } from '../../../shared/auto-loop-review'
 import type { AutoLoopRuntime, QueuedAutoLoopMessage } from '../../../shared/auto-loop-types'
+import type { MergeMethod } from '../../../shared/forge-merge'
 import { isSubagentTask } from '../../../shared/subagent-classification'
 import type { WorkflowPolicy } from '../../../shared/workflow-policy'
 import type { ProviderId, UsageSnapshot } from '../types/usage'
@@ -259,6 +260,7 @@ export interface ForgeInfo {
     canCreatePr: boolean
     canChangePrBase: boolean
     canMergeRequest: boolean
+    mergeMethods?: readonly MergeMethod[]
     canDeleteRemoteBranch: boolean
     requestTermShort: 'PR' | 'MR'
   }

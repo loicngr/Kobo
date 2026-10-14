@@ -1295,7 +1295,7 @@ export default {
     'Clique sur le titre pour choisir une session, en créer une, la renommer ou retrouver son identifiant.',
   'tours.workspace.actions.title': 'Actions du workspace',
   'tours.workspace.actions.description':
-    'Le menu ⋯ regroupe la vue côte à côte, la palette de commandes, le panneau latéral et la visite guidée.',
+    'Le menu ⋯ regroupe la vue côte à côte, la palette de commandes et la visite guidée. Le bouton juste à sa droite ouvre ou masque le panneau latéral.',
   'tours.workspace.title': 'Dans un workspace',
   'tours.workspace.chat.title': 'Conversation',
   'tours.workspace.chat.description':
@@ -1309,7 +1309,8 @@ export default {
   'tours.workspace.status.title': 'Statut',
   'tours.workspace.status.description': "L'état de la session en cours ; arrêtez-la ici si besoin.",
   'tours.workspace.git.title': 'Git',
-  'tours.workspace.git.description': 'Commits, diff, push, rebase et la PR de cette branche.',
+  'tours.workspace.git.description':
+    'Commits, diff, push, rebase et la PR de cette branche. Le diff s’ouvre en ligne. L’édition est désactivée pendant le travail d’un agent ; Non poussé inclut les commits locaux et les fichiers non commités.',
   'tours.workspace.tasks.title': 'Tâches',
   'tours.workspace.tasks.description': "Ce que l'agent prévoit de faire, et les critères d'acceptation à respecter.",
   'tours.workspace.timeline.title': 'Chronologie',
@@ -1336,7 +1337,7 @@ export default {
     'Résultat de la CI, décision de review et reviewers, rafraîchis toutes les 30 secondes.',
   'tours.gitPr.actions.title': 'Actions Git',
   'tours.gitPr.actions.description':
-    "Push, pull, rebase ou changement de branche de base. Pendant un conflit, un bouton laisse l'agent le résoudre.",
+    "Push, pull, rebase ou changement de branche de base. Pendant un conflit, un bouton laisse l'agent le résoudre. Pour une PR GitHub, choisissez merge commit, squash ou rebase dans la confirmation de fusion.",
   'tours.gitPr.attention.title': "Badges d'attention",
   'tours.gitPr.attention.description':
     'La carte affiche une CI en échec, des changements demandés ou une PR prête à merger.',
@@ -1661,6 +1662,9 @@ export default {
   'git.changePrBaseSuccess': 'Branche cible de la {request} mise à jour',
   'git.changePrBaseFailed': 'Impossible de changer la branche cible de la {request}',
   'git.mergeRequest': 'Fusionner la {request}',
+  'git.mergeMethod.merge': 'Merge commit — conserver tous les commits',
+  'git.mergeMethod.squash': 'Squash and merge — regrouper en un seul commit',
+  'git.mergeMethod.rebase': 'Rebase and merge — rejouer les commits sans commit de fusion',
   'git.mergeRequestConfirmTitle': 'Fusionner la {request} ?',
   'git.mergeRequestConfirmMessage': 'Cette action fusionne la {request} ouverte dans sa branche cible.',
   'git.mergeRequestSuccess': '{request} fusionnée',
@@ -1912,6 +1916,7 @@ export default {
   'diff.reviewSubmitted': "Revue soumise à l'agent",
   'diff.reviewSubmitFailed': 'Échec de la soumission : {error}',
   'diff.scopeBranch': 'Branche',
+  'diff.workingTree': 'Copie de travail',
   'diff.scopeUnpushed': 'Non pushé',
   'diff.noChanges': 'Aucun changement',
   'diff.searchFiles': 'Rechercher des fichiers…',
@@ -1957,7 +1962,7 @@ export default {
   'diffViewer.fileTreeShow': 'Afficher l’arbre des fichiers',
   'diffViewer.fileTreeHide': 'Masquer l’arbre des fichiers',
   'diffViewer.closeConfirm.saveAndClose': 'Enregistrer et fermer',
-  'diffViewer.agentRunning': 'L’agent tourne — arrête-le pour éditer',
+  'diffViewer.agentRunning': 'Un agent travaille. Arrêtez-le pour activer l’édition.',
   'diffViewer.fileDeleted': 'Fichier supprimé',
 
   // Notifications
@@ -2610,6 +2615,9 @@ export default {
   'tours.home.activity.description':
     'En bas du drawer gauche, retrouve les questions, fins de session, erreurs et changements de PR survenus pendant ton absence.',
   'progress.title': 'Activités',
+  'progress.unmeasured': 'Progression non chiffrée',
+  'progress.stale': 'Aucune mise à jour depuis {minutes} min',
+  'progress.staleHint': 'Aucun nouveau point d’avancement reçu. Cela ne signifie pas que le travail est arrêté.',
   'progress.status.running': 'En cours',
   'progress.status.succeeded': 'Réussie',
   'progress.status.failed': 'Échec',

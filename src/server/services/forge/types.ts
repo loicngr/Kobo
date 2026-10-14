@@ -1,3 +1,4 @@
+import type { MergeMethod } from '../../../shared/forge-merge.js'
 // src/server/services/forge/types.ts
 
 /** Known forge identifiers. `none` means "no supported forge / PR features off". */
@@ -73,6 +74,8 @@ export interface ForgeCapabilities {
   canCreatePr: boolean
   canChangePrBase: boolean
   canMergeRequest: boolean
+  /** Explicit strategies supported by the integration, subject to repository policy. */
+  mergeMethods?: readonly MergeMethod[]
   canDeleteRemoteBranch: boolean
   canListPullRequests: boolean
   /** Short request term for UI labels. */
@@ -158,7 +161,7 @@ export interface ForgeProvider {
   getPrStatus(repoPath: string, branch: string): Promise<PrSnapshot | null>
   createPr(repoPath: string, opts: CreatePrOptions): Promise<{ url: string; number: number }>
   changePrBase(repoPath: string, base: string): Promise<void>
-  mergeRequest(repoPath: string, number: number): Promise<void>
+  mergeRequest(repoPath: string, number: number, method?: MergeMethod): Promise<void>
   deleteRemoteBranch(repoPath: string, branch: string): Promise<void>
   /** List open PRs/MRs, newest first. The cursor is provider-defined and opaque. */
   listPullRequests(repoPath: string, opts: ListPullRequestsOptions): Promise<ListPullRequestsResult>

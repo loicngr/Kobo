@@ -93,13 +93,22 @@
             <q-item v-close-popup clickable @click="commandPaletteQuery = ''; commandPaletteOpen = true">
               <q-item-section>{{ $t('workspacePage.commandPaletteHint') }}</q-item-section>
             </q-item>
-            <q-item v-close-popup clickable @click="layout.toggleRight()">
-              <q-item-section>{{ $t('layout.togglePanel') }}</q-item-section>
-            </q-item>
             <q-item v-close-popup clickable @click="replayWorkspaceTour">
               <q-item-section>{{ $t('help.replayThis') }}</q-item-section>
             </q-item>
           </q-list></q-menu>
+        </q-btn>
+        <q-btn
+          flat
+          dense
+          round
+          size="sm"
+          :aria-label="$t('layout.togglePanel')"
+          :aria-expanded="layout.rightDrawerOpen"
+          @click="layout.toggleRight()"
+        >
+          <q-icon :name="layout.rightDrawerOpen ? 'menu_open' : 'menu'" class="flip-horizontal" />
+          <q-tooltip>{{ $t('layout.togglePanel') }}</q-tooltip>
         </q-btn>
       </template>
       <template v-else>

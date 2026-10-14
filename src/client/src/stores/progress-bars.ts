@@ -147,6 +147,7 @@ export const useProgressBarsStore = defineStore('progress-bars', () => {
     pendingDismissals,
     error,
     visible,
+    serverNow: () => Date.now() + clockOffset.value,
     selectScope,
     apply,
     refresh,

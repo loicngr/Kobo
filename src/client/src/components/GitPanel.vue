@@ -771,6 +771,7 @@ import { getActionBlocker } from 'src/utils/action-blocker'
 import { apiFetchResponse, apiFetchResponseForStatus, apiResponseError } from 'src/utils/api'
 import { defineAsyncComponent } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { isMergeMethod } from '../../../shared/forge-merge'
 import { useWorkingTreeFiles } from '../composables/use-working-tree-files'
 
 const DiffViewer = defineAsyncComponent(() => import('./DiffViewer.vue'))
@@ -1871,33 +1872,56 @@ function handleChangePrBase() {
 
 function handleMergeRequest() {
   if (!props.workspace || !canMergeRequest.value) return
+  const workspace = props.workspace
+  const methods = forge.value.capabilities.mergeMethods
+  const canDeleteBranch = forge.value.capabilities.canDeleteRemoteBranch
   const request = forge.value.capabilities.requestTermShort
   $q.dialog({
     title: t('git.mergeRequestConfirmTitle', { request }),
     message: t('git.mergeRequestConfirmMessage', { request }),
+    ...(methods?.length
+      ? {
+          options: {
+            type: 'radio' as const,
+            model: methods[0],
+            items: methods.map((method) => ({ label: t(`git.mergeMethod.${method}`), value: method })),
+          },
+        }
+      : {}),
     dark: true,
     cancel: { flat: true, label: t('common.cancel'), color: 'kobo-2' },
     ok: { flat: true, label: t('git.mergeRequest', { request }), color: 'deep-orange-5' },
-  }).onOk(async () => {
-    if (!props.workspace) return
+  }).onOk(async (method: unknown) => {
+    if (props.workspace?.id !== workspace.id || !canMergeRequest.value) return
+    if (methods?.length && (!isMergeMethod(method) || !methods.includes(method))) return
     mergingRequest.value = true
     try {
-      const res = await apiFetchResponse(`/api/workspaces/${props.workspace.id}/merge-pr`, { method: 'POST' })
+      const res = await apiFetchResponse(`/api/workspaces/${workspace.id}/merge-pr`, {
+        method: 'POST',
+        ...(methods?.length
+          ? {
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ method }),
+            }
+          : {}),
+      })
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
         throw new Error(data.error ?? 'Failed')
       }
       const data = (await res.json()) as { merged: boolean; branch: string }
       $q.notify({ type: 'positive', message: t('git.mergeRequestSuccess', { request }), position: 'top' })
-      await Promise.allSettled([loadGitStats({ freshFetch: true }), store.refreshPrSnapshot(props.workspace.id)])
-      if (data.merged && forge.value.capabilities.canDeleteRemoteBranch) {
+      await Promise.allSettled([loadGitStats({ freshFetch: true }), store.refreshPrSnapshot(workspace.id)])
+      if (data.merged && canDeleteBranch && props.workspace?.id === workspace.id) {
         $q.dialog({
           title: t('git.deleteRemoteBranchTitle'),
           message: t('git.deleteRemoteBranchMessage', { branch: data.branch }),
           dark: true,
           cancel: { flat: true, label: t('common.cancel'), color: 'kobo-2' },
           ok: { flat: true, label: t('git.deleteRemoteBranch'), color: 'negative' },
-        }).onOk(() => void deleteRemoteBranch(data.branch))
+        }).onOk(() => {
+          if (props.workspace?.id === workspace.id) void deleteRemoteBranch(data.branch)
+        })
       }
     } catch (e) {
       const message = e instanceof Error ? e.message : t('git.mergeRequestFailed', { request })
