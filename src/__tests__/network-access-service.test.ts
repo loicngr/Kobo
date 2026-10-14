@@ -1,7 +1,6 @@
 import os from 'node:os'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  authorizeWsUpgrade,
   evaluateNetworkAccess,
   generateToken,
   getLanHostnames,
@@ -14,6 +13,7 @@ import {
   resolveDevClientOrigin,
   resolveNetworkAccessEnvOverrides,
   resolveProxyHostname,
+  resolveProxyOrigin,
   tokenMatches,
 } from '../server/services/network-access-service.js'
 
@@ -122,43 +122,6 @@ describe('evaluateNetworkAccess', () => {
   })
 })
 
-describe('authorizeWsUpgrade', () => {
-  it('authorizes loopback without token', () => {
-    expect(authorizeWsUpgrade({ address: '::1', rawUrl: '/ws', enabled: true, expectedToken: 'secret' })).toBe(true)
-  })
-  it('parses ?token= for non-loopback', () => {
-    expect(
-      authorizeWsUpgrade({ address: '10.0.0.5', rawUrl: '/ws?token=secret', enabled: true, expectedToken: 'secret' }),
-    ).toBe(true)
-    expect(
-      authorizeWsUpgrade({ address: '10.0.0.5', rawUrl: '/ws?token=bad', enabled: true, expectedToken: 'secret' }),
-    ).toBe(false)
-    expect(authorizeWsUpgrade({ address: '10.0.0.5', rawUrl: '/ws', enabled: true, expectedToken: 'secret' })).toBe(
-      false,
-    )
-  })
-  it('trustLoopback=false: loopback WS upgrade needs the token', () => {
-    expect(
-      authorizeWsUpgrade({
-        address: '::1',
-        rawUrl: '/ws',
-        enabled: true,
-        expectedToken: 'secret',
-        trustLoopback: false,
-      }),
-    ).toBe(false)
-    expect(
-      authorizeWsUpgrade({
-        address: '::1',
-        rawUrl: '/ws?token=secret',
-        enabled: true,
-        expectedToken: 'secret',
-        trustLoopback: false,
-      }),
-    ).toBe(true)
-  })
-})
-
 describe('resolveNetworkAccessEnvOverrides', () => {
   it('returns {} when both env vars are unset', () => {
     expect(resolveNetworkAccessEnvOverrides({})).toEqual({})
@@ -220,13 +183,11 @@ describe('isAllowedRequestHost', () => {
     expect(isAllowedRequestHost({ enabled: true, lanHostnames, host: '192.168.1.99:3000' })).toBe(false)
   })
 
-  it('accepts any host behind a reverse proxy, where the token gate owns the boundary', () => {
-    expect(isAllowedRequestHost({ ...base, host: 'kobo.example.com', behindProxy: true })).toBe(true)
+  it('fails closed for public hosts when the proxy hostname is missing', () => {
+    expect(isAllowedRequestHost({ ...base, host: 'kobo.example.com', behindProxy: true })).toBe(false)
   })
 
   it('enforces the declared proxy hostname when the operator supplies one', () => {
-    // Without a declared hostname we cannot tell the operator's domain from an
-    // attacker's, so proxy mode accepts anything. Declaring it closes that.
     const proxied = { ...base, behindProxy: true, proxyHostname: 'kobo.example.com' }
     expect(isAllowedRequestHost({ ...proxied, host: 'kobo.example.com' })).toBe(true)
     expect(isAllowedRequestHost({ ...proxied, host: 'kobo.example.com:8443' })).toBe(true)
@@ -284,9 +245,9 @@ describe('isAllowedOrigin', () => {
     expect(isAllowedOrigin({ origin: 'http://localhost:5173', requestHost: 'localhost:3300', devOrigin })).toBe(false)
   })
 
-  it('behind a proxy, enforces the declared hostname and accepts anything without one', () => {
+  it('behind a proxy, enforces the declared hostname and refuses an undeclared proxy', () => {
     expect(isAllowedOrigin({ origin: 'https://evil.com', requestHost: 'kobo.example.com', behindProxy: true })).toBe(
-      true,
+      false,
     )
     const declared = { behindProxy: true, proxyHostname: 'kobo.example.com' }
     expect(isAllowedOrigin({ ...declared, origin: 'https://kobo.example.com', requestHost: 'kobo.example.com' })).toBe(
@@ -305,10 +266,32 @@ describe('resolveProxyHostname', () => {
     expect(resolveProxyHostname({ KOBO_NETWORK_ACCESS_PROXY_HOST: 'kobo.example.com:8443' })).toBe('kobo.example.com')
   })
 
-  it('returns null when unset, empty or unparseable, keeping today behaviour', () => {
+  it('returns null when unset, empty or unparseable', () => {
     expect(resolveProxyHostname({})).toBeNull()
     expect(resolveProxyHostname({ KOBO_NETWORK_ACCESS_PROXY_HOST: '   ' })).toBeNull()
     expect(resolveProxyHostname({ KOBO_NETWORK_ACCESS_PROXY_HOST: 'ht tp://x' })).toBeNull()
+  })
+})
+
+describe('resolveProxyOrigin', () => {
+  it('defaults bare hostnames to HTTPS and preserves explicitly declared scheme and port', () => {
+    expect(resolveProxyOrigin({ KOBO_NETWORK_ACCESS_PROXY_HOST: 'kobo.example.com' })).toBe('https://kobo.example.com')
+    expect(resolveProxyOrigin({ KOBO_NETWORK_ACCESS_PROXY_HOST: 'kobo.example.com:8443' })).toBe(
+      'https://kobo.example.com:8443',
+    )
+    expect(resolveProxyOrigin({ KOBO_NETWORK_ACCESS_PROXY_HOST: 'http://kobo.localhost' })).toBe(
+      'http://kobo.localhost',
+    )
+  })
+
+  it.each([
+    'https://user:secret@kobo.example.com',
+    'https://kobo.example.com/path',
+    'https://kobo.example.com?token=secret',
+    'ftp://kobo.example.com',
+  ])('rejects invalid public origin configuration %s', (value) => {
+    expect(resolveProxyHostname({ KOBO_NETWORK_ACCESS_PROXY_HOST: value })).toBeNull()
+    expect(resolveProxyOrigin({ KOBO_NETWORK_ACCESS_PROXY_HOST: value })).toBeNull()
   })
 })
 
@@ -326,7 +309,7 @@ describe('isLocalRequestHost', () => {
     expect(isLocalRequestHost('127.0.0.1')).toBe(true)
     expect(isLocalRequestHost('[::1]:3000')).toBe(true)
     expect(isLocalRequestHost('[::ffff:127.0.0.1]:3000')).toBe(true)
-    expect(isLocalRequestHost('http://localhost:8080')).toBe(true)
+    expect(isLocalRequestHost('http://localhost:8080')).toBe(false)
   })
 
   it('rejects anything else, including undefined', () => {
@@ -359,5 +342,34 @@ describe('getLanHostnames / getLanUrls', () => {
     vi.spyOn(os, 'networkInterfaces').mockReturnValue(sample as never)
 
     expect(getLanUrls(3000)).toEqual(['http://192.168.1.20:3000'])
+  })
+})
+
+describe('strict header syntax and origin isolation', () => {
+  it.each(['localhost/path', 'localhost?token=secret', 'user@localhost', 'localhost#fragment', 'http://localhost'])(
+    'rejects malformed Host %s',
+    (host) => {
+      expect(isAllowedRequestHost({ host, enabled: false, lanHostnames: [] })).toBe(false)
+    },
+  )
+  it.each([
+    'https://localhost:3000',
+    'http://localhost:3000/path',
+    'http://user@localhost:3000',
+    'http://localhost:3000?token=x',
+    'ftp://localhost:3000',
+  ])('rejects invalid or different-scheme origins %s', (origin) => {
+    expect(isAllowedOrigin({ origin, requestHost: 'localhost:3000' })).toBe(false)
+  })
+  it('compares the exact configured proxy scheme and port', () => {
+    const params = {
+      behindProxy: true,
+      proxyHostname: 'kobo.example.com',
+      proxyOrigin: 'https://kobo.example.com:8443',
+      requestHost: 'kobo.example.com:8443',
+    }
+    expect(isAllowedOrigin({ ...params, origin: 'https://kobo.example.com:8443' })).toBe(true)
+    expect(isAllowedOrigin({ ...params, origin: 'https://kobo.example.com' })).toBe(false)
+    expect(isAllowedOrigin({ ...params, origin: 'http://kobo.example.com:8443' })).toBe(false)
   })
 })

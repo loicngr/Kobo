@@ -12,9 +12,8 @@ import { type GlobalSettings, useSettingsStore } from 'src/stores/settings'
 import { useUpdateStore } from 'src/stores/update'
 import type { AgentEvent } from 'src/types/agent-event'
 import type { ProviderId, UsageSnapshot } from 'src/types/usage'
-import { appendTokenToWsUrl, getToken } from 'src/utils/auth-token'
+import { authenticatedWebSocketUrl } from 'src/utils/auth-token'
 import { hookSender, parseHookEventType } from 'src/utils/hook-events'
-import { openNetworkLogin } from 'src/utils/network-login-bus'
 import { resolveNotificationSoundOverride } from 'src/utils/notification-sounds'
 import { DEFAULT_TOAST_TIMEOUT_MS } from 'src/utils/notification-timeout'
 import { notify } from 'src/utils/notifications'
@@ -125,6 +124,8 @@ function prToastActions(workspaceId: string, prUrl?: string): Array<Record<strin
 
 // Module-level variables — must NOT be reactive (Vue Proxy breaks WebSocket)
 let _ws: WebSocket | null = null
+let _connectionEpoch = 0
+let _connecting = false
 let _reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let _reconnectAttempt = 0
 let _shouldReconnect = false
@@ -503,8 +504,8 @@ export const useWebSocketStore = defineStore('websocket', {
   }),
 
   actions: {
-    connect() {
-      if (_ws) return
+    async connect() {
+      if (_ws || _connecting) return
       _shouldReconnect = true
       if (!_networkListenersBound) {
         _networkListenersBound = true
@@ -512,6 +513,8 @@ export const useWebSocketStore = defineStore('websocket', {
           if (_shouldReconnect) this.connect()
         })
         window.addEventListener('offline', () => {
+          _connectionEpoch++
+          _connecting = false
           this.connected = false
           this.reconnecting = _shouldReconnect
           this.pendingSyncRequests = []
@@ -534,8 +537,20 @@ export const useWebSocketStore = defineStore('websocket', {
         return
       }
 
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-      const url = appendTokenToWsUrl(`${protocol}//${window.location.host}/ws`, getToken())
+      const epoch = ++_connectionEpoch
+      _connecting = true
+      let url: string
+      try {
+        url = await authenticatedWebSocketUrl('/ws')
+      } catch {
+        if (epoch === _connectionEpoch) {
+          _connecting = false
+          if (_shouldReconnect) this._scheduleReconnect()
+        }
+        return
+      }
+      if (epoch !== _connectionEpoch || !_shouldReconnect || !navigator.onLine) return
+      _connecting = false
 
       const ws = new WebSocket(url)
       _ws = ws
@@ -630,6 +645,8 @@ export const useWebSocketStore = defineStore('websocket', {
     },
 
     disconnect() {
+      _connectionEpoch++
+      _connecting = false
       chatDeliveries.disconnect(t('network.login.unreachable'))
       _shouldReconnect = false
       this.pendingSyncRequests = []
@@ -779,16 +796,6 @@ export const useWebSocketStore = defineStore('websocket', {
       _reconnectAttempt++
       this.reconnecting = true
       this.reconnectAttempt = _reconnectAttempt
-
-      // The browser surfaces a rejected WS upgrade (401 from the network-access
-      // guard) only as a generic close → endless silent reconnect. After a few
-      // consecutive failures while a token is stored, the token is most likely
-      // stale/invalid: surface the login dialog so realtime can recover, mirroring
-      // the HTTP 401 path. Gated on getToken() so a plain localhost server-down
-      // doesn't pop a token prompt. Fires once per failure streak (reset on open).
-      if (_reconnectAttempt === 4 && getToken()) {
-        openNetworkLogin()
-      }
 
       _reconnectTimer = setTimeout(() => {
         _reconnectTimer = null

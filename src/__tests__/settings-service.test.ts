@@ -7,6 +7,7 @@ import {
   LEGACY_AGNOSTIC_REVIEW_TEMPLATE,
   LEGACY_CI_FIX_PROMPT_TEMPLATE,
 } from '../server/services/legacy-public-prompts.js'
+import * as networkSessions from '../server/services/network-session-service.js'
 import type { GlobalSettings, ProjectSettings, Settings } from '../server/services/settings-service.js'
 import {
   _setSettingsPath,
@@ -765,6 +766,58 @@ describe('atomic write', () => {
 })
 
 describe('automatic settings backups', () => {
+  it('revokes live credentials only after a persisted network policy change', () => {
+    const revoke = vi.spyOn(networkSessions, 'revokeNetworkSessions')
+    try {
+      const initial = getGlobalSettings()
+      updateNetworkAccessSettings({ networkAccessEnabled: initial.networkAccessEnabled })
+      expect(revoke).not.toHaveBeenCalled()
+      updateNetworkAccessSettings({ networkAccessToken: 'rotated-token' })
+      expect(revoke).toHaveBeenCalledTimes(1)
+      updateNetworkAccessSettings({ networkAccessBehindProxy: !initial.networkAccessBehindProxy })
+      expect(revoke).toHaveBeenCalledTimes(2)
+      updateNetworkAccessSettings({ networkAccessEnabled: !initial.networkAccessEnabled })
+      expect(revoke).toHaveBeenCalledTimes(3)
+    } finally {
+      revoke.mockRestore()
+    }
+  })
+
+  it('preserves the previous policy when writing settings fails', () => {
+    const initial = { ...getGlobalSettings() }
+    const revoke = vi.spyOn(networkSessions, 'revokeNetworkSessions')
+    const rename = vi.spyOn(fs, 'renameSync').mockImplementation(() => {
+      throw new Error('write failed')
+    })
+    try {
+      expect(() => updateNetworkAccessSettings({ networkAccessToken: 'rejected-token' })).toThrow('write failed')
+      expect(revoke).not.toHaveBeenCalled()
+      expect(getGlobalSettings().networkAccessToken).toBe(initial.networkAccessToken)
+    } finally {
+      revoke.mockRestore()
+      rename.mockRestore()
+    }
+  })
+
+  it('protects settings, pre-existing temporary files and backups with private permissions', () => {
+    getSettings()
+    fs.chmodSync(tmpDir, 0o755)
+    fs.chmodSync(settingsPath, 0o644)
+    const oldBackup = path.join(tmpDir, 'settings.json.backup-legacy')
+    fs.writeFileSync(oldBackup, '{"secret":"legacy"}', { mode: 0o644 })
+    fs.writeFileSync(`${settingsPath}.tmp`, '', { mode: 0o644 })
+    _setSettingsPath(settingsPath)
+    getSettings()
+    expect(fs.statSync(tmpDir).mode & 0o777).toBe(0o700)
+    expect(fs.statSync(settingsPath).mode & 0o777).toBe(0o600)
+    expect(fs.statSync(oldBackup).mode & 0o777).toBe(0o600)
+    expect(fs.statSync(`${settingsPath}.tmp`).mode & 0o777).toBe(0o600)
+    updateNetworkAccessSettings({ networkAccessToken: 'new-private-token' })
+    for (const filename of fs.readdirSync(tmpDir).filter((name) => name.startsWith('settings.json'))) {
+      expect(fs.statSync(path.join(tmpDir, filename)).mode & 0o777).toBe(0o600)
+    }
+  })
+
   it('creates a backup before updateGlobalSettings writes', () => {
     getSettings()
     const before = fs.readFileSync(settingsPath, 'utf-8')

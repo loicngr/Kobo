@@ -44,7 +44,7 @@ export function formatStartupBanner(options: StartupOptions): string {
   ]
   if (options.networkEnabled) {
     for (const lanUrl of options.lanUrls ?? []) lines.push(`  LAN: ${lanUrl}`)
-    if (options.token) lines.push(`  Token: ${options.token}`)
+    lines.push('  Authentication required; retrieve the token from local settings.')
   }
 
   const release = parseChangelog(options.changelog ?? '').find((entry) => entry.version === options.version)

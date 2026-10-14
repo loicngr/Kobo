@@ -307,6 +307,26 @@ export function resolveMemoryScope(input: MemoryScope): ResolvedMemoryScope {
   return materializeScope(input)
 }
 
+/** Resolve only the workspace-owned scope, without creating or exposing ancestors. */
+export function resolveWorkspaceMemoryScope(workspaceId: string): ResolvedMemoryScope {
+  return materializeScope({ level: 'workspace', workspaceId })
+}
+
+/** Catalogue for a caller whose authority is explicitly restricted to these workspaces. */
+export function listWorkspaceMemoryScopes(
+  workspaceIds: readonly string[],
+  options: { cursor?: string; limit?: number } = {},
+): { items: ResolvedMemoryScope[]; nextCursor?: string } {
+  const limit = requireBoundedPage(options.limit)
+  const offset = requireCursor(options.cursor)
+  const exists = getDb().prepare('SELECT id FROM workspaces WHERE id = ?')
+  const existing = [...new Set(workspaceIds)].sort().filter((id) => exists.get(id))
+  return {
+    items: existing.slice(offset, offset + limit).map(resolveWorkspaceMemoryScope),
+    ...(offset + limit < existing.length ? { nextCursor: String(offset + limit) } : {}),
+  }
+}
+
 export interface ListMemoryScopesOptions {
   workspaceId?: string
   actor?: MemoryActor

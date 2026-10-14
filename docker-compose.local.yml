@@ -14,8 +14,8 @@
 #      mount source, which breaks auth in a confusing way.
 #
 # Run:   docker compose -f docker-compose.local.yml up -d
-# Token: docker compose -f docker-compose.local.yml logs kobo | grep Token
-# Open:  http://localhost:3000/?token=<token from above>
+# Token: retrieve from private settings; see CONFIGURATION.md#token--login-flow.
+# Open:  http://localhost:3000/ and use the login dialog if prompted.
 #        (KOBO_NETWORK_ACCESS_ENABLED below makes Kōbō bind 0.0.0.0 inside
 #        the container, otherwise the published port connects to nothing —
 #        Docker's port-forwarded connection doesn't look like loopback from

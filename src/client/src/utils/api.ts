@@ -4,7 +4,7 @@ import i18n from 'src/i18n'
  * The single network entry point for the client.
  *
  * It sits ON TOP of the `window.fetch` override installed by
- * `boot/network-auth.ts` — token injection and the 401 login prompt keep
+ * `boot/network-auth.ts` — browser sessions and the 401 login prompt keep
  * working untouched. What it adds is what raw call sites lacked: a
  * request deadline, cancellation, and above all the SERVER's error message.
  * The backend answers `{ error: "<descriptive message>" }` on every failure;

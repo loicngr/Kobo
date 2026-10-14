@@ -1,4 +1,24 @@
 export default {
+  'settings.mcp.failed': 'La operación ha fallado',
+  'settings.mcp.write': 'Escritura / acción',
+  'settings.mcp.readOnly': 'Lectura',
+  'settings.mcp.expiryDays': '{count} días',
+  'settings.mcp.revoke': 'Revocar',
+  'settings.mcp.noExpiry': 'Sin caducidad',
+  'settings.mcp.hideKey': 'Ocultar clave',
+  'settings.mcp.copyKey': 'Copiar clave',
+  'settings.mcp.key': 'Clave MCP',
+  'settings.mcp.oneTimeKey': 'Copia esta clave ahora: no se volverá a mostrar después de salir de esta página.',
+  'settings.mcp.createKey': 'Crear clave',
+  'settings.mcp.expiry': 'Caducidad',
+  'settings.mcp.scopeHint':
+    'Solo lectura por defecto. Seleccionar workspaces desactiva las herramientas globales y limita la memoria a esos workspaces. Todos los workspaces permite también memoria global y de proyecto si se conceden las herramientas de memoria.',
+  'settings.mcp.tools': 'Herramientas permitidas',
+  'settings.mcp.workspaces': 'Workspaces permitidos',
+  'settings.mcp.allWorkspaces': 'Todos los workspaces (actuales y futuros)',
+  'settings.mcp.keyName': 'Nombre de la clave',
+  'settings.mcp.scopedHint':
+    'Cada cliente usa su propia clave MCP, revocable de forma independiente. El token de administrador ya no permite acceder a MCP.',
   'groupMessage.title': 'Mensaje grupal',
   'groupMessage.description': 'Enviar la misma instrucción a varios workspaces.',
   'groupMessage.devServerRunning': 'Solo workspaces con un servidor de desarrollo en ejecución',
@@ -1662,6 +1682,14 @@ export default {
   'git.mergeMethod.rebase': 'Rebase y fusión — reaplicar los commits sin commit de fusión',
   'git.mergeRequestConfirmTitle': '¿Fusionar {request}?',
   'git.mergeRequestConfirmMessage': 'Esto fusionará la {request} abierta en su rama de destino.',
+  'git.mergePolicyTitle': 'Fusión bloqueada por GitHub',
+  'git.mergePolicyMessage':
+    'Las reglas de protección de la rama impiden la fusión. Puedes conservar las protecciones o intentar una fusión como administrador (--admin). Esto omite las comprobaciones y revisiones obligatorias si tus permisos de GitHub lo permiten.',
+  'git.mergeKeepProtections': 'Conservar protecciones',
+  'git.mergeAsAdmin': 'Fusionar como administrador',
+  'git.mergeAdminFailed':
+    'No se pudo confirmar la fusión como administrador. Comprueba el estado de la PR, tus permisos y las reglas del repositorio.',
+  'git.mergeRequestPending': 'Solicitud enviada. La fusión de esta {request} aún no está confirmada.',
   'git.mergeRequestSuccess': '{request} fusionada',
   'git.mergeRequestFailed': 'No se pudo fusionar {request}',
   'git.deleteRemoteBranch': 'Eliminar rama remota',
@@ -2159,11 +2187,10 @@ export default {
   'settings.mcp.stdio': 'Stdio local',
   'settings.mcp.copyUrl': 'Copiar URL',
   'settings.mcp.copyConfig': 'Copiar configuración',
-  'settings.mcp.copyWithToken': 'Copiar con token',
+  'settings.mcp.copyWithToken': 'Copiar con la nueva clave',
   'settings.mcp.genericFormat':
     'Estos ejemplos usan el formato genérico mcpServers. Adapta el contenedor a tu cliente MCP. Las vistas previas muestran un marcador para el token.',
-  'settings.mcp.tokenUnavailable':
-    'No hay ningún token disponible. Activa el acceso de red antes de copiar una configuración autenticada.',
+  'settings.mcp.tokenUnavailable': 'Crea una clave MCP dedicada para copiar una configuración autenticada.',
   'settings.mcp.stdioUnavailable':
     'El punto de entrada stdio no está disponible en esta instalación. Usa HTTP o compila Kōbō primero.',
   'settings.mcp.copyFailed': 'No se pudo copiar al portapapeles.',

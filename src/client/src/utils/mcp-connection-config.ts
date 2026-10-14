@@ -18,7 +18,7 @@ export interface McpEndpoint {
 
 /** Browser origin is the page the user actually opened; never a forwarded header. */
 export function getMcpEndpoints(info: McpConnectionInfo, browserOrigin: string): McpEndpoint[] {
-  const endpoints: McpEndpoint[] = [{ url: info.localUrl, kind: 'local', requiresToken: info.localRequiresToken }]
+  const endpoints: McpEndpoint[] = [{ url: info.localUrl, kind: 'local', requiresToken: true }]
   if (!info.networkEnabled) return endpoints
   endpoints.push(...info.lanUrls.map((url) => ({ url, kind: 'remote' as const, requiresToken: true })))
   if (info.behindProxy) {
@@ -47,7 +47,7 @@ export function formatMcpConfig(
   token?: string,
 ): string {
   const name = clientName.trim() ? normalizeClientName(clientName) : ''
-  const credential = token || '<KOBO_NETWORK_TOKEN>'
+  const credential = token || '<KOBO_MCP_TOKEN>'
   if (endpoint === 'stdio') {
     if (!info.stdio) throw new Error('MCP stdio entrypoint unavailable')
     return JSON.stringify(
@@ -58,7 +58,7 @@ export function formatMcpConfig(
             env: {
               ...info.stdio.env,
               ...(name ? { KOBO_MCP_CLIENT_NAME: name } : {}),
-              ...(info.localRequiresToken ? { KOBO_NETWORK_TOKEN: credential } : {}),
+              KOBO_MCP_TOKEN: credential,
             },
           },
         },
@@ -69,7 +69,7 @@ export function formatMcpConfig(
   }
   const headers = {
     ...(name ? { 'X-Kobo-Client-Name': encodeURIComponent(name), 'X-Kobo-Client-Name-Encoding': 'uri' } : {}),
-    ...(endpoint.requiresToken ? { 'X-Kobo-Token': credential } : {}),
+    Authorization: `Bearer ${credential}`,
   }
   return JSON.stringify(
     { mcpServers: { kobo: { url: endpoint.url, ...(Object.keys(headers).length ? { headers } : {}) } } },

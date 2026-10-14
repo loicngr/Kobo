@@ -10,7 +10,13 @@ import { Hono } from 'hono'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { closeDb, getDb } from '../server/db/index.js'
 import { runMigrations } from '../server/db/migrations.js'
+import internalMcp from '../server/routes/internal-mcp.js'
 import mcp from '../server/routes/mcp.js'
+import {
+  createExternalMcpCredential,
+  EXTERNAL_TOOL_CATALOGUE,
+} from '../server/services/external-mcp-credentials-service.js'
+import { createInternalMcpCapability } from '../server/services/internal-mcp-capability-service.js'
 import { executeWorkspaceDialogueTool } from '../server/services/workspace-dialogue-service.js'
 
 vi.mock('../server/services/agent/orchestrator.js', () => ({
@@ -24,17 +30,42 @@ vi.mock('../server/services/workspace-message-service.js', () => ({
 import * as agent from '../server/services/agent/orchestrator.js'
 import { deliverWorkspaceMessage } from '../server/services/workspace-message-service.js'
 
+const reportRecord = vi.hoisted(() => ({ current: undefined as unknown }))
+vi.mock('../server/routes/workspaces.js', async () => {
+  const { Hono } = await import('hono')
+  const reports = new Hono()
+  reports.post('/:id/session-handoffs/:handoffId/report', async (c) => {
+    reportRecord.current = { workspace: c.req.param('id'), handoff: c.req.param('handoffId'), body: await c.req.json() }
+    return c.json({ accepted: true })
+  })
+  reports.post('/:id/auto-loop/final-review/report', async (c) => {
+    reportRecord.current = { workspace: c.req.param('id'), body: await c.req.json() }
+    return c.json({ ok: true })
+  })
+  return { default: reports }
+})
 let directory: string
+let previousHome: string | undefined
+let mcpToken: string
+let managedToken: string
 // These integration tests cold-start Node + tsx + the MCP server. Give both
 // subprocess tests the same bounded allowance under the full CI worker load.
 const STDIO_TEST_TIMEOUT_MS = 15_000
-const app = new Hono().route('/api/mcp', mcp)
+const app = new Hono().route('/api/mcp', mcp).route('/api/internal-mcp', internalMcp)
 app.post('/api/workspaces/:id/stop', (c) => c.json({ token: c.req.header('X-Kobo-Token') ?? null }))
 beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(agent.getPendingInputs).mockReturnValue([])
   closeDb()
   directory = mkdtempSync(join(tmpdir(), 'kobo-external-mcp-'))
+  previousHome = process.env.KOBO_HOME
+  process.env.KOBO_HOME = directory
+  mcpToken = createExternalMcpCredential({
+    name: 'integration',
+    allWorkspaces: true,
+    tools: EXTERNAL_TOOL_CATALOGUE.map((tool) => tool.name),
+  }).token
+  managedToken = createInternalMcpCapability({ workspaceId: 'a', sessionId: 'session-a', readOnly: false }).token
   const db = getDb(join(directory, 'test.db'))
   runMigrations(db)
   for (const id of ['a', 'b'])
@@ -44,6 +75,8 @@ beforeEach(() => {
 })
 afterEach(() => {
   closeDb()
+  if (previousHome === undefined) delete process.env.KOBO_HOME
+  else process.env.KOBO_HOME = previousHome
   rmSync(directory, { recursive: true, force: true })
 })
 
@@ -51,6 +84,7 @@ it('supports initialization, discovery and tool calls through the SDK HTTP clien
   const client = new Client({ name: 'external-test', version: '1' })
   const transport = new StreamableHTTPClientTransport(new URL('http://localhost/api/mcp'), {
     fetch: async (input, init) => app.fetch(new Request(input, init)),
+    requestInit: { headers: { Authorization: `Bearer ${mcpToken}` } },
   })
   try {
     await client.connect(transport)
@@ -92,7 +126,7 @@ it(
             KOBO_WORKSPACE_ID: '',
             KOBO_DB_PATH: getDb().name,
             KOBO_BACKEND_URL: `http://127.0.0.1:${address.port}`,
-            KOBO_NETWORK_TOKEN: 'test-token',
+            KOBO_MCP_TOKEN: mcpToken,
           },
           stderr: 'pipe',
         }),
@@ -111,7 +145,7 @@ it(
         expect.objectContaining({ source: { kind: 'mcp', clientName: 'Agent 工房 🤖', transport: 'stdio' } }),
       )
       const stopped = await client.callTool({ name: 'stop_workspace', arguments: { workspace_id: 'b' } })
-      expect(JSON.parse((stopped.content as { text: string }[])[0].text)).toMatchObject({ token: 'test-token' })
+      expect(stopped.isError).toBe(true)
     } finally {
       await client.close()
       await new Promise<void>((resolve, reject) => listener.close((error) => (error ? reject(error) : resolve())))
@@ -123,7 +157,7 @@ it(
 it('rejects oversized MCP requests before tool dispatch', async () => {
   const response = await app.request('/api/mcp', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${mcpToken}` },
     body: 'x'.repeat(1024 * 1024 + 1),
   })
   expect(response.status).toBe(413)
@@ -253,12 +287,13 @@ it('reads streamed and legacy replies, filters sessions and advances past non-me
 it(
   'limits a handoff-generation MCP to reading and submitting its backend-bound report',
   async () => {
-    let posted: unknown
-    const handoffApp = new Hono()
-    handoffApp.post('/api/workspaces/:id/session-handoffs/:handoffId/report', async (c) => {
-      posted = { workspace: c.req.param('id'), handoff: c.req.param('handoffId'), body: await c.req.json() }
-      return c.json({ accepted: true })
+    const capability = createInternalMcpCapability({
+      workspaceId: 'a',
+      sessionId: 'handoff-session',
+      readOnly: true,
+      env: { KOBO_HANDOFF_ID: 'transfer-1', KOBO_HANDOFF_TOKEN: 'bound-token' },
     })
+    const handoffApp = new Hono().route('/api/internal-mcp', internalMcp)
     const listener = serve({ fetch: handoffApp.fetch, hostname: '127.0.0.1', port: 0 })
     if (!listener.listening) await new Promise<void>((resolve) => listener.once('listening', resolve))
     const address = listener.address()
@@ -273,6 +308,7 @@ it(
             PATH: process.env.PATH ?? '',
             KOBO_DB_PATH: join(directory, 'test.db'),
             KOBO_WORKSPACE_ID: 'a',
+            KOBO_MCP_SESSION_TOKEN: capability.token,
             KOBO_BACKEND_URL: `http://127.0.0.1:${address.port}`,
             KOBO_HANDOFF_ID: 'transfer-1',
             KOBO_HANDOFF_TOKEN: 'bound-token',
@@ -291,7 +327,7 @@ it(
         arguments: { report: '# Report', token: 'caller-spoof' },
       })
       expect(result.isError).not.toBe(true)
-      expect(posted).toEqual({
+      expect(reportRecord.current).toEqual({
         workspace: 'a',
         handoff: 'transfer-1',
         body: { token: 'bound-token', report: '# Report' },
@@ -307,12 +343,13 @@ it(
 it(
   'limits a final-review MCP to reads and submits only its bound session capability',
   async () => {
-    let posted: unknown
-    const reportApp = new Hono()
-    reportApp.post('/api/workspaces/:id/auto-loop/final-review/report', async (c) => {
-      posted = { workspace: c.req.param('id'), body: await c.req.json() }
-      return c.json({ ok: true })
+    const capability = createInternalMcpCapability({
+      workspaceId: 'a',
+      sessionId: 'review-session',
+      readOnly: true,
+      env: { KOBO_FINAL_REVIEW_SESSION_ID: 'review-session', KOBO_FINAL_REVIEW_TOKEN: 'bound-token' },
     })
+    const reportApp = new Hono().route('/api/internal-mcp', internalMcp)
     const listener = serve({ fetch: reportApp.fetch, hostname: '127.0.0.1', port: 0 })
     if (!listener.listening) await new Promise<void>((resolve) => listener.once('listening', resolve))
     const address = listener.address()
@@ -327,6 +364,7 @@ it(
             PATH: process.env.PATH ?? '',
             KOBO_DB_PATH: join(directory, 'test.db'),
             KOBO_WORKSPACE_ID: 'a',
+            KOBO_MCP_SESSION_TOKEN: capability.token,
             KOBO_BACKEND_URL: `http://127.0.0.1:${address.port}`,
             KOBO_FINAL_REVIEW_TOKEN: 'bound-token',
             KOBO_FINAL_REVIEW_SESSION_ID: 'review-session',
@@ -354,7 +392,10 @@ it(
       }
       const report = { summary: 'All clear', findings: [], token: 'caller-spoof', sessionId: 'wrong-session' }
       expect((await client.callTool({ name: 'submit_final_review', arguments: report })).isError).not.toBe(true)
-      expect(posted).toEqual({ workspace: 'a', body: { token: 'bound-token', sessionId: 'review-session', report } })
+      expect(reportRecord.current).toEqual({
+        workspace: 'a',
+        body: { token: 'bound-token', sessionId: 'review-session', report },
+      })
     } finally {
       await client.close()
       await new Promise<void>((resolve, reject) => listener.close((error) => (error ? reject(error) : resolve())))
@@ -374,7 +415,9 @@ it.each(['http', 'stdio-global', 'stdio-workspace'] as const)(
     try {
       await client.connect(
         mode === 'http'
-          ? new StreamableHTTPClientTransport(new URL(`${url}/api/mcp`))
+          ? new StreamableHTTPClientTransport(new URL(`${url}/api/mcp`), {
+              requestInit: { headers: { Authorization: `Bearer ${mcpToken}` } },
+            })
           : new StdioClientTransport({
               command: process.execPath,
               args: ['--import', 'tsx', 'src/mcp-server/kobo-tasks-server.ts'],
@@ -384,6 +427,8 @@ it.each(['http', 'stdio-global', 'stdio-workspace'] as const)(
                 KOBO_WORKSPACE_ID: mode === 'stdio-workspace' ? 'a' : '',
                 KOBO_DB_PATH: getDb().name,
                 KOBO_BACKEND_URL: url,
+                KOBO_MCP_TOKEN: mcpToken,
+                KOBO_MCP_SESSION_TOKEN: managedToken,
               },
               stderr: 'pipe',
             }),
@@ -421,3 +466,41 @@ it.each(['http', 'stdio-global', 'stdio-workspace'] as const)(
   },
   STDIO_TEST_TIMEOUT_MS,
 )
+
+it('enforces a dedicated workspace-scoped key against real persisted workspaces and memory', async () => {
+  const issued = createExternalMcpCredential({ name: 'workspace a only', workspaceIds: ['a'] })
+  const client = new Client({ name: 'scoped', version: '1' })
+  const transport = new StreamableHTTPClientTransport(new URL('http://localhost/api/mcp'), {
+    fetch: async (input, init) => app.fetch(new Request(input, init)),
+    requestInit: { headers: { Authorization: `Bearer ${issued.token}` } },
+  })
+  getDb()
+    .prepare(
+      "INSERT INTO memory_scopes(id,level,workspace_id,created_at,updated_at) VALUES ('secret-scope','workspace','b',datetime('now'),datetime('now'))",
+    )
+    .run()
+  try {
+    await client.connect(transport)
+    const list = await client.callTool({ name: 'list_workspaces', arguments: {} })
+    expect(JSON.parse((list.content as { text: string }[])[0].text)).toEqual([expect.objectContaining({ id: 'a' })])
+    const allowed = await client.callTool({ name: 'get_workspace', arguments: { workspace_id: 'a' } })
+    expect(allowed.isError).not.toBe(true)
+    const denied = await client.callTool({ name: 'get_workspace', arguments: { workspace_id: 'b' } })
+    const absent = await client.callTool({ name: 'get_workspace', arguments: { workspace_id: 'does-not-exist' } })
+    expect(denied.isError).toBe(true)
+    expect(denied).toEqual(absent)
+    const memory = await client.callTool({
+      name: 'read_memory',
+      arguments: { scope_id: 'secret-scope', entry_id: 'anything' },
+    })
+    expect(memory.isError).toBe(true)
+    const mutation = await client.callTool({
+      name: 'send_workspace_message',
+      arguments: { workspace_id: 'a', content: 'write' },
+    })
+    expect(mutation.isError).toBe(true)
+    expect(deliverWorkspaceMessage).not.toHaveBeenCalled()
+  } finally {
+    await client.close()
+  }
+})

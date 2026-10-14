@@ -54,8 +54,9 @@ export async function callWorkspaceDialogueTool(
   const transport = new StreamableHTTPClientTransport(new URL(`${backendUrl.replace(/\/$/, '')}/api/mcp`), {
     requestInit: {
       signal,
+      redirect: 'error',
       headers: {
-        ...(token ? { 'X-Kobo-Token': token } : {}),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
         'X-Kobo-Client-Name': encodeURIComponent(normalizeClientName(clientName)),
         'X-Kobo-Client-Name-Encoding': 'uri',
         'X-Kobo-Client-Transport': 'stdio',
@@ -65,6 +66,30 @@ export async function callWorkspaceDialogueTool(
   try {
     await client.connect(transport, { signal })
     return await client.callTool({ name, arguments: arguments_ }, undefined, { signal, timeout })
+  } finally {
+    await client.close()
+  }
+}
+
+/** Discovery uses the same principal and live grants as execution. */
+export async function listWorkspaceDialogueTools(backendUrl: string, token?: string, clientName?: string) {
+  const client = new Client({ name: 'kobo-stdio-bridge', version: '1.0.0' })
+  const signal = AbortSignal.timeout(30_000)
+  const transport = new StreamableHTTPClientTransport(new URL(`${backendUrl.replace(/\/$/, '')}/api/mcp`), {
+    requestInit: {
+      signal,
+      redirect: 'error',
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        'X-Kobo-Client-Name': encodeURIComponent(normalizeClientName(clientName)),
+        'X-Kobo-Client-Name-Encoding': 'uri',
+        'X-Kobo-Client-Transport': 'stdio',
+      },
+    },
+  })
+  try {
+    await client.connect(transport, { signal })
+    return await client.listTools({}, { signal, timeout: 30_000 })
   } finally {
     await client.close()
   }

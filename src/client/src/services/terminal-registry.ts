@@ -17,6 +17,8 @@ export interface TerminalEntry {
   /** 1-based count of consecutive reconnection attempts. 0 when connected. */
   reconnectAttempt: number
   reconnectTimer?: ReturnType<typeof setTimeout>
+  /** Shared across panel remounts while awaiting a one-use upgrade ticket. */
+  connectionAttempt?: symbol
 }
 
 /** Singleton — survives component remount AND workspace switches. */
@@ -57,9 +59,13 @@ export function disposeTerminalEntry(workspaceId: string): void {
   // from terminalMap but scheduleReconnect doesn't consult the map, so it
   // would happily reconnect a terminal the user just closed.
   clearReconnectTimer(entry)
+  entry.connectionAttempt = undefined
   if (entry.ws) {
+    entry.ws.onopen = null
+    entry.ws.onmessage = null
     entry.ws.onclose = null
-    if (entry.ws.readyState === WebSocket.OPEN) entry.ws.close()
+    entry.ws.onerror = null
+    if (entry.ws.readyState === WebSocket.OPEN || entry.ws.readyState === WebSocket.CONNECTING) entry.ws.close()
   }
   entry.onDataDisposable?.dispose()
   entry.terminal.dispose()

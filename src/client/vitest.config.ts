@@ -13,6 +13,7 @@ export default defineConfig({
   resolve: {
     alias: {
       src: fileURLToPath(new URL('./src', import.meta.url)),
+      '#q-app': fileURLToPath(new URL('./node_modules/@quasar/app-vite/exports/wrappers.js', import.meta.url)),
     },
   },
 })

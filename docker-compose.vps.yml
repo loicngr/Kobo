@@ -46,6 +46,12 @@ services:
       traefik.http.routers.kobo.entrypoints: ${TRAEFIK_ENTRYPOINT:-websecure}
       traefik.http.routers.kobo.tls: "true"
       traefik.http.routers.kobo.tls.certresolver: ${TRAEFIK_CERTRESOLVER:-letsencrypt}
+      traefik.http.routers.kobo.middlewares: kobo-security
+      traefik.http.middlewares.kobo-security.headers.stsseconds: "31536000"
+      traefik.http.middlewares.kobo-security.headers.contenttypenosniff: "true"
+      traefik.http.middlewares.kobo-security.headers.referrerpolicy: no-referrer
+      traefik.http.middlewares.kobo-security.headers.customframeoptionsvalue: SAMEORIGIN
+      traefik.http.middlewares.kobo-security.headers.contentsecuritypolicy: "frame-ancestors 'self'"
       traefik.http.services.kobo.loadbalancer.server.port: "3000"
     # No published HTTP or SSH ports. Traefik handles HTTP and WebSockets.
     stop_grace_period: 180s

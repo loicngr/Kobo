@@ -37,21 +37,21 @@ describe('MCP connection configuration', () => {
   it('uses placeholders unless a token is explicitly passed for copying', () => {
     const endpoint = getMcpEndpoints(info, '')[1]!
     const preview = formatMcpConfig(info, endpoint, '工房 🤖')
-    expect(preview).toContain('<KOBO_NETWORK_TOKEN>')
+    expect(preview).toContain('<KOBO_MCP_TOKEN>')
     expect(JSON.parse(preview).mcpServers.kobo.headers).toMatchObject({
       'X-Kobo-Client-Name': encodeURIComponent('工房 🤖'),
       'X-Kobo-Client-Name-Encoding': 'uri',
     })
     expect(formatMcpConfig(info, endpoint, '', 'secret')).toContain('secret')
-    expect(formatMcpConfig(info, endpoint, '', '')).toContain('<KOBO_NETWORK_TOKEN>')
-    expect(formatMcpConfig(info, getMcpEndpoints(info, '')[0]!, '', 'secret')).not.toContain('secret')
+    expect(formatMcpConfig(info, endpoint, '', '')).toContain('<KOBO_MCP_TOKEN>')
+    expect(formatMcpConfig(info, getMcpEndpoints(info, '')[0]!, '', 'secret')).toContain('secret')
   })
   it('preserves absolute stdio paths and only adds credentials when required', () => {
     const preview = JSON.parse(formatMcpConfig({ ...info, localRequiresToken: true }, 'stdio', 'Helper'))
     expect(preview.mcpServers.kobo.env).toMatchObject({
       KOBO_DB_PATH: '/srv/dev/kobo.db',
       KOBO_MCP_CLIENT_NAME: 'Helper',
-      KOBO_NETWORK_TOKEN: '<KOBO_NETWORK_TOKEN>',
+      KOBO_MCP_TOKEN: '<KOBO_MCP_TOKEN>',
     })
     expect(() => formatMcpConfig({ ...info, stdio: null }, 'stdio', '')).toThrow('unavailable')
   })

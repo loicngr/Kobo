@@ -50,7 +50,7 @@ describe('startup display', () => {
     expect(result).not.toMatch(/What’s new|Future feature/)
   })
 
-  it('keeps network URLs and authentication information when network access is on', () => {
+  it('keeps network URLs without disclosing authentication credentials', () => {
     const result = formatStartupBanner({
       ...base,
       networkEnabled: true,
@@ -59,7 +59,7 @@ describe('startup display', () => {
     })
     expect(result).toContain('http://localhost:9997')
     expect(result).toContain('http://192.168.1.2:9997')
-    expect(result).toContain('test-token')
+    expect(result).not.toContain('test-token')
     expect(result).toContain('Network access enabled')
     expect(result).not.toContain('Local access only')
   })

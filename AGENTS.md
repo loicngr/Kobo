@@ -6,7 +6,9 @@ Guidance for AI coding agents (Claude Code, Cursor, etc.) working on this reposi
 
 **Kōbō** (工房, Japanese for "workshop") orchestrates Claude Code and OpenAI Codex agents across isolated git worktrees. Each "workspace" is a self-contained mission with its own worktree, branch, agent sessions, optional dev server, optional Notion/Sentry context, and a dedicated MCP tools server. A Vue 3 UI lets the human track progress, read live agent output, review Git changes, and manage the lifecycle. A workspace can switch engines through a handoff to a fresh session while preserving its worktree and history.
 
-Single-user dev tool, local by default. The server binds `127.0.0.1` unless the opt-in "network access" setting is enabled, which binds all interfaces and gates non-loopback API/WS requests behind a shared token. Behind-a-reverse-proxy mode also requires the token for loopback API/WS requests; `/api/health` stays exempt. Host/Origin checks apply separately. No multi-tenant concerns.
+Single-user dev tool, local by default. The server binds `127.0.0.1` unless the opt-in "network access" setting is enabled. Operator HTTP access uses the network token or a 12-hour HttpOnly browser session; browsers use 60-second single-use path-bound tickets for WebSocket upgrades, never the operator token in the URL or localStorage. Behind-a-reverse-proxy mode also gates loopback operator requests. Rotation, network disable and proxy-mode changes revoke sessions, tickets and active WebSockets. `/api/health` stays exempt. Host/Origin checks apply separately; public proxy origin must be declared explicitly. No multi-tenant concerns.
+
+External `/api/mcp` and global stdio require dedicated hashed credentials with tool/workspace grants, expiry and revocation, even on loopback. Manage them through operator-only `/api/mcp-credentials`; global stdio uses `KOBO_MCP_TOKEN`. Managed workspace stdio uses per-launch `KOBO_MCP_SESSION_TOKEN` through OS-loopback-only `/api/internal-mcp`, never the operator token or direct SQLite writes. The backend enforces Plan/read-only permissions and revokes capabilities when stopping begins. Keep report/progress exceptions narrowly scoped. See [SECURITY.md](./SECURITY.md).
 
 ## Tech stack
 
@@ -103,7 +105,8 @@ src/
 │       ├── pages/                  # WorkspacePage, CreatePage, SettingsPage
 │       └── router/
 ├── mcp-server/                     # standalone MCP server spawned per workspace
-│   ├── kobo-tasks-server.ts        # entrypoint, registers tools
+│   ├── kobo-tasks-server.ts        # stdio bridge; forwards discovery/calls to authenticated backend
+│   ├── managed-mcp-dispatcher.ts   # workspace tool definitions/dispatch, executed in backend
 │   └── kobo-tasks-handlers.ts      # pure handlers (list_tasks, mark_task_done)
 ├── shared/                         # model catalogues, prompts, dialogue contracts, shared utilities
 └── __tests__/                      # backend Vitest suites; client tests live under client/src/__tests__/
@@ -292,7 +295,7 @@ also bypasses the auto-loop next-iteration UI path; normal backend immediate
 message delivery pauses a ready loop. Do not flush existing queues on toggle,
 remove compaction/permission/handoff guards, or queue rejected forced sends.
 
-`POST /api/mcp` exposes stateless Streamable HTTP discovery/dialogue tools, behind the existing Host/Origin and network-token gates. The global stdio server forwards dialogue calls through this backend so agent runtime ownership remains centralized. `workspace-message-service.ts` shares delivery with WebSocket chat.
+`POST /api/mcp` exposes stateless Streamable HTTP discovery/dialogue tools, behind Host/Origin, network enablement and dedicated MCP credential gates. The global stdio server forwards dialogue calls through this backend so agent runtime ownership remains centralized. `workspace-message-service.ts` shares delivery with WebSocket chat.
 
 Optional `send_workspace_message.idempotency_key` uses `mcp_message_requests` (migration v43). Reserve before dispatch, preserve fingerprints and terminal outcomes, and never automatically resend an unfinished request after restart. The user event and accepted receipt commit in one SQLite transaction; broadcast follows commit. Dispatch may precede persistence, so interrupted requests are explicitly `delivery_unknown`, not an exactly-once execution promise. The backend alone calls `reconcileMessageRequests` on startup. History retention does not delete the ledger; workspace deletion cascades it.
 

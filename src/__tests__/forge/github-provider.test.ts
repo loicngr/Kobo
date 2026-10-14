@@ -51,6 +51,31 @@ describe('github forge provider', () => {
     expect(execFileMock).toHaveBeenLastCalledWith('gh', ['pr', 'merge', '42', `--${method}`])
   })
 
+  it('adds admin only for an explicitly confirmed override', async () => {
+    execFileMock.mockResolvedValueOnce('')
+    await githubProvider.mergeRequest('/repo', 42, 'squash', { admin: true })
+    expect(execFileMock).toHaveBeenLastCalledWith('gh', ['pr', 'merge', '42', '--squash', '--admin'])
+    execFileMock.mockResolvedValueOnce('')
+    await githubProvider.mergeRequest('/repo', 42, 'squash', { admin: false })
+    expect(execFileMock).toHaveBeenLastCalledWith('gh', ['pr', 'merge', '42', '--squash'])
+  })
+
+  it('classifies branch policy refusals without exposing the CLI output', async () => {
+    execFileMock.mockRejectedValueOnce(
+      new Error('Command failed: gh pr merge 903 --squash: the base branch policy prohibits the merge. Add --admin'),
+    )
+    await expect(githubProvider.mergeRequest('/repo', 903, 'squash')).rejects.toMatchObject({
+      code: 'merge_policy_blocked',
+      message: 'GitHub branch protection rules prevent this merge.',
+    })
+  })
+
+  it('does not classify unrelated failures as an invitation to bypass protection', async () => {
+    const failure = new Error('Network timeout')
+    execFileMock.mockRejectedValueOnce(failure)
+    await expect(githubProvider.mergeRequest('/repo', 42)).rejects.toBe(failure)
+  })
+
   it('isAvailable returns available when gh auth status succeeds', async () => {
     execFileMock.mockResolvedValueOnce('Logged in to github.com\n')
     expect(await githubProvider.isAvailable('/repo')).toEqual({ available: true })

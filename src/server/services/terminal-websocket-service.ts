@@ -1,6 +1,7 @@
 import type { IPty } from 'node-pty'
 import type WebSocket from 'ws'
 import { assertWorkspaceLifecycleAvailable, isWorkspaceLifecycleBusy } from '../utils/workspace-lifecycle-guard.js'
+import { acceptNetworkSocketMessage, isNetworkSocketAuthorized } from './network-session-service.js'
 import { createTerminal, getTerminal } from './terminal-service.js'
 import { getWorkspace } from './workspace-service.js'
 
@@ -34,6 +35,7 @@ export function handleTerminalConnection(ws: WebSocket, workspaceId: string, isS
     ws.terminate()
   }
   function send(data: string | Buffer): boolean {
+    if (!isNetworkSocketAuthorized(ws)) return false
     if (disposed || ws.readyState !== 1) return false
     if (ws.bufferedAmount + Buffer.byteLength(data) > MAX_BUFFERED_BYTES) {
       disconnect()
@@ -73,6 +75,7 @@ export function handleTerminalConnection(ws: WebSocket, workspaceId: string, isS
   ws.on('error', disconnect)
 
   ws.on('message', (data: WebSocket.RawData, isBinary: boolean) => {
+    if (!acceptNetworkSocketMessage(ws)) return
     if (disposed || ws.readyState !== 1 || isShuttingDown()) return
     if (isBinary) {
       if (currentPty && getTerminal(workspaceId) === currentPty && !isWorkspaceLifecycleBusy(workspaceId)) {

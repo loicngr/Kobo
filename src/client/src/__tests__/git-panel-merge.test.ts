@@ -109,6 +109,79 @@ describe('GitPanel PR merge confirmation', () => {
     expect(mocks.api).not.toHaveBeenCalled()
   })
 
+  it('offers an explicit admin retry after a policy refusal, preserving the method', async () => {
+    await openDialog()
+    mocks.api.mockResolvedValueOnce({ ok: false, json: async () => ({ code: 'merge_policy_blocked' }) })
+    await confirm('squash')
+    expect(mocks.api).toHaveBeenCalledTimes(1)
+    expect(mocks.notify).not.toHaveBeenCalled()
+    expect(mocks.dialog).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        title: 'Merge blocked by GitHub',
+        cancel: expect.objectContaining({ label: 'Keep protections' }),
+        ok: expect.objectContaining({ label: 'Merge as administrator' }),
+      }),
+    )
+    await confirm()
+    expect(mocks.api).toHaveBeenLastCalledWith('/api/workspaces/ws-a/merge-pr', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ method: 'squash', admin: true }),
+    })
+  })
+
+  it('ignores an admin confirmation after navigating to another workspace', async () => {
+    await openDialog()
+    mocks.api.mockResolvedValueOnce({ ok: false, json: async () => ({ code: 'merge_policy_blocked' }) })
+    await confirm('squash')
+    await wrapper.setProps({ workspace: { ...workspace, id: 'ws-b' } })
+    await flushPromises()
+    await confirm()
+    expect(mocks.api).toHaveBeenCalledTimes(1)
+  })
+
+  it('ignores an admin confirmation after the panel is unmounted', async () => {
+    await openDialog()
+    mocks.api.mockResolvedValueOnce({ ok: false, json: async () => ({ code: 'merge_policy_blocked' }) })
+    await confirm('squash')
+    wrapper.unmount()
+    await confirm()
+    expect(mocks.api).toHaveBeenCalledTimes(1)
+  })
+
+  it('announces a confirmed admin merge and offers branch deletion', async () => {
+    await openDialog()
+    mocks.api.mockResolvedValueOnce({ ok: false, json: async () => ({ code: 'merge_policy_blocked' }) })
+    await confirm('squash')
+    mocks.api.mockResolvedValueOnce({ ok: true, json: async () => ({ merged: true, branch: 'feature/a' }) })
+    await confirm()
+    expect(mocks.notify).toHaveBeenCalledWith(expect.objectContaining({ type: 'positive', message: 'PR merged' }))
+    expect(mocks.dialog).toHaveBeenCalledTimes(3)
+  })
+
+  it('does not offer another admin retry when GitHub still refuses', async () => {
+    await openDialog()
+    mocks.api.mockResolvedValue({ ok: false, json: async () => ({ code: 'merge_policy_blocked' }) })
+    await confirm('rebase')
+    await confirm()
+    expect(mocks.dialog).toHaveBeenCalledTimes(2)
+    expect(mocks.notify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'negative',
+        message:
+          'Administrator merge could not be confirmed. Check the PR status, your permissions and repository rules.',
+      }),
+    )
+  })
+
+  it('does not announce success when the merge is not confirmed', async () => {
+    await openDialog()
+    await confirm('squash')
+    expect(mocks.notify).toHaveBeenCalledWith(expect.objectContaining({ type: 'info' }))
+    expect(mocks.notify).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'positive' }))
+    expect(mocks.dialog).toHaveBeenCalledTimes(1)
+  })
+
   it('shows a failed merge without offering branch deletion', async () => {
     await openDialog()
     mocks.api.mockResolvedValueOnce({ ok: false, json: async () => ({ error: 'Squash disabled' }) })

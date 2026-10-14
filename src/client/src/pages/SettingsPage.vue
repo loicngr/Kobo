@@ -1865,6 +1865,7 @@ where ffmpeg</pre>
 
               <q-toggle
                 :model-value="network.enabled"
+                :disable="networkUpdating"
                 :label="$t('settings.network.enable')"
                 dark
                 color="primary"
@@ -1878,6 +1879,7 @@ where ffmpeg</pre>
               <div v-if="network.enabled" class="q-mt-md">
                 <q-toggle
                   :model-value="network.behindProxy"
+                  :disable="networkUpdating"
                   :label="$t('settings.network.behindProxy')"
                   dark
                   color="primary"
@@ -1897,6 +1899,7 @@ where ffmpeg</pre>
                   <q-btn
                     class="q-mt-sm"
                     :label="$t('settings.network.regenerate')"
+                    :loading="networkUpdating"
                     color="primary"
                     outline
                     dense
@@ -1917,7 +1920,7 @@ where ffmpeg</pre>
                   <img :src="networkQrDataUrl" :alt="$t('settings.network.scan')" width="200" height="200" />
                 </div>
               </template>
-              <McpConnectionSettings :token="network.token" :network-enabled="network.enabled" :behind-proxy="network.behindProxy" />
+              <McpConnectionSettings :network-enabled="network.enabled" :behind-proxy="network.behindProxy" />
             </div>
 
             <!-- Import / Export config -->
@@ -2829,8 +2832,10 @@ import { useSettingsStore } from 'src/stores/settings'
 import { type Template, useTemplatesStore } from 'src/stores/templates'
 import { useWorkspaceTemplatesStore } from 'src/stores/workspace-templates'
 import { apiFetchResponse, apiFetchResponseForStatus, apiResponseError } from 'src/utils/api'
+import { authenticateBrowser } from 'src/utils/auth-token'
 import { formFieldsEqual } from 'src/utils/form-fields-equal'
 import { captureFormSnapshot } from 'src/utils/form-snapshot'
+import { closeNetworkLogin } from 'src/utils/network-login-bus'
 import {
   DEFAULT_NOTIFICATION_SOUND,
   DEFAULT_PR_NOTIFICATION_AUDIO_SETTINGS,
@@ -2965,6 +2970,9 @@ interface NetworkState {
   behindProxy: boolean
   urls: string[]
 }
+const networkUpdating = ref(false)
+let networkQrEpoch = 0
+let networkStateEpoch = 0
 const network = ref<NetworkState>({ enabled: false, token: '', behindProxy: false, urls: [] })
 const networkRestartRequired = ref(false)
 const networkQrDataUrl = ref('')
@@ -2986,34 +2994,43 @@ function toClientLanUrl(serverUrl: string): string {
 const networkDisplayUrls = computed(() => network.value.urls.map(toClientLanUrl))
 
 async function fetchNetwork() {
+  const epoch = ++networkStateEpoch
   try {
     const res = await apiFetchResponse('/api/settings/network')
     if (!res.ok) throw await apiResponseError(res)
-    network.value = (await res.json()) as NetworkState
+    const data = (await res.json()) as NetworkState
+    if (epoch !== networkStateEpoch) return
+    network.value = data
     await refreshQr()
   } catch {
+    if (epoch !== networkStateEpoch) return
     $q.notify({ type: 'negative', message: t('settings.network.loadFailed'), position: 'top' })
   }
 }
 
 async function refreshQr() {
+  const epoch = ++networkQrEpoch
   const base = networkDisplayUrls.value[0]
   if (!base || !network.value.token) {
     networkQrDataUrl.value = ''
     return
   }
-  const url = `${base}/?token=${encodeURIComponent(network.value.token)}`
+  const url = `${base}/#token=${encodeURIComponent(network.value.token)}`
   try {
     // Loaded on demand: it is only needed by the LAN pairing QR, and a static
     // import puts the whole encoder in the settings chunk for everyone else.
     const { default: QRCode } = await import('qrcode')
-    networkQrDataUrl.value = await QRCode.toDataURL(url, { margin: 1, width: 200 })
+    const qr = await QRCode.toDataURL(url, { margin: 1, width: 200 })
+    if (epoch === networkQrEpoch) networkQrDataUrl.value = qr
   } catch {
-    networkQrDataUrl.value = ''
+    if (epoch === networkQrEpoch) networkQrDataUrl.value = ''
   }
 }
 
 async function postNetwork(body: { enabled?: boolean; regenerate?: boolean; behindProxy?: boolean }) {
+  if (networkUpdating.value) return
+  networkUpdating.value = true
+  networkStateEpoch++
   try {
     const res = await apiFetchResponse('/api/settings/network', {
       method: 'POST',
@@ -3023,12 +3040,23 @@ async function postNetwork(body: { enabled?: boolean; regenerate?: boolean; behi
     if (!res.ok) throw await apiResponseError(res)
     const data = (await res.json()) as NetworkState & { restartRequired?: boolean }
     network.value = { enabled: data.enabled, token: data.token, behindProxy: data.behindProxy, urls: data.urls }
+    // The policy change revoked the old cookie and every active socket. This
+    // response is the operator's one-time chance to establish a fresh session.
+    if (
+      data.enabled &&
+      data.token &&
+      (body.regenerate || body.enabled !== undefined || body.behindProxy !== undefined)
+    ) {
+      if ((await authenticateBrowser(data.token)).ok) closeNetworkLogin()
+    }
     if (data.restartRequired) networkRestartRequired.value = true
     await refreshQr()
   } catch {
     $q.notify({ type: 'negative', message: t('settings.network.updateFailed'), position: 'top' })
     // Resync the toggle to the real server state (it optimistically followed the click).
     await fetchNetwork()
+  } finally {
+    networkUpdating.value = false
   }
 }
 

@@ -799,7 +799,7 @@ describe('MCP tasks server handlers', () => {
 
 describe('MCP server tool registration — set_workspace_agent_description', () => {
   it('exposes the set_workspace_agent_description tool with the right schema', () => {
-    const serverSource = fs.readFileSync(path.join(__dirname, '..', 'mcp-server', 'kobo-tasks-server.ts'), 'utf-8')
+    const serverSource = fs.readFileSync(path.join(__dirname, '..', 'mcp-server', 'managed-mcp-dispatcher.ts'), 'utf-8')
     expect(serverSource).toMatch(/name:\s*['"]set_workspace_agent_description['"]/)
     expect(serverSource).not.toMatch(/['"]set_workspace_description['"]/)
     expect(serverSource).toMatch(/properties:\s*\{[\s\S]*?description:\s*\{\s*type:\s*['"]string['"]/)
@@ -807,7 +807,7 @@ describe('MCP server tool registration — set_workspace_agent_description', () 
   })
 
   it('dispatches set_workspace_agent_description to setWorkspaceAgentDescriptionHandler', () => {
-    const serverSource = fs.readFileSync(path.join(__dirname, '..', 'mcp-server', 'kobo-tasks-server.ts'), 'utf-8')
+    const serverSource = fs.readFileSync(path.join(__dirname, '..', 'mcp-server', 'managed-mcp-dispatcher.ts'), 'utf-8')
     expect(serverSource).toMatch(/setWorkspaceAgentDescriptionHandler/)
     expect(serverSource).toMatch(
       /name === 'set_workspace_agent_description'[\s\S]*?setWorkspaceAgentDescriptionHandler\s*\(/,
@@ -869,7 +869,7 @@ describe('MCP cron handlers', () => {
 
 describe('MCP server tool registration — cron family', () => {
   it('exposes cron_create, cron_delete, cron_list with right schemas', () => {
-    const serverSource = fs.readFileSync(path.join(__dirname, '..', 'mcp-server', 'kobo-tasks-server.ts'), 'utf-8')
+    const serverSource = fs.readFileSync(path.join(__dirname, '..', 'mcp-server', 'managed-mcp-dispatcher.ts'), 'utf-8')
     expect(serverSource).toMatch(/name:\s*['"]cron_create['"]/)
     expect(serverSource).toMatch(/name:\s*['"]cron_delete['"]/)
     expect(serverSource).toMatch(/name:\s*['"]cron_list['"]/)
@@ -878,7 +878,7 @@ describe('MCP server tool registration — cron family', () => {
   })
 
   it('routes cron_create / cron_delete through the backend HTTP and dispatches cron_list locally', () => {
-    const serverSource = fs.readFileSync(path.join(__dirname, '..', 'mcp-server', 'kobo-tasks-server.ts'), 'utf-8')
+    const serverSource = fs.readFileSync(path.join(__dirname, '..', 'mcp-server', 'managed-mcp-dispatcher.ts'), 'utf-8')
     // cron_create + cron_delete must NOT call cron-service.arm/cancel directly
     // — those would arm the in-memory setTimeout in the MCP sub-process, which
     // dies with the agent session. The backend owns the timer Map.
@@ -895,7 +895,7 @@ describe('MCP server tool registration — cron family', () => {
 
 describe('MCP server tool registration — auto-loop control', () => {
   it('exposes set_auto_loop and delegates both transitions to the backend', () => {
-    const serverSource = fs.readFileSync(path.join(__dirname, '..', 'mcp-server', 'kobo-tasks-server.ts'), 'utf-8')
+    const serverSource = fs.readFileSync(path.join(__dirname, '..', 'mcp-server', 'managed-mcp-dispatcher.ts'), 'utf-8')
 
     expect(serverSource).toMatch(/name:\s*['"]set_auto_loop['"]/)
     expect(serverSource).toMatch(/required:\s*\[['"]enabled['"]\]/)
@@ -908,7 +908,7 @@ describe('MCP server tool registration — auto-loop control', () => {
 
 describe('MCP server tool registration — global workspace tools', () => {
   const readServerSource = () =>
-    fs.readFileSync(path.join(__dirname, '..', 'mcp-server', 'kobo-tasks-server.ts'), 'utf-8')
+    fs.readFileSync(path.join(__dirname, '..', 'mcp-server', 'managed-mcp-dispatcher.ts'), 'utf-8')
 
   it('exposes list_workspaces, create_workspace, archive_workspace, stop_workspace with the right schemas', () => {
     const src = readServerSource()
@@ -921,7 +921,7 @@ describe('MCP server tool registration — global workspace tools', () => {
 
   it('includes shared creation tools in GLOBAL_TOOLS, not WORKSPACE_SCOPED_TOOLS', () => {
     const src = readServerSource()
-    const globalBlockMatch = src.match(/const GLOBAL_TOOLS[\s\S]*?\n\]/)
+    const globalBlockMatch = src.match(/const GLOBAL_TOOLS[\s\S]*?\n\s*\]/)
     expect(globalBlockMatch).not.toBeNull()
     const globalBlock = globalBlockMatch?.[0] ?? ''
     expect(globalBlock).toContain('...WORKSPACE_CREATION_TOOLS')
@@ -929,7 +929,7 @@ describe('MCP server tool registration — global workspace tools', () => {
     for (const toolName of ['list_workspaces', 'stop_workspace']) {
       expect(globalBlock).toMatch(new RegExp(`name:\\s*['"]${toolName}['"]`))
     }
-    const scopedBlockMatch = src.match(/const WORKSPACE_SCOPED_TOOLS[\s\S]*?\n\]\n\nconst GLOBAL_TOOLS/)
+    const scopedBlockMatch = src.match(/const WORKSPACE_SCOPED_TOOLS[\s\S]*?\n\s*\]\n\n\s*const GLOBAL_TOOLS/)
     expect(scopedBlockMatch).not.toBeNull()
     const scopedBlock = scopedBlockMatch?.[0] ?? ''
     expect(scopedBlock).not.toContain('...WORKSPACE_CREATION_TOOLS')
@@ -963,8 +963,8 @@ describe('MCP server tool registration — global workspace tools', () => {
 
   it('routes create_workspace/archive_workspace/stop_workspace through the backend HTTP API', () => {
     const src = readServerSource()
-    expect(src).toMatch(/isWorkspaceCreationTool\(name\)[\s\S]*?callWorkspaceDialogueTool\(/)
-    expect(src).toMatch(/isWorkspaceLifecycleTool\(name\)[\s\S]*?callWorkspaceDialogueTool\(/)
+    expect(src).toMatch(/isWorkspaceCreationTool\(name\)[\s\S]*?dialogueTool\(/)
+    expect(src).toMatch(/isWorkspaceLifecycleTool\(name\)[\s\S]*?dialogueTool\(/)
     expect(src).toMatch(
       /name === 'stop_workspace'[\s\S]*?backendRequest\(\s*['"]POST['"]\s*,\s*`\/api\/workspaces\/\$\{[^}]+\}\/stop`/,
     )
@@ -984,7 +984,7 @@ describe('MCP server tool registration — global workspace tools', () => {
 
 describe('MCP server tool registration — get_ticket', () => {
   const readServerSource = () =>
-    fs.readFileSync(path.join(__dirname, '..', 'mcp-server', 'kobo-tasks-server.ts'), 'utf-8')
+    fs.readFileSync(path.join(__dirname, '..', 'mcp-server', 'managed-mcp-dispatcher.ts'), 'utf-8')
 
   it('exposes the source-agnostic get_ticket tool', () => {
     expect(readServerSource()).toMatch(/name:\s*['"]get_ticket['"]/)

@@ -3,6 +3,7 @@ import { nanoid } from 'nanoid'
 import type WebSocket from 'ws'
 import { getDb } from '../db/index.js'
 import { recordActivity } from './activity-service.js'
+import { acceptNetworkSocketMessage, isNetworkSocketAuthorized } from './network-session-service.js'
 import { getAllPersistedSnapshots } from './usage/db.js'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -36,6 +37,7 @@ const MAX_BUFFERED_BYTES = 1024 * 1024
 
 /** A dropped frame must end the connection so its replay cursor cannot skip it. */
 function sendFrame(ws: WebSocket, message: string): void {
+  if (!isNetworkSocketAuthorized(ws)) return
   if (ws.readyState !== 1) return
   if (ws.bufferedAmount > MAX_BUFFERED_BYTES) {
     clients.delete(ws)
@@ -130,6 +132,7 @@ export function handleConnection(ws: WebSocket): void {
   }
 
   ws.on('message', (data: WebSocket.RawData) => {
+    if (!acceptNetworkSocketMessage(ws)) return
     let msg: WsMessage
     try {
       const parsed: unknown = JSON.parse(data.toString())

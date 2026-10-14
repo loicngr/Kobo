@@ -42,3 +42,21 @@ describe('terminal-registry', () => {
     expect((entry.ws as unknown as { close: ReturnType<typeof vi.fn> }).close).not.toHaveBeenCalled()
   })
 })
+
+it('cancels an unfinished upgrade and detaches every callback when closing a terminal', () => {
+  const entry = fakeEntry()
+  entry.connectionAttempt = Symbol('ticket request')
+  ;(entry.ws as unknown as { readyState: number }).readyState = WebSocket.CONNECTING
+  entry.ws!.onopen = vi.fn()
+  entry.ws!.onmessage = vi.fn()
+  entry.ws!.onerror = vi.fn()
+  terminalMap.set('connecting', entry)
+  disposeTerminalEntry('connecting')
+  expect(entry.connectionAttempt).toBeUndefined()
+  expect(entry.ws!.close).toHaveBeenCalledOnce()
+  expect(entry.ws!.onopen).toBeNull()
+  expect(entry.ws!.onmessage).toBeNull()
+  expect(entry.ws!.onerror).toBeNull()
+  expect(entry.ws!.onclose).toBeNull()
+  expect(terminalMap.has('connecting')).toBe(false)
+})

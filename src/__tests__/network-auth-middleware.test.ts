@@ -30,16 +30,31 @@ function setup(address: string | undefined, enabled: boolean, token: string, beh
 beforeEach(() => vi.clearAllMocks())
 
 describe('networkAuthMiddleware', () => {
-  it('accepts the configured token as Bearer on the MCP endpoint only', async () => {
+  it('delegates MCP authentication to its dedicated route instead of accepting operator Bearer tokens', async () => {
     setup('192.168.1.5', true, 'secret')
-    expect(
-      (await app.request('/api/mcp', { method: 'POST', headers: { Authorization: 'Bearer secret' } })).status,
-    ).toBe(200)
-    expect((await app.request('/api/mcp', { method: 'POST', headers: { Authorization: 'Bearer wrong' } })).status).toBe(
-      401,
-    )
+    // This sentinel has no route auth; real MCP route tests cover dedicated keys.
+    expect((await app.request('/api/mcp', { method: 'POST' })).status).toBe(200)
     expect((await app.request('/api/ping', { headers: { Authorization: 'Bearer secret' } })).status).toBe(401)
   })
+  it('keeps external MCP disabled for remote clients when network access is disabled', async () => {
+    setup('192.168.1.5', false, 'secret')
+    expect((await app.request('/api/mcp', { method: 'POST' })).status).toBe(403)
+  })
+  it.each(['Authorization', 'X-Kobo-Token'])(
+    'never elevates a provided MCP key through the loopback exemption (%s)',
+    async (header) => {
+      setup('127.0.0.1', true, 'secret')
+      const value = header === 'Authorization' ? 'Bearer kobo_mcp_synthetic' : 'kobo_mcp_synthetic'
+      expect((await app.request('/api/ping', { headers: { [header]: value } })).status).toBe(401)
+    },
+  )
+  it.each(['/api/internal-mcp', '/api/internal-mcp/', '/api/internal-mcp/nested'])(
+    'does not let a remote operator token reach %s',
+    async (pathname) => {
+      setup('192.168.1.5', true, 'secret')
+      expect((await app.request(pathname, { method: 'POST', headers: { 'X-Kobo-Token': 'secret' } })).status).toBe(403)
+    },
+  )
   it('allows loopback without a token', async () => {
     setup('127.0.0.1', true, 'secret')
     const res = await app.request('/api/ping')

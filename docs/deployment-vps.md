@@ -191,13 +191,21 @@ From `/opt/kobo`:
 docker network inspect web                    # use your TRAEFIK_NETWORK value
 docker compose config --quiet
 docker compose up -d --wait --wait-timeout 180 kobo
-docker compose logs kobo | grep Token
+docker compose exec kobo node -e 'const fs = require("node:fs"); console.log(JSON.parse(fs.readFileSync(process.env.KOBO_HOME + "/settings.json", "utf8")).global.networkAccessToken)'
 ```
 
-Open `https://kobo.example.com/?token=<printed-token>` on your PC. The browser
-remembers the token; treat both that URL and startup logs as credentials.
+Open `https://kobo.example.com/` on your PC and paste the token into the login
+dialog. The retrieval command deliberately displays a secret in your local
+terminal; do not copy its output into logs or shared transcripts. Startup logs
+never contain the token. After upgrading from a version that logged it, rotate
+the token and apply your existing log-retention policy to old copies.
 `KOBO_NETWORK_ACCESS_PROXY_HOST` is populated from `KOBO_DOMAIN` and must match
 the public hostname. Both network access and behind-proxy mode are enabled.
+Missing or invalid proxy hostname configuration rejects public traffic. Browser
+origins must match the configured scheme and port (HTTPS is the default).
+The Compose example attaches HSTS and browser security headers at the TLS router;
+same-origin split panes remain supported. Keep the Docker socket unmounted unless
+project workflows need its root-equivalent host access.
 
 This example publishes no HTTP or SSH ports. Use SSH to the VPS followed by
 `docker compose exec kobo kobo-vps-entrypoint --exec bash` for a container shell. The VPS launcher prepares the home permissions, then drops root before starting Node. It does not start the image's optional SSH daemon. `--exec` runs administrative shell/CLI commands as the same non-root user without repeating home migration.
@@ -211,15 +219,19 @@ curl -s -o /dev/null -w '%{http_code}\n' https://kobo.example.com/api/workspaces
 
 Expect health JSON with `status: "ok"` and the installed version, then `401`
 without a token. `/api/health` is intentionally public. Ordinary authenticated
-REST requests use `X-Kobo-Token`; the external MCP endpoint also supports Bearer
-authentication. No additional Traefik route is needed for WebSocket upgrades.
+REST scripts use the operator token in `X-Kobo-Token`; browser login creates a
+12-hour HttpOnly session cookie. External MCP clients require a dedicated key,
+with explicitly granted tools/workspaces, even on loopback. See
+[external MCP credentials](../CONFIGURATION.md#external-llm-access-through-mcp).
+No additional Traefik route is needed for WebSocket upgrades: the browser obtains
+a 60-second, single-use ticket instead of placing the operator token in the URL.
 
-Behind-proxy mode also protects loopback requests. Kōbō supplies the current
-network token to its internal workspace MCP process when launching Claude or
-Codex, so memory, progress bars and other backend calls can authenticate without
-manual MCP configuration. Memory and progress calls still require their separate
-per-launch capabilities. After rotating the network token, stop and resume active
-agent sessions so their MCP processes receive the new token.
+Rotating the operator token, disabling network access or changing proxy mode
+revokes browser sessions and existing WebSockets, including terminal connections.
+Managed agent MCP processes use a revocable per-launch capability through a
+loopback-only internal endpoint, not the operator token. Plan/read-only launches
+cannot mutate workspace state; only their narrow progress/report exceptions
+remain. Agent processes are not stopped by browser credential revocation.
 
 ## 3. Authenticate and choose a project
 

@@ -12,6 +12,8 @@
           :placeholder="t('network.login.tokenPlaceholder')"
           :error="hasError"
           :error-message="errorMsg"
+          type="password"
+          autocomplete="off"
           autofocus
           dense
           outlined
@@ -32,8 +34,7 @@
 </template>
 
 <script setup lang="ts">
-import { apiFetchStatus } from 'src/utils/api'
-import { setToken } from 'src/utils/auth-token'
+import { authenticateBrowser } from 'src/utils/auth-token'
 import { closeNetworkLogin, networkLoginOpen } from 'src/utils/network-login-bus'
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -53,15 +54,13 @@ const errorMsg = ref('')
 
 async function submit() {
   const candidate = token.value.trim()
-  if (!candidate) return
+  if (!candidate || loading.value) return
   loading.value = true
   hasError.value = false
   try {
-    // Send the candidate explicitly; only persist it once it actually validates,
-    // so a bad attempt never overwrites a previously-working token in storage.
-    const res = await apiFetchStatus('/api/settings/network/ping', { headers: { 'X-Kobo-Token': candidate } })
+    const res = await authenticateBrowser(candidate)
     if (res.ok) {
-      setToken(candidate)
+      token.value = ''
       closeNetworkLogin()
       window.location.reload()
       return

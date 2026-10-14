@@ -24,10 +24,10 @@ describe('MCP connection metadata', () => {
       KOBO_BACKEND_URL: 'http://127.0.0.1:4300',
       KOBO_WORKSPACE_ID: '',
     })
-    expect(result.localRequiresToken).toBe(false)
+    expect(result.localRequiresToken).toBe(true)
   })
   it('formats IPv6 addresses and requires a local token behind a proxy', () => {
-    const result = buildMcpConnectionInfo({ ...input, networkEnabled: true, behindProxy: true })
+    const result = buildMcpConnectionInfo({ ...input, networkEnabled: true, behindProxy: false })
     expect(result.lanUrls).toEqual(['http://192.168.1.2:4300/api/mcp', 'http://[2001:db8::1]:4300/api/mcp'])
     expect(result.localRequiresToken).toBe(true)
   })

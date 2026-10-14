@@ -114,12 +114,22 @@ describe('orchestrator progress capabilities', () => {
       const opts = capture.starts[0]
       const token = opts.mcpServers!.find((s) => s.name === 'kobo-tasks')!.env.KOBO_PROGRESS_SESSION_TOKEN
       expect(token).toBeTruthy()
+      const internal = await import('../../server/services/internal-mcp-capability-service.js')
+      const managedEnv = opts.mcpServers!.find((s) => s.name === 'kobo-tasks')!.env
+      expect(managedEnv).not.toHaveProperty('KOBO_NETWORK_TOKEN')
+      expect(managedEnv).not.toHaveProperty('KOBO_DB_PATH')
+      const internalToken = managedEnv.KOBO_MCP_SESSION_TOKEN
+      expect(internal.authorizeInternalMcpTool(internalToken, 'create_task', {})).toMatchObject({
+        workspaceId: workspace.id,
+        sessionId: initial.agentSessionId,
+      })
       const owner = runtime.resolveProgressCapability(token)
       expect(owner).toMatchObject({ workspaceId: workspace.id, sessionId: initial.agentSessionId })
       expect(opts.prompt).not.toContain('<kobo-progress-reporting>') // injected once by the engine builder
       const bar = progress.createProgressBar(owner, { activityKey: 'long-task', label: 'Long task' })
       const stopping = orchestrator.stopAgentAndWait(workspace.id)
       expect(() => runtime.resolveProgressCapability(token)).toThrow()
+      expect(() => internal.authorizeInternalMcpTool(internalToken, 'create_task', {})).toThrow()
       expect(progress.listProgressBars(owner).items[0].status).toBe('running')
       await flush()
       capture.releaseStop()
@@ -145,6 +155,26 @@ describe('orchestrator progress capabilities', () => {
       await stopping2
     },
   )
+
+  it.each(['claude-code', 'codex'] as const)('enforces Plan in the managed MCP capability for %s', async (engineId) => {
+    const workspace = await createWorkspace(engineId)
+    const capture = makeEngine(engineId)
+    const { _registerEngineForTest } = await import('../../server/services/agent/engines/registry.js')
+    _registerEngineForTest(capture.engine)
+    const orchestrator = await import('../../server/services/agent/orchestrator.js')
+    const internal = await import('../../server/services/internal-mcp-capability-service.js')
+    orchestrator.startAgent(workspace.id, workspace.projectPath, 'Plan only', undefined, false, 'plan')
+    await flush()
+    const token = capture.starts[0].mcpServers!.find((server) => server.name === 'kobo-tasks')!.env
+      .KOBO_MCP_SESSION_TOKEN
+    expect(() => internal.authorizeInternalMcpTool(token, 'list_tasks', {})).not.toThrow()
+    expect(() => internal.authorizeInternalMcpTool(token, 'create_task', {})).toThrow(/read-only/)
+    expect(() => internal.authorizeInternalMcpTool(token, 'delete_workspace', { workspace_id: 'other' })).toThrow(
+      /read-only/,
+    )
+    await orchestrator.stopAgentAndWait(workspace.id)
+    expect(() => internal.authorizeInternalMcpTool(token, 'list_tasks', {})).toThrow()
+  })
 
   it.each(['claude-code', 'codex'] as const)(
     'persists prepared %s instructions once, scoped to the initial session without memory or capabilities',

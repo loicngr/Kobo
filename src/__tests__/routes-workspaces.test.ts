@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { MergePolicyError } from '../server/services/forge/types.js'
 
 vi.mock('../server/services/image-service.js', () => ({
   saveImage: vi.fn(),
@@ -7471,6 +7472,63 @@ describe('POST /api/workspaces/:id/merge-pr', () => {
     expect(await res.json()).toMatchObject({ code: 'merge_method_unsupported' })
     expect(mergeRequestMock).not.toHaveBeenCalled()
     expect(getPrStatusMock).not.toHaveBeenCalled()
+  })
+
+  it('returns a structured policy refusal without retrying automatically', async () => {
+    getPrStatusMock.mockResolvedValueOnce({ number: 42, state: 'OPEN', readyToMerge: true })
+    mergeRequestMock.mockRejectedValueOnce(new MergePolicyError())
+    const res = await app.request('/api/workspaces/ws-1/merge-pr', { method: 'POST' })
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({
+      code: 'merge_policy_blocked',
+      error: 'GitHub branch protection rules prevent this merge.',
+    })
+    expect(mergeRequestMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('forwards an explicit admin override even when checks are not ready', async () => {
+    getPrStatusMock.mockResolvedValueOnce({ number: 42, state: 'OPEN', readyToMerge: false })
+    const res = await app.request('/api/workspaces/ws-1/merge-pr', {
+      method: 'POST',
+      body: JSON.stringify({ method: 'squash', admin: true }),
+    })
+    expect(res.status).toBe(200)
+    expect(mergeRequestMock).toHaveBeenCalledExactlyOnceWith(expect.any(String), 42, 'squash', { admin: true })
+  })
+
+  it('does not override protections when admin is false', async () => {
+    getPrStatusMock.mockResolvedValueOnce({ number: 42, state: 'OPEN', readyToMerge: false })
+    const res = await app.request('/api/workspaces/ws-1/merge-pr', {
+      method: 'POST',
+      body: JSON.stringify({ admin: false }),
+    })
+    expect(res.status).toBe(409)
+    expect(mergeRequestMock).not.toHaveBeenCalled()
+  })
+
+  it.each(['"true"', '1', 'null', '{}'])('rejects a non-boolean admin value: %s', async (value) => {
+    const res = await app.request('/api/workspaces/ws-1/merge-pr', { method: 'POST', body: `{"admin":${value}}` })
+    expect(res.status).toBe(400)
+    expect(mergeRequestMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects admin for other forges instead of silently ignoring it', async () => {
+    const provider = getForgeProvider('github')
+    vi.mocked(getForgeProvider).mockReturnValueOnce({ ...provider, id: 'gitlab' })
+    const res = await app.request('/api/workspaces/ws-1/merge-pr', { method: 'POST', body: '{"admin":true}' })
+    expect(res.status).toBe(409)
+    expect(await res.json()).toMatchObject({ code: 'merge_admin_unsupported' })
+    expect(mergeRequestMock).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    { number: 42, state: 'CLOSED', readyToMerge: false },
+    { number: 42, state: 'OPEN', readyToMerge: false, mergeable: 'CONFLICTING' },
+  ])('does not override an unmergeable PR: %j', async (snapshot) => {
+    getPrStatusMock.mockResolvedValueOnce(snapshot)
+    const res = await app.request('/api/workspaces/ws-1/merge-pr', { method: 'POST', body: '{"admin":true}' })
+    expect(res.status).toBe(409)
+    expect(mergeRequestMock).not.toHaveBeenCalled()
   })
 
   it('returns a forge failure without retrying another method', async () => {

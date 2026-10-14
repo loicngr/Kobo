@@ -1,4 +1,24 @@
 export default {
+  'settings.mcp.failed': 'Vorgang fehlgeschlagen',
+  'settings.mcp.write': 'Schreiben / Aktion',
+  'settings.mcp.readOnly': 'Lesen',
+  'settings.mcp.expiryDays': '{count} Tage',
+  'settings.mcp.revoke': 'Widerrufen',
+  'settings.mcp.noExpiry': 'Kein Ablauf',
+  'settings.mcp.hideKey': 'Schlüssel ausblenden',
+  'settings.mcp.copyKey': 'Schlüssel kopieren',
+  'settings.mcp.key': 'MCP-Schlüssel',
+  'settings.mcp.oneTimeKey': 'Jetzt kopieren: Nach Verlassen dieser Seite wird der Schlüssel nicht erneut angezeigt.',
+  'settings.mcp.createKey': 'Schlüssel erstellen',
+  'settings.mcp.expiry': 'Ablauf',
+  'settings.mcp.scopeHint':
+    'Standardmäßig nur Lesen. Eine Workspace-Auswahl deaktiviert globale Werkzeuge und begrenzt den Speicher auf diese Workspaces. Alle Workspaces erlaubt auch globalen und Projektspeicher, wenn Speicherwerkzeuge freigegeben sind.',
+  'settings.mcp.tools': 'Erlaubte Werkzeuge',
+  'settings.mcp.workspaces': 'Erlaubte Workspaces',
+  'settings.mcp.allWorkspaces': 'Alle Workspaces (aktuelle und zukünftige)',
+  'settings.mcp.keyName': 'Schlüsselname',
+  'settings.mcp.scopedHint':
+    'Jeder Client verwendet einen eigenen, unabhängig widerrufbaren MCP-Schlüssel. Das Administrator-Token gewährt keinen MCP-Zugriff mehr.',
   'groupMessage.title': 'Gruppennachricht',
   'groupMessage.description': 'Dieselbe Anweisung an mehrere Workspaces senden.',
   'groupMessage.devServerRunning': 'Nur Workspaces mit laufendem Entwicklungsserver',
@@ -1671,6 +1691,14 @@ export default {
   'git.mergeMethod.rebase': 'Rebase und Merge — Commits ohne Merge-Commit neu anwenden',
   'git.mergeRequestConfirmTitle': '{request} mergen?',
   'git.mergeRequestConfirmMessage': 'Dadurch wird die offene {request} in ihren Zielbranch gemergt.',
+  'git.mergePolicyTitle': 'Merge von GitHub blockiert',
+  'git.mergePolicyMessage':
+    'Die Branch-Schutzregeln verhindern den Merge. Sie können die Schutzregeln beibehalten oder einen Administrator-Merge (--admin) versuchen. Dadurch werden erforderliche Prüfungen und Reviews umgangen, sofern Ihre GitHub-Berechtigungen dies erlauben.',
+  'git.mergeKeepProtections': 'Schutzregeln beibehalten',
+  'git.mergeAsAdmin': 'Als Administrator mergen',
+  'git.mergeAdminFailed':
+    'Der Administrator-Merge konnte nicht bestätigt werden. Prüfen Sie den PR-Status, Ihre Berechtigungen und die Repository-Regeln.',
+  'git.mergeRequestPending': 'Anfrage gesendet. Der Merge dieser {request} ist noch nicht bestätigt.',
   'git.mergeRequestSuccess': '{request} gemergt',
   'git.mergeRequestFailed': '{request} konnte nicht gemergt werden',
   'git.deleteRemoteBranch': 'Remote-Branch löschen',
@@ -2172,11 +2200,11 @@ export default {
   'settings.mcp.stdio': 'Lokales stdio',
   'settings.mcp.copyUrl': 'URL kopieren',
   'settings.mcp.copyConfig': 'Konfiguration kopieren',
-  'settings.mcp.copyWithToken': 'Mit Token kopieren',
+  'settings.mcp.copyWithToken': 'Mit neuem Schlüssel kopieren',
   'settings.mcp.genericFormat':
     'Diese Beispiele verwenden das allgemeine mcpServers-Format. Passen Sie den Container an Ihren MCP-Client an. Die Vorschau enthält Token-Platzhalter.',
   'settings.mcp.tokenUnavailable':
-    'Kein Token verfügbar. Aktivieren Sie den Netzwerkzugriff, bevor Sie eine authentifizierte Konfiguration kopieren.',
+    'Erstellen Sie einen MCP-Schlüssel, um eine authentifizierte Konfiguration zu kopieren.',
   'settings.mcp.stdioUnavailable':
     'Der stdio-Einstiegspunkt ist in dieser Installation nicht verfügbar. Verwenden Sie HTTP oder bauen Sie zuerst Kōbō.',
   'settings.mcp.copyFailed': 'Kopieren in die Zwischenablage fehlgeschlagen.',

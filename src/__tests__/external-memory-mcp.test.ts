@@ -9,8 +9,14 @@ import { Hono } from 'hono'
 import { afterEach, beforeEach, expect, it } from 'vitest'
 import { closeDb, getDb } from '../server/db/index.js'
 import { runMigrations } from '../server/db/migrations.js'
+import internalMcp from '../server/routes/internal-mcp.js'
 import mcp from '../server/routes/mcp.js'
 import memory from '../server/routes/memory.js'
+import {
+  createExternalMcpCredential,
+  EXTERNAL_TOOL_CATALOGUE,
+} from '../server/services/external-mcp-credentials-service.js'
+import { createInternalMcpCapability } from '../server/services/internal-mcp-capability-service.js'
 import {
   allocateMemoryConversationKey,
   createMemoryCapability,
@@ -22,12 +28,21 @@ import { _setSettingsPath, updateGlobalSettings } from '../server/services/setti
 import { createIdleSession } from '../server/services/workspace-service.js'
 import { estimateMemoryTokens } from '../server/utils/memory-token-budget.js'
 
+let externalToken: string
+let previousHome: string | undefined
 let directory: string
-const app = new Hono().route('/api/mcp', mcp).route('/api/memory', memory)
+const app = new Hono().route('/api/mcp', mcp).route('/api/internal-mcp', internalMcp).route('/api/memory', memory)
 
 beforeEach(() => {
   closeDb()
   directory = mkdtempSync(join(tmpdir(), 'kobo-external-memory-mcp-'))
+  previousHome = process.env.KOBO_HOME
+  process.env.KOBO_HOME = directory
+  externalToken = createExternalMcpCredential({
+    name: 'Transport test',
+    allWorkspaces: true,
+    tools: EXTERNAL_TOOL_CATALOGUE.map((tool) => tool.name),
+  }).token
   _setSettingsPath(join(directory, 'settings.json'))
   const db = getDb(join(directory, 'test.db'))
   runMigrations(db)
@@ -37,6 +52,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  process.env.KOBO_HOME = previousHome
   closeDb()
   rmSync(directory, { recursive: true, force: true })
 })
@@ -44,6 +60,7 @@ afterEach(() => {
 function httpClient(clientName = 'Memory client') {
   const client = new Client({ name: clientName, version: '1' })
   const transport = new StreamableHTTPClientTransport(new URL('http://localhost/api/mcp'), {
+    requestInit: { headers: { Authorization: `Bearer ${externalToken}` } },
     fetch: async (input, init) =>
       app.fetch(
         new Request(input, {
@@ -550,7 +567,7 @@ it('exposes external memory over global stdio without workspace or engine state'
           KOBO_WORKSPACE_ID: '',
           KOBO_DB_PATH: getDb().name,
           KOBO_BACKEND_URL: `http://127.0.0.1:${address.port}`,
-          KOBO_NETWORK_TOKEN: 'test-token',
+          KOBO_MCP_TOKEN: externalToken,
           KOBO_MCP_CLIENT_NAME: 'Atelier ✨',
         },
         stderr: 'pipe',
@@ -682,8 +699,13 @@ it('returns no MCP content from the workspace bridge after its denial allowance 
           KOBO_WORKSPACE_ID: 'ws-1',
           KOBO_DB_PATH: getDb().name,
           KOBO_BACKEND_URL: `http://127.0.0.1:${address.port}`,
-          KOBO_NETWORK_TOKEN: 'test-token',
-          KOBO_MEMORY_SESSION_TOKEN: capability.token,
+          KOBO_MCP_TOKEN: externalToken,
+          KOBO_MCP_SESSION_TOKEN: createInternalMcpCapability({
+            workspaceId: 'ws-1',
+            sessionId: session.id,
+            readOnly: false,
+            env: { KOBO_MEMORY_SESSION_TOKEN: capability.token },
+          }).token,
         },
         stderr: 'pipe',
       }),
@@ -748,14 +770,23 @@ it('keeps workspace-bound and handoff memory calls off the unrestricted external
     KOBO_WORKSPACE_ID: 'ws-1',
     KOBO_DB_PATH: getDb().name,
     KOBO_BACKEND_URL: `http://127.0.0.1:${address.port}`,
-    KOBO_NETWORK_TOKEN: 'test-token',
+    KOBO_MCP_TOKEN: externalToken,
   }
   const startClient = async (extraEnv: Record<string, string> = {}) => {
     const client = new Client({ name: 'Bound agent', version: '1' })
     const transport = new StdioClientTransport({
       command: process.execPath,
       args: ['--import', 'tsx', 'src/mcp-server/kobo-tasks-server.ts'],
-      env: { ...environment, ...extraEnv },
+      env: {
+        ...environment,
+        ...extraEnv,
+        KOBO_MCP_SESSION_TOKEN: createInternalMcpCapability({
+          workspaceId: 'ws-1',
+          sessionId: 'test',
+          readOnly: !!extraEnv.KOBO_HANDOFF_ID,
+          env: extraEnv,
+        }).token,
+      },
       stderr: 'pipe',
     })
     await client.connect(transport)
@@ -780,7 +811,8 @@ it('keeps workspace-bound and handoff memory calls off the unrestricted external
       })
       expect(denied.isError).toBe(true)
       expect((denied.content as Array<{ text?: string }>)[0]?.text).toContain('launch capability')
-      expect(backendRequests).toEqual([])
+      expect(backendRequests.length).toBeGreaterThan(0)
+      expect(backendRequests.every((path) => path === '/api/internal-mcp')).toBe(true)
     } finally {
       await bound.close()
     }
@@ -802,8 +834,9 @@ it('keeps workspace-bound and handoff memory calls off the unrestricted external
         },
       })
       expect(forged.isError).toBe(true)
-      expect((forged.content as Array<{ text?: string }>)[0]?.text).toContain('handoff report')
-      expect(backendRequests).toEqual([])
+      expect((forged.content as Array<{ text?: string }>)[0]?.text).toContain('read-only')
+      expect(backendRequests.length).toBeGreaterThan(0)
+      expect(backendRequests.every((path) => path === '/api/internal-mcp')).toBe(true)
     } finally {
       await handoff.close()
     }

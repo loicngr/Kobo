@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../server/services/network-access-service.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../server/services/network-access-service.js')>()),
@@ -28,8 +28,37 @@ function setup(options: { enabled?: boolean; behindProxy?: boolean; lanHostnames
 }
 
 beforeEach(() => vi.clearAllMocks())
+afterEach(() => vi.unstubAllEnvs())
 
 describe('hostCheckMiddleware', () => {
+  it.each(['localhost/path', 'http://localhost', 'user@localhost'])(
+    'rejects malformed raw Host %s before the loopback fast path',
+    async (host) => {
+      setup()
+      expect((await app.request('http://localhost/api/ping', { headers: { host } })).status).toBe(403)
+    },
+  )
+
+  it('accepts the declared HTTPS proxy origin but refuses scheme/port changes and forged forwarded hosts', async () => {
+    setup({ behindProxy: true })
+    vi.stubEnv('KOBO_NETWORK_ACCESS_PROXY_HOST', 'https://kobo.example.com:8443')
+    for (const [origin, status] of [
+      ['https://kobo.example.com:8443', 200],
+      ['http://kobo.example.com:8443', 403],
+      ['https://kobo.example.com', 403],
+    ] as const) {
+      const response = await app.request('http://kobo.example.com:8443/api/write', {
+        method: 'POST',
+        headers: { origin },
+      })
+      expect(response.status).toBe(status)
+    }
+    expect(
+      (await app.request('http://evil.com/api/ping', { headers: { 'X-Forwarded-Host': 'kobo.example.com:8443' } }))
+        .status,
+    ).toBe(403)
+  })
+
   it('serves a request addressed to the machine own name', async () => {
     setup()
     const res = await app.request('http://localhost:3000/api/ping')
@@ -69,10 +98,10 @@ describe('hostCheckMiddleware', () => {
     expect((await app.request('http://192.168.1.20:3000/api/ping')).status).toBe(200)
   })
 
-  it('serves any host behind a reverse proxy, where the token gate owns the boundary', async () => {
+  it('refuses public hosts when the proxy hostname is not configured', async () => {
     setup({ behindProxy: true })
     const res = await app.request('http://kobo.example.com/api/ping')
-    expect(res.status).toBe(200)
+    expect(res.status).toBe(403)
   })
 })
 

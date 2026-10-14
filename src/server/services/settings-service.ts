@@ -31,6 +31,7 @@ import {
   LEGACY_PR_PROMPT_TEMPLATE,
   LEGACY_SENTRY_INITIAL_PROMPT,
 } from './legacy-public-prompts.js'
+import { revokeNetworkSessions } from './network-session-service.js'
 import { DEFAULT_REVIEW_PROMPT_TEMPLATE } from './review-template-service.js'
 import {
   DEFAULT_CHANGE_SOURCE_BRANCH_SCRIPT,
@@ -1666,6 +1667,7 @@ function readSettings(): Settings {
 
 function readSettingsFromDisk(): Settings {
   ensureSettingsPathInitialized()
+  protectSettingsFiles()
   if (!fs.existsSync(settingsFilePath)) {
     const defaults = defaultSettings()
     writeSettings(defaults)
@@ -1713,6 +1715,21 @@ function readSettingsFromDisk(): Settings {
 /** Number of `settings.json.backup-*` files kept; older ones are rotated out. */
 const SETTINGS_BACKUP_KEEP = 5
 
+/** Repair legacy permissions before reading secrets, without following file symlinks. */
+function protectSettingsFiles(): void {
+  const dir = path.dirname(settingsFilePath)
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
+  fs.chmodSync(dir, 0o700)
+  const basename = path.basename(settingsFilePath)
+  for (const name of fs.readdirSync(dir)) {
+    if (name !== basename && name !== `${basename}.tmp` && !name.startsWith(`${basename}.backup-`)) continue
+    const file = path.join(dir, name)
+    const stat = fs.lstatSync(file)
+    if (!stat.isFile() || stat.nlink !== 1) throw new Error('[settings] Refusing unsafe settings file')
+    fs.chmodSync(file, 0o600)
+  }
+}
+
 /**
  * Keep only the `SETTINGS_BACKUP_KEEP` most recent `settings.json.backup-*`
  * files in `dir`, deleting the rest. Best-effort — never throws.
@@ -1747,7 +1764,7 @@ function createSettingsBackupIfPresent(): void {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-')
   settingsBackupSequence += 1
   const backupPath = path.join(dir, `settings.json.backup-${stamp}-${settingsBackupSequence}`)
-  fs.copyFileSync(settingsFilePath, backupPath)
+  fs.writeFileSync(backupPath, fs.readFileSync(settingsFilePath), { mode: 0o600, flag: 'wx' })
   pruneSettingsBackups(dir)
 }
 
@@ -1756,14 +1773,11 @@ function writeSettings(settings: Settings, options?: { backup?: boolean }): void
   invalidateSettingsCache()
   ensureSettingsPathInitialized()
   const tmpPath = `${settingsFilePath}.tmp`
-  const dir = path.dirname(settingsFilePath)
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true })
-  }
+  protectSettingsFiles()
   if (options?.backup) {
     createSettingsBackupIfPresent()
   }
-  fs.writeFileSync(tmpPath, JSON.stringify(settings, null, 2), 'utf-8')
+  fs.writeFileSync(tmpPath, JSON.stringify(settings, null, 2), { encoding: 'utf-8', mode: 0o600 })
   fs.renameSync(tmpPath, settingsFilePath)
 }
 
@@ -2232,7 +2246,9 @@ export function updateNetworkAccessSettings(patch: {
   networkAccessToken?: string
   networkAccessBehindProxy?: boolean
 }): GlobalSettings {
-  const settings = readSettings()
+  const current = readSettings()
+  // Keep cached policy intact until persistence succeeds.
+  const settings = { ...current, global: { ...current.global } }
   if (typeof patch.networkAccessEnabled === 'boolean') {
     settings.global.networkAccessEnabled = patch.networkAccessEnabled
   }
@@ -2243,6 +2259,13 @@ export function updateNetworkAccessSettings(patch: {
     settings.global.networkAccessBehindProxy = patch.networkAccessBehindProxy
   }
   writeSettings(settings, { backup: true })
+  if (
+    current.global.networkAccessEnabled !== settings.global.networkAccessEnabled ||
+    current.global.networkAccessToken !== settings.global.networkAccessToken ||
+    current.global.networkAccessBehindProxy !== settings.global.networkAccessBehindProxy
+  ) {
+    revokeNetworkSessions()
+  }
   return settings.global
 }
 

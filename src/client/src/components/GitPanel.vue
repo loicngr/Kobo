@@ -820,6 +820,7 @@ const fetching = ref(false)
 const openingPr = ref(false)
 const changingBase = ref(false)
 const mergingRequest = ref(false)
+let panelUnmounted = false
 const showDiff = ref(false)
 // Exposed API surface of DiffViewer (see its `defineExpose`). Typed loosely
 // rather than via `InstanceType<typeof DiffViewer>` because DiffViewer is
@@ -1294,6 +1295,7 @@ watch(
 )
 
 onBeforeUnmount(() => {
+  panelUnmounted = true
   window.removeEventListener('kobo:select-diff', onSelectDiff)
   if (gitRefreshTimeout) {
     clearTimeout(gitRefreshTimeout)
@@ -1871,7 +1873,7 @@ function handleChangePrBase() {
 }
 
 function handleMergeRequest() {
-  if (!props.workspace || !canMergeRequest.value) return
+  if (!props.workspace || !canMergeRequest.value || mergingRequest.value) return
   const workspace = props.workspace
   const methods = forge.value.capabilities.mergeMethods
   const canDeleteBranch = forge.value.capabilities.canDeleteRemoteBranch
@@ -1894,23 +1896,46 @@ function handleMergeRequest() {
   }).onOk(async (method: unknown) => {
     if (props.workspace?.id !== workspace.id || !canMergeRequest.value) return
     if (methods?.length && (!isMergeMethod(method) || !methods.includes(method))) return
+    await performMerge(method)
+  })
+
+  async function performMerge(method: unknown, admin = false) {
+    if (panelUnmounted || props.workspace?.id !== workspace.id || mergingRequest.value) return
     mergingRequest.value = true
     try {
       const res = await apiFetchResponse(`/api/workspaces/${workspace.id}/merge-pr`, {
         method: 'POST',
-        ...(methods?.length
+        ...(methods?.length || admin
           ? {
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ method }),
+              body: JSON.stringify({ ...(methods?.length ? { method } : {}), ...(admin ? { admin: true } : {}) }),
             }
           : {}),
       })
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
-        throw new Error(data.error ?? 'Failed')
+        if (data.code === 'merge_policy_blocked') {
+          if (!panelUnmounted && !admin && forge.value.id === 'github' && props.workspace?.id === workspace.id) {
+            $q.dialog({
+              title: t('git.mergePolicyTitle'),
+              message: t('git.mergePolicyMessage'),
+              dark: true,
+              focus: 'cancel',
+              cancel: { flat: true, label: t('git.mergeKeepProtections'), color: 'kobo-2' },
+              ok: { flat: true, label: t('git.mergeAsAdmin'), color: 'negative' },
+            }).onOk(() => performMerge(method, true))
+            return
+          }
+          throw new Error(t('git.mergeAdminFailed'))
+        }
+        throw new Error(admin ? t('git.mergeAdminFailed') : (data.error ?? t('git.mergeRequestFailed', { request })))
       }
       const data = (await res.json()) as { merged: boolean; branch: string }
-      $q.notify({ type: 'positive', message: t('git.mergeRequestSuccess', { request }), position: 'top' })
+      $q.notify({
+        type: data.merged ? 'positive' : 'info',
+        message: t(data.merged ? 'git.mergeRequestSuccess' : 'git.mergeRequestPending', { request }),
+        position: 'top',
+      })
       await Promise.allSettled([loadGitStats({ freshFetch: true }), store.refreshPrSnapshot(workspace.id)])
       if (data.merged && canDeleteBranch && props.workspace?.id === workspace.id) {
         $q.dialog({
@@ -1929,7 +1954,7 @@ function handleMergeRequest() {
     } finally {
       mergingRequest.value = false
     }
-  })
+  }
 }
 
 async function deleteRemoteBranch(branch: string) {

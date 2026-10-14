@@ -8,8 +8,11 @@ import { WebSocketServer } from 'ws'
 import { closeDb, getDb } from './db/index.js'
 import { getPendingMigrations, runMigrations } from './db/migrations.js'
 import { hostCheckMiddleware } from './middleware/host-check-middleware.js'
-import { networkAuthMiddleware } from './middleware/network-auth-middleware.js'
+import { networkAuthMiddleware, operatorDispatchAuthMiddleware } from './middleware/network-auth-middleware.js'
+import { securityHeadersMiddleware } from './middleware/security-headers-middleware.js'
+import { requestBodyLimitsMiddleware, trafficLimitsMiddleware } from './middleware/traffic-limits-middleware.js'
 import activityRouter from './routes/activity.js'
+import authRouter from './routes/auth.js'
 import changelogRouter from './routes/changelog.js'
 import devServerRouter from './routes/dev-server.js'
 import documentsRouter from './routes/documents.js'
@@ -21,8 +24,10 @@ import gitRouter from './routes/git.js'
 import healthRouter from './routes/health.js'
 import imagesRouter from './routes/images.js'
 import integrationsRouter from './routes/integrations.js'
+import internalMcpRouter from './routes/internal-mcp.js'
 import maintenanceRouter from './routes/maintenance.js'
 import mcpRouter from './routes/mcp.js'
+import mcpCredentialsRouter from './routes/mcp-credentials.js'
 import memoryRouter from './routes/memory.js'
 import { migrationRouter } from './routes/migration.js'
 import notionRouter from './routes/notion.js'
@@ -70,7 +75,6 @@ import { onKoboShutdown } from './services/lifecycle-hook-service.js'
 import { reconcileMessageRequests } from './services/mcp-message-request-service.js'
 import { reconcileMemoryContextsOnStartup } from './services/memory-context-service.js'
 import {
-  authorizeWsUpgrade,
   generateToken,
   getLanHostnames,
   getLanUrls,
@@ -80,7 +84,13 @@ import {
   resolveDevClientOrigin,
   resolveNetworkAccessEnvOverrides,
   resolveProxyHostname,
+  resolveProxyOrigin,
 } from './services/network-access-service.js'
+import {
+  consumeWebSocketTicket,
+  isNetworkTransportAllowed,
+  registerNetworkSocket,
+} from './services/network-session-service.js'
 import { startPrWatcher, stopPrWatcher } from './services/pr-watcher-service.js'
 import { reconcileOrphanedProgressBars } from './services/progress-bar-service.js'
 import * as quotaBackoffService from './services/quota-backoff-service.js'
@@ -204,10 +214,14 @@ const app = new Hono()
 // that re-resolves its own domain to 127.0.0.1 cannot read our responses as
 // same-origin. Mounted on every path, ahead of the token gate: the SPA shell
 // is served outside /api/*, and rebinding targets the browser, not the socket.
+app.use('*', securityHeadersMiddleware())
 app.use('*', hostCheckMiddleware)
 
 // Gate non-loopback requests behind the network-access token (loopback exempt).
+app.use('/api/*', trafficLimitsMiddleware())
 app.use('/api/*', networkAuthMiddleware)
+app.use('/api/*', requestBodyLimitsMiddleware())
+app.use('/api/*', operatorDispatchAuthMiddleware)
 
 // Health check (root / is handled by the SPA catch-all below)
 app.get('/api/health', (c) => c.json({ status: 'ok', version: getPackageVersion() }))
@@ -215,6 +229,9 @@ app.get('/api/health', (c) => c.json({ status: 'ok', version: getPackageVersion(
 // Mount route sub-routers
 app.route('/api/workspaces', workspacesRouter)
 app.route('/api/workspace-messages', workspaceMessagesRouter)
+app.route('/api/auth', authRouter)
+app.route('/api/internal-mcp', internalMcpRouter)
+app.route('/api/mcp-credentials', mcpCredentialsRouter)
 app.route('/api/mcp', mcpRouter)
 app.route('/api/memory', memoryRouter)
 app.route('/api/progress-bars', progressBarsRouter)
@@ -328,7 +345,6 @@ const server = serve(
         devClientOrigin: resolveDevClientOrigin(),
         networkEnabled: settings.networkAccessEnabled,
         lanUrls: settings.networkAccessEnabled ? getLanUrls(info.port) : [],
-        token: settings.networkAccessToken,
         changelog: readStartupNotes(getChangelogPath()),
         color: Boolean(process.stdout.isTTY && process.env.TERM !== 'dumb' && !('NO_COLOR' in process.env)),
       }),
@@ -354,8 +370,8 @@ server.on('error', (err: NodeJS.ErrnoException) => {
 })
 
 // Create WebSocketServer attached to the HTTP server
-const wss = new WebSocketServer({ noServer: true })
-const terminalWss = new WebSocketServer({ noServer: true })
+const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024, perMessageDeflate: false })
+const terminalWss = new WebSocketServer({ noServer: true, maxPayload: 128 * 1024, perMessageDeflate: false })
 
 // Wire WebSocket connections to websocket-service.handleConnection()
 wss.on('connection', (ws) => {
@@ -441,9 +457,29 @@ server.on('upgrade', (request, socket, head) => {
     socket.destroy()
     return
   }
-  const { pathname } = new URL(request.url ?? '/', `http://localhost:${PORT}`)
-
-  const wsGlobal = getGlobalSettings()
+  let upgradeUrl: URL
+  try {
+    const raw = request.url ?? '/'
+    if (!raw.startsWith('/') || raw.startsWith('//') || raw.includes('\\')) throw new Error('Invalid upgrade path')
+    upgradeUrl = new URL(raw, `http://localhost:${PORT}`)
+  } catch {
+    socket.write('HTTP/1.1 400 Bad Request\r\n\r\n')
+    socket.destroy()
+    return
+  }
+  const { pathname } = upgradeUrl
+  let wsGlobal: ReturnType<typeof getGlobalSettings>
+  try {
+    wsGlobal = getGlobalSettings()
+  } catch {
+    socket.destroy()
+    return
+  }
+  if (!isNetworkTransportAllowed(request.socket.remoteAddress, wsGlobal)) {
+    socket.write('HTTP/1.1 403 Forbidden\r\n\r\n')
+    socket.destroy()
+    return
+  }
 
   // WebSockets are exempt from the same-origin policy and send no preflight,
   // so without these two any page the user visits could open /ws/terminal/<id>
@@ -461,7 +497,7 @@ server.on('upgrade', (request, socket, head) => {
       proxyHostname: resolveProxyHostname(),
     })
   ) {
-    console.warn(`[host-check] WS 403 (forbidden host '${wsHost ?? 'unknown'}') ${pathname}`)
+    console.warn('[host-check] WS 403 (forbidden host)')
     socket.write('HTTP/1.1 403 Forbidden\r\n\r\n')
     socket.destroy()
     return
@@ -474,26 +510,17 @@ server.on('upgrade', (request, socket, head) => {
       behindProxy: wsGlobal.networkAccessBehindProxy,
       proxyHostname: resolveProxyHostname(),
       devOrigin: resolveDevClientOrigin(),
+      proxyOrigin: resolveProxyOrigin(),
     })
   ) {
-    console.warn(`[origin-check] WS 403 (forbidden origin '${request.headers.origin ?? 'unknown'}') ${pathname}`)
+    console.warn('[origin-check] WS 403 (forbidden origin)')
     socket.write('HTTP/1.1 403 Forbidden\r\n\r\n')
     socket.destroy()
     return
   }
 
-  if (
-    !authorizeWsUpgrade({
-      address: request.socket.remoteAddress,
-      rawUrl: request.url,
-      enabled: wsGlobal.networkAccessEnabled,
-      expectedToken: wsGlobal.networkAccessToken,
-      trustLoopback: !wsGlobal.networkAccessBehindProxy,
-    })
-  ) {
-    console.warn(
-      `[network-auth] WS 401 (missing/invalid token) from ${request.socket.remoteAddress ?? 'unknown'} ${pathname}`,
-    )
+  const ticket = consumeWebSocketTicket(upgradeUrl.searchParams.get('ticket'), pathname, wsGlobal)
+  if (!ticket) {
     socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n')
     socket.destroy()
     return
@@ -501,7 +528,16 @@ server.on('upgrade', (request, socket, head) => {
 
   if (pathname === '/ws') {
     wss.handleUpgrade(request, socket, head, (ws) => {
-      wss.emit('connection', ws, request)
+      if (
+        registerNetworkSocket(
+          ws,
+          request.socket.remoteAddress ?? 'unknown',
+          wsGlobal,
+          getGlobalSettings,
+          ticket.session,
+        )
+      )
+        wss.emit('connection', ws, request)
     })
   } else if (pathname.startsWith('/ws/terminal/')) {
     const workspaceId = pathname.slice('/ws/terminal/'.length)
@@ -510,7 +546,16 @@ server.on('upgrade', (request, socket, head) => {
       return
     }
     terminalWss.handleUpgrade(request, socket, head, (ws) => {
-      terminalWss.emit('connection', ws, workspaceId)
+      if (
+        registerNetworkSocket(
+          ws,
+          request.socket.remoteAddress ?? 'unknown',
+          wsGlobal,
+          getGlobalSettings,
+          ticket.session,
+        )
+      )
+        terminalWss.emit('connection', ws, workspaceId)
     })
   } else {
     socket.destroy()

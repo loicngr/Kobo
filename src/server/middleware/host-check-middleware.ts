@@ -6,6 +6,7 @@ import {
   isLocalRequestHost,
   resolveDevClientOrigin,
   resolveProxyHostname,
+  resolveProxyOrigin,
 } from '../services/network-access-service.js'
 import { getGlobalSettings } from '../services/settings-service.js'
 
@@ -33,10 +34,11 @@ export const hostCheckMiddleware: MiddlewareHandler = async (c, next) => {
 
   let host: string | undefined
   try {
-    host = new URL(c.req.url).host
+    host = c.req.header('host') ?? new URL(c.req.url).host
   } catch {
     host = undefined
   }
+  const requestProtocol = new URL(c.req.url).protocol
   const origin = c.req.header('origin')
 
   // Fast path. This middleware runs on every request, static assets included,
@@ -49,7 +51,7 @@ export const hostCheckMiddleware: MiddlewareHandler = async (c, next) => {
   const devOrigin = resolveDevClientOrigin()
 
   // A page we served ourselves, talking to us: still no settings needed.
-  if (isLocalRequestHost(host) && isAllowedOrigin({ origin, requestHost: host, devOrigin })) {
+  if (isLocalRequestHost(host) && isAllowedOrigin({ origin, requestHost: host, devOrigin, requestProtocol })) {
     return next()
   }
 
@@ -76,7 +78,7 @@ export const hostCheckMiddleware: MiddlewareHandler = async (c, next) => {
     })
   ) {
     // Surface it: "the page just stopped loading" is otherwise undebuggable.
-    console.warn(`[host-check] 403 (forbidden host '${host ?? 'unknown'}') ${c.req.method} ${c.req.path}`)
+    console.warn('[host-check] 403 (forbidden host)')
     return c.json({ error: 'forbidden host' }, 403)
   }
 
@@ -87,9 +89,11 @@ export const hostCheckMiddleware: MiddlewareHandler = async (c, next) => {
       behindProxy: global.networkAccessBehindProxy,
       proxyHostname: resolveProxyHostname(),
       devOrigin,
+      requestProtocol,
+      proxyOrigin: resolveProxyOrigin(),
     })
   ) {
-    console.warn(`[origin-check] 403 (forbidden origin '${origin}') ${c.req.method} ${c.req.path}`)
+    console.warn('[origin-check] 403 (forbidden origin)')
     return c.json({ error: 'forbidden origin' }, 403)
   }
 

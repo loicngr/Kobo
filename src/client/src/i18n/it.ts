@@ -1,4 +1,24 @@
 export default {
+  'settings.mcp.failed': 'Operazione non riuscita',
+  'settings.mcp.write': 'Scrittura / azione',
+  'settings.mcp.readOnly': 'Lettura',
+  'settings.mcp.expiryDays': '{count} giorni',
+  'settings.mcp.revoke': 'Revoca',
+  'settings.mcp.noExpiry': 'Nessuna scadenza',
+  'settings.mcp.hideKey': 'Nascondi chiave',
+  'settings.mcp.copyKey': 'Copia chiave',
+  'settings.mcp.key': 'Chiave MCP',
+  'settings.mcp.oneTimeKey': 'Copia ora questa chiave: non verrà più mostrata dopo aver lasciato questa pagina.',
+  'settings.mcp.createKey': 'Crea chiave',
+  'settings.mcp.expiry': 'Scadenza',
+  'settings.mcp.scopeHint':
+    'Sola lettura per impostazione predefinita. Selezionare workspace disattiva gli strumenti globali e limita la memoria ai workspace scelti. Tutti i workspace consente anche memoria globale e di progetto se sono concessi gli strumenti di memoria.',
+  'settings.mcp.tools': 'Strumenti consentiti',
+  'settings.mcp.workspaces': 'Workspace consentiti',
+  'settings.mcp.allWorkspaces': 'Tutti i workspace (attuali e futuri)',
+  'settings.mcp.keyName': 'Nome della chiave',
+  'settings.mcp.scopedHint':
+    'Ogni client usa una propria chiave MCP, revocabile separatamente. Il token amministratore non consente più l’accesso MCP.',
   'groupMessage.title': 'Messaggio di gruppo',
   'groupMessage.description': 'Invia la stessa istruzione a più workspace.',
   'groupMessage.devServerRunning': 'Solo workspace con un server di sviluppo in esecuzione',
@@ -1657,6 +1677,14 @@ export default {
   'git.mergeMethod.rebase': 'Rebase e merge — riapplica i commit senza commit di merge',
   'git.mergeRequestConfirmTitle': 'Unire {request}?',
   'git.mergeRequestConfirmMessage': 'Questa azione unisce la {request} aperta nel suo branch di destinazione.',
+  'git.mergePolicyTitle': 'Unione bloccata da GitHub',
+  'git.mergePolicyMessage':
+    'Le regole di protezione del branch impediscono l’unione. Puoi mantenere le protezioni o tentare un’unione come amministratore (--admin). Questa azione aggira i controlli e le revisioni obbligatorie se le tue autorizzazioni GitHub lo consentono.',
+  'git.mergeKeepProtections': 'Mantieni le protezioni',
+  'git.mergeAsAdmin': 'Unisci come amministratore',
+  'git.mergeAdminFailed':
+    'Impossibile confermare l’unione come amministratore. Verifica lo stato della PR, le tue autorizzazioni e le regole del repository.',
+  'git.mergeRequestPending': 'Richiesta inviata. L’unione di questa {request} non è ancora confermata.',
   'git.mergeRequestSuccess': '{request} unita',
   'git.mergeRequestFailed': 'Impossibile unire {request}',
   'git.deleteRemoteBranch': 'Elimina branch remoto',
@@ -2154,11 +2182,10 @@ export default {
   'settings.mcp.stdio': 'Stdio locale',
   'settings.mcp.copyUrl': 'Copia URL',
   'settings.mcp.copyConfig': 'Copia configurazione',
-  'settings.mcp.copyWithToken': 'Copia con token',
+  'settings.mcp.copyWithToken': 'Copia con la nuova chiave',
   'settings.mcp.genericFormat':
     'Questi esempi usano il formato generico mcpServers. Adatta il contenitore al tuo client MCP. Le anteprime mostrano un segnaposto per il token.',
-  'settings.mcp.tokenUnavailable':
-    'Nessun token disponibile. Attiva l’accesso alla rete prima di copiare una configurazione autenticata.',
+  'settings.mcp.tokenUnavailable': 'Crea una chiave MCP dedicata per copiare una configurazione autenticata.',
   'settings.mcp.stdioUnavailable':
     'Il punto di ingresso stdio non è disponibile in questa installazione. Usa HTTP o compila prima Kōbō.',
   'settings.mcp.copyFailed': 'Impossibile copiare negli appunti.',

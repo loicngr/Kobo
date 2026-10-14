@@ -887,11 +887,28 @@ destination worktree and sends file/image references to the agent and chat.
 Keyed retries include attachment identity and never upload or send twice. See
 [Sending files and images](src/mcp-server/README.md#sending-files-and-images).
 
-Remote HTTP clients follow the [network access](#network-access) settings and supply the Kōbō token as `Authorization: Bearer <token>` or `X-Kobo-Token`. The endpoint uses the same Host/Origin and reverse-proxy policy as the rest of the backend. No network setting is changed automatically.
+Every external MCP client, including loopback and global stdio clients, must use
+a dedicated MCP key. The operator token and browser session cookie are not accepted
+by `/api/mcp`. Send the MCP key as `Authorization: Bearer <key>`. The endpoint retains the same Host/Origin, network-access and
+reverse-proxy policy. No network setting changes automatically.
+
+Keys are independent, stored only as hashes and have explicit tool and workspace
+grants, optional expiration and individual revocation. The default tool grant is
+read-only; writes and destructive tools require an explicit grant. Each key must
+select workspace IDs or deliberately grant all workspaces. An MCP key cannot
+authenticate to operator REST, terminal or credential-management endpoints.
+
+An authenticated operator manages credentials through `/api/mcp-credentials`:
+GET lists metadata and available tools; POST accepts `name`, optional `tools`,
+`workspaceIds` or `allWorkspaces: true`, and optional ISO `expiresAt`; DELETE
+`/api/mcp-credentials/<id>` revokes one key. Creation returns the raw `token` once.
+Do not send that token to logs, commit it, or reuse it as the operator credential.
 
 See [Connect an external LLM](src/mcp-server/README.md#connect-an-external-llm) for connection examples, tool arguments, cursor polling and authentication details.
 
-The **External LLM access (MCP)** panel within global Network access settings provides copyable URLs and HTTP/stdio configurations for this running installation. Previews use token placeholders; copying a configuration with the real token is a separate action. Set a client name to identify its messages and question answers in workspace history.
+The **External LLM access (MCP)** panel within global Network access settings
+provides HTTP/stdio configuration templates. Supply the dedicated MCP key for the
+intended client. Client names are display labels, not permission identities.
 
 External senders can supply `idempotency_key` once per intended message and reuse it on retries. The durable receipt survives backend restarts and event retention. An uncertain delivery is explicitly reported and never automatically sent again; see the MCP guide for response codes and limitations.
 
@@ -1058,8 +1075,9 @@ To disable network access, toggle it off and restart again.
 
 ### The network access token
 
-When network access is enabled, every non-loopback HTTP request and every
-non-loopback WebSocket connection must supply a shared token.
+When network access is enabled, remote API and WebSocket access requires
+operator authentication. The shared operator token opens a browser session;
+external MCP clients use separate scoped credentials.
 
 - **Auto-generated**: Kōbō generates a random token the first time you enable
   the feature. You never have to type one in.
@@ -1075,11 +1093,12 @@ non-loopback WebSocket connection must supply a shared token.
 
 **Option A: QR code (recommended for phones)**
 
-The Settings panel shows a QR code encoding
-`http://<lan-ip>:<port>/?token=<token>`. Scan it with your phone's camera
-while on the same Wi-Fi network; the browser opens directly to a pre-authenticated
-session. The token is stored in the browser's `localStorage` under
-`kobo:network-token` so subsequent visits don't require re-scanning.
+The Settings panel shows a QR code using a URL fragment (`#token=<token>`),
+which browsers do not send in HTTP requests. The client immediately removes the
+fragment and exchanges the token for a 12-hour HttpOnly, SameSite=Strict session
+cookie (Secure for a configured HTTPS proxy). The operator token is not retained in localStorage.
+Previously stored tokens are removed during migration. Use QR links only on
+trusted devices; do not publish or bookmark a credential-bearing link.
 
 **Option B: manual URL**
 
@@ -1087,22 +1106,27 @@ session. The token is stored in the browser's `localStorage` under
    `http://<lan-ip>:<port>/`).
 2. Open it on the remote device.
 3. A login dialog appears: paste the token from the Settings panel and confirm.
-4. The token is stored in `localStorage`; subsequent visits auto-authenticate.
+4. The HttpOnly session cookie authenticates subsequent visits until expiry or revocation.
 
 **Host machine (localhost)**: connect to `http://localhost:<port>` as usual.
 No token is needed unless **Behind a reverse proxy** is enabled.
 
 ### Token transport
 
-| Connection type | How to supply the token |
+| Connection type | Authentication |
 |---|---|
-| HTTP requests | `X-Kobo-Token: <token>` header |
-| MCP HTTP requests (`/api/mcp`) | `X-Kobo-Token` or `Authorization: Bearer <token>` |
-| WebSocket connections | `?token=<token>` query parameter on the upgrade URL |
+| Browser API requests | HttpOnly session cookie after login |
+| Operator scripts / REST | `X-Kobo-Token: <operator-token>` header |
+| External MCP HTTP (`/api/mcp`) | Dedicated MCP key as `Authorization: Bearer <key>` |
+| Browser WebSocket connections | Short-lived, single-use ticket in the upgrade URL, bound to its WS path |
 
-The Kōbō browser client handles both automatically once the token is stored in
-`localStorage`. Third-party scripts or API consumers must supply the header or
-query param manually.
+The browser handles session and ticket exchanges automatically. Tickets expire
+after 60 seconds and cannot be replayed, reused for a different terminal, or used
+after their session expires. The permanent operator token is no longer accepted
+in a WebSocket query string. Rotation, disabling network access or changing proxy
+mode invalidates browser sessions, pending tickets and existing main/terminal
+WebSocket connections. Agent processes are not stopped by credential revocation.
+Server restart also expires browser sessions.
 
 The IP address used for the loopback exemption is taken **from the OS socket**,
 never from forwarded headers (`X-Forwarded-For` etc.), so a remote client cannot
@@ -1154,19 +1178,15 @@ Practical consequences:
   count as the real interface. In development the Quasar dev server is the one
   exception, since it proxies to the backend and so never matches the `Host`;
   the `dev` npm script declares it through `KOBO_DEV_CLIENT_ORIGIN`.
-- **Behind-a-reverse-proxy mode accepts any host by default**, because only the
-  operator knows the expected domain. Declare it with
-  `KOBO_NETWORK_ACCESS_PROXY_HOST` (see below) to close that; the bundled
-  `docker-compose.example.yml` and `docker-compose.local-traefik.yml` do. That
-  mode also disables the loopback exemption, so every `/api/*` request has to
-  carry the token — but the SPA itself is served outside `/api/*` and behind no
-  token, so without a declared hostname a rebinding page can be served the real
-  interface and ask the user to paste their token into it.
+- **Behind-a-reverse-proxy mode requires a declared public hostname.** Set
+  `KOBO_NETWORK_ACCESS_PROXY_HOST`; missing or invalid configuration rejects
+  public requests. Internal loopback clients remain reachable but still require
+  authentication. The bundled proxy Compose files configure this explicitly.
 
 #### `KOBO_NETWORK_ACCESS_PROXY_HOST`
 
-Set it to the domain your proxy serves Kōbō under, and the host check is
-enforced in behind-a-reverse-proxy mode instead of being skipped:
+Set it to the public origin your proxy serves Kōbō under. This is required in
+behind-a-reverse-proxy mode:
 
 ```yaml
 environment:
@@ -1175,9 +1195,33 @@ environment:
   - KOBO_NETWORK_ACCESS_PROXY_HOST=kobo.example.com
 ```
 
-A scheme and a port are accepted and ignored (`https://kobo.example.com:8443`
-reads as `kobo.example.com`). Loopback stays reachable so a local healthcheck
-keeps working. Leaving it unset preserves the previous behaviour.
+A bare hostname means HTTPS. For a nonstandard port, set the complete origin,
+e.g. `https://kobo.example.com:8443`. Browser Origin checks compare the scheme,
+hostname and port exactly. Local HTTP proxy staging must explicitly declare
+`http://kobo.localhost`. Paths, credentials, query strings and fragments are
+invalid. Loopback healthchecks and authenticated internal calls remain reachable.
+Leaving this variable unset rejects public proxy traffic.
+
+### Browser response protections
+
+The server sends `Content-Security-Policy: frame-ancestors 'self'` and
+`X-Frame-Options: SAMEORIGIN`, preserving Kōbō's split panes while blocking
+embedding by another site. It also sends `X-Content-Type-Options: nosniff`,
+`Referrer-Policy: no-referrer` and `Cache-Control: no-store` for API responses.
+The public HTTPS Compose examples add one-year HSTS at Traefik, without applying
+it to subdomains or HTTP-only local staging. Kōbō does not trust forwarded headers
+to decide whether a connection is HTTPS. A broader script/style CSP is not enabled;
+it needs separate compatibility testing with Quasar and Monaco.
+
+Application limits apply per OS peer address (forwarded addresses are not trusted):
+3,000 API requests per minute and 20 login attempts per minute. Requests exceeding
+these limits receive HTTP 429. MCP permits 32 concurrent requests, with at most
+four bodies larger than 1 MiB or of unknown/chunked length; ordinary attachment
+uploads also have four slots. Authentication runs before body buffering. Main
+WebSocket messages are capped at 1 MiB, terminal messages at 128 KiB; sockets
+have per-peer and global caps and inbound message-rate limits. Behind a proxy,
+clients share the proxy peer's bucket, so configure client-IP limits at the proxy
+for deployments with many simultaneous clients.
 
 ### Security caveats
 
@@ -1300,7 +1344,7 @@ retrieved once — see [Token / login flow](#token--login-flow).
 | `${HOME}/.claude.json:/root/.claude.json` | RW | Claude Code auth + MCP server registrations. **Must already exist as a file on the host** (run `claude /login` locally first if it doesn't) — Docker silently creates an empty *directory* instead of erroring on a missing bind-mount source, which breaks auth in a confusing way. |
 | `${HOME}/.claude:/root/.claude` | RW | Claude Code's full state directory (skills/plugins cache, session transcripts, memory) — Claude Code writes into this tree during normal operation. |
 | `${HOME}/.codex:/root/.codex` | RW | Codex's full state directory (`auth.json`, `config.toml`). Harmless to mount even if you only use Claude Code. |
-| `/var/run/docker.sock:/var/run/docker.sock` | RW, enabled in `example.yml`, opt-in in `vps.yml` | Lets the dev-server panel start/stop/tail logs for your projects' own `docker compose` stacks. **DANGER**: grants the container root-equivalent control over the host — anyone who can run a command inside `kobo` can spawn a privileged container that mounts the host filesystem. Remove this line if you don't need the dev-server panel. |
+| `/var/run/docker.sock:/var/run/docker.sock` | RW, opt-in in both `example.yml` and `vps.yml` | Lets the dev-server panel start/stop/tail logs for your projects' own `docker compose` stacks. **DANGER**: grants the container root-equivalent control over the host — anyone who can run a command inside `kobo` can spawn a privileged container that mounts the host filesystem. Leave this mount commented out unless required. |
 
 ### Ports
 
@@ -1316,25 +1360,32 @@ reachable, matching the real production posture.
 
 ### Token / login flow
 
-All four files pre-enable network access via env vars, so there's no interactive Settings-UI step.
-Retrieve the auto-generated token from the container's boot log, then bookmark the token-bearing URL:
+All four files pre-enable network access via environment variables. Startup logs
+never contain the token. Retrieve it deliberately from a trusted local terminal:
 
 ```bash
-docker compose -f <compose-file> logs kobo | grep Token
+docker compose -f <compose-file> exec kobo node -e 'const fs = require("node:fs"); console.log(JSON.parse(fs.readFileSync(process.env.KOBO_HOME + "/settings.json", "utf8")).global.networkAccessToken)'
 ```
 
-Open `http://<host>/?token=<token>` (exact host depends on the file — see the walkthroughs below).
-The token is stored in the browser's `localStorage`, so you only paste it once per browser.
+Open the plain application URL and paste the token into its login dialog. Do not
+put the token in a URL, command argument, log collector or shared transcript.
+For an npm installation, read `networkAccessToken` from your private
+`$KOBO_HOME/settings.json` (default `~/.config/kobo/settings.json`).
+Kōbō restricts its home to mode `0700` and settings, temporary settings and
+settings backups to `0600`, including existing files on startup or the next disk read.
+
+Existing logs from older releases may still contain a valid token. After upgrading,
+rotate it from Settings and apply your log-retention policy to retained copies.
+Kōbō does not delete historical logs automatically.
 
 ### Quick local test — `docker-compose.local.yml`
 
 ```bash
 docker build -t kobo:local .                          # once
 docker compose -f docker-compose.local.yml up -d
-docker compose -f docker-compose.local.yml logs kobo | grep Token
 ```
 
-Open `http://localhost:3000/?token=<token from above>`.
+Open `http://localhost:3000/`; retrieve the token using [Token / login flow](#token--login-flow) if prompted.
 
 By default the file bind-mounts `./kobo-projects` (next to it) at `/projects` — put a real git repo
 in there (or set `KOBO_PROJECTS_DIR` to point elsewhere) before creating a workspace. When you get
@@ -1353,10 +1404,9 @@ and lose all Kōbō state).
 ```bash
 docker build -t kobo:local .                          # once, if not already built
 docker compose -f docker-compose.local-traefik.yml up -d
-docker compose -f docker-compose.local-traefik.yml logs kobo | grep Token
 ```
 
-Open `http://kobo.localhost/?token=<token from above>` — `.localhost` resolves to `127.0.0.1` on
+Open `http://kobo.localhost/` and sign in using [Token / login flow](#token--login-flow) — `.localhost` resolves to `127.0.0.1` on
 most OSes without touching `/etc/hosts`. This exercises the exact routing/auth/mount setup used by
 `docker-compose.example.yml`, minus a real domain and TLS certificate.
 
@@ -1386,17 +1436,16 @@ Before using it:
 2. Replace `kobo.example.com` with your real domain, and `you@example.com` with a real email (Let's Encrypt account).
 3. Populate a `.env` file next to the compose file with `GH_TOKEN` / `GITLAB_TOKEN` if you use the forge integration.
 4. Point every bind mount (`~/.ssh`, `~/.gitconfig`, `~/.claude.json`, `~/.claude`, `~/.codex`) at real paths on the host — see [Volumes](#volumes) for what each one is for, in particular the "`~/.claude.json` must already exist as a file" gotcha.
-5. Decide whether you need the Docker-socket passthrough (dev-server panel). If not, delete that volume line — see the DANGER note in [Volumes](#volumes).
+5. Leave the Docker socket unmounted unless your project workflows require it; opting in grants host-level control. See [Volumes](#volumes).
 6. Network access + behind-a-reverse-proxy are already pre-enabled via the `KOBO_NETWORK_ACCESS_*` env vars in the file — no manual bootstrap step.
 
-Bring it up, grab the token, bookmark the URL:
+Start it, then retrieve the token using the login flow above:
 
 ```bash
 docker compose -f docker-compose.example.yml up -d
-docker compose -f docker-compose.example.yml logs kobo | grep Token
 ```
 
-Open `https://kobo.example.com/?token=<token>`. SSH access: `ssh -p 2222 root@<host>` (key-based
+Open `https://kobo.example.com/` and sign in using [Token / login flow](#token--login-flow). SSH access: `ssh -p 2222 root@<host>` (key-based
 only). See [Ports](#ports) and [Volumes](#volumes) above for the full rationale on the Docker socket
 and SSH tradeoffs before deploying this to a real machine.
 
@@ -1455,9 +1504,8 @@ An old image alone is not a complete rollback after database migrations.
   — check `docker inspect <container> --format '{{json .State.Health}}'`. This should not happen on
   a current image (`/api/health` is exempt from the token gate, see [The image](#the-image)); if you
   see a 401 in the health log on a custom-built image, you're missing that exemption.
-- **`docker compose logs kobo | grep Token` returns nothing** — network access wasn't enabled at
-  boot. Confirm `KOBO_NETWORK_ACCESS_ENABLED=true` is actually set in the `environment:` block for
-  the `kobo` service.
+- **The token is absent from startup logs** — this is intentional. Use the local
+  [token retrieval command](#token--login-flow), then the browser login dialog.
 
 ## Agent runtimes
 

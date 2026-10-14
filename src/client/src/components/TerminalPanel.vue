@@ -97,7 +97,7 @@ import {
   terminalStateVersion,
 } from 'src/services/terminal-registry'
 import { useWorkspaceStore } from 'src/stores/workspace'
-import { appendTokenToWsUrl, getToken } from 'src/utils/auth-token'
+import { authenticatedWebSocketUrl } from 'src/utils/auth-token'
 import {
   shouldConnectOnFocus,
   TERMINAL_RECONNECT_MAX_ATTEMPTS,
@@ -138,17 +138,41 @@ const reconnectAttempt = computed(() => currentEntry.value?.reconnectAttempt ?? 
 const reconnectMax = TERMINAL_RECONNECT_MAX_ATTEMPTS
 const terminalError = computed(() => currentEntry.value?.error ?? null)
 
-function connectWs(wid: string, entry: TerminalEntry) {
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const ws = new WebSocket(appendTokenToWsUrl(`${protocol}//${window.location.host}/ws/terminal/${wid}`, getToken()))
+async function connectWs(wid: string, entry: TerminalEntry) {
+  if (
+    terminalMap.get(wid) !== entry ||
+    entry.exited ||
+    entry.connectionAttempt ||
+    entry.ws?.readyState === WebSocket.OPEN ||
+    entry.ws?.readyState === WebSocket.CONNECTING
+  )
+    return
+  clearReconnectTimer(entry)
+  const attempt = Symbol()
+  entry.connectionAttempt = attempt
+  let url: string
+  try {
+    url = await authenticatedWebSocketUrl(`/ws/terminal/${wid}`)
+  } catch {
+    if (entry.connectionAttempt === attempt) {
+      entry.connectionAttempt = undefined
+      if (terminalMap.get(wid) === entry && !entry.exited) scheduleReconnect(wid, entry)
+    }
+    return
+  }
+  if (terminalMap.get(wid) !== entry || entry.connectionAttempt !== attempt || entry.exited) return
+  entry.connectionAttempt = undefined
+  const ws = new WebSocket(url)
   ws.binaryType = 'arraybuffer'
   entry.ws = ws
 
   ws.onopen = () => {
+    if (terminalMap.get(wid) !== entry || entry.ws !== ws) return
     ws.send(JSON.stringify({ type: 'create' }))
   }
 
   ws.onmessage = (event) => {
+    if (terminalMap.get(wid) !== entry || entry.ws !== ws) return
     if (event.data instanceof ArrayBuffer) {
       entry.terminal.write(new Uint8Array(event.data))
     } else {
@@ -185,12 +209,14 @@ function connectWs(wid: string, entry: TerminalEntry) {
   }
 
   ws.onclose = () => {
+    if (terminalMap.get(wid) !== entry || entry.ws !== ws) return
     if (!entry.exited) entry.terminal.writeln(`\r\n${t('terminal.outputMayBeMissing')}\r\n`)
     entry.ws = null
     scheduleReconnect(wid, entry)
   }
 
   ws.onerror = () => {
+    if (terminalMap.get(wid) !== entry || entry.ws !== ws) return
     entry.error = t('terminal.error')
     bumpTerminalState()
   }
@@ -213,7 +239,8 @@ function connectWs(wid: string, entry: TerminalEntry) {
 function scheduleReconnect(wid: string, target: TerminalEntry) {
   // A shell that exited on its own must NOT be respawned — only a lost
   // connection is retried.
-  if (target.exited) return
+  if (target.exited || terminalMap.get(wid) !== target) return
+  clearReconnectTimer(target)
   const attempt = target.reconnectAttempt + 1
   const delay = terminalReconnectDelayMs(attempt)
   if (delay === null) return // give up; the user gets a manual Reconnect button
@@ -227,7 +254,7 @@ function scheduleReconnect(wid: string, target: TerminalEntry) {
   // terminal open would all resume in lockstep after one backend restart.
   const jitteredDelay = Math.round(delay * (0.8 + Math.random() * 0.4))
   target.reconnectTimer = setTimeout(() => {
-    if (target.exited) return
+    if (target.exited || terminalMap.get(wid) !== target) return
     connectWs(wid, target)
   }, jitteredDelay)
 }

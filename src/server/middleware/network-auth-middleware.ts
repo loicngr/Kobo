@@ -1,44 +1,64 @@
 import { getConnInfo } from '@hono/node-server/conninfo'
 import type { MiddlewareHandler } from 'hono'
-import { evaluateNetworkAccess } from '../services/network-access-service.js'
+import { getCookie } from 'hono/cookie'
+import { evaluateNetworkAccess, isLoopbackAddress } from '../services/network-access-service.js'
+import { browserCookieName, getBrowserSession } from '../services/network-session-service.js'
 import { getGlobalSettings } from '../services/settings-service.js'
 
-/**
- * Gates non-loopback requests behind the network-access token.
- *
- * Loopback requests pass without a token (the host machine's own usage is
- * frictionless) — unless `networkAccessBehindProxy` is enabled, in which case
- * loopback is treated like any other address (see network-access-service.ts).
- * The client IP comes only from the OS socket via getConnInfo, never from
- * X-Forwarded-For, so a remote client cannot spoof a loopback address.
- *
- * `/api/health` is always exempt, regardless of `networkAccessBehindProxy`:
- * it exposes only `{ status, version }` (nothing sensitive), and Docker's own
- * HEALTHCHECK / a Compose healthcheck / an orchestrator's liveness probe has
- * no way to supply the runtime-generated token — without this exemption, a
- * "behind a reverse proxy" deployment's own container never reports healthy.
- */
+/** Socket addresses are authoritative; forwarded headers never establish trust. */
 export const networkAuthMiddleware: MiddlewareHandler = async (c, next) => {
   if (c.req.path === '/api/health') return next()
   const address = getConnInfo(c).remote.address
-  const global = getGlobalSettings()
-  // MCP clients commonly send the shared token as an Authorization header.
-  const bearerToken = /^\/api\/mcp\/?$/.test(c.req.path)
-    ? c.req.header('Authorization')?.match(/^Bearer\s+(.+)$/i)?.[1]
-    : undefined
+  const policy = getGlobalSettings()
+  const loopback = isLoopbackAddress(address)
+  // These two transports authenticate themselves, with credentials that cannot
+  // authorize any other HTTP route. Internal capabilities never cross the network.
+  if (/^\/api\/internal-mcp(?:\/|$)/.test(c.req.path)) {
+    if (c.req.method !== 'POST' || !loopback) return c.json({ error: 'unauthorized' }, 403)
+    return next()
+  }
+  if (c.req.path === '/api/mcp' || c.req.path === '/api/mcp/') {
+    if (!policy.networkAccessEnabled && (!loopback || policy.networkAccessBehindProxy))
+      return c.json({ error: 'unauthorized' }, 403)
+    return next()
+  }
+  // Supplying an MCP credential never becomes operator authority, even where
+  // unauthenticated local operator requests are normally trusted.
+  if (
+    /^Bearer\s+kobo_mcp_/i.test(c.req.header('Authorization') ?? '') ||
+    c.req.header('X-Kobo-Token')?.startsWith('kobo_mcp_')
+  ) {
+    return c.json({ error: 'Operator credential required' }, 401)
+  }
+  const session = getBrowserSession(getCookie(c, browserCookieName(policy)), policy)
   const decision = evaluateNetworkAccess({
     address,
-    enabled: global.networkAccessEnabled,
-    expectedToken: global.networkAccessToken,
-    providedToken: c.req.header('X-Kobo-Token') ?? bearerToken,
-    trustLoopback: !global.networkAccessBehindProxy,
+    enabled: policy.networkAccessEnabled,
+    expectedToken: policy.networkAccessToken,
+    providedToken: session ? policy.networkAccessToken : c.req.header('X-Kobo-Token'),
+    trustLoopback: !policy.networkAccessBehindProxy,
   })
   if (decision.allow) return next()
-  // Surface denied requests so "my device can't connect" is debuggable.
-  // Never log the token itself, only the reason and the remote address.
-  const reason = decision.status === 403 ? 'network access disabled' : 'missing/invalid token'
-  console.warn(
-    `[network-auth] HTTP ${decision.status} (${reason}) from ${address ?? 'unknown'} ${c.req.method} ${c.req.path}`,
-  )
   return c.json({ error: 'unauthorized' }, decision.status as 401 | 403)
+}
+
+/** Mount after the initial auth gate and body limits, before operator routes.
+ * Acceptance happens only after the complete bounded request has arrived.
+ * MCP transports implement their own equivalent live-credential checks.
+ */
+export const operatorDispatchAuthMiddleware: MiddlewareHandler = async (c, next) => {
+  if (/^\/api\/(?:internal-)?mcp(?:\/|$)/.test(c.req.path)) return next()
+  if (c.req.raw.body) {
+    const original = c.req.raw
+    let body: ArrayBuffer
+    try {
+      body = await original.arrayBuffer()
+    } catch {
+      return c.json({ error: 'Invalid request body' }, 400)
+    }
+    // Preserve raw consumers (multipart uploads and workspace creation), as
+    // well as Hono's json/formData helpers. The initial limits ran beforehand.
+    c.req.raw = new Request(original, { body })
+  }
+  return networkAuthMiddleware(c, next)
 }

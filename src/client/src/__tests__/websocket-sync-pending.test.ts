@@ -1,3 +1,7 @@
+vi.mock('../utils/auth-token', () => ({
+  authenticatedWebSocketUrl: vi.fn(async (path: string) => `ws://localhost${path}?ticket=test`),
+}))
+
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { computed } from 'vue'
@@ -6,6 +10,7 @@ import { useSessionHandoffStore } from '../stores/session-handoff'
 import { useUpdateStore } from '../stores/update'
 import { useWebSocketStore } from '../stores/websocket'
 import { useWorkspaceStore, type Workspace } from '../stores/workspace'
+import { authenticatedWebSocketUrl } from '../utils/auth-token'
 
 class FakeWebSocket extends EventTarget {
   static OPEN = 1
@@ -59,24 +64,24 @@ describe('websocket sync request loading', () => {
     vi.unstubAllGlobals()
   })
 
-  function connect() {
+  async function connect() {
     const store = useWebSocketStore()
-    store.connect()
+    await store.connect()
     const socket = FakeWebSocket.instances.at(-1)!
     socket.open()
     return { store, socket }
   }
 
-  it('retrieves release availability on initial connection and reconnect', () => {
-    const { store } = connect()
+  it('retrieves release availability on initial connection and reconnect', async () => {
+    const { store } = await connect()
     expect(useUpdateStore().refreshSnapshot).toHaveBeenCalledTimes(1)
     store.disconnect()
-    connect()
+    await connect()
     expect(useUpdateStore().refreshSnapshot).toHaveBeenCalledTimes(2)
   })
 
-  it('tracks an actual subscribe sync reactively until even an empty response arrives', () => {
-    const { store, socket } = connect()
+  it('tracks an actual subscribe sync reactively until even an empty response arrives', async () => {
+    const { store, socket } = await connect()
     const pending = computed(() => store.isSyncPending('w1'))
     expect(pending.value).toBe(false)
 
@@ -92,17 +97,17 @@ describe('websocket sync request loading', () => {
     expect(pending.value).toBe(false)
   })
 
-  it('does not create an outstanding request without an open socket', () => {
+  it('does not create an outstanding request without an open socket', async () => {
     const store = useWebSocketStore()
     store.subscribe('absent')
-    store.connect()
+    await store.connect()
     store.subscribe('connecting')
     expect(FakeWebSocket.instances[0]!.send).not.toHaveBeenCalled()
     expect(store.pendingSyncRequests).toEqual([])
   })
 
-  it('does not create an outstanding request when sending fails', () => {
-    const { store, socket } = connect()
+  it('does not create an outstanding request when sending fails', async () => {
+    const { store, socket } = await connect()
     socket.send.mockImplementation(() => {
       throw new Error('socket closed')
     })
@@ -110,8 +115,8 @@ describe('websocket sync request loading', () => {
     expect(store.pendingSyncRequests).toEqual([])
   })
 
-  it('consumes overlapping multi-workspace requests in response order', () => {
-    const { store, socket } = connect()
+  it('consumes overlapping multi-workspace requests in response order', async () => {
+    const { store, socket } = await connect()
     store._send({ type: 'sync:request', payload: { workspaceIds: ['w1', 'w2'] } })
     store.subscribe('w1')
     expect(store.pendingSyncRequests).toEqual([['w1', 'w2'], ['w1']])
@@ -123,8 +128,8 @@ describe('websocket sync request loading', () => {
     expect(store.isSyncPending('w1')).toBe(false)
   })
 
-  it('releases only the response being processed when its replay throws', () => {
-    const { store, socket } = connect()
+  it('releases only the response being processed when its replay throws', async () => {
+    const { store, socket } = await connect()
     store.subscribe('w1')
     store.subscribe('w2')
     socket.respond({ events: {} })
@@ -134,16 +139,16 @@ describe('websocket sync request loading', () => {
     expect(store.pendingSyncRequests).toEqual([])
   })
 
-  it.each(['sync:empty', 'sync:error'])('consumes one request when the server answers %s', (type) => {
-    const { store, socket } = connect()
+  it.each(['sync:empty', 'sync:error'])('consumes one request when the server answers %s', async (type) => {
+    const { store, socket } = await connect()
     store.subscribe('w1')
     store.subscribe('w2')
     socket.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ type, payload: {} }) }))
     expect(store.pendingSyncRequests).toEqual([['w2']])
   })
 
-  it.each(['disconnect', 'close', 'offline'])('releases all pending requests on %s', (action) => {
-    const { store, socket } = connect()
+  it.each(['disconnect', 'close', 'offline'])('releases all pending requests on %s', async (action) => {
+    const { store, socket } = await connect()
     store.subscribe('w1')
     store.subscribe('w2')
     expect(store.pendingSyncRequests).toHaveLength(2)
@@ -158,8 +163,8 @@ describe('websocket sync request loading', () => {
     expect(store.isSyncPending('w1')).toBe(false)
   })
 
-  it('does not attribute late events from an offline connection to a new sync request', () => {
-    const { store, socket } = connect()
+  it('does not attribute late events from an offline connection to a new sync request', async () => {
+    const { store, socket } = await connect()
     store.subscribe('old')
     vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false)
     window.dispatchEvent(new Event('offline'))
@@ -168,6 +173,7 @@ describe('websocket sync request loading', () => {
     vi.spyOn(useDevServerStore(), 'fetchStatus').mockResolvedValue()
     vi.spyOn(useSessionHandoffStore(), 'refresh').mockResolvedValue()
     window.dispatchEvent(new Event('online'))
+    await Promise.resolve()
     const replacement = FakeWebSocket.instances.at(-1)!
     replacement.open()
     store.subscribe('new')
@@ -180,8 +186,8 @@ describe('websocket sync request loading', () => {
     expect(store.isSyncPending('new')).toBe(false)
   })
 
-  it('preserves drain and targeted follow-up requests sent while consuming earlier responses', () => {
-    const { store, socket } = connect()
+  it('preserves drain and targeted follow-up requests sent while consuming earlier responses', async () => {
+    const { store, socket } = await connect()
     useWorkspaceStore().workspaces = [{ id: 'w1' }, { id: 'w2' }] as Workspace[]
     store.subscribe('w1')
     socket.respond({
@@ -206,7 +212,7 @@ describe('websocket sync request loading', () => {
     workspace.selectedWorkspaceId = 'w1'
     const ws = useWebSocketStore()
     ws.lastEventId = 'before'
-    const { socket } = connect()
+    const { socket } = await connect()
     expect(workspace.fetchWorkspacesInfo).not.toHaveBeenCalled()
     socket.respond({
       truncated: true,
@@ -229,7 +235,7 @@ describe('websocket sync request loading', () => {
     workspace.autoLoopMessages['previously-opened'] = []
     const ws = useWebSocketStore()
     ws.lastEventId = 'before'
-    const { socket } = connect()
+    const { socket } = await connect()
     socket.respond()
     await Promise.resolve()
     await Promise.resolve()
@@ -237,5 +243,22 @@ describe('websocket sync request loading', () => {
     expect(workspace.fetchAutoLoopMessages).toHaveBeenCalledWith('w1')
     expect(workspace.fetchAutoLoopMessages).toHaveBeenCalledWith('previously-opened')
     expect(workspace.fetchAutoLoopMessages).toHaveBeenCalledTimes(2)
+  })
+  it('does not reopen a disconnected client after a delayed upgrade ticket arrives', async () => {
+    let resolveTicket!: (value: string) => void
+    vi.mocked(authenticatedWebSocketUrl).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveTicket = resolve
+        }),
+    )
+    const store = useWebSocketStore()
+    const pending = store.connect()
+    store.disconnect()
+    resolveTicket('ws://localhost/ws?ticket=stale')
+    await pending
+    expect(FakeWebSocket.instances).toHaveLength(0)
+    await store.connect()
+    expect(FakeWebSocket.instances).toHaveLength(1)
   })
 })

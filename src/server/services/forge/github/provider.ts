@@ -14,7 +14,7 @@ import type {
   PrSnapshot,
   PullRequestSummary,
 } from '../types.js'
-import { deriveReadyToMerge, truncatePrBody } from '../types.js'
+import { deriveReadyToMerge, MergePolicyError, truncatePrBody } from '../types.js'
 
 const execFileAsync = promisify(execFile)
 const CLI_TIMEOUT_MS = 30_000
@@ -233,8 +233,22 @@ export const githubProvider: ForgeProvider = {
     await execFileAsync('gh', ['pr', 'edit', '--base', base], cliOptions(repoPath))
   },
 
-  async mergeRequest(repoPath: string, number: number, method: MergeMethod = 'merge'): Promise<void> {
-    await execFileAsync('gh', ['pr', 'merge', String(number), `--${method}`], cliOptions(repoPath))
+  async mergeRequest(
+    repoPath: string,
+    number: number,
+    method: MergeMethod = 'merge',
+    options?: { admin?: boolean },
+  ): Promise<void> {
+    const args = ['pr', 'merge', String(number), `--${method}`]
+    if (options?.admin === true) args.push('--admin')
+    try {
+      await execFileAsync('gh', args, cliOptions(repoPath))
+    } catch (error) {
+      // Only known policy refusals offer an override, never network/auth/unknown failures.
+      const message = error instanceof Error ? error.message : ''
+      if (/the base branch policy prohibits the merge/i.test(message)) throw new MergePolicyError()
+      throw error
+    }
   },
   async deleteRemoteBranch(repoPath: string, branch: string): Promise<void> {
     await execFileAsync('git', ['push', 'origin', '--delete', branch], cliOptions(repoPath))

@@ -7,10 +7,8 @@ import { assertAgentStopped, type StopAgentOutcome } from '../../utils/agent-sto
 import {
   ensureKoboHome,
   getCompiledMcpServerPath,
-  getDbPath,
   getKoboHome,
   getMcpServerSourcePath,
-  getSettingsPath,
   getSkillsPath,
 } from '../../utils/paths.js'
 import { assertWorkspaceLifecycleAvailable, workspaceLifecycleReason } from '../../utils/workspace-lifecycle-guard.js'
@@ -26,6 +24,7 @@ import * as autoLoopService from '../auto-loop-service.js'
 import * as cleanupScriptService from '../cleanup-script-service.js'
 import * as cronService from '../cron-service.js'
 import { resolveForge } from '../forge/resolve.js'
+import { createInternalMcpCapability, revokeInternalMcpCapability } from '../internal-mcp-capability-service.js'
 import * as lifecycleHookService from '../lifecycle-hook-service.js'
 import {
   advanceMemoryConversationEpoch,
@@ -622,29 +621,25 @@ function readEffectiveSettingsSafe(projectPath: string): ReturnType<typeof getEf
 
 function buildMcpServers(
   workspaceId: string,
-  extraEnv?: Record<string, string>,
-  memoryCapability?: string,
+  internalCapability?: string,
+  launchEnv?: Record<string, string | undefined>,
 ): McpServerSpec[] {
   const mcpServerCompiled = getCompiledMcpServerPath()
   const mcpServerSource = getMcpServerSourcePath()
-  const global = getGlobalSettings()
   return [
     {
       name: 'kobo-tasks',
       command: mcpServerCompiled ? 'node' : 'npx',
       args: mcpServerCompiled ? [mcpServerCompiled] : ['tsx', mcpServerSource],
       env: {
+        ...(Object.fromEntries(
+          Object.entries(launchEnv ?? {}).filter(
+            ([key, value]) => key !== 'KOBO_NETWORK_TOKEN' && typeof value === 'string',
+          ),
+        ) as Record<string, string>),
         KOBO_WORKSPACE_ID: workspaceId,
-        ...extraEnv,
-        ...(memoryCapability ? { KOBO_MEMORY_SESSION_TOKEN: memoryCapability } : {}),
-        KOBO_DB_PATH: getDbPath(),
-        KOBO_SETTINGS_PATH: getSettingsPath(),
+        ...(internalCapability ? { KOBO_MCP_SESSION_TOKEN: internalCapability } : {}),
         KOBO_BACKEND_URL: `http://127.0.0.1:${backendPort}`,
-        // Behind a proxy, even internal loopback requests require network auth.
-        // Per-launch memory/progress capabilities remain independently required.
-        ...(global.networkAccessBehindProxy && global.networkAccessToken
-          ? { KOBO_NETWORK_TOKEN: global.networkAccessToken }
-          : {}),
       },
     },
   ]
@@ -1656,6 +1651,7 @@ export interface AgentLaunchOptions {
 }
 const launchOptions = new WeakMap<SessionController, AgentLaunchOptions>()
 const controllerProgressCapabilities = new WeakMap<SessionController, ProgressCapability>()
+const controllerInternalMcpCapabilities = new WeakMap<SessionController, string>()
 const controllerMemoryCapabilities = new WeakMap<SessionController, string>()
 const controllerMemoryConversationKeys = new WeakMap<SessionController, string>()
 const controllerMemoryContextIds = new WeakMap<SessionController, string>()
@@ -1670,6 +1666,9 @@ const memoryCompactionStates = new WeakMap<
 >()
 
 function revokeControllerCapabilities(controller: SessionController): void {
+  const internalToken = controllerInternalMcpCapabilities.get(controller)
+  if (internalToken) revokeInternalMcpCapability(internalToken)
+  controllerInternalMcpCapabilities.delete(controller)
   const progress = controllerProgressCapabilities.get(controller)
   if (progress) revokeProgressCapability(progress.token)
   const token = controllerMemoryCapabilities.get(controller)
@@ -1915,6 +1914,19 @@ export function startAgent(
     readOnly: effectivePermissionMode === 'plan' || !!launch?.handoffGeneration,
   })
 
+  const progressCapability = createProgressCapability(workspaceId, agentSessionId)
+  const internalMcpCapability = createInternalMcpCapability({
+    workspaceId,
+    sessionId: agentSessionId,
+    readOnly:
+      effectivePermissionMode === 'plan' || !!launch?.handoffGeneration || !!launch?.mcpEnv?.KOBO_FINAL_REVIEW_TOKEN,
+    env: {
+      ...launch?.mcpEnv,
+      KOBO_MEMORY_SESSION_TOKEN: memoryCapability.token,
+      KOBO_PROGRESS_SESSION_TOKEN: progressCapability.token,
+    },
+  })
+
   const unavailableIntegrations: Array<'notion' | 'sentry'> = []
   const integrationServers = buildIntegrationMcpServers(getGlobalSettings(), engine.id, (name) =>
     unavailableIntegrations.push(name),
@@ -1943,7 +1955,10 @@ export function startAgent(
       }
     })(),
     settings,
-    mcpServers: [...buildMcpServers(workspaceId, launch?.mcpEnv, memoryCapability.token), ...integrationServers],
+    mcpServers: [
+      ...buildMcpServers(workspaceId, internalMcpCapability.token, internalMcpCapability.env),
+      ...integrationServers,
+    ],
     env: ws ? buildAgentEnv(ws.projectPath) : undefined,
   }
 
@@ -1981,12 +1996,10 @@ export function startAgent(
     }
   }
 
-  const progressCapability = createProgressCapability(workspaceId, agentSessionId)
-  const managedMcp = options.mcpServers?.find((server) => server.name === 'kobo-tasks')
-  if (managedMcp) managedMcp.env.KOBO_PROGRESS_SESSION_TOKEN = progressCapability.token
   try {
     beforeDispatch?.()
   } catch (error) {
+    revokeInternalMcpCapability(internalMcpCapability.token)
     revokeMemoryCapability(memoryCapability.token)
     revokeProgressCapability(progressCapability.token)
     throw error
@@ -1995,6 +2008,7 @@ export function startAgent(
   controller = new SessionController(workspaceId, agentSessionId, engine, (ev) =>
     handleEvent(workspaceId, agentSessionId, controller, ev),
   )
+  controllerInternalMcpCapabilities.set(controller, internalMcpCapability.token)
   controllerProgressCapabilities.set(controller, progressCapability)
   controllerMemoryCapabilities.set(controller, memoryCapability.token)
   controllerMemoryConversationKeys.set(controller, memoryCapability.conversationKey)

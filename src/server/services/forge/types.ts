@@ -152,6 +152,15 @@ export class ForgeUnavailableError extends Error {
   }
 }
 
+/** A policy refusal that can be presented as an explicit administrator choice. */
+export class MergePolicyError extends Error {
+  readonly code = 'merge_policy_blocked'
+  constructor() {
+    super('GitHub branch protection rules prevent this merge.')
+    this.name = 'MergePolicyError'
+  }
+}
+
 /** A forge integration. One implementation per supported forge. */
 export interface ForgeProvider {
   readonly id: ForgeId
@@ -161,7 +170,7 @@ export interface ForgeProvider {
   getPrStatus(repoPath: string, branch: string): Promise<PrSnapshot | null>
   createPr(repoPath: string, opts: CreatePrOptions): Promise<{ url: string; number: number }>
   changePrBase(repoPath: string, base: string): Promise<void>
-  mergeRequest(repoPath: string, number: number, method?: MergeMethod): Promise<void>
+  mergeRequest(repoPath: string, number: number, method?: MergeMethod, options?: { admin?: boolean }): Promise<void>
   deleteRemoteBranch(repoPath: string, branch: string): Promise<void>
   /** List open PRs/MRs, newest first. The cursor is provider-defined and opaque. */
   listPullRequests(repoPath: string, opts: ListPullRequestsOptions): Promise<ListPullRequestsResult>

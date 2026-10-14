@@ -143,49 +143,34 @@ describe('orchestrator memory context', () => {
     const orchestrator = await import('../../server/services/agent/orchestrator.js')
     const { Hono } = await import('hono')
     const { networkAuthMiddleware } = await import('../../server/middleware/network-auth-middleware.js')
-    const { default: memoryRoutes } = await import('../../server/routes/memory.js')
-    const { default: progressRoutes } = await import('../../server/routes/progress-bars.js')
-    const { callMemoryTool } = await import('../../mcp-server/memory-client.js')
-    const { callProgressBarTool } = await import('../../mcp-server/progress-bar-client.js')
+    const { default: managedRoutes } = await import('../../server/routes/internal-mcp.js')
     const app = new Hono()
     app.use('/api/*', networkAuthMiddleware)
-    app.route('/api/memory', memoryRoutes)
-    app.route('/api/progress-bars', progressRoutes)
+    app.route('/api/internal-mcp', managedRoutes)
 
     orchestrator.startAgent(workspace.id, workspace.projectPath, 'Long-running task')
     await flush()
     try {
       const env = capture.starts[0].mcpServers!.find((server) => server.name === 'kobo-tasks')!.env
-      const transport = {
-        backendUrl: env.KOBO_BACKEND_URL,
-        networkToken: env.KOBO_NETWORK_TOKEN,
-        fetcher: (async (input, init) => app.request(new Request(input, init))) as typeof fetch,
+      expect(env.KOBO_NETWORK_TOKEN).toBeUndefined()
+      const call = async (name: string, args: Record<string, unknown> = {}, token = env.KOBO_MCP_SESSION_TOKEN) => {
+        const response = await app.request('/api/internal-mcp', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Kobo-Mcp-Session': token },
+          body: JSON.stringify({ method: 'call', name, arguments: args }),
+        })
+        return { status: response.status, result: await response.json() }
       }
-      const memoryRequest = {
-        ...transport,
-        name: 'list_memory_scopes',
-        args: {},
-        capability: env.KOBO_MEMORY_SESSION_TOKEN,
-      }
-      await expect(callMemoryTool(memoryRequest)).resolves.toMatchObject({ items: expect.any(Array) })
-      const progress = await callProgressBarTool({
-        ...transport,
-        name: 'create_progress_bar',
-        args: { activity_key: 'proxy-test', label: 'Run tests' },
-        capability: env.KOBO_PROGRESS_SESSION_TOKEN,
-      })
-      expect(progress.isError).toBeUndefined()
-      expect(progress.structuredContent).toMatchObject({ label: 'Run tests', workspaceId: workspace.id })
-
-      if (behindProxy) {
-        await expect(callMemoryTool({ ...memoryRequest, networkToken: undefined })).rejects.toThrow('401: unauthorized')
-      } else {
-        expect(env.KOBO_NETWORK_TOKEN).toBeUndefined()
-      }
-      // The network credential never replaces per-launch authorization.
-      await expect(callMemoryTool({ ...memoryRequest, capability: 'invalid-capability' })).rejects.toThrow(
-        '401: Invalid or expired memory capability',
-      )
+      const memory = await call('list_memory_scopes')
+      expect(memory.status).toBe(200)
+      expect(JSON.parse(memory.result.content[0].text)).toMatchObject({ items: expect.any(Array) })
+      const progress = await call('create_progress_bar', { activity_key: 'proxy-test', label: 'Run tests' })
+      expect(progress.status).toBe(200)
+      expect(progress.result.isError).toBeUndefined()
+      expect(progress.result.structuredContent).toMatchObject({ label: 'Run tests', workspaceId: workspace.id })
+      expect((await call('list_memory_scopes', {}, 'invalid-capability')).status).toBe(403)
+      // The administrator secret cannot be substituted for a launch capability.
+      expect((await call('list_memory_scopes', {}, networkSettings.networkAccessToken)).status).toBe(403)
     } finally {
       await orchestrator.stopAgentAndWait(workspace.id)
     }

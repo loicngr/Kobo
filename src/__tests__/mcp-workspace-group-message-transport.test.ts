@@ -9,7 +9,13 @@ import { Hono } from 'hono'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { closeDb, getDb } from '../server/db/index.js'
 import { runMigrations } from '../server/db/migrations.js'
+import internalMcp from '../server/routes/internal-mcp.js'
 import mcp from '../server/routes/mcp.js'
+import {
+  createExternalMcpCredential,
+  EXTERNAL_TOOL_CATALOGUE,
+} from '../server/services/external-mcp-credentials-service.js'
+import { createInternalMcpCapability } from '../server/services/internal-mcp-capability-service.js'
 
 const mocks = vi.hoisted(() => ({ start: vi.fn(), get: vi.fn() }))
 vi.mock('../server/services/workspace-group-message-service.js', () => ({
@@ -24,11 +30,20 @@ const receipt = {
   recipients: [{ workspaceId: 'other', name: 'Other', delivery: 'immediate', state: 'pending' }],
 }
 const args = { request_id: 'group-test', workspace_ids: ['other'], content: 'Bonjour' }
-const app = new Hono().route('/api/mcp', mcp)
+const app = new Hono().route('/api/mcp', mcp).route('/api/internal-mcp', internalMcp)
+let externalToken: string
+let previousHome: string | undefined
 let directory: string
 beforeEach(() => {
   vi.resetAllMocks()
   directory = mkdtempSync(join(tmpdir(), 'kobo-group-mcp-'))
+  previousHome = process.env.KOBO_HOME
+  process.env.KOBO_HOME = directory
+  externalToken = createExternalMcpCredential({
+    name: 'Transport test',
+    allWorkspaces: true,
+    tools: EXTERNAL_TOOL_CATALOGUE.map((tool) => tool.name),
+  }).token
   closeDb()
   runMigrations(getDb(join(directory, 'test.db')))
   for (const status of ['running', 'starting', 'stopped', 'stopping', 'error', 'unknown']) {
@@ -42,6 +57,7 @@ beforeEach(() => {
   mocks.get.mockReturnValue(receipt)
 })
 afterEach(() => {
+  process.env.KOBO_HOME = previousHome
   closeDb()
   rmSync(directory, { recursive: true, force: true })
 })
@@ -82,7 +98,11 @@ it('exposes group preview/send/status over HTTP with structured validation error
       new StreamableHTTPClientTransport(new URL('http://localhost/api/mcp'), {
         fetch: async (input, init) => app.fetch(new Request(input, init)),
         requestInit: {
-          headers: { 'X-Kobo-Client-Name': encodeURIComponent('Équipe'), 'X-Kobo-Client-Name-Encoding': 'uri' },
+          headers: {
+            Authorization: `Bearer ${externalToken}`,
+            'X-Kobo-Client-Name': encodeURIComponent('Équipe'),
+            'X-Kobo-Client-Name-Encoding': 'uri',
+          },
         },
       }),
     )
@@ -102,6 +122,15 @@ it.each(['global', 'workspace', 'review', 'handoff'])(
     if (!listener.listening) await new Promise<void>((resolve) => listener.once('listening', resolve))
     const address = listener.address()
     if (!address || typeof address === 'string') throw new Error('Missing listener')
+    const managed = createInternalMcpCapability({
+      workspaceId: 'self',
+      sessionId: 'session',
+      readOnly: mode === 'review' || mode === 'handoff',
+      env: {
+        ...(mode === 'review' ? { KOBO_FINAL_REVIEW_TOKEN: 'review', KOBO_FINAL_REVIEW_SESSION_ID: 'session' } : {}),
+        ...(mode === 'handoff' ? { KOBO_HANDOFF_ID: 'handoff', KOBO_HANDOFF_TOKEN: 'handoff' } : {}),
+      },
+    })
     const client = new Client({ name: 'Équipe', version: '1' })
     try {
       await client.connect(
@@ -111,6 +140,8 @@ it.each(['global', 'workspace', 'review', 'handoff'])(
           env: {
             PATH: process.env.PATH ?? '',
             KOBO_HOME: directory,
+            KOBO_MCP_TOKEN: externalToken,
+            KOBO_MCP_SESSION_TOKEN: managed.token,
             KOBO_DB_PATH: getDb().name,
             KOBO_WORKSPACE_ID: mode === 'global' ? '' : 'self',
             KOBO_BACKEND_URL: `http://127.0.0.1:${address.port}`,

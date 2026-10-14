@@ -6,7 +6,7 @@ Kōbō also exposes workspace creation, PR checkout diagnosis, conversation and 
 
 ## Connect an external LLM
 
-**Settings → Global → Network access → External LLM access (MCP)** provides this installation's backend URLs and a local stdio configuration. The preview uses a token placeholder; **Copy with token** explicitly includes the current network token. Development configurations use the backend port, independently of the UI port. The JSON examples use a generic `mcpServers` format; adapt the enclosing configuration to your client.
+**Settings → Global → Network access → External LLM access (MCP)** provides this installation's backend URLs and a local stdio configuration. Create a dedicated MCP key, choose its allowed tools and workspaces, and optionally set an expiry. New keys default to read-only. Copy the new key immediately: it is displayed only once, and only its SHA-256 hash is stored. **Copy with new key** includes that key; previews always use a placeholder. Keys can be revoked independently from this panel. Development configurations use the backend port, independently of the UI port. The JSON examples use a generic `mcpServers` format; adapt the enclosing configuration to your client.
 
 ### HTTP (local or remote)
 
@@ -18,17 +18,15 @@ http://127.0.0.1:3000/api/mcp
 
 Use the backend's actual port (`3300` for the default development server). This endpoint needs no database path or separate MCP process. It supports MCP initialization, tool discovery and JSON responses; conversation updates are retrieved by polling a cursor rather than a persistent event stream.
 
-For another machine, enable [Network access](../../CONFIGURATION.md#network-access), restart Kōbō as instructed there, and replace `127.0.0.1` with its reachable address. Configure either header in the MCP client:
+For another machine, enable [Network access](../../CONFIGURATION.md#network-access), restart Kōbō as instructed there, and replace `127.0.0.1` with its reachable address. Configure this header in every MCP client, including local clients:
 
 ```text
-Authorization: Bearer <your Kōbō network access token>
+Authorization: Bearer <your dedicated Kōbō MCP key>
 ```
 
-```text
-X-Kobo-Token: <your Kōbō network access token>
-```
+Administrator tokens, browser cookies and `X-Kobo-Token` are not accepted by `/api/mcp`. Dedicated MCP keys cannot authenticate administrative API or WebSocket access. The existing Host/Origin checks and reverse-proxy settings also apply. OAuth authorization flows are not supported. For public access, use HTTPS. Adding this endpoint does not enable network access automatically.
 
-Find the token in **Settings → Global → Network access**. The existing Host/Origin checks and reverse-proxy settings also apply to MCP. Local connections need no token unless **Behind a reverse proxy** is enabled. This is shared-token authentication; clients requiring an OAuth authorization flow are not supported. For access outside a trusted LAN, follow the existing reverse-proxy/TLS deployment guidance. Adding this endpoint does not enable network access automatically.
+Both tool discovery and execution reload the key's current grants. Authentication is rechecked after receiving the request body, so revocation or expiry during a slow upload prevents dispatch. Revocation does not cancel an operation already dispatched; inspect its result before retrying. Selecting workspace IDs filters discovery results and denies other workspaces without revealing whether they exist. Global tools (creation, PR diagnosis and group preview/receipts) require an explicit **All workspaces** grant. Restricted keys can discover only their granted workspace-owned memory scopes, including fresh empty scopes and their current generation/revision. For restricted keys, memory reads/writes only address the selected workspaces' own memory scopes, excluding inherited global/project memory. An all-workspace key with memory tool grants can access global/project memory too. Mutation and destructive tools require explicit tool grants; no confirmation boolean expands a credential's scope.
 
 The HTTP endpoint exposes `list_workspaces` and the six [conversation tools](#conversation-tools) below. Its discovery response is an array of `{ id, name, status, projectPath, archivedAt }`.
 
@@ -43,7 +41,7 @@ The existing global server exposes the same six conversation tools alongside its
       "command": "node",
       "args": ["/absolute/path/to/Kobo/dist/mcp-server/kobo-tasks-server.js"],
       "env": {
-        "KOBO_DB_PATH": "/absolute/path/to/kobo/kobo.db",
+        "KOBO_MCP_TOKEN": "<your dedicated MCP key>",
         "KOBO_BACKEND_URL": "http://127.0.0.1:3000"
       }
     }
@@ -51,7 +49,7 @@ The existing global server exposes the same six conversation tools alongside its
 }
 ```
 
-Leave `KOBO_WORKSPACE_ID` unset or empty for an external client. Use the same database and backend instance: the production database defaults to `~/.config/kobo/kobo.db`, while development uses `data/kobo.db`. If the backend requires a token, set `KOBO_NETWORK_TOKEN` for backend calls. Conversation tools always use the running backend to preserve agent ownership and lifecycle checks.
+Leave `KOBO_WORKSPACE_ID` unset or empty for an external client. Set `KOBO_MCP_TOKEN` to its dedicated MCP key, even on loopback. Global stdio forwards discovery and every operation to the running backend; it does not open SQLite or receive administrator credentials. Keep client configuration files private because they contain the issued key.
 
 ### Conversation tools
 
@@ -159,18 +157,14 @@ into the worktree.
 | Env var | Purpose |
 |---|---|
 | `KOBO_WORKSPACE_ID` | ID of the current workspace — scopes workspace-local queries. Optional: when unset, the server runs in "global" mode (see [Global tools](#global-tools-workspace-less-mode) below) and exposes management and conversation tools; workspace-scoped tools are omitted from the tool list entirely. |
-| `KOBO_DB_PATH` | Absolute path to Kōbō's SQLite DB. **Required**. |
+| `KOBO_DB_PATH` | Legacy compatibility metadata; stdio does not open the database. |
 | `KOBO_SETTINGS_PATH` | Absolute path to Kōbō's `settings.json`. Optional — `get_settings` returns an error shape if absent. |
 | `KOBO_BACKEND_URL` | Base URL of the running Kōbō HTTP backend. Default: `http://localhost:3000`. Used by tools that need runtime state (dev server, git info, workspace transitions). |
-| `KOBO_NETWORK_TOKEN` | Optional network access token sent with backend requests. |
+| `KOBO_MCP_TOKEN` | Required dedicated MCP key for global/external stdio. |
+| `KOBO_MCP_SESSION_TOKEN` | Backend-issued, revocable per-launch capability for managed workspace stdio. Never supplied by external clients. |
 | `KOBO_MCP_CLIENT_NAME` | Optional display name overriding the external stdio client's initialization name. |
 
-The server reads the DB directly for local queries, writes directly for task
-CRUD, and calls the backend HTTP API for runtime processes and validated
-workspace transitions. Conversation tools are defined in
-`src/shared/workspace-dialogue-tools.ts` and forwarded through the backend.
-The stdio server opens an existing database; schema migration belongs to backend
-startup.
+Managed stdio forwards operations through `/api/internal-mcp` using its launch capability. The backend binds workspace, session, read-only permissions and narrow reporting exceptions. Plan, manual review, final review and handoff launches cannot use general mutating tools. Stopping or replacing a launch revokes its capability. The stdio process never opens SQLite; database changes and runtime ownership remain in the backend.
 
 ## Tools
 
@@ -409,7 +403,7 @@ List all images uploaded to the current workspace via Kōbō's chat paste/upload
 
 ### Global tools (workspace-less mode)
 
-These management tools and the 6 [conversation tools](#conversation-tools) are registered regardless of whether `KOBO_WORKSPACE_ID` is set. Workspace-bound stdio, global stdio and external HTTP share creation, PR diagnosis, archive, purge, deletion and restoration tools. The HTTP endpoint also exposes discovery, conversation and memory; `stop_workspace` remains a stdio tool. Restricted final-review and handoff sessions cannot call creation or lifecycle mutation tools.
+These management tools and the 6 [conversation tools](#conversation-tools) are registered regardless of whether `KOBO_WORKSPACE_ID` is set. Workspace-bound stdio, global stdio and external HTTP share creation, PR diagnosis, archive, purge, deletion and restoration tools. The HTTP endpoint also exposes discovery, conversation and memory; `stop_workspace` remains a managed workspace tool and is not available to external global stdio. Restricted final-review and handoff sessions cannot call creation or lifecycle mutation tools.
 
 #### `list_workspaces`
 List Kōbō workspaces with id, title, status, and creation date. Reads the DB directly — works even when the Kōbō backend server isn't running.
@@ -543,7 +537,7 @@ The same six memory tools are available on a workspace-bound agent server and on
 
 | Tool | Purpose and important arguments |
 |---|---|
-| `list_memory_scopes` | Lists selectable scopes; external clients may pass `workspace_id` to list exactly the applicable global/project/workspace scopes. |
+| `list_memory_scopes` | Lists selectable scopes within the credential grant. External clients may pass `workspace_id`; restricted keys receive only that workspace-owned scope, while all-workspace keys may also receive its applicable global/project scopes. |
 | `list_memories` | Bounded page of compact metadata; select one `scope_id`, or an applicable `workspace_id` externally. |
 | `read_memory` | Reads a specific `scope_id` + `entry_id`; large bodies are returned as explicit fragments with a revision/code-point cursor. Set `repeat: true` only to intentionally spend budget rereading an unchanged range. |
 | `search_memories` | Bounded search in a selected scope or external workspace view; results are metadata/excerpts, not a corpus dump. |

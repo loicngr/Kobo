@@ -9,7 +9,13 @@ import { Hono } from 'hono'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { closeDb, getDb } from '../server/db/index.js'
 import { runMigrations } from '../server/db/migrations.js'
+import internalMcp from '../server/routes/internal-mcp.js'
 import mcp from '../server/routes/mcp.js'
+import {
+  createExternalMcpCredential,
+  EXTERNAL_TOOL_CATALOGUE,
+} from '../server/services/external-mcp-credentials-service.js'
+import { createInternalMcpCapability } from '../server/services/internal-mcp-capability-service.js'
 
 const captured = vi.hoisted(() => ({
   requests: [] as Array<{ body: Record<string, unknown>; files: string[] }>,
@@ -119,7 +125,9 @@ vi.mock('../server/routes/pull-requests.js', async () => {
       }),
   }
 })
-const app = new Hono().route('/api/mcp', mcp)
+const app = new Hono().route('/api/mcp', mcp).route('/api/internal-mcp', internalMcp)
+let externalToken: string
+let previousHome: string | undefined
 let directory: string
 beforeEach(() => {
   captured.requests = []
@@ -129,10 +137,18 @@ beforeEach(() => {
   captured.lifecycleCalls = []
   captured.worktreePurged = false
   directory = mkdtempSync(join(tmpdir(), 'kobo-mcp-create-'))
+  previousHome = process.env.KOBO_HOME
+  process.env.KOBO_HOME = directory
+  externalToken = createExternalMcpCredential({
+    name: 'Transport test',
+    allWorkspaces: true,
+    tools: EXTERNAL_TOOL_CATALOGUE.map((tool) => tool.name),
+  }).token
   closeDb()
   runMigrations(getDb(join(directory, 'test.db')))
 })
 afterEach(() => {
+  process.env.KOBO_HOME = previousHome
   closeDb()
   rmSync(directory, { recursive: true, force: true })
 })
@@ -179,6 +195,7 @@ async function httpClient() {
   const client = new Client({ name: 'creation-test', version: '1' })
   await client.connect(
     new StreamableHTTPClientTransport(new URL('http://localhost/api/mcp'), {
+      requestInit: { headers: { Authorization: `Bearer ${externalToken}` } },
       fetch: async (input, init) => app.fetch(new Request(input, init)),
     }),
   )
@@ -235,7 +252,8 @@ it.each(['', 'internal-workspace'])(
   async (workspaceId) => {
     const authenticatedApp = new Hono()
     authenticatedApp.use('*', async (c, next) => {
-      if (c.req.header('X-Kobo-Token') !== 'test-network-token') return c.json({ error: 'Unauthorized' }, 401)
+      if (c.req.path !== '/api/internal-mcp' && c.req.header('Authorization') !== `Bearer ${externalToken}`)
+        return c.json({ error: 'Unauthorized' }, 401)
       return next()
     })
     authenticatedApp.route('/', app)
@@ -243,6 +261,11 @@ it.each(['', 'internal-workspace'])(
     if (!listener.listening) await new Promise<void>((resolve) => listener.once('listening', resolve))
     const address = listener.address()
     if (!address || typeof address === 'string') throw new Error('Missing listener')
+    const managed = createInternalMcpCapability({
+      workspaceId: workspaceId || 'unused',
+      sessionId: 'test',
+      readOnly: false,
+    })
     const client = new Client({ name: 'external-creation', version: '1' })
     try {
       await client.connect(
@@ -254,8 +277,9 @@ it.each(['', 'internal-workspace'])(
             KOBO_HOME: directory,
             KOBO_DB_PATH: getDb().name,
             KOBO_WORKSPACE_ID: workspaceId,
+            KOBO_MCP_SESSION_TOKEN: managed.token,
             KOBO_BACKEND_URL: `http://127.0.0.1:${address.port}`,
-            KOBO_NETWORK_TOKEN: 'test-network-token',
+            KOBO_MCP_TOKEN: externalToken,
           },
           stderr: 'pipe',
         }),
@@ -317,7 +341,7 @@ it('allows a creation attachment above the SDK HTTP default limit without wideni
     expect(captured.requests).toHaveLength(1)
     const res = await app.request('/api/mcp', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${externalToken}` },
       body: JSON.stringify({
         jsonrpc: '2.0',
         id: 1,

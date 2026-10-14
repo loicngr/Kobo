@@ -126,6 +126,10 @@ describe('paths — Kōbō home resolution', () => {
       const result = ensureKoboHome()
       expect(result).toBe(nested)
       expect(fs.existsSync(nested)).toBe(true)
+      expect(fs.statSync(nested).mode & 0o777).toBe(0o700)
+      fs.chmodSync(nested, 0o755)
+      ensureKoboHome()
+      expect(fs.statSync(nested).mode & 0o777).toBe(0o700)
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true })
     }

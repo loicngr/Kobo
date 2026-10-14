@@ -18,6 +18,7 @@ import {
   listMemoryOperations,
   listMemoryScopes,
   listWorkspaceMemoryOperations,
+  listWorkspaceMemoryScopes,
   readMemory,
   remember,
   searchMemories,
@@ -222,7 +223,12 @@ function chargeExternalOutput(input: {
 }
 
 /** Execute the external memory surface; caller identity is always derived from MCP transport. */
-export function executeMemoryMcpTool(name: string, input: unknown, source: MessageSource): unknown {
+export function executeMemoryMcpTool(
+  name: string,
+  input: unknown,
+  source: MessageSource,
+  allowedWorkspaceIds?: readonly string[],
+): unknown {
   if (!isMemoryToolName(name)) throw new TypeError(`Unknown memory tool '${name}'`)
   const actor = externalActor(source)
   const transport = source.transport as MemoryTransport
@@ -263,11 +269,16 @@ export function executeMemoryMcpTool(name: string, input: unknown, source: Messa
     switch (name) {
       case 'list_memory_scopes':
         data = boundedScopes(
-          listMemoryScopes({
-            ...(args.workspace_id ? { workspaceId: args.workspace_id as string } : {}),
-            ...(cursor ? { cursor } : {}),
-            ...(limit ? { limit } : {}),
-          }),
+          allowedWorkspaceIds
+            ? listWorkspaceMemoryScopes(
+                args.workspace_id ? allowedWorkspaceIds.filter((id) => id === args.workspace_id) : allowedWorkspaceIds,
+                { ...(cursor ? { cursor } : {}), ...(limit ? { limit } : {}) },
+              )
+            : listMemoryScopes({
+                ...(args.workspace_id ? { workspaceId: args.workspace_id as string } : {}),
+                ...(cursor ? { cursor } : {}),
+                ...(limit ? { limit } : {}),
+              }),
         )
         break
       case 'list_memories': {

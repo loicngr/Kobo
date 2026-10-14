@@ -45,7 +45,7 @@ export function buildMcpConnectionInfo(input: ConnectionInput) {
     networkEnabled: input.networkEnabled,
     behindProxy: input.behindProxy,
     proxyHostname: input.proxyHostname,
-    localRequiresToken: input.behindProxy,
+    localRequiresToken: true,
     stdio: args
       ? {
           command: input.command,

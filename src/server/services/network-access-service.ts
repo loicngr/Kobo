@@ -68,15 +68,26 @@ const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1', '::ffff:127.0.
  * scheme (`http://127.0.0.1:3000`); adding a scheme when none is present runs
  * both through the same URL rules, including the bracketed IPv6 form.
  */
-function headerHostname(value: string): string | null {
+function parseOrigin(value: string): URL | null {
+  if (!/^https?:\/\/[^/?#\\\s]+$/i.test(value)) return null
   try {
-    const hostname = new URL(value.includes('://') ? value : `http://${value}`).hostname
-    if (!hostname) return null
-    // The URL parser keeps IPv6 hostnames bracketed; compare on the bare address.
-    return hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname
+    const url = new URL(value)
+    return url.hostname && !url.username && !url.password ? url : null
   } catch {
     return null
   }
+}
+
+function parseHost(value: string): URL | null {
+  if (!value || /[/?#@\\\s]/.test(value)) return null
+  return parseOrigin(`http://${value}`)
+}
+
+function headerHostname(value: string): string | null {
+  const url = value.includes('://') ? parseOrigin(value) : parseHost(value)
+  const hostname = url?.hostname
+  if (!hostname) return null
+  return hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname
 }
 
 /**
@@ -86,7 +97,7 @@ function headerHostname(value: string): string | null {
  * both synchronous, and this runs on every request.
  */
 export function isLocalRequestHost(value: string | undefined): boolean {
-  if (!value) return false
+  if (!value || !parseHost(value)) return false
   const hostname = headerHostname(value)
   return hostname !== null && LOCAL_HOSTNAMES.has(hostname)
 }
@@ -97,24 +108,8 @@ function isAllowedHostname(hostname: string | null, enabled: boolean, lanHostnam
   return enabled && lanHostnames.includes(hostname)
 }
 
-/**
- * Guards against DNS rebinding: a page on `evil.com` whose domain re-resolves
- * to 127.0.0.1 reaches this server with `Host: evil.com`, and the browser then
- * treats every response as same-origin. Only the names by which the machine is
- * legitimately reachable are accepted — its own loopback names, plus its LAN
- * addresses once network access is enabled.
- *
- * Behind a reverse proxy the Host is whatever domain the operator chose. When
- * they declare it via `KOBO_NETWORK_ACCESS_PROXY_HOST` it is enforced like any
- * other name; without it we cannot tell their domain from an attacker's, so
- * anything is accepted. That mode also turns off the loopback exemption, so
- * every `/api/*` request has to carry the token.
- *
- * Residual risk when the hostname is left undeclared: the SPA shell is served
- * outside `/api/*` and therefore behind no token, so a rebinding page can be
- * handed the real interface and ask the user to paste their token into it.
- * Declaring the hostname closes that; otherwise, authenticate at the proxy.
- */
+/** Reject malformed/rebinding hosts. Proxy mode requires a declared public host;
+ * loopback remains reachable for authenticated internal clients and health checks. */
 export function isAllowedRequestHost(params: {
   host: string | undefined
   enabled: boolean
@@ -124,29 +119,27 @@ export function isAllowedRequestHost(params: {
   proxyHostname?: string | null
 }): boolean {
   if (!params.host) return false
-  const hostname = headerHostname(params.host)
+  const hostname = parseHost(params.host) ? headerHostname(params.host) : null
   if (params.behindProxy) {
-    // No declared hostname means we cannot tell the operator's domain from an
-    // attacker's, so anything goes — the historical behaviour.
-    if (!params.proxyHostname) return true
+    if (!hostname) return false
+    if (!params.proxyHostname) return LOCAL_HOSTNAMES.has(hostname)
     return hostname === params.proxyHostname || (hostname !== null && LOCAL_HOSTNAMES.has(hostname))
   }
   return isAllowedHostname(hostname, params.enabled, params.lanHostnames)
 }
 
-/**
- * Hostname declared via `KOBO_NETWORK_ACCESS_PROXY_HOST`, or null when unset.
- *
- * Behind a reverse proxy we otherwise have to accept any Host, which leaves the
- * door open to a rebinding page being served the real interface and asking the
- * user to paste their token into it. Declaring the domain the proxy serves
- * closes that, and costs one environment variable in the compose file where
- * the other network-access settings already live.
- */
+/** Validated hostname declared by the operator; invalid/missing values fail closed. */
 export function resolveProxyHostname(env: NodeJS.ProcessEnv = process.env): string | null {
   const raw = env.KOBO_NETWORK_ACCESS_PROXY_HOST?.trim()
   if (!raw) return null
   return headerHostname(raw)
+}
+
+/** Exact public origin. A bare configured hostname implies HTTPS. */
+export function resolveProxyOrigin(env: NodeJS.ProcessEnv = process.env): string | null {
+  const raw = env.KOBO_NETWORK_ACCESS_PROXY_HOST?.trim()
+  if (!raw) return null
+  return parseOrigin(raw.includes('://') ? raw : `https://${raw}`)?.origin ?? null
 }
 
 /**
@@ -184,34 +177,27 @@ export function isAllowedOrigin(params: {
   requestHost: string | undefined
   behindProxy?: boolean
   proxyHostname?: string | null
+  proxyOrigin?: string | null
+  requestProtocol?: string
   /** Origin the dev client is served from, when `npm run dev` declares one. */
   devOrigin?: string | null
 }): boolean {
   if (params.origin === undefined) return true
 
-  const origin = authority(params.origin)
-  if (origin === null) return false
+  const origin = parseOrigin(params.origin)?.origin
+  if (!origin) return false
 
   if (params.behindProxy) {
-    if (!params.proxyHostname) return true
-    return headerHostname(params.origin) === params.proxyHostname
+    if (!params.proxyHostname) return false
+    const expected = params.proxyOrigin ?? parseOrigin(`https://${params.proxyHostname}`)?.origin
+    return origin === expected
   }
 
-  // `quasar dev` proxies to the backend with changeOrigin, so it rewrites the
-  // Host to ours while the browser stays on the Quasar port. The two cannot
-  // match there, hence the explicit declaration.
-  if (params.devOrigin && origin === authority(params.devOrigin)) return true
-
-  return params.requestHost !== undefined && origin === authority(params.requestHost)
-}
-
-/** Host and port of a raw `Host`/`Origin` value, or null when unparseable. */
-function authority(value: string): string | null {
-  try {
-    return new URL(value.includes('://') ? value : `http://${value}`).host || null
-  } catch {
-    return null
-  }
+  // The explicit Quasar development origin can differ from the backend port.
+  if (params.devOrigin && origin === parseOrigin(params.devOrigin)?.origin) return true
+  if (!params.requestHost || !parseHost(params.requestHost)) return false
+  const protocol = params.requestProtocol ?? 'http:'
+  return origin === parseOrigin(`${protocol}//${params.requestHost}`)?.origin
 }
 
 /**
@@ -263,29 +249,6 @@ export function evaluateNetworkAccess(params: {
   if (!params.enabled) return { allow: false, status: 403 }
   if (tokenMatches(params.providedToken, params.expectedToken)) return { allow: true, status: 200 }
   return { allow: false, status: 401 }
-}
-
-/** WS upgrade authorization: parses `?token=` from the raw URL. */
-export function authorizeWsUpgrade(params: {
-  address: string | undefined
-  rawUrl: string | undefined
-  enabled: boolean
-  expectedToken: string
-  trustLoopback?: boolean
-}): boolean {
-  let providedToken: string | undefined
-  try {
-    providedToken = new URL(params.rawUrl ?? '/', 'http://localhost').searchParams.get('token') ?? undefined
-  } catch {
-    providedToken = undefined
-  }
-  return evaluateNetworkAccess({
-    address: params.address,
-    enabled: params.enabled,
-    expectedToken: params.expectedToken,
-    providedToken,
-    trustLoopback: params.trustLoopback,
-  }).allow
 }
 
 /**

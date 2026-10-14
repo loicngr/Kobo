@@ -15,8 +15,8 @@
 #      doesn't exist yet, which breaks Claude Code auth in a confusing way.
 #   6. Network access + "behind a reverse proxy" are pre-enabled via the
 #      KOBO_NETWORK_ACCESS_* env vars below — no manual bootstrap step
-#      needed. Find the auto-generated token with:
-#        docker compose -f docker-compose.example.yml logs kobo | grep Token
+#      needed. Retrieve the token deliberately from the private settings file;
+#      see CONFIGURATION.md#token--login-flow. Secrets are never printed in logs.
 
 services:
   traefik:
@@ -46,9 +46,8 @@ services:
       - KOBO_NETWORK_ACCESS_ENABLED=true
       - KOBO_NETWORK_ACCESS_BEHIND_PROXY=true
       # Must match the Host() rule below. Behind a proxy Kōbō cannot guess the
-      # domain you serve it under, so without this it has to accept any Host —
-      # which lets a page that re-resolves its own domain to this container be
-      # handed the real interface and ask the user for their token.
+      # public origin you serve it under. Missing/invalid configuration rejects
+      # public requests. A bare domain defaults to HTTPS; specify nonstandard ports.
       - KOBO_NETWORK_ACCESS_PROXY_HOST=kobo.example.com
     volumes:
       # Named volume: Kōbō's own state (SQLite DB, settings.json, etc).
@@ -74,14 +73,20 @@ services:
       # — anyone who can run a command inside `kobo` can spawn a privileged
       # container that mounts the host filesystem. Accepted knowingly to
       # support the dev-server panel (start/stop/logs for your projects'
-      # docker-compose stacks). Remove this line if you don't need that
-      # panel — see CONFIGURATION.md for the tradeoff.
-      - /var/run/docker.sock:/var/run/docker.sock
+      # docker-compose stacks). Opt in only if needed by uncommenting the mount.
+      # See CONFIGURATION.md for the tradeoff.
+      # - /var/run/docker.sock:/var/run/docker.sock
     labels:
       - traefik.enable=true
       - traefik.http.routers.kobo.rule=Host(`kobo.example.com`)
       - traefik.http.routers.kobo.entrypoints=websecure
       - traefik.http.routers.kobo.tls.certresolver=le
+      - traefik.http.routers.kobo.middlewares=kobo-security
+      - traefik.http.middlewares.kobo-security.headers.stsseconds=31536000
+      - traefik.http.middlewares.kobo-security.headers.contenttypenosniff=true
+      - traefik.http.middlewares.kobo-security.headers.referrerpolicy=no-referrer
+      - traefik.http.middlewares.kobo-security.headers.customframeoptionsvalue=SAMEORIGIN
+      - "traefik.http.middlewares.kobo-security.headers.contentsecuritypolicy=frame-ancestors 'self'"
       - traefik.http.services.kobo.loadbalancer.server.port=3000
       # WebSocket traffic (Kōbō's live updates) rides the same HTTP route —
       # Traefik proxies WS upgrades automatically, no extra label needed.

@@ -1,4 +1,24 @@
 export default {
+  'settings.mcp.failed': 'Operation failed',
+  'settings.mcp.write': 'Write / action',
+  'settings.mcp.readOnly': 'Read',
+  'settings.mcp.expiryDays': '{count} days',
+  'settings.mcp.revoke': 'Revoke',
+  'settings.mcp.noExpiry': 'No expiry',
+  'settings.mcp.hideKey': 'Hide key',
+  'settings.mcp.copyKey': 'Copy key',
+  'settings.mcp.key': 'MCP key',
+  'settings.mcp.oneTimeKey': 'Copy this key now: it will not be shown again after leaving this page.',
+  'settings.mcp.createKey': 'Create key',
+  'settings.mcp.expiry': 'Expiry',
+  'settings.mcp.scopeHint':
+    'Read-only by default. Selecting workspaces disables global tools and limits memory to their own workspace scopes. All workspaces also permits global and project memory when memory tools are granted.',
+  'settings.mcp.tools': 'Allowed tools',
+  'settings.mcp.workspaces': 'Allowed workspaces',
+  'settings.mcp.allWorkspaces': 'All workspaces (current and future)',
+  'settings.mcp.keyName': 'Key name',
+  'settings.mcp.scopedHint':
+    'Each client uses its own independently revocable MCP key. The administrator token no longer grants MCP access.',
   'groupMessage.title': 'Group message',
   'groupMessage.description': 'Send the same instruction to several workspaces.',
   'groupMessage.devServerRunning': 'Only workspaces with a running development server',
@@ -1644,6 +1664,14 @@ export default {
   'git.mergeMethod.rebase': 'Rebase and merge — replay commits without a merge commit',
   'git.mergeRequestConfirmTitle': 'Merge {request}?',
   'git.mergeRequestConfirmMessage': 'This merges the open {request} into its target branch.',
+  'git.mergePolicyTitle': 'Merge blocked by GitHub',
+  'git.mergePolicyMessage':
+    'Branch protection rules prevent this merge. You can keep the protections, or attempt an administrator merge (--admin). This bypasses required checks and reviews if your GitHub permissions allow it.',
+  'git.mergeKeepProtections': 'Keep protections',
+  'git.mergeAsAdmin': 'Merge as administrator',
+  'git.mergeAdminFailed':
+    'Administrator merge could not be confirmed. Check the PR status, your permissions and repository rules.',
+  'git.mergeRequestPending': 'Request sent. The merge of this {request} is not yet confirmed.',
   'git.mergeRequestSuccess': '{request} merged',
   'git.mergeRequestFailed': 'Failed to merge {request}',
   'git.deleteRemoteBranch': 'Delete remote branch',
@@ -2134,11 +2162,10 @@ export default {
   'settings.mcp.stdio': 'Local stdio',
   'settings.mcp.copyUrl': 'Copy URL',
   'settings.mcp.copyConfig': 'Copy configuration',
-  'settings.mcp.copyWithToken': 'Copy with token',
+  'settings.mcp.copyWithToken': 'Copy with new key',
   'settings.mcp.genericFormat':
     'These examples use a generic mcpServers format. Adapt the container format to your MCP client. Token placeholders are kept in previews.',
-  'settings.mcp.tokenUnavailable':
-    'No token is available. Enable network access before copying authenticated configuration.',
+  'settings.mcp.tokenUnavailable': 'Create a dedicated MCP key to copy an authenticated configuration.',
   'settings.mcp.stdioUnavailable':
     'The stdio entrypoint is unavailable in this installation. Use HTTP or build Kōbō first.',
   'settings.mcp.copyFailed': 'Could not copy to the clipboard.',

@@ -1,4 +1,24 @@
 export default {
+  'settings.mcp.failed': 'Opération impossible',
+  'settings.mcp.write': 'Écriture / action',
+  'settings.mcp.readOnly': 'Lecture',
+  'settings.mcp.expiryDays': '{count} jours',
+  'settings.mcp.revoke': 'Révoquer',
+  'settings.mcp.noExpiry': 'Sans expiration',
+  'settings.mcp.hideKey': 'Masquer la clé',
+  'settings.mcp.copyKey': 'Copier la clé',
+  'settings.mcp.key': 'Clé MCP',
+  'settings.mcp.oneTimeKey': 'Copiez cette clé maintenant : elle ne sera plus affichée après fermeture de cette page.',
+  'settings.mcp.createKey': 'Créer une clé',
+  'settings.mcp.expiry': 'Expiration',
+  'settings.mcp.scopeHint':
+    'Lecture seule par défaut. Avec une sélection de workspaces, les outils globaux sont indisponibles et la mémoire est limitée aux scopes de ces workspaces. Tous les workspaces autorise aussi la mémoire globale et projet si les outils mémoire sont accordés.',
+  'settings.mcp.tools': 'Outils autorisés',
+  'settings.mcp.workspaces': 'Workspaces autorisés',
+  'settings.mcp.allWorkspaces': 'Tous les workspaces (présents et futurs)',
+  'settings.mcp.keyName': 'Nom de la clé',
+  'settings.mcp.scopedHint':
+    'Chaque client utilise sa propre clé MCP, révocable indépendamment. Le jeton administrateur ne donne plus accès au MCP.',
   'groupMessage.title': 'Message groupé',
   'groupMessage.description': 'Envoyer la même consigne à plusieurs workspaces.',
   'groupMessage.devServerRunning': 'Uniquement les workspaces avec un serveur de développement lancé',
@@ -1669,6 +1689,14 @@ export default {
   'git.mergeMethod.rebase': 'Rebase and merge — rejouer les commits sans commit de fusion',
   'git.mergeRequestConfirmTitle': 'Fusionner la {request} ?',
   'git.mergeRequestConfirmMessage': 'Cette action fusionne la {request} ouverte dans sa branche cible.',
+  'git.mergePolicyTitle': 'Fusion bloquée par GitHub',
+  'git.mergePolicyMessage':
+    'Les règles de protection de la branche empêchent la fusion. Vous pouvez conserver ces protections ou tenter une fusion en administrateur (--admin). Cette action contourne les contrôles et revues obligatoires si vos droits GitHub le permettent.',
+  'git.mergeKeepProtections': 'Conserver les protections',
+  'git.mergeAsAdmin': 'Fusionner en administrateur',
+  'git.mergeAdminFailed':
+    'La fusion en administrateur n’a pas pu être confirmée. Vérifiez l’état de la PR, vos droits et les règles du dépôt.',
+  'git.mergeRequestPending': 'Demande envoyée. La fusion de cette {request} n’est pas encore confirmée.',
   'git.mergeRequestSuccess': '{request} fusionnée',
   'git.mergeRequestFailed': 'Impossible de fusionner la {request}',
   'git.deleteRemoteBranch': 'Supprimer la branche distante',
@@ -2168,11 +2196,10 @@ export default {
   'settings.mcp.stdio': 'Stdio local',
   'settings.mcp.copyUrl': 'Copier l’URL',
   'settings.mcp.copyConfig': 'Copier la configuration',
-  'settings.mcp.copyWithToken': 'Copier avec le jeton',
+  'settings.mcp.copyWithToken': 'Copier avec la nouvelle clé',
   'settings.mcp.genericFormat':
     'Ces exemples utilisent le format générique mcpServers. Adaptez le conteneur à votre client MCP. Les aperçus affichent un emplacement réservé au jeton.',
-  'settings.mcp.tokenUnavailable':
-    'Aucun jeton disponible. Activez l’accès réseau avant de copier une configuration authentifiée.',
+  'settings.mcp.tokenUnavailable': 'Créez une clé MCP dédiée pour copier une configuration authentifiée.',
   'settings.mcp.stdioUnavailable':
     'Le point d’entrée stdio est indisponible dans cette installation. Utilisez HTTP ou compilez Kōbō.',
   'settings.mcp.copyFailed': 'Impossible de copier dans le presse-papiers.',

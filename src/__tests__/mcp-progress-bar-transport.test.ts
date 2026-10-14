@@ -9,18 +9,36 @@ import { Hono } from 'hono'
 import { afterEach, beforeEach, expect, it } from 'vitest'
 import { closeDb, getDb } from '../server/db/index.js'
 import { runMigrations } from '../server/db/migrations.js'
+import internalMcp from '../server/routes/internal-mcp.js'
 import mcp from '../server/routes/mcp.js'
 import progress from '../server/routes/progress-bars.js'
+import {
+  createExternalMcpCredential,
+  EXTERNAL_TOOL_CATALOGUE,
+} from '../server/services/external-mcp-credentials-service.js'
+import { createInternalMcpCapability } from '../server/services/internal-mcp-capability-service.js'
 import {
   closeProgressCapability,
   createProgressCapability,
   revokeProgressCapability,
 } from '../server/services/progress-bar-runtime.js'
 
-const app = new Hono().route('/api/mcp', mcp).route('/api/progress-bars', progress)
+const app = new Hono()
+  .route('/api/mcp', mcp)
+  .route('/api/internal-mcp', internalMcp)
+  .route('/api/progress-bars', progress)
+let externalToken: string
+let previousHome: string | undefined
 let directory: string
 beforeEach(() => {
   directory = mkdtempSync(join(tmpdir(), 'kobo-progress-'))
+  previousHome = process.env.KOBO_HOME
+  process.env.KOBO_HOME = directory
+  externalToken = createExternalMcpCredential({
+    name: 'Transport test',
+    allWorkspaces: true,
+    tools: EXTERNAL_TOOL_CATALOGUE.map((tool) => tool.name),
+  }).token
   closeDb()
   runMigrations(getDb(join(directory, 'test.db')))
   getDb()
@@ -31,6 +49,7 @@ beforeEach(() => {
   getDb().prepare("INSERT INTO agent_sessions(id,workspace_id,started_at) VALUES ('s','w','now')").run()
 })
 afterEach(() => {
+  process.env.KOBO_HOME = previousHome
   closeDb()
   rmSync(directory, { recursive: true, force: true })
 })
@@ -113,6 +132,7 @@ it('exposes external HTTP progress with structured errors', async () => {
   try {
     await client.connect(
       new StreamableHTTPClientTransport(new URL('http://localhost/api/mcp'), {
+        requestInit: { headers: { Authorization: `Bearer ${externalToken}` } },
         fetch: async (input, init) => app.fetch(new Request(input, init)),
       }),
     )
@@ -129,6 +149,16 @@ it.each(['global', 'workspace', 'review', 'handoff', 'unscoped'])(
     const address = listener.address()
     if (!address || typeof address === 'string') throw new Error('No address')
     const cap = createProgressCapability('w', 's')
+    const managed = createInternalMcpCapability({
+      workspaceId: 'w',
+      sessionId: 's',
+      readOnly: mode === 'review' || mode === 'handoff',
+      env: {
+        ...(mode !== 'unscoped' ? { KOBO_PROGRESS_SESSION_TOKEN: cap.token } : {}),
+        ...(mode === 'review' ? { KOBO_FINAL_REVIEW_TOKEN: 'review', KOBO_FINAL_REVIEW_SESSION_ID: 's' } : {}),
+        ...(mode === 'handoff' ? { KOBO_HANDOFF_ID: 'handoff', KOBO_HANDOFF_TOKEN: 'handoff' } : {}),
+      },
+    })
     const client = new Client({ name: 'progress-stdio', version: '1' })
     try {
       await client.connect(
@@ -138,6 +168,8 @@ it.each(['global', 'workspace', 'review', 'handoff', 'unscoped'])(
           env: {
             PATH: process.env.PATH ?? '',
             KOBO_HOME: directory,
+            KOBO_MCP_TOKEN: externalToken,
+            KOBO_MCP_SESSION_TOKEN: managed.token,
             KOBO_DB_PATH: getDb().name,
             KOBO_WORKSPACE_ID: mode === 'global' ? '' : 'w',
             KOBO_BACKEND_URL: `http://127.0.0.1:${address.port}`,

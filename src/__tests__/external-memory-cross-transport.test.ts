@@ -11,19 +11,33 @@ import { closeDb, getDb } from '../server/db/index.js'
 import { runMigrations } from '../server/db/migrations.js'
 import mcp from '../server/routes/mcp.js'
 import memory from '../server/routes/memory.js'
+import {
+  createExternalMcpCredential,
+  EXTERNAL_TOOL_CATALOGUE,
+} from '../server/services/external-mcp-credentials-service.js'
 import { _setSettingsPath, updateGlobalSettings } from '../server/services/settings-service.js'
 
 const app = new Hono().route('/api/mcp', mcp).route('/api/memory', memory)
 let directory: string
+let previousHome: string | undefined
+let externalToken: string
 
 beforeEach(() => {
   closeDb()
   directory = mkdtempSync(join(tmpdir(), 'kobo-memory-transport-share-'))
+  previousHome = process.env.KOBO_HOME
+  process.env.KOBO_HOME = directory
+  externalToken = createExternalMcpCredential({
+    name: 'Transport test',
+    allWorkspaces: true,
+    tools: EXTERNAL_TOOL_CATALOGUE.map((tool) => tool.name),
+  }).token
   _setSettingsPath(join(directory, 'settings.json'))
   runMigrations(getDb(join(directory, 'test.db')))
 })
 
 afterEach(() => {
+  process.env.KOBO_HOME = previousHome
   closeDb()
   rmSync(directory, { recursive: true, force: true })
 })
@@ -48,6 +62,7 @@ it('shares the same memory scope and entry between stateless HTTP and global std
   if (!address || typeof address === 'string') throw new Error('Missing test listener address')
   const httpClient = new Client({ name: 'HTTP writer', version: '1' })
   const httpTransport = new StreamableHTTPClientTransport(new URL('http://localhost/api/mcp'), {
+    requestInit: { headers: { Authorization: `Bearer ${externalToken}` } },
     fetch: async (input, init) => app.fetch(new Request(input, init)),
   })
   const stdioClient = new Client({ name: 'stdio reader', version: '1' })
@@ -92,7 +107,7 @@ it('shares the same memory scope and entry between stateless HTTP and global std
           KOBO_WORKSPACE_ID: '',
           KOBO_DB_PATH: getDb().name,
           KOBO_BACKEND_URL: `http://127.0.0.1:${address.port}`,
-          KOBO_NETWORK_TOKEN: 'test-token',
+          KOBO_MCP_TOKEN: externalToken,
           KOBO_MCP_CLIENT_NAME: 'stdio reader',
         },
         stderr: 'pipe',
