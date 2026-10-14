@@ -61,6 +61,12 @@ export const CLAUDE_MODELS: readonly AgentModel[] = [
     i18nDescriptionKey: 'model.sonnet55Description',
   },
   {
+    id: 'claude-haiku-5-5',
+    label: 'Haiku 5.5',
+    i18nLabelKey: 'model.haiku55',
+    i18nDescriptionKey: 'model.haiku55Description',
+  },
+  {
     id: 'claude-haiku-4-5-20251001',
     label: 'Haiku 4.5',
     i18nLabelKey: 'model.haiku',

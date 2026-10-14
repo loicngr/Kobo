@@ -1473,7 +1473,7 @@ claude /login
 
 Kōbō talks to the embedded [`@anthropic-ai/claude-agent-sdk`](https://github.com/anthropics/claude-agent-sdk-typescript), which reuses the same login. The `claude` CLI is **not** required at runtime; you only need it for `/login`, `mcp add`, and other one-off setup commands. As a fallback you can export `ANTHROPIC_API_KEY` instead.
 
-The model selector is populated from [`src/shared/models.ts`](./src/shared/models.ts), also used by backend validation. This checkout includes Fable 5.1, Mythos 5, Opus 5, Opus 4.8, Sonnet 5 and older variants. Pick the default in **Settings → Agents**. Catalogue entries describe what Kōbō offers; provider access still depends on your account. `auto` leaves model selection to the runtime.
+The model selector is populated from [`src/shared/models.ts`](./src/shared/models.ts), also used by backend validation. This checkout includes Fable 5.1, Mythos 5.1/5, Opus 5.5, Sonnet 5.5, Haiku 5.5 (`claude-haiku-5-5`) and older variants. Pick the default in **Settings → Agents**. Catalogue entries describe what Kōbō offers; provider access still depends on your account. `auto` leaves model selection to the runtime.
 
 #### Immediate chat messages
 

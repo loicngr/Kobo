@@ -428,6 +428,8 @@ export default {
   'model.sonnet5': 'Sonnet 5',
   'model.sonnetClassic': 'Sonnet 4.6 (Classic)',
   'model.sonnet1m': 'Sonnet 4.6 (1M)',
+  'model.haiku55': 'Haiku 5.5',
+  'model.haiku55Description': 'Schnelle Aufgaben mit geringer Latenz, 1M Kontext',
   'model.haiku': 'Haiku 4.5',
   'model.autoDescription': 'Claude wählt das optimale Modell',
   'model.opus5Description': 'Für komplexes agentisches Coding und Unternehmenseinsätze, 1M Kontext',
