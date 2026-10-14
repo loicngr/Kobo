@@ -5,7 +5,7 @@
 # step (set -e via the recipe shell).
 #
 # Quick reference:
-#   make ci          # everything CI runs on a PR (audit + lint + tsc + tests)
+#   make ci          # everything CI runs on a PR, including the installed tarball test
 #   make release     # CI gates + build + version-not-yet-published guard
 #   make test        # backend + client + deployment tooling tests
 #   make lint        # biome lint only
@@ -29,7 +29,7 @@ help:
 	@echo "Kōbō — local CI/release runner"
 	@echo ""
 	@echo "Targets:"
-	@echo "  make ci         Run the full PR pipeline, step for step (install + audit + lint + type checks + build + tests)"
+	@echo "  make ci         Run the full PR pipeline, step for step (install + audit + lint + type checks + build + tests + package smoke test)"
 	@echo "  make release    Run CI + build + verify version is not already published"
 	@echo "  make install    npm ci on all three trees"
 	@echo "  make audit      npm audit --audit-level=high on all three trees"
@@ -39,6 +39,7 @@ help:
 	@echo "  make test-back  backend tests only"
 	@echo "  make test-front client tests only"
 	@echo "  make test-deployment tooling tests (Python 3.10+ / OpenSSL, no Docker/network)"
+	@echo "  make test-package install and smoke-test the built tarball (requires build, uses npm/network)"
 	@echo "  make build      production build"
 	@echo "  make clean      remove build artefacts"
 
@@ -91,7 +92,7 @@ typecheck-front:
 
 # ── Tests ──────────────────────────────────────────────────────────────────────
 
-.PHONY: test test-back test-front test-deployment
+.PHONY: test test-back test-front test-deployment test-package
 test: test-back test-front test-deployment
 
 test-back:
@@ -103,6 +104,10 @@ test-front:
 # Deterministic updater tests: no Docker daemon, network or production data.
 test-deployment:
 	npm run test:deployment
+
+# The caller must build first; CI runs this after the app/deployment suites.
+test-package:
+	npm run test:package
 
 # ── Build ──────────────────────────────────────────────────────────────────────
 
@@ -117,11 +122,12 @@ clean:
 # ── Pipelines ──────────────────────────────────────────────────────────────────
 
 # Mirrors `.github/workflows/ci.yml` step-for-step, in the same order: install,
-# audit, lint, the three type checks, build, then app suites and updater tests. Anything
+# audit, lint, the three type checks, build, app/deployment suites and the installed
+# tarball smoke test. Anything
 # added to the workflow must be added here too, or a red CI is found after the
 # push instead of before.
 .PHONY: ci
-ci: install audit lint typecheck build test
+ci: install audit lint typecheck build test test-package
 	@echo ""
 	@echo "✓ CI pipeline passed locally."
 

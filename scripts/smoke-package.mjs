@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { execFile, spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
@@ -124,45 +125,82 @@ try {
   assert.equal(settings.global.skillSuite, 'standard')
   assert.equal(settings.global.notionEnabled, false)
   assert.equal(settings.global.onboardingComplete, false)
-  const initialize = await fetch(`${backend}/api/mcp`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'package-smoke', version: '1' } } }),
-  })
-  assert(initialize.ok, 'Packaged HTTP MCP initialization failed')
-  const initializedText = await initialize.text()
-  const initializedJson = initializedText.startsWith('event:') || initializedText.startsWith('data:')
-    ? initializedText.split('\n').find(line => line.startsWith('data:'))?.slice(5).trim()
-    : initializedText
-  assert.equal(JSON.parse(initializedJson).result?.serverInfo?.name, 'kobo-workspaces')
-  const mcp = spawn(process.execPath, [path.join(installed, 'dist/mcp-server/kobo-tasks-server.js')], {
-    cwd: application,
-    env: { ...env, KOBO_DB_PATH: path.join(env.KOBO_HOME, 'kobo.db'), KOBO_SETTINGS_PATH: path.join(env.KOBO_HOME, 'settings.json'), KOBO_BACKEND_URL: backend },
-    stdio: ['pipe', 'pipe', 'ignore'],
-  })
-  children.push(mcp)
-  await new Promise((resolve, reject) => {
-    let buffer = ''
-    const timeout = setTimeout(() => reject(new Error('Packaged stdio MCP initialization timed out')), 10_000)
-    const failed = () => { clearTimeout(timeout); reject(new Error('Packaged stdio MCP closed before initialization')) }
-    mcp.once('error', failed)
-    mcp.once('exit', failed)
-    mcp.stdout.on('data', chunk => {
-      buffer += chunk.toString()
-      const lines = buffer.split('\n'); buffer = lines.pop()
-      for (const line of lines) {
-        try {
-          const message = JSON.parse(line)
-          if (message.id === 1) {
-            clearTimeout(timeout); mcp.removeListener('exit', failed)
-            if (message.result?.serverInfo?.name === 'kobo-tasks') resolve()
-            else reject(new Error('Unexpected packaged MCP response'))
-          }
-        } catch { /* Ignore non-protocol output. */ }
-      }
+  const initializeBody = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {
+    protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'package-smoke', version: '1' },
+  } })
+  async function initializeHttp(token) {
+    return fetch(`${backend}/api/mcp`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json', Accept: 'application/json, text/event-stream',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: initializeBody,
+      signal: AbortSignal.timeout(10_000),
     })
-    mcp.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'package-smoke', version: '1' } } }) + '\n')
+  }
+  assert.equal((await initializeHttp()).status, 401, 'Packaged HTTP MCP must reject anonymous clients')
+  // Only the disposable loopback operator can provision this short-lived, read-only key.
+  const credentialResponse = await fetch(`${backend}/api/mcp-credentials`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: 'package-smoke', tools: ['list_workspaces'], allWorkspaces: true,
+      expiresAt: new Date(Date.now() + 60 * 60_000).toISOString(),
+    }),
+    signal: AbortSignal.timeout(10_000),
   })
-  console.log(`PASS: ${metadata.name}@${metadata.version} tarball install, native modules, startup, fresh settings, PWA, HTTP and stdio MCP (${process.platform}/${process.arch}).`)
+  assert.equal(credentialResponse.status, 201, 'Packaged MCP credential provisioning failed')
+  const { token, credential } = await credentialResponse.json()
+  assert.equal(typeof token, 'string', 'Missing packaged MCP credential')
+  assert.equal(typeof credential?.id, 'string', 'Missing packaged MCP credential ID')
+  const operatorResponse = await fetch(`${backend}/api/settings`, {
+    headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10_000),
+  })
+  assert.equal(operatorResponse.status, 401, 'MCP credentials must not authorize operator routes')
+
+  // Resolve the protocol client from the installed tarball's dependency tree, never the checkout.
+  const requireInstalled = createRequire(path.join(installed, 'package.json'))
+  const { Client } = await import(pathToFileURL(requireInstalled.resolve('@modelcontextprotocol/sdk/client/index.js')).href)
+  const { StreamableHTTPClientTransport } = await import(pathToFileURL(requireInstalled.resolve('@modelcontextprotocol/sdk/client/streamableHttp.js')).href)
+  const { StdioClientTransport } = await import(pathToFileURL(requireInstalled.resolve('@modelcontextprotocol/sdk/client/stdio.js')).href)
+  const httpClient = new Client({ name: 'package-smoke-http', version: '1' })
+  const stdioClient = new Client({ name: 'package-smoke-stdio', version: '1' })
+  async function checkDiscoveryAndRead(client, transport) {
+    const { tools } = await client.listTools({}, { timeout: 10_000 })
+    assert.deepEqual(tools.map(tool => tool.name), ['list_workspaces'], `${transport} MCP must honor tool grants`)
+    const result = await client.callTool({ name: 'list_workspaces', arguments: {} }, undefined, { timeout: 10_000 })
+    assert.notEqual(result.isError, true, `${transport} MCP workspace read failed`)
+    assert.deepEqual(JSON.parse(result.content[0].text), [], `${transport} MCP fresh workspace list must be empty`)
+  }
+  try {
+    await httpClient.connect(new StreamableHTTPClientTransport(new URL(`${backend}/api/mcp`), {
+      requestInit: { headers: { Authorization: `Bearer ${token}` } },
+    }), { timeout: 10_000 })
+    assert.equal(httpClient.getServerVersion()?.name, 'kobo-workspaces')
+    await checkDiscoveryAndRead(httpClient, 'HTTP')
+
+    await stdioClient.connect(new StdioClientTransport({
+      command: process.execPath,
+      args: [path.join(installed, 'dist/mcp-server/kobo-tasks-server.js')],
+      cwd: application,
+      env: { ...env, KOBO_BACKEND_URL: backend, KOBO_MCP_TOKEN: token },
+      stderr: 'ignore',
+    }), { timeout: 10_000 })
+    assert.equal(stdioClient.getServerVersion()?.name, 'kobo-tasks')
+    // Initialization alone never exercises the stdio bridge's backend authentication.
+    await checkDiscoveryAndRead(stdioClient, 'stdio')
+
+    const revoked = await fetch(`${backend}/api/mcp-credentials/${encodeURIComponent(credential.id)}`, {
+      method: 'DELETE', signal: AbortSignal.timeout(10_000),
+    })
+    assert.equal(revoked.status, 200, 'Packaged MCP credential revocation failed')
+    assert.equal((await initializeHttp(token)).status, 401, 'HTTP MCP must reject revoked credentials')
+    const denied = await stdioClient.callTool({ name: 'list_workspaces', arguments: {} }, undefined, { timeout: 10_000 })
+    assert.equal(denied.isError, true, 'Running stdio MCP must reject revoked credentials')
+  } finally {
+    await Promise.allSettled([stdioClient.close(), httpClient.close()])
+  }
+  console.log(`PASS: ${metadata.name}@${metadata.version} tarball install, native modules, startup, fresh settings, PWA, authenticated HTTP/stdio MCP and credential revocation (${process.platform}/${process.arch}).`)
 } finally {
   for (const child of children.reverse()) await stop(child)
   await rm(temporary, { recursive: true, force: true })
