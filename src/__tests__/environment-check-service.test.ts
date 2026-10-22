@@ -4,7 +4,7 @@ import { checkEnvironment, type EnvironmentProbe } from '../server/services/envi
 function probe(): EnvironmentProbe {
   return {
     platform: 'linux',
-    nodeVersion: '24.21.0',
+    nodeVersion: '26.12.1',
     dataDirectory: '/private/data',
     run: vi.fn(async (_command: string, args: string[]) => (args.includes('--is-inside-work-tree') ? 'true' : 'ok')),
     writableDirectory: vi.fn(async () => true),
@@ -15,6 +15,19 @@ function probe(): EnvironmentProbe {
 }
 
 describe('environment readiness', () => {
+  it.each([
+    ['24.21.0', 'error'],
+    ['26.11.99', 'error'],
+    ['26.12.0', 'error'],
+    ['26.12.1', 'ok'],
+    ['26.12.2', 'ok'],
+    ['26.13.0', 'ok'],
+    ['27.0.0', 'ok'],
+  ])('checks the Node.js minimum for %s', async (nodeVersion, expected) => {
+    const report = await checkEnvironment({ engine: 'claude-code' }, { ...probe(), nodeVersion })
+    expect(report.checks.find((check) => check.code === 'node')?.status).toBe(expected)
+  })
+
   it('distinguishes an installed engine from unverified authentication and model access', async () => {
     const report = await checkEnvironment({ engine: 'claude-code' }, probe())
     expect(report.checks.find((c) => c.code === 'runtime')?.status).toBe('ok')

@@ -4,7 +4,7 @@ Thanks for considering a contribution. This guide covers the from-source setup, 
 
 ## Prerequisites
 
-Node.js ≥ 24.15. The repository's `.nvmrc` pins the tested version; run
+Node.js ≥ 26.12.1. The repository's `.nvmrc` pins the tested version; run
 `nvm use` when using nvm.
 
 ## Setup

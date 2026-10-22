@@ -1,5 +1,7 @@
 import { type ChildProcess, execFile, spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
+import { StringDecoder } from 'node:string_decoder'
+import { stripVTControlCharacters } from 'node:util'
 import { resolveInstance, sanitizeBranchName } from '../utils/dev-server-instance.js'
 
 import { assertWorkspaceLifecycleAvailable } from '../utils/workspace-lifecycle-guard.js'
@@ -47,6 +49,7 @@ export interface DevServerStatus {
 
 /** workspaceId -> spawned dev-server process */
 const trackedProcesses = new Map<string, ChildProcess>()
+const directServerStatuses = new Map<string, DevServerStatus>()
 const stoppingProcesses = new Map<string, Promise<DevServerStatus>>()
 const generations = new Map<string, number>()
 let shuttingDown = false
@@ -58,6 +61,7 @@ export function beginDevServerShutdown(): void {
 /** Test-only: clear the tracked-processes map between tests. */
 export function _resetTrackedProcessesForTests(): void {
   trackedProcesses.clear()
+  directServerStatuses.clear()
   stoppingProcesses.clear()
   generations.clear()
   shuttingDown = false
@@ -101,7 +105,8 @@ export async function listRunningContainers(projectName?: string): Promise<strin
  * still running (e.g. `docker compose up -d` is pulling/building images), the
  * status is reported as `'starting'` even if no matching container is visible
  * in `docker ps` yet. This prevents the UI from flashing to `'stopped'` during
- * long build phases.
+ * long build phases. Direct processes report running and their URL after a
+ * recognized local readiness announcement on stdout or stderr.
  */
 export async function getStatus(
   projectPath: string,
@@ -109,11 +114,13 @@ export async function getStatus(
   workspaceId?: string,
 ): Promise<DevServerStatus> {
   const config = resolveInstance(projectPath, workingBranch)
+  const directStatus = workspaceId ? directServerStatuses.get(workspaceId) : undefined
+  if (workspaceId && directStatus && trackedProcesses.has(workspaceId)) return { ...directStatus }
 
   if (!config) {
     return {
-      status: 'unknown',
-      instanceName: '',
+      status: workspaceId && trackedProcesses.has(workspaceId) ? 'starting' : 'unknown',
+      instanceName: workspaceId && trackedProcesses.has(workspaceId) ? sanitizeBranchName(workingBranch) : '',
       projectName: '',
       httpPort: '',
       url: '',
@@ -205,12 +212,67 @@ export function startDevServer(workspaceId: string): DevServerStatus {
   generations.set(workspaceId, generation)
   trackedProcesses.set(workspaceId, proc)
 
-  // Log stdout/stderr for debugging
+  // Parse complete lines separately per stream: CLI output and ANSI sequences
+  // can span arbitrary pipe chunks. Bound the unfinished line retained in memory.
+  const observeOutput = () => {
+    const decoder = new StringDecoder('utf8')
+    let pending = ''
+    return (data: Buffer): void => {
+      if (
+        shuttingDown ||
+        trackedProcesses.get(workspaceId) !== proc ||
+        generations.get(workspaceId) !== generation ||
+        stoppingProcesses.has(workspaceId) ||
+        directServerStatuses.has(workspaceId)
+      )
+        return
+      pending += decoder.write(data)
+      const lines = pending.split(/[\r\n]/)
+      pending = lines.pop()!.slice(-8192)
+      for (const line of lines) {
+        // Quasar's "App URL....." and Vite/Next's "Local:" are explicit
+        // readiness announcements; unrelated links in build output are not.
+        const match = stripVTControlCharacters(line).match(
+          /^\s*(?:[»➜-]\s*)?(?:App URL[.\s]*|Local:\s*)(https?:\/\/\S+)\s*$/i,
+        )
+        if (!match) continue
+        let url: URL
+        try {
+          url = new URL(match[1]!)
+        } catch {
+          continue
+        }
+        if (
+          url.username ||
+          url.password ||
+          !['localhost', '127.0.0.1', '[::1]', '0.0.0.0', '[::]'].includes(url.hostname)
+        )
+          continue
+        if (url.hostname === '0.0.0.0' || url.hostname === '[::]') url.hostname = 'localhost'
+        const status: DevServerStatus = {
+          status: 'running',
+          instanceName,
+          projectName: '',
+          httpPort: url.port || (url.protocol === 'https:' ? '443' : '80'),
+          url: url.href,
+          containers: [],
+        }
+        directServerStatuses.set(workspaceId, status)
+        updateDevServerStatus(workspaceId, 'running')
+        emitEphemeral(workspaceId, 'devserver:status', status)
+        break
+      }
+    }
+  }
+  const observeStdout = observeOutput()
+  const observeStderr = observeOutput()
   proc.stdout?.on('data', (data: Buffer) => {
     console.log(`[dev-server:${instanceName}] ${data.toString().trim()}`)
+    observeStdout(data)
   })
   proc.stderr?.on('data', (data: Buffer) => {
     console.error(`[dev-server:${instanceName}] ${data.toString().trim()}`)
+    observeStderr(data)
   })
 
   proc.on('exit', (code) => {
@@ -223,6 +285,7 @@ export function startDevServer(workspaceId: string): DevServerStatus {
         }
         if (trackedProcesses.get(workspaceId) !== proc || stoppingProcesses.has(workspaceId)) return
         trackedProcesses.delete(workspaceId)
+        directServerStatuses.delete(workspaceId)
         const currentStatus = await getStatus(workspace.projectPath, workspace.workingBranch)
         if (shuttingDown || generations.get(workspaceId) !== generation || stoppingProcesses.has(workspaceId)) return
         updateDevServerStatus(workspaceId, currentStatus.status)
@@ -240,6 +303,7 @@ export function startDevServer(workspaceId: string): DevServerStatus {
       return
     // A signal failure is also an 'error' event; it does not prove process exit.
     if (!proc.pid) trackedProcesses.delete(workspaceId)
+    directServerStatuses.delete(workspaceId)
     updateDevServerStatus(workspaceId, 'error')
     console.error(`[dev-server] Process error for workspace ${workspaceId}:`, err)
     emitEphemeral(workspaceId, 'devserver:status', {
@@ -276,6 +340,7 @@ export async function stopDevServer(workspaceId: string): Promise<DevServerStatu
   const pending = stoppingProcesses.get(workspaceId)
   if (pending) return pending
   generations.set(workspaceId, (generations.get(workspaceId) ?? 0) + 1)
+  directServerStatuses.delete(workspaceId)
   const stopping = stopDevServerOwned(workspaceId)
   stoppingProcesses.set(workspaceId, stopping)
   try {
@@ -365,6 +430,7 @@ async function stopTrackedProcess(workspaceId: string): Promise<void> {
   const exited = (await signalAndWait(tracked, 'SIGTERM', 3_000)) || (await signalAndWait(tracked, 'SIGKILL', 1_000))
   if (!exited) throw new Error('Dev server stop is not confirmed; retry after the process exits')
   if (trackedProcesses.get(workspaceId) === tracked) trackedProcesses.delete(workspaceId)
+  directServerStatuses.delete(workspaceId)
 }
 
 async function stopDevServerOwned(workspaceId: string): Promise<DevServerStatus> {

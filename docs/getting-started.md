@@ -4,7 +4,7 @@ Kōbō is a local, single-user application that runs Claude Code or OpenAI Codex
 
 ## Requirements
 
-- Node.js 24.15 or later, Git and Bash, with a writable local Git repository containing at least one commit.
+- Node.js 26.12.1 or later, Git and Bash, with a writable local Git repository containing at least one commit.
 - A working login or API credential for the engine you choose. Kōbō ships neither credentials nor a provider subscription. Provider usage can incur charges.
 - Linux is the locally exercised platform for this readiness change. CI is configured to exercise Linux and macOS; a configured job is not a completed compatibility test. Windows users need a Linux environment such as WSL; native Windows and WSL have not been validated in this release rehearsal.
 

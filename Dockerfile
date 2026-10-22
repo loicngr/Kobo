@@ -1,5 +1,5 @@
 # ── Build stage ──────────────────────────────────────────────────────────────
-FROM node:24.19.0-slim AS build
+FROM node:26.12.1-slim AS build
 WORKDIR /app
 
 # node-pty ships no prebuilt binary for this platform and compiles from
@@ -24,7 +24,7 @@ RUN cd src/client/src-pwa && npm ci
 RUN npm run build
 
 # ── Runtime stage ────────────────────────────────────────────────────────────
-FROM node:24.19.0-slim AS runtime
+FROM node:26.12.1-slim AS runtime
 WORKDIR /app
 
 # OS-level tools the agents and forge CLIs need, plus a Docker CLI (talks to

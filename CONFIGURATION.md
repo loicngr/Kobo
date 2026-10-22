@@ -1293,7 +1293,7 @@ and [project/skills operations guide](./docs/vps-projects-and-skills.md).
 
 ### The image
 
-Multi-stage `Dockerfile`, `node:24.19.0-slim` base:
+Multi-stage `Dockerfile`, `node:26.12.1-slim` base:
 
 - **Build stage**: installs root, client, and PWA deps, then runs `npm run build` (client via Quasar, server via `tsc`).
 - **Runtime stage**: production deps only, plus OS tooling the agents and forge CLIs need — `git`, `openssh-client` + `openssh-server`, `ripgrep`, `fd-find`, `jq`, `curl`, Python + build tools, the Docker CLI, Compose and Buildx plugins (talk to a mounted host socket, see [Volumes](#volumes)), netcat (`nc`), `gh`, `glab`, `tmux`, `vim`/`nano`, and more for interactive shell use.
@@ -1702,15 +1702,17 @@ Kōbō treats the dev server in two independent layers:
 | Layer | Driven by | Works for any project? |
 |---|---|---|
 | **Start / Stop** | The shell commands you configure | ✅ Yes, any shell-startable process |
-| **Status badge, URL, container count, logs** | The `.container/instances/*.env` convention + Docker | ❌ No, requires the convention below |
+| **Status badge, URL** | A tracked process's local readiness announcement, or the Docker convention below | Quasar (`App URL...`) and Vite/Next (`Local:`), or matching Docker containers |
+| **Container count, logs viewer** | The `.container/instances/*.env` convention + Docker | ❌ No, requires the convention below |
 
-Configured processes can be started and stopped. Docker status, a URL and logs
-require a matching instance file and running containers. Without an instance,
-runtime detection returns `unknown`; the HTTP route may show the saved process
-status instead, but has no URL or container logs. Without a start command, the
-route returns `not_configured`.
-
-> **Known limitation: Docker-coupled, for now.** Status detection, the URL, the container count, and the logs viewer are currently hard-wired to Docker and to the `.container/instances/*.env` convention described below. This is a deliberate, temporary state: it works today for Docker-instance projects, and the convention is documented here so you can adopt it. An **evolution is planned** to abstract this layer, making the URL/port configurable and the running-detection engine-agnostic (e.g. a TCP probe) so the panel works for any project, Docker or not, without imposing this file layout. Until that lands, follow the contract below.
+Configured processes can be started and stopped. A tracked direct process reports
+`starting` until it announces a local HTTP(S) URL in a recognized readiness line
+on stdout or stderr, then reports `running` with that URL and port. Colored output
+and lines split across chunks are supported. This observes the CLI announcement;
+it does not probe application health. Docker container status and logs require a
+matching instance file and running containers. Without a tracked process or an
+instance, runtime detection returns `unknown`; the HTTP route may show the saved
+status instead. Without a start command, the route returns `not_configured`.
 
 ### 1. Configure start / stop commands
 
@@ -1729,9 +1731,9 @@ How Kōbō runs them:
   - `DEV_DOCKER_NO_FOLLOW=1`: a hint that a Docker setup script should exit after starting its containers instead of following logs. A tracked start process reports `starting` when an instance file exists but no matching container is running yet; once containers appear, Docker status takes precedence.
 - `stopCommand` runs with `INSTANCE` and `PROJECT_NAME` in the environment. After it, Kōbō also unconditionally runs `docker compose -p <PROJECT_NAME> down` if a `PROJECT_NAME` was resolved, so a Docker project does not strictly need a `stopCommand` at all.
 
-### 2. Make the status panel light up — the `.container/instances` contract
+### 2. Docker status — the `.container/instances` contract
 
-For the **Running** badge, the URL, the container count, and the logs button to appear, your **start command must create an instance file**:
+For Docker detection, the URL, the container count, and the logs button to appear, your **start command must create an instance file**:
 
 ```
 <project-root>/.container/instances/<any-name>.env
@@ -1753,13 +1755,12 @@ The simplest correct start script therefore: read `$INSTANCE`, start your contai
 
 ### 3. Running detection and logs
 
-- **Status**: `running` if at least one container has the exact Compose project label; `starting` if an instance file exists and the start process remains tracked but no container is running; `stopped` otherwise; `unknown` if no instance file matched.
+- **Status**: a tracked process with a recognized local readiness URL reports `running`. Otherwise, `running` if at least one container has the exact Compose project label; `starting` while the start process remains tracked; `stopped` when an instance exists but no container or process remains; `unknown` if neither a tracked process nor an instance matched.
 - **Logs**: the logs button runs `docker logs` on those same matched containers.
 
-Both are **Docker-only**. A plain Node process (`npm run dev`) does not produce a
-running Docker status or container logs. Writing an instance file alone is not
-enough to expose a URL: status responses only include the URL when matching
-containers are running. Direct processes can still be started and stopped.
+The logs viewer and container count remain **Docker-only**. Writing an instance
+file alone is not enough to expose a URL: matching containers must be running,
+or a tracked direct process must have announced its local URL.
 
 ### Minimal setups
 
@@ -1767,11 +1768,15 @@ containers are running. Direct processes can still be started and stopped.
 
 **Non-Docker project (e.g. Vite/Node)**: configure a foreground command such as
 `npm run dev`. Kōbō tracks its process group for shutdown, including children that
-outlive the shell. Open the project's URL yourself; the Docker status, URL and
-logs contract does not provide general process health monitoring.
+outlive the shell. Quasar's `App URL... http://localhost:9000/` and Vite/Next's
+`Local: http://localhost:5173/` announcements populate the status and URL without
+an instance file. Other output formats remain `starting`; there is no general
+process health monitoring or direct-process log viewer. Readiness URLs are kept
+only for the current launch and cleared when it stops.
 
-**No instance file at all**: Start/Stop run your commands; the panel uses the
-saved status when available, otherwise `unknown`, with no URL or Docker logs.
+**No instance file at all**: Start/Stop run your commands; a tracked process uses
+the direct-process detection above. Otherwise the panel uses the saved status
+when available, or `unknown`, with no URL or Docker logs.
 
 ### Kōbō shutdown
 

@@ -35,7 +35,7 @@ afterEach(() => {
 
 describe('session progress reporting', () => {
   it('creates a scoped public record and emits only after commit without chat history', () => {
-    vi.mocked(emitEphemeral).mockImplementation((_ws, _type, record) => {
+    vi.mocked(emitEphemeral).mockImplementationOnce((_ws, _type, record) => {
       expect(state.db.inTransaction).toBe(false)
       expect(
         state.db.prepare('SELECT id FROM session_progress_bars WHERE id=?').get((record as { id: string }).id),
@@ -144,13 +144,36 @@ describe('session progress reporting', () => {
     expect(progress.listProgressBars({ ...owner, limit: 10 }).nextOffset).toBe(10)
     expect(progress.listProgressBars({ ...owner, limit: 10, offset: 30 }).items).toHaveLength(2)
     expect(() => progress.listProgressBars({ ...owner, limit: 101 })).toThrow()
-    state.db.exec("UPDATE session_progress_bars SET status='failed'")
-    for (let i = 32; i < 1000; i++) {
-      const bar = progress.createProgressBar(owner, { ...input, activityKey: String(i) })
-      progress.finishProgressBar(owner, bar.id, { sequence: 1, outcome: 'succeeded' })
-    }
+    const completed = progress.finishProgressBar(owner, first.id, { sequence: 1, outcome: 'succeeded' })
+    const dismissed = progress.dismissProgressBar(owner, first.id)
+    state.db.exec("UPDATE session_progress_bars SET status='failed', completed_at=updated_at WHERE status='running'")
+    // Seed history in one statement; exercise the service at the retention
+    // boundary instead of repeating unrelated create/finish work 968 times.
+    state.db
+      .prepare(`
+      WITH RECURSIVE history(n) AS (
+        SELECT 32 UNION ALL SELECT n+1 FROM history WHERE n < 998
+      )
+      INSERT INTO session_progress_bars (
+        id, workspace_id, session_id, owner_kind, owner_launch_id, activity_key,
+        creation_fingerprint, label, status, completed_at, created_at, updated_at
+      )
+      SELECT 'history-' || n, workspace_id, session_id, owner_kind, owner_launch_id,
+        'history-' || n, creation_fingerprint, label, 'succeeded', completed_at, created_at, updated_at
+      FROM history CROSS JOIN session_progress_bars WHERE id=?
+    `)
+      .run(first.id)
+    expect(progress.listProgressBars(owner).totalCount).toBe(999)
+    const last = progress.createProgressBar(owner, { ...input, activityKey: 'last' })
+    progress.finishProgressBar(owner, last.id, { sequence: 1, outcome: 'succeeded' })
+    expect(progress.listProgressBars(owner).totalCount).toBe(1000)
     expect(() => progress.createProgressBar(owner, { ...input, activityKey: 'over' })).toThrow(/limit/i)
-    expect(progress.createProgressBar(owner, input).id).toBe(first.id)
+    expect(progress.createProgressBar(owner, input)).toMatchObject({
+      id: first.id,
+      status: 'succeeded',
+      completedAt: completed.completedAt,
+      dismissedAt: dismissed.dismissedAt,
+    })
   })
   it('emits nothing when a database mutation rolls back', () => {
     state.db.exec(`CREATE TRIGGER reject_progress BEFORE INSERT ON session_progress_bars

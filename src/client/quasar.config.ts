@@ -20,7 +20,7 @@ export default defineConfig((ctx) => {
       },
       target: {
         browser: ['es2022', 'firefox115', 'chrome115', 'safari14'],
-        node: 'node24',
+        node: 'node26',
       },
       vueRouterMode: 'hash',
     },

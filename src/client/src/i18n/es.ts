@@ -280,7 +280,7 @@ export default {
   'setup.check.repository': 'Repositorio Git',
   'setup.check.firstCommit': 'Primer commit',
   'setup.check.projectWritable': 'Escritura en el proyecto',
-  'setup.fix.node': 'Instale Node.js 24.15 o posterior.',
+  'setup.fix.node': 'Instale Node.js 26.12.1 o posterior.',
   'setup.fix.platform': 'Use Linux, macOS o WSL2; Windows nativo no está soportado.',
   'setup.fix.git': 'Instale Git en este servidor.',
   'setup.fix.shell': 'Instale Bash en este servidor.',

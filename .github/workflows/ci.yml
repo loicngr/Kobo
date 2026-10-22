@@ -4,9 +4,9 @@ on:
   pull_request:
     # `main` included: the develop -> main release PR is the one that ships,
     # and it was the only PR in the repo running no checks at all.
-    branches: [develop, main]
+    branches: [ develop, main ]
   push:
-    branches: [develop]
+    branches: [ develop ]
 
 permissions:
   contents: read
@@ -23,16 +23,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ ubuntu-latest, macos-latest ]
 
     steps:
       - name: Checkout
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           # Single source of truth, instead of a version repeated here, in
           # release.yml and in .nvmrc, free to drift apart.

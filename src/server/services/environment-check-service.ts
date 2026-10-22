@@ -88,9 +88,10 @@ export async function checkEnvironment(
   request: EnvironmentRequest,
   probe: EnvironmentProbe = liveProbe(),
 ): Promise<EnvironmentReport> {
-  const [major, minor] = probe.nodeVersion.split('.').map(Number)
+  const [major, minor, patch] = probe.nodeVersion.split('.').map(Number)
+  const supportedNode = major > 26 || (major === 26 && (minor > 12 || (minor === 12 && patch >= 1)))
   const checks: EnvironmentReport['checks'] = [
-    { code: 'node', status: major > 24 || (major === 24 && minor >= 15) ? 'ok' : 'error' },
+    { code: 'node', status: supportedNode ? 'ok' : 'error' },
     { code: 'platform', status: ['linux', 'darwin'].includes(probe.platform) ? 'ok' : 'error' },
   ]
   const commandAvailable = async (command: string, args: string[]): Promise<EnvironmentCheckStatus> => {

@@ -61,7 +61,7 @@
     "quasar"
   ],
   "engines": {
-    "node": ">=24.15.0"
+    "node": ">=26.12.1"
   },
   "scripts": {
     "dev": "KOBO_ENFORCE_LOCAL_HOME=1 KOBO_HOME=./data PORT=3300 KOBO_DEV_CLIENT_ORIGIN=http://localhost:8080 tsx watch src/server/index.ts",
@@ -88,32 +88,32 @@
     "security:scan": "node scripts/scan-secrets.mjs"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.287",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.308",
     "@emnapi/core": "^1.11.3",
     "@emnapi/runtime": "^1.11.3",
-    "@hono/node-server": "^2.1.3",
-    "@modelcontextprotocol/sdk": "^1.31.0",
-    "@openai/codex": "^0.159.3",
+    "@hono/node-server": "^2.1.5",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "@openai/codex": "^0.163.0",
     "better-sqlite3": "^13.0.3",
-    "cron-parser": "^5.10.1",
-    "hono": "^4.13.12",
-    "nanoid": "^6.0.1",
+    "cron-parser": "^5.10.2",
+    "hono": "^4.13.13",
+    "nanoid": "^6.0.2",
     "node-pty": "^1.1.0",
     "ws": "^8.22.0"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.14",
     "@types/better-sqlite3": "^9.6.0",
-    "@types/node": "^26.6.4",
+    "@types/node": "^26.6.5",
     "@types/ws": "^8.18.2",
     "@vitest/runner": "^4.1.11",
-    "concurrently": "^10.0.5",
+    "concurrently": "^10.0.6",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.3"
+    "vitest": "^5.0.5"
   },
   "overrides": {
-    "@hono/node-server": "^2.1.3",
-    "shell-quote": "^1.11.0"
+    "@hono/node-server": "^2.1.5",
+    "shell-quote": "^1.12.0"
   }
 }

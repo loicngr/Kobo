@@ -40,7 +40,7 @@ import {
 } from '../server/services/dev-server-service.js'
 import { getProjectSettings } from '../server/services/settings-service.js'
 import { emitEphemeral } from '../server/services/websocket-service.js'
-import { getWorkspace, listWorkspaces } from '../server/services/workspace-service.js'
+import { getWorkspace, listWorkspaces, updateDevServerStatus } from '../server/services/workspace-service.js'
 import { makeProjectSettings, makeWorkspace } from './helpers/fixtures.js'
 
 beforeEach(() => {
@@ -527,6 +527,83 @@ describe('startDevServer', () => {
 })
 
 // ── stopDevServer ──────────────────────────────────────────────────────────────
+
+describe('direct dev servers', () => {
+  function launch() {
+    const proc = Object.assign(new EventEmitter(), {
+      stdout: new EventEmitter(),
+      stderr: new EventEmitter(),
+      exitCode: null as number | null,
+      signalCode: null,
+      kill: vi.fn(),
+    })
+    vi.mocked(getWorkspace).mockReturnValue(
+      makeWorkspace({ id: 'direct', projectPath: '/tmp/no-instance', workingBranch: 'feature/test' }),
+    )
+    vi.mocked(getProjectSettings).mockReturnValue(
+      makeProjectSettings({ devServer: { startCommand: 'npm run dev', stopCommand: '' } }),
+    )
+    vi.mocked(spawn).mockReturnValue(proc as never)
+    startDevServer('direct')
+    return proc
+  }
+
+  it('reports starting while a direct server has not announced its URL', async () => {
+    launch()
+    expect(await getStatus('/tmp/no-instance', 'feature/test', 'direct')).toMatchObject({
+      status: 'starting',
+      url: '',
+    })
+  })
+
+  it.each(['stdout', 'stderr'] as const)('detects the Quasar App URL on %s across colored chunks', async (stream) => {
+    const proc = launch()
+    proc[stream].emit('data', Buffer.from(' » App URL................. \u001b[32mhttp://local'))
+    proc[stream].emit('data', Buffer.from('host:9000/\u001b[0m\n    http://192.168.1.48:9000/\n'))
+    const expected = { status: 'running', httpPort: '9000', url: 'http://localhost:9000/', containers: [] }
+    expect(await getStatus('/tmp/no-instance', 'feature/test', 'direct')).toMatchObject(expected)
+    expect(updateDevServerStatus).toHaveBeenLastCalledWith('direct', 'running')
+    expect(emitEphemeral).toHaveBeenLastCalledWith('direct', 'devserver:status', expect.objectContaining(expected))
+    expect(execFile).not.toHaveBeenCalled()
+  })
+
+  it('detects a Vite local URL and retains it across status polls', async () => {
+    const proc = launch()
+    proc.stdout.emit('data', Buffer.from('  ➜  Local:   http://localhost:5173/\n'))
+    expect(await getStatus('/tmp/no-instance', 'feature/test', 'direct')).toMatchObject({
+      status: 'running',
+      httpPort: '5173',
+      url: 'http://localhost:5173/',
+    })
+  })
+
+  it('does not treat documentation or remote URLs as readiness', async () => {
+    const proc = launch()
+    proc.stdout.emit('data', Buffer.from('Documentation: https://quasar.dev\nLocal: https://example.com:9000/\n'))
+    expect(await getStatus('/tmp/no-instance', 'feature/test', 'direct')).toMatchObject({ status: 'starting', url: '' })
+  })
+
+  it('clears the URL after exit and ignores late output from the old launch', async () => {
+    const proc = launch()
+    proc.stdout.emit('data', Buffer.from('App URL........ http://localhost:9000/\n'))
+    proc.exitCode = 0
+    proc.emit('exit', 0)
+    await vi.waitFor(() => expect(updateDevServerStatus).toHaveBeenLastCalledWith('direct', 'unknown'))
+    launch()
+    proc.stdout.emit('data', Buffer.from('App URL........ http://localhost:9999/\n'))
+    expect(await getStatus('/tmp/no-instance', 'feature/test', 'direct')).toMatchObject({ status: 'starting', url: '' })
+  })
+
+  it('ignores readiness output once stopping begins', async () => {
+    const proc = launch()
+    const stopping = stopDevServer('direct')
+    proc.stdout.emit('data', Buffer.from('App URL........ http://localhost:9000/\n'))
+    expect(updateDevServerStatus).not.toHaveBeenCalledWith('direct', 'running')
+    proc.exitCode = 0
+    proc.emit('exit', 0)
+    await stopping
+  })
+})
 
 describe('stopDevServer', () => {
   it('throws when workspace not found', async () => {

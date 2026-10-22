@@ -12,7 +12,7 @@ External `/api/mcp` and global stdio require dedicated hashed credentials with t
 
 ## Tech stack
 
-**Backend**: Node.js ≥ 24.15, Hono (HTTP), `ws` (WebSocket), better-sqlite3 (WAL mode), nanoid, `@modelcontextprotocol/sdk`. TypeScript throughout, `tsx` for dev, `tsc` for production build.
+**Backend**: Node.js ≥ 26.12.1, Hono (HTTP), `ws` (WebSocket), better-sqlite3 (WAL mode), nanoid, `@modelcontextprotocol/sdk`. TypeScript throughout, `tsx` for dev, `tsc` for production build.
 
 **Frontend**: Vue 3, Quasar 2, Pinia, vue-router, marked + dompurify for markdown rendering. Vite via `@quasar/app-vite`, built and served as a Progressive Web App in production.
 

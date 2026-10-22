@@ -6,7 +6,7 @@ Open the first-run setup from Help and run the check again after changing the se
 
 | Check | Action |
 |---|---|
-| Node | Use Node 24.15 or later; contributors should use `.nvmrc`. |
+| Node | Use Node 26.12.1 or later; contributors should use `.nvmrc`. |
 | Git / Bash | Install the missing executable and make it available on the server's `PATH`. |
 | Project | Select a writable Git repository containing at least one commit. |
 | Storage / worktrees | Check permissions on `KOBO_HOME`, the project and configured worktree root. |

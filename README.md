@@ -28,7 +28,7 @@ Use [group messages](CONFIGURATION.md#group-workspace-messages) to send one inst
 
 ## Quick start
 
-Requires Node.js ≥ 24.15, Git, Bash and your own Claude Code **or** Codex authentication. No skill plugin or ticket integration is required. Kōbō is a local, single-user tool; each user installs their own instance.
+Requires Node.js ≥ 26.12.1, Git, Bash and your own Claude Code **or** Codex authentication. No skill plugin or ticket integration is required. Kōbō is a local, single-user tool; each user installs their own instance.
 
 ```bash
 npx @loicngr/kobo@latest

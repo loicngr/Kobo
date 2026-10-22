@@ -17,7 +17,7 @@ export interface PlatformProbe {
 /**
  * Detect the live host's platform/arch/libc from `process`. `glibcVersionRuntime`
  * lives in the diagnostic report header on glibc systems and is absent on musl.
- * Available since Node 12; Kōbō requires Node ≥ 20 (see AGENTS.md).
+ * Available since Node 12; Kōbō requires Node ≥ 26.12.1 (see AGENTS.md).
  */
 export function detectPlatform(): PlatformProbe {
   const report = (process as { report?: { getReport(): { header?: { glibcVersionRuntime?: string } } } }).report
