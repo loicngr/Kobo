@@ -4,6 +4,11 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads released version sections.
 
+## 2.1.30
+
+- fix(workspaces): preserve pr merge transitions and mobile focus
+- feat(agents): integrate mistral vibe through acp
+
 ## Unreleased
 
 - Add Mistral Vibe through the official ACP SDK alongside Claude Code and Codex,
