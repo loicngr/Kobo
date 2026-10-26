@@ -97,4 +97,5 @@ export const DEFAULT_MODEL_BY_ENGINE: Readonly<Record<string, string>> = {
 export const FRESH_MODEL_BY_ENGINE: Readonly<Record<string, string>> = {
   'claude-code': 'claude-sonnet-5-5',
   codex: 'auto',
+  'mistral-vibe': 'auto',
 }

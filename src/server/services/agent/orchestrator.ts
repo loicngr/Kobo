@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { nanoid } from 'nanoid'
+import { parseQuestionSelections, type QuestionSelections } from '../../../shared/question-selections.js'
 import { renderWorkflowPolicy } from '../../../shared/workflow-policy.js'
 import type { MessageSource } from '../../../shared/workspace-message-types.js'
 import { getDb } from '../../db/index.js'
@@ -71,6 +72,7 @@ import {
   updateWorkspaceStatus,
   type WorkspaceStatus,
 } from '../workspace-service.js'
+import { assertEngineConfigurationSupported } from './engines/configuration.js'
 import { resolveEngine } from './engines/registry.js'
 import {
   AGENT_NO_LONGER_RUNNING_TEXT,
@@ -146,9 +148,9 @@ let shuttingDown = false
 let capacityTimer: ReturnType<typeof setTimeout> | undefined
 const stoppedCapacityOwners = new Set<string>()
 
-function notifyCapacityAvailable(stoppedWorkspaceId: string): void {
+export function notifyCapacityAvailable(stoppedWorkspaceId?: string): void {
   if (isShuttingDown()) return
-  stoppedCapacityOwners.add(stoppedWorkspaceId)
+  if (stoppedWorkspaceId) stoppedCapacityOwners.add(stoppedWorkspaceId)
   if (capacityTimer) return
   // Let the stopping caller finish disabling/archiving before scheduling other work.
   capacityTimer = setTimeout(() => {
@@ -1710,11 +1712,15 @@ export function resumePendingReviewReturns(onlyWorkspaceId?: string): void {
           id,
           workspace.worktreePath,
           prompt,
-          pending.original.sessionModel ?? pending.original.model,
+          // Configured Auto resumes native state, including older durable returns.
+          pending.original.engine === 'mistral-vibe' && pending.original.model === 'auto'
+            ? pending.original.model
+            : (pending.original.sessionModel ?? pending.original.model),
           true,
           pending.original.agentPermissionMode,
           pending.originalSessionId,
-          pending.original.reasoningEffort,
+          // Vibe pins source thinking in its saved session; iteration effort is only workspace intent.
+          pending.original.engine === 'mistral-vibe' ? 'auto' : pending.original.reasoningEffort,
           () => {
             if (!claimReviewReturn(id)) throw new Error('The review return is already being dispatched')
           },
@@ -1739,8 +1745,9 @@ export function resumePendingReviewReturns(onlyWorkspaceId?: string): void {
           .get(pending.reviewSessionId, id) as { engine_session_id: string | null } | undefined
         if (!session) throw new Error('The review session no longer exists')
         const extra = getAutoLoopReviewLaunch(id, pending.reviewSessionId)
+        const reviewMode = pending.review.engine === 'mistral-vibe' ? pending.review.agentPermissionMode : 'plan'
         const prompt = session.engine_session_id
-          ? 'Kōbō was restarted during this read-only review. Continue the review in this same session and finish with a standalone findings summary. Do not change files or ask questions.' +
+          ? 'Kōbō was restarted during this report-only review. Continue the review in this same session and finish with a standalone findings summary. Do not modify, create or delete files, commit, push, or mutate memory or workspace state. Respect any native approval requests.' +
             (extra?.promptSuffix ?? '')
           : pending.reviewPrompt
         if (!prompt)
@@ -1752,16 +1759,16 @@ export function resumePendingReviewReturns(onlyWorkspaceId?: string): void {
           pending.review.engine,
           pending.review.model,
           pending.review.reasoningEffort,
-          'plan',
+          reviewMode,
         )
-        emitEphemeral(id, 'workspace:configuration', { ...pending.review, agentPermissionMode: 'plan' })
+        emitEphemeral(id, 'workspace:configuration', { ...pending.review, agentPermissionMode: reviewMode })
         startAgent(
           id,
           workspace.worktreePath,
           prompt,
           pending.review.model,
           !!session.engine_session_id,
-          'plan',
+          reviewMode,
           pending.reviewSessionId,
           pending.review.reasoningEffort,
           undefined,
@@ -1824,6 +1831,23 @@ export function startAgent(
   if (workspace.archivedAt) throw new Error(`Workspace '${workspaceId}' is archived`)
   if (workspace.worktreePurgedAt) throw new Error(`Workspace '${workspaceId}' worktree is purged`)
 
+  const engineId = readWorkspaceEngineId(workspaceId)
+  const engine = resolveEngine(engineId)
+  const restricted =
+    !!launch?.handoffGeneration ||
+    launch?.mcpEnv?.KOBO_REVIEW_ONLY === '1' ||
+    !!launch?.mcpEnv?.KOBO_FINAL_REVIEW_TOKEN ||
+    getReviewReturn(workspaceId, existingSessionId) !== null
+  assertEngineConfigurationSupported(engine, {
+    model: model ?? workspace.model,
+    reasoningEffort: reasoningEffort ?? workspace.reasoningEffort,
+    agentPermissionMode: agentPermissionMode ?? workspace.agentPermissionMode,
+    readOnly:
+      !!launch?.handoffGeneration ||
+      (restricted && engineId !== 'mistral-vibe') ||
+      (agentPermissionMode ?? workspace.agentPermissionMode) === 'plan',
+  })
+
   // "For this turn" never survives a new agent session.
   permissionPolicyService.clearTurnPermissions(workspaceId)
   // Zombie detection: an SDK iterator hung on a never-resolved canUseTool
@@ -1870,8 +1894,6 @@ export function startAgent(
   }
 
   const ws = getWs(workspaceId)
-  const engineId = readWorkspaceEngineId(workspaceId)
-  const engine = resolveEngine(engineId)
 
   let agentSessionId: string
   let resumeFromEngineSessionId: string | undefined
@@ -1894,9 +1916,8 @@ export function startAgent(
 
   const settings = ws ? readEffectiveSettingsSafe(ws.projectPath) : readEffectiveSettingsSafe(workingDir)
 
-  // A review whose report returns to the original session must end by itself:
-  // enforce read-only plan mode here, not only through its prompt.
-  const readOnly = !!launch?.handoffGeneration || getReviewReturn(workspaceId, agentSessionId) !== null
+  // Native review grants stay restricted independently of filesystem permissions.
+  const readOnly = !!launch?.handoffGeneration || (restricted && engineId !== 'mistral-vibe')
   const effectivePermissionMode = readOnly ? 'plan' : (agentPermissionMode ?? ws?.agentPermissionMode ?? 'bypass')
   const memoryDispatchId = nanoid()
   const memoryCapability = createMemoryCapability({
@@ -1911,17 +1932,17 @@ export function startAgent(
       engine: engine.id,
       ...(resumeFromEngineSessionId ? { nativeConversationId: resumeFromEngineSessionId } : {}),
     }),
-    readOnly: effectivePermissionMode === 'plan' || !!launch?.handoffGeneration,
+    readOnly: effectivePermissionMode === 'plan' || restricted,
   })
 
   const progressCapability = createProgressCapability(workspaceId, agentSessionId)
   const internalMcpCapability = createInternalMcpCapability({
     workspaceId,
     sessionId: agentSessionId,
-    readOnly:
-      effectivePermissionMode === 'plan' || !!launch?.handoffGeneration || !!launch?.mcpEnv?.KOBO_FINAL_REVIEW_TOKEN,
+    readOnly: effectivePermissionMode === 'plan' || restricted,
     env: {
       ...launch?.mcpEnv,
+      ...(restricted && engineId === 'mistral-vibe' ? { KOBO_REVIEW_ONLY: '1' } : {}),
       KOBO_MEMORY_SESSION_TOKEN: memoryCapability.token,
       KOBO_PROGRESS_SESSION_TOKEN: progressCapability.token,
     },
@@ -1968,7 +1989,14 @@ export function startAgent(
     const initialContext = options.prompt
     let recorded = false
     options.onPromptPrepared = (instructions) => {
-      if (recorded) return
+      if (
+        recorded ||
+        shuttingDown ||
+        controller.isClosed ||
+        controller.status === 'stopping' ||
+        controllers.get(workspaceId) !== controller
+      )
+        return
       emit(
         workspaceId,
         'user:message',
@@ -2051,7 +2079,7 @@ export function startAgent(
             dispatchId: memoryDispatchId,
             conversationKey: memoryCapability.conversationKey,
             resume: Boolean(resumeFromEngineSessionId),
-            readOnly: effectivePermissionMode === 'plan' || !!launch?.handoffGeneration,
+            readOnly: effectivePermissionMode === 'plan' || restricted,
             mode: getGlobalSettings().memoryMode,
           })
       if (memoryContext) {
@@ -2066,12 +2094,18 @@ export function startAgent(
       const contextId = controllerMemoryContextIds.get(controller)
       if (ready && contextId) {
         void ready.then(
-          () => markMemoryContextInitialized(contextId),
-          () => markMemoryContextFailed(contextId),
+          () => {
+            if (!shuttingDown && !controller.isClosed && controllers.get(workspaceId) === controller)
+              markMemoryContextInitialized(contextId)
+          },
+          () => {
+            if (!shuttingDown && !controller.isClosed && controllers.get(workspaceId) === controller)
+              markMemoryContextFailed(contextId)
+          },
         )
       }
       const pid = controller.pid
-      if (pid !== undefined) {
+      if (pid !== undefined && !shuttingDown && !controller.isClosed && controllers.get(workspaceId) === controller) {
         try {
           const db = getDb()
           db.prepare('UPDATE agent_sessions SET pid = ? WHERE id = ?').run(pid, agentSessionId)
@@ -2088,10 +2122,15 @@ export function startAgent(
           return
         }
       }
-      if (controller.status !== 'stopping') launch?.onStarted?.()
+      if (!shuttingDown && controller.status !== 'stopping') launch?.onStarted?.()
     })
     .catch((err) => {
       revokeControllerCapabilities(controller)
+      if (
+        shuttingDown ||
+        (controllers.get(workspaceId) !== controller && pendingStarts.get(workspaceId) !== controller)
+      )
+        return
       const contextId = controllerMemoryContextIds.get(controller)
       if (contextId) markMemoryContextFailed(contextId)
       if (existingCtrl && controller.status === 'stopping') return
@@ -2394,6 +2433,11 @@ export function sendWakeupIfWaiting(workspaceId: string, content: string, expect
   return true
 }
 
+/** Reject unsupported steering before saving attachments or recording dispatch. */
+export function assertImmediateMessageSupported(workspaceId: string): void {
+  controllers.get(workspaceId)?.assertImmediateMessageSupported()
+}
+
 /** Write a user message to the running agent. */
 export async function sendMessage(
   workspaceId: string,
@@ -2410,6 +2454,7 @@ export async function sendMessage(
   if (expectedSessionId && ctrl.agentSessionId !== expectedSessionId) {
     throw new Error(`Session '${expectedSessionId}' is not active for workspace '${workspaceId}'`)
   }
+  ctrl.assertImmediateMessageSupported()
   wakeupService.cancel(workspaceId, 'user-message')
   await ctrl.sendMessage(content, beforeDispatch)
 }
@@ -2519,7 +2564,7 @@ export async function answerPendingQuestion(
   workspaceId: string,
   answers: Record<string, string>,
   expectedToolCallId?: string,
-  opts?: { awaitingFreeForm?: boolean; response?: string; source?: MessageSource },
+  opts?: { awaitingFreeForm?: boolean; response?: string; source?: MessageSource; selections?: QuestionSelections },
 ): Promise<void> {
   const head = peekPending(workspaceId)
   if (!head) {
@@ -2562,10 +2607,15 @@ export async function answerPendingQuestion(
     throw new Error(`Agent for workspace '${workspaceId}' has no active engine process`)
   }
 
+  if (ctrl.agentSessionId !== head.agentSessionId || ctrl.status !== 'running') {
+    throw new Error(`Pending question session '${head.agentSessionId}' is no longer active`)
+  }
+  const selections = parseQuestionSelections(opts?.selections)
   const resolved = engineProcess.resolvePendingUserInput(head.toolCallId, {
     kind: 'question',
     answers,
     ...(opts?.response !== undefined ? { response: opts.response } : {}),
+    ...(selections !== undefined ? { selections } : {}),
   })
   if (!resolved) {
     throw new Error(`No pending callback for toolCallId '${head.toolCallId}'`)
@@ -2660,19 +2710,37 @@ export async function answerPendingPermission(
     decision.decision === 'allow'
       ? ({ kind: 'permission-allow' } as const)
       : ({ kind: 'permission-deny', reason: decision.reason } as const)
+  if (ctrl.agentSessionId !== head.agentSessionId || ctrl.status !== 'running') {
+    throw new Error(`Pending permission session '${head.agentSessionId}' is no longer active`)
+  }
+  const request = {
+    engine: (ws as { engine?: string }).engine ?? 'claude-code',
+    toolName: head.toolName,
+    payload: head.toolInput,
+  }
+  if (
+    decision.decision === 'allow' &&
+    decision.scope === 'operation' &&
+    !permissionPolicyService.isOperationApprovalAvailable(request)
+  ) {
+    throw new Error('Exact operation details are unavailable')
+  }
+  if (
+    decision.decision === 'allow' &&
+    (decision.scope === 'operation' || decision.scope === 'tool' || decision.scope === 'turn')
+  ) {
+    if (!engineProcess.hasPendingUserInput) {
+      throw new Error('Cannot remember permission without a live callback check')
+    }
+    if (!engineProcess.hasPendingUserInput(decision.toolCallId)) {
+      throw new Error(`No pending callback for toolCallId '${decision.toolCallId}'`)
+    }
+  }
   if (decision.decision === 'allow' && (decision.scope === 'operation' || decision.scope === 'tool')) {
-    permissionPolicyService.createWorkspacePermissionRule(
-      workspaceId,
-      { engine: (ws as { engine?: string }).engine ?? 'claude-code', toolName: head.toolName, payload: head.toolInput },
-      decision.scope,
-    )
+    permissionPolicyService.createWorkspacePermissionRule(workspaceId, request, decision.scope)
   }
   if (decision.decision === 'allow' && decision.scope === 'turn') {
-    permissionPolicyService.allowPermissionForTurn(workspaceId, {
-      engine: (ws as { engine?: string }).engine ?? 'claude-code',
-      toolName: head.toolName,
-      payload: head.toolInput,
-    })
+    permissionPolicyService.allowPermissionForTurn(workspaceId, request)
   }
   const resolved = engineProcess.resolvePendingUserInput(decision.toolCallId, response)
   if (!resolved) {

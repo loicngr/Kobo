@@ -1,3 +1,20 @@
+import { preflightMistralConfiguration } from '../server/services/mistral-options-service.js'
+
+vi.mock('../server/services/mistral-options-service.js', () => ({
+  preflightMistralConfiguration: vi.fn(async (engine, _context, selection) => {
+    if (
+      engine === 'mistral-vibe' &&
+      ((selection.model && selection.model !== 'auto') ||
+        (selection.reasoningEffort && selection.reasoningEffort !== 'auto'))
+    )
+      throw new Error('Native selection unavailable in this test context')
+  }),
+}))
+const nativeDefaults = vi.hoisted(() => ({ permissionMode: 'interactive' }))
+vi.mock('../server/services/settings-service.js', () => ({
+  getGlobalSettings: () => ({ defaultPermissionModeByEngine: { 'mistral-vibe': nativeDefaults.permissionMode } }),
+}))
+
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { acquireUpdateMaintenance, releaseUpdateMaintenance } from '../server/services/update-maintenance-service.js'
 import { executeWorkspaceCreationTool } from '../server/services/workspace-creation-mcp-service.js'
@@ -313,4 +330,176 @@ describe('MCP workspace creation', () => {
     expect(() => validateWorkspaceCreationArguments('create_workspace', { name: 'a', project_path: '/repo' })).toThrow()
     expect(() => validateWorkspaceCreationArguments('create_workspace', prInput)).not.toThrow()
   })
+})
+
+it.each([
+  { agent_permission_mode: 'plan' },
+  { model: 'custom' },
+  { brainstorm_model: 'custom' },
+  { reasoning_effort: 'high' },
+  { brainstorm_reasoning_effort: 'high' },
+])('rejects unsupported Mistral configuration before any checkout %j', async (selection) => {
+  const dispatch = vi.fn()
+  await expect(
+    executeWorkspaceCreationTool('create_workspace', { ...prInput, engine: 'mistral-vibe', ...selection }, dispatch),
+  ).rejects.toMatchObject({ status: 400, stage: 'validate' })
+  expect(dispatch).not.toHaveBeenCalled()
+})
+it('accepts native Mistral defaults through MCP creation', async () => {
+  const dispatch = vi.fn().mockResolvedValue(response({ id: 'mistral' }))
+  await expect(
+    executeWorkspaceCreationTool('create_workspace', { ...base, engine: 'mistral-vibe' }, dispatch),
+  ).resolves.toEqual({ id: 'mistral' })
+  expect(JSON.parse(dispatch.mock.calls[0]![1].body)).toMatchObject({ engine: 'mistral-vibe' })
+})
+
+it('rejects inherited Plan before PR checkout without promoting permissions', async () => {
+  nativeDefaults.permissionMode = 'plan'
+  const dispatch = vi.fn()
+  try {
+    await expect(
+      executeWorkspaceCreationTool('create_workspace', { ...prInput, engine: 'mistral-vibe' }, dispatch),
+    ).rejects.toThrow('agentPermissionMode')
+    expect(dispatch).not.toHaveBeenCalled()
+  } finally {
+    nativeDefaults.permissionMode = 'interactive'
+  }
+})
+
+it('ignores an invalid saved mode consistently with HTTP creation', async () => {
+  nativeDefaults.permissionMode = 'invalid-legacy-mode'
+  const dispatch = vi.fn().mockResolvedValue(response({ id: 'native' }))
+  try {
+    await expect(
+      executeWorkspaceCreationTool('create_workspace', { ...base, engine: 'mistral-vibe' }, dispatch),
+    ).resolves.toEqual({ id: 'native' })
+  } finally {
+    nativeDefaults.permissionMode = 'interactive'
+  }
+})
+
+it.each(['plan', 'bypass'])(
+  'forwards the validated Mistral mode when the default changes to %s during PR diagnosis',
+  async (nextMode) => {
+    nativeDefaults.permissionMode = 'interactive'
+    let finishDiagnosis!: (value: Response) => void
+    const dispatch = vi.fn(async (path: string, _init: RequestInit) => {
+      if (path.endsWith('/diagnose'))
+        return new Promise<Response>((resolve) => {
+          finishDiagnosis = resolve
+        })
+      if (path.endsWith('/resolve'))
+        return response({ worktreePath: '/trees/pr', sourceBranch: 'main', workingBranch: 'feature/pr' })
+      return response({ id: 'native' })
+    })
+    try {
+      const pending = executeWorkspaceCreationTool('create_workspace', { ...prInput, engine: 'mistral-vibe' }, dispatch)
+      await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce())
+      nativeDefaults.permissionMode = nextMode
+      finishDiagnosis(response(diagnosis()))
+      await expect(pending).resolves.toEqual({ id: 'native' })
+      expect(JSON.parse(dispatch.mock.calls[2]![1].body as string)).toMatchObject({
+        engine: 'mistral-vibe',
+        agentPermissionMode: 'interactive',
+      })
+    } finally {
+      nativeDefaults.permissionMode = 'interactive'
+    }
+  },
+)
+
+it('accepts discovered native aliases and off before MCP creation dispatch', async () => {
+  vi.mocked(preflightMistralConfiguration).mockResolvedValueOnce(undefined).mockResolvedValueOnce(undefined)
+  const dispatch = vi.fn().mockResolvedValue(response({ id: 'native' }))
+  await expect(
+    executeWorkspaceCreationTool(
+      'create_workspace',
+      {
+        ...base,
+        engine: 'mistral-vibe',
+        model: 'native-alias',
+        reasoning_effort: 'off',
+        brainstorm_model: 'other-alias',
+        brainstorm_reasoning_effort: 'max',
+      },
+      dispatch,
+    ),
+  ).resolves.toEqual({ id: 'native' })
+  expect(JSON.parse(dispatch.mock.calls[0]![1].body)).toMatchObject({
+    model: 'native-alias',
+    reasoningEffort: 'off',
+    brainstormModel: 'other-alias',
+    brainstormReasoningEffort: 'max',
+  })
+  expect(preflightMistralConfiguration).toHaveBeenCalledWith(
+    'mistral-vibe',
+    { projectPath: base.project_path },
+    expect.objectContaining({ model: 'other-alias', reasoningEffort: 'max' }),
+  )
+})
+
+it.each(['claude-code', 'codex'])('keeps native off invalid for %s MCP callers', (engine) => {
+  expect(() =>
+    validateWorkspaceCreationArguments('create_workspace', { ...base, engine, reasoning_effort: 'off' }),
+  ).toThrow()
+  expect(() =>
+    validateWorkspaceCreationArguments('create_workspace', { ...base, engine, brainstorm_reasoning_effort: 'off' }),
+  ).toThrow()
+})
+
+it('preflights a native final reviewer before creating its workspace', async () => {
+  vi.mocked(preflightMistralConfiguration)
+    .mockResolvedValueOnce(undefined)
+    .mockResolvedValueOnce(undefined)
+    .mockResolvedValueOnce(undefined)
+  const dispatch = vi.fn().mockResolvedValue(response({ id: 'native-review' }))
+  await executeWorkspaceCreationTool(
+    'create_workspace',
+    {
+      ...base,
+      auto_loop_final_review: {
+        engine: 'mistral-vibe',
+        model: 'native-alias',
+        reasoning_effort: 'off',
+        additional_instructions: 'Report only',
+      },
+    },
+    dispatch,
+  )
+  expect(preflightMistralConfiguration).toHaveBeenCalledWith(
+    'mistral-vibe',
+    { projectPath: '/repo' },
+    {
+      engine: 'mistral-vibe',
+      model: 'native-alias',
+      reasoningEffort: 'off',
+      additionalInstructions: 'Report only',
+      agentPermissionMode: 'interactive',
+    },
+  )
+  expect(JSON.parse(dispatch.mock.calls[0]![1].body)).toMatchObject({
+    autoLoopFinalReview: {
+      engine: 'mistral-vibe',
+      model: 'native-alias',
+      reasoningEffort: 'off',
+    },
+  })
+})
+it('rejects a removed native final reviewer before PR checkout', async () => {
+  const dispatch = vi.fn()
+  await expect(
+    executeWorkspaceCreationTool(
+      'create_workspace',
+      {
+        ...prInput,
+        auto_loop_final_review: {
+          engine: 'mistral-vibe',
+          model: 'removed',
+          reasoning_effort: 'off',
+        },
+      },
+      dispatch,
+    ),
+  ).rejects.toMatchObject({ status: 400, stage: 'validate' })
+  expect(dispatch).not.toHaveBeenCalled()
 })

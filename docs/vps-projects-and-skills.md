@@ -138,6 +138,34 @@ Choose a value appropriate to memory and existing limits; do not lower a higher
 limit or assume every `EMFILE` has this cause. Restart only the affected frontend.
 Kōbō does not change host sysctls automatically.
 
+## Use Mistral Vibe inside the container
+
+Vibe is optional and is not supplied by Kōbō's Claude/Codex runtimes. Follow
+[Mistral's native setup](https://docs.mistral.ai/vibe/code/cli/install-setup)
+inside the container as the agent user, using the launcher shell above. Ensure
+`vibe-acp` is on the **server process PATH**, then run `vibe` to authenticate
+(`vibe --setup` repeats native setup). See the
+[3.0.1 ACP instructions](https://github.com/mistralai/mistral-vibe/blob/v3.0.1/docs/acp-setup.md).
+An installation or login on your PC/VPS host is not inherited by the container.
+
+Persist Vibe's native state in the home volume (or its configured `VIBE_HOME`)
+and make the executable available after container recreation through your image
+or deployment setup. Kōbō neither installs Vibe nor copies native credentials.
+Its health check only detects the executable version; successful authentication
+requires native setup in this environment. Do not put keys in Git, workspace
+prompts or diagnostic logs.
+
+Kōbō exposes native Auto model/effort and Interactive/Strict/Bypass execution.
+Manual and automatic final reviews are available under native permissions;
+Interactive is the default (fixed for automatic reviews) and may request human
+approval. Prompts forbid modifications; filesystem read-only access is not guaranteed.
+Kōbō MCP and memory remain read/report-only. Explicit native model/thinking choices
+may persist Vibe preferences, including outside Kōbō.
+Plan, account/quota controls, managed skills, live steering and
+sub-agent cards are unavailable. For a fresh-session transfer from Vibe, turn
+off generated summaries. [Configuration and measured compatibility](../CONFIGURATION.md#mistral-vibe)
+distinguish the passing offline 3.0.1 adapter smoke from the unrun provider smoke.
+
 ## Install Claude/Codex instructions, skills and plugins
 
 Open the non-root container shell shown above. Install each extension for the

@@ -46,4 +46,12 @@ describe('environment route', () => {
     expect(await response.json()).toEqual(report)
     expect(getEnvironmentReport).toHaveBeenCalledWith({ engine: 'codex', projectPath: '/demo project' })
   })
+  it('accepts Mistral without changing the report envelope', async () => {
+    const report = { checkedAt: new Date().toISOString(), engine: 'mistral-vibe' as const, checks: [] }
+    vi.mocked(getEnvironmentReport).mockResolvedValueOnce(report)
+    const response = await app.request('/api/environment?engine=mistral-vibe', { headers })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual(report)
+    expect(getEnvironmentReport).toHaveBeenCalledWith({ engine: 'mistral-vibe', projectPath: undefined })
+  })
 })

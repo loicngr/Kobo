@@ -1,5 +1,20 @@
+import { preflightMistralConfiguration } from '../server/services/mistral-options-service.js'
+
+vi.mock('../server/services/mistral-options-service.js', () => ({
+  preflightMistralConfiguration: vi.fn(async (engine, _context, selection) => {
+    if (
+      engine === 'mistral-vibe' &&
+      ((selection.model && selection.model !== 'auto') ||
+        (selection.reasoningEffort && selection.reasoningEffort !== 'auto'))
+    )
+      throw new Error('Native selection unavailable in this test context')
+  }),
+}))
+
 import { Hono } from 'hono'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { MISTRAL_CAPABILITIES } from '../server/services/agent/engines/mistral-vibe/capabilities.js'
+import { listEngines } from '../server/services/agent/engines/registry.js'
 import { MergePolicyError } from '../server/services/forge/types.js'
 
 vi.mock('../server/services/image-service.js', () => ({
@@ -99,6 +114,8 @@ vi.mock('../server/services/worktree-service.js', async (importOriginal) => ({
 }))
 
 vi.mock('../server/services/agent/orchestrator.js', () => ({
+  assertImmediateMessageSupported: vi.fn(),
+  answerPendingQuestion: vi.fn(),
   InterruptAgentError: MockInterruptAgentError,
   StopSubagentsError: MockStopSubagentsError,
   stopSubagents: vi.fn(() => 0),
@@ -463,6 +480,36 @@ app.route('/api/workspaces', router)
 
 const fakeWorkspace = makeWorkspace()
 
+describe('POST deferred question answers', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('preserves typed native selections alongside string answers', async () => {
+    const response = await app.request('/api/workspaces/ws-1/deferred-tool-use/answer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ toolCallId: 'q', answers: {}, selections: { q0: ['One, Two', 'Three'] } }),
+    })
+    expect(response.status).toBe(200)
+    expect(agentManager.answerPendingQuestion).toHaveBeenCalledWith('ws-1', {}, 'q', {
+      awaitingFreeForm: false,
+      selections: { q0: ['One, Two', 'Three'] },
+    })
+  })
+
+  it.each([null, [], { q0: 'One, Two' }, { q0: [false] }, { q0: Array(33).fill('x') }])(
+    'rejects malformed selections before answering',
+    async (selections) => {
+      const response = await app.request('/api/workspaces/ws-1/deferred-tool-use/answer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ toolCallId: 'q', answers: {}, selections }),
+      })
+      expect(response.status).toBe(400)
+      expect(agentManager.answerPendingQuestion).not.toHaveBeenCalled()
+    },
+  )
+})
+
 describe('POST /api/workspaces/:id/restore-worktree', () => {
   it('blocks restoration during content migration', async () => {
     const status = vi.spyOn(contentMigrationService, 'getContentMigrationStatus').mockReturnValueOnce({
@@ -538,6 +585,11 @@ const fakeSession = {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.mocked(listEngines).mockReturnValue([
+    { id: 'claude-code', capabilities: { permissionModes: ['plan', 'bypass', 'strict', 'interactive'] } },
+    { id: 'codex', capabilities: { permissionModes: ['plan', 'bypass', 'strict'] } },
+    { id: 'mistral-vibe', capabilities: MISTRAL_CAPABILITIES },
+  ] as unknown as ReturnType<typeof listEngines>)
   // fetchSourceBranch succeeds by default; individual tests can override.
   vi.mocked(gitOps.fetchSourceBranchOrThrowAsync).mockResolvedValue(undefined)
   // Reset the async-fetch default (clearAllMocks wipes call history but some
@@ -8775,4 +8827,266 @@ describe('GET automatic admission', () => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(null)
     expect((await app.request('/api/workspaces/missing/automatic-admission')).status).toBe(404)
   })
+})
+
+describe('Mistral engine preflight', () => {
+  const base = {
+    name: 'Vibe',
+    projectPath: '/tmp/project',
+    sourceBranch: 'main',
+    workingBranch: 'feature/vibe',
+    engine: 'mistral-vibe',
+  }
+  it.each([
+    { agentPermissionMode: 'plan' },
+    { model: 'custom' },
+    { brainstormModel: 'custom' },
+    { reasoningEffort: 'high' },
+    { brainstormReasoningEffort: 'high' },
+  ])('rejects creation before repository mutation %j', async (selection) => {
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...base, ...selection }),
+    })
+    expect(res.status).toBe(400)
+    expect(workspaceService.createWorkspace).not.toHaveBeenCalled()
+    expect(gitOps.fetchSourceBranchOrThrowAsync).not.toHaveBeenCalled()
+  })
+  it.each([{ agentPermissionMode: 'plan' }, { model: 'custom' }, { reasoningEffort: 'high' }])(
+    'rejects configuration before persistence %j',
+    async (selection) => {
+      vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+        id: 'vibe',
+        engine: 'mistral-vibe',
+        model: 'auto',
+        reasoningEffort: 'auto',
+        agentPermissionMode: 'interactive',
+      } as never)
+      const res = await app.request('/api/workspaces/vibe', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(selection),
+      })
+      expect(res.status).toBe(400)
+      expect(workspaceService.updateWorkspaceFields).not.toHaveBeenCalled()
+    },
+  )
+  it('rejects starting a saved Plan workspace before stopping its controller', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      id: 'vibe',
+      engine: 'mistral-vibe',
+      model: 'auto',
+      reasoningEffort: 'auto',
+      agentPermissionMode: 'plan',
+    } as never)
+    const res = await app.request('/api/workspaces/vibe/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    })
+    expect(res.status).toBe(400)
+    expect(agentManager.stopAgentAndWait).not.toHaveBeenCalled()
+    expect(agentManager.startAgent).not.toHaveBeenCalled()
+  })
+})
+
+it('rejects inherited Mistral Plan before Git checkout', async () => {
+  vi.mocked(settingsService.getGlobalSettings).mockReturnValue(
+    makeGlobalSettings({ defaultPermissionModeByEngine: { 'mistral-vibe': 'plan' } }),
+  )
+  const res = await app.request('/api/workspaces', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: 'Vibe',
+      projectPath: '/tmp/project',
+      sourceBranch: 'main',
+      workingBranch: 'feature/vibe',
+      engine: 'mistral-vibe',
+    }),
+  })
+  expect(res.status).toBe(400)
+  expect(gitOps.fetchSourceBranchOrThrowAsync).not.toHaveBeenCalled()
+  expect(workspaceService.createWorkspace).not.toHaveBeenCalled()
+})
+it('defaults Mistral creation to interactive when no saved default exists', async () => {
+  vi.mocked(fs.existsSync).mockReturnValue(false)
+  vi.mocked(gitOps.branchExists).mockReturnValue(false)
+  vi.mocked(settingsService.getGlobalSettings).mockReturnValue(
+    makeGlobalSettings({ defaultPermissionModeByEngine: {} }),
+  )
+  const native = {
+    ...fakeWorkspace,
+    engine: 'mistral-vibe',
+    model: 'auto',
+    reasoningEffort: 'auto',
+    agentPermissionMode: 'interactive' as const,
+  }
+  vi.mocked(workspaceService.createWorkspace).mockReturnValue(native)
+  vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
+    worktreePath: '/tmp/worktree',
+    base: 'origin',
+    branchCreated: true,
+  })
+  vi.mocked(workspaceService.listTasks).mockReturnValue([])
+  vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(makeWorkspaceWithTasks(native))
+  const res = await app.request('/api/workspaces', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: 'Vibe',
+      projectPath: '/tmp/project',
+      sourceBranch: 'main',
+      workingBranch: 'feature/vibe',
+      engine: 'mistral-vibe',
+    }),
+  })
+  expect(res.status).toBe(201)
+  expect(workspaceService.createWorkspace).toHaveBeenCalledWith(
+    expect.objectContaining({ engine: 'mistral-vibe', agentPermissionMode: 'interactive' }),
+  )
+})
+
+it.each(['plan', 'bypass'] as const)(
+  'keeps the validated Mistral mode when the default changes to %s during fetch',
+  async (nextMode) => {
+    vi.mocked(fs.existsSync).mockReturnValue(false)
+    vi.mocked(gitOps.branchExists).mockReturnValue(false)
+    vi.mocked(settingsService.getGlobalSettings).mockReturnValue(
+      makeGlobalSettings({ defaultPermissionModeByEngine: { 'mistral-vibe': 'interactive' } }),
+    )
+    const native = {
+      ...fakeWorkspace,
+      engine: 'mistral-vibe',
+      model: 'auto',
+      reasoningEffort: 'auto',
+      agentPermissionMode: 'interactive' as const,
+    }
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(native)
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
+      worktreePath: '/tmp/worktree',
+      base: 'origin',
+      branchCreated: true,
+    })
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(makeWorkspaceWithTasks(native))
+    let finishFetch!: () => void
+    vi.mocked(gitOps.fetchSourceBranchOrThrowAsync).mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishFetch = resolve
+        }),
+    )
+    const pending = app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Vibe',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/vibe',
+        engine: 'mistral-vibe',
+      }),
+    })
+    await vi.waitFor(() => expect(gitOps.fetchSourceBranchOrThrowAsync).toHaveBeenCalledOnce())
+    expect(workspaceService.createWorkspace).not.toHaveBeenCalled()
+    vi.mocked(settingsService.getGlobalSettings).mockReturnValue(
+      makeGlobalSettings({ defaultPermissionModeByEngine: { 'mistral-vibe': nextMode } }),
+    )
+    finishFetch()
+    expect((await pending).status).toBe(201)
+    expect(workspaceService.createWorkspace).toHaveBeenCalledWith(
+      expect.objectContaining({ agentPermissionMode: 'interactive' }),
+    )
+    expect(vi.mocked(agentManager.startAgent).mock.calls[0]?.[5]).toBe('interactive')
+  },
+)
+
+it('persists an explicitly discovered native model and off without starting inference', async () => {
+  vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+    ...fakeWorkspace,
+    engine: 'mistral-vibe',
+    model: 'auto',
+    reasoningEffort: 'auto',
+    agentPermissionMode: 'interactive',
+  })
+  vi.mocked(preflightMistralConfiguration).mockResolvedValueOnce(undefined)
+  const response = await app.request(`/api/workspaces/${fakeWorkspace.id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: 'native-alias', reasoningEffort: 'off' }),
+  })
+  expect(response.status).toBe(200)
+  expect(preflightMistralConfiguration).toHaveBeenCalledWith(
+    'mistral-vibe',
+    { workspaceId: fakeWorkspace.id },
+    { model: 'native-alias', reasoningEffort: 'off', agentPermissionMode: 'interactive' },
+  )
+  expect(workspaceService.updateWorkspaceFields).toHaveBeenCalledWith(
+    fakeWorkspace.id,
+    expect.objectContaining({ model: 'native-alias', reasoningEffort: 'off' }),
+  )
+  expect(agentManager.startAgent).not.toHaveBeenCalled()
+})
+
+it('preflights an Auto-model explicit-thinking resume as a saved session before replacement', async () => {
+  vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+    ...fakeWorkspace,
+    engine: 'mistral-vibe',
+    model: 'auto',
+    reasoningEffort: 'max',
+    agentPermissionMode: 'interactive',
+  })
+  vi.mocked(preflightMistralConfiguration).mockResolvedValueOnce(undefined)
+  const response = await app.request(`/api/workspaces/${fakeWorkspace.id}/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ resume: true, agentSessionId: 'saved-b' }),
+  })
+  expect(response.status).toBe(200)
+  expect(preflightMistralConfiguration).toHaveBeenCalledWith(
+    'mistral-vibe',
+    { workspaceId: fakeWorkspace.id },
+    { model: 'auto', reasoningEffort: 'max', agentPermissionMode: 'interactive' },
+    true,
+  )
+  expect(agentManager.startAgent).toHaveBeenCalledWith(
+    fakeWorkspace.id,
+    fakeWorkspace.worktreePath,
+    expect.any(String),
+    'auto',
+    true,
+    'interactive',
+    'saved-b',
+    'max',
+    undefined,
+    expect.any(Object),
+  )
+})
+
+it('preflights a removed native final reviewer before HTTP creation mutates checkout', async () => {
+  const res = await app.request('/api/workspaces', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: 'Review',
+      projectPath: '/tmp/project',
+      sourceBranch: 'main',
+      workingBranch: 'feature/native-review',
+      autoLoopFinalReview: {
+        engine: 'mistral-vibe',
+        model: 'removed-native',
+        reasoningEffort: 'off',
+        additionalInstructions: '',
+      },
+    }),
+  })
+  expect(res.status).toBe(400)
+  expect(await res.json()).toMatchObject({
+    error: 'Native selection unavailable in this test context',
+    step: 'validate',
+  })
+  expect(gitOps.fetchSourceBranchOrThrowAsync).not.toHaveBeenCalled()
+  expect(workspaceService.createWorkspace).not.toHaveBeenCalled()
 })

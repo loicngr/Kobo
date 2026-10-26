@@ -307,3 +307,12 @@ it('waits instead of blocking when capacity changes during review preparation', 
   expect(getRuntime(id)).toMatchObject({ state: 'waiting', reason: 'final-review-capacity' })
   expect(svc.getFinalReviewStatus(id).state).toBe('pending')
 })
+
+it('persists a native final reviewer model and explicit off without adding permission settings', async () => {
+  const svc = await import('../server/services/auto-loop-final-review-service.js')
+  const native = { ...config, engine: 'mistral-vibe', model: 'native-alias', reasoningEffort: 'off' }
+  expect(svc.configureFinalReview(id, native)).toMatchObject({ configuration: native, state: 'pending' })
+  closeDb()
+  getDb(path.join(dir, 'test.db'))
+  expect(svc.getFinalReviewStatus(id).configuration).toEqual(native)
+})

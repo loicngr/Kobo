@@ -115,6 +115,7 @@ interface GlobalSettings {
   terminalCommand: string
   /** Opt-in: pr-watcher auto-purges the worktree on PR-merged transition. */
   autoPurgeOnPrMerged: boolean
+  maxConcurrentAgents: number
   autoLoopMaxRetries: number
   agentWatchdogEnabled: boolean
   forceImmediateMessages: boolean
@@ -250,7 +251,10 @@ export const useSettingsStore = defineStore('settings', {
       workflowPolicy: { ...MANUAL_WORKFLOW_POLICY },
       memoryMode: 'hybrid' as MemoryMode,
       onboardingComplete: false,
-      defaultModelByEngine: { 'claude-code': 'claude-sonnet-5-5', codex: 'auto' } as Record<string, string>,
+      defaultModelByEngine: { 'claude-code': 'claude-sonnet-5-5', codex: 'auto', 'mistral-vibe': 'auto' } as Record<
+        string,
+        string
+      >,
       dangerouslySkipPermissions: true,
       prPromptTemplate: '',
       reviewPromptTemplate: '',
@@ -263,6 +267,7 @@ export const useSettingsStore = defineStore('settings', {
       fileManagerCommand: '',
       terminalCommand: '',
       autoPurgeOnPrMerged: false,
+      maxConcurrentAgents: 2,
       autoLoopMaxRetries: 5,
       agentWatchdogEnabled: false,
       forceImmediateMessages: false,
@@ -290,7 +295,10 @@ export const useSettingsStore = defineStore('settings', {
       notionInProgressStatus: '',
       notionAssigneeProperty: '',
       notionUserId: '',
-      defaultPermissionModeByEngine: { 'claude-code': 'plan', codex: 'plan' } as Record<string, string>,
+      defaultPermissionModeByEngine: { 'claude-code': 'plan', codex: 'plan', 'mistral-vibe': 'interactive' } as Record<
+        string,
+        string
+      >,
       notionMcpKey: '',
       sentryMcpKey: '',
       bitbucketToken: '',

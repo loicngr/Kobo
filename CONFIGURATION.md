@@ -41,6 +41,7 @@ Reference for Kōbō configuration and external integrations. The tables cover t
 - [Agent runtimes](#agent-runtimes)
   - [Claude Code](#claude-code)
   - [OpenAI Codex](#openai-codex)
+  - [Mistral Vibe](#mistral-vibe)
   - [Permission modes](#permission-modes)
 - [Dev server](#dev-server)
 - [Forge integration](#forge-integration)
@@ -137,7 +138,7 @@ settings exports.
 | Key | Type | Purpose |
 |---|---|---|
 | `defaultModel` | `string` | Fallback model when no engine-specific default is set. |
-| `defaultModelByEngine` | `Record<engine, string>` | Per-engine default model (`claude-code` / `codex`). Fresh installs use Sonnet 5.5 (`claude-sonnet-5-5`) for Claude Code and `auto` for Codex. Historical migrations and existing user choices are preserved. The actual model is reported by the engine when the session starts; an Auto configuration label is not a model name. |
+| `defaultModelByEngine` | `Record<engine, string>` | Per-engine default model (`claude-code` / `codex` / `mistral-vibe`). Fresh installs use Sonnet 5.5 (`claude-sonnet-5-5`) for Claude Code and `auto` for Codex and Mistral Vibe. Historical migrations and existing user choices are preserved. The actual model is reported by the engine when the session starts; an Auto configuration label is not a model name. |
 | `workflowPolicy` | `{ commit, push, publish }` | Independent `manual` / `automatic` preferences, snapshotted at workspace creation. Fresh defaults are manual. See [Git preferences](#first-run-defaults-and-git-workflow-preferences). |
 | `skillSuite` | `string` | Standard, an external suite/combination, or custom instructions. Fresh default `standard`; see [Skill suites](#skill-suites). |
 | `defaultPermissionModeByEngine` | `Record<engine, mode>` | Default permission mode per engine. See [Permission modes](#permission-modes). |
@@ -681,8 +682,10 @@ also keeps a recoverable return instead of silently losing it.
 Enable **Final review** in the creation form or the workspace's Auto-loop panel.
 Configure the reviewer engine, model, reasoning effort and additional instructions
 in advance. Workspace templates and remembered creation preferences retain these
-settings. Each review uses a separate session in Plan mode and returns to the exact
-working session with its original LLM settings and permissions.
+settings. Each review uses a separate session: Plan for Claude Code/Codex, native
+Interactive for Vibe. Kōbō grants allow only reads and scoped reports; Vibe does not
+guarantee filesystem read-only access and may pause for human approval. The review
+returns to the exact working session with its original LLM settings and permissions.
 
 After all work and final checks pass, Kōbō launches the reviewer. Its structured
 findings become tasks for the original agent to correct automatically. The agent
@@ -870,7 +873,15 @@ capacity release and lifecycle-guard release reconsider waiting workspaces.
 It emits `autoloop:waiting-for-slot` so the
 interface can say so rather than looking stalled.
 
-The setting lives in `settings.json` under `global` and has no UI control yet:
+Change the limit in **Settings → Agents**. Saving applies immediately: increasing
+it, or changing a finite limit to `0`, immediately reconsiders waiting auto-loop
+iterations and review returns through the normal admission checks. Cron, wakeup
+and quota retries retain their existing timers and deadlines; their next admission
+check reads the new limit. Reducing it never interrupts active sessions; new
+automatic sessions wait until capacity becomes available. Progress and retry state
+are preserved.
+
+The setting also lives in `settings.json` under `global`:
 
 ```json
 { "global": { "maxConcurrentAgents": 3 } }
@@ -985,7 +996,7 @@ arguments, ordering, retry behavior and update limits.
 
 ## Persistent memory
 
-Kōbō stores deliberate, concise facts in SQLite, independently of Claude Code's native memory and provider chat history. Claude Code and Codex read the same Kōbō scopes, so a fact saved in one engine can be available to the other. There is no background transcript extractor or extra LLM call: agents must deliberately use the memory tools to save useful knowledge.
+Kōbō stores deliberate, concise facts in SQLite, independently of Claude Code's native memory and provider chat history. Claude Code, Codex and Mistral Vibe read the same Kōbō scopes, so facts can follow a mission across engines. The incremental v55 migration preserves existing entries/proposals while extending engine provenance. There is no background transcript extractor or extra LLM call: agents must deliberately use the memory tools to save useful knowledge.
 
 Choose the global behavior in **Settings → Memory**. New and upgraded installations default to **Hybrid**:
 
@@ -1509,7 +1520,7 @@ An old image alone is not a complete rollback after database migrations.
 
 ## Agent runtimes
 
-Engines are selected per workspace at creation time. Both share the same UI surface (chat feed, task panel, permission modes, sub-agent panel, quota footer, auto-loop).
+Engines are selected per workspace at creation time. All three share chat, task tracking, memory and auto-loop; available permissions and optional controls depend on each engine's capabilities.
 
 ### Claude Code
 
@@ -1544,7 +1555,7 @@ its dedicated auto-loop API.
 
 **Settings → Agents → Enable agent inactivity watchdogs**, at the top of the tab,
 controls the global `agentWatchdogEnabled` boolean. It is **off by default**, for
-both new and existing installations. Each Claude/Codex launch or resume captures
+both new and existing installations. Each engine launch or resume captures
 the current value; saving the toggle does not interrupt or reconfigure an already
 running agent. Stop and resume that agent to apply the new value.
 
@@ -1596,6 +1607,92 @@ Kōbō spawns a long-lived `codex app-server` subprocess per workspace and bridg
 When a Codex session is already working, **Send now** sends a queued chat message through the app-server's `turn/steer` endpoint. The message stays queued until Codex acknowledges the steer request; a failed request is restored to the queue instead of being lost.
 
 The selector reads [`src/shared/codex-models.ts`](./src/shared/codex-models.ts). This checkout lists GPT-6 Astra, GPT-5.6 Sol/Terra/Luna, GPT-5.5 and older variants; availability depends on your account and authentication. Kōbō exposes effort values `auto`, `none`, `low`, `medium`, `high`, `xhigh`, and `max`, as declared in the engine's capabilities. The runtime must support the selected model/effort combination. Both selectors switch when you change the engine.
+
+### Mistral Vibe
+
+> Experimental. Target version: **Vibe 3.0.1**, ACP v1 with SDK 2.0.1.
+
+Follow the official [native Vibe setup](https://docs.mistral.ai/vibe/code/cli/install-setup)
+and [Vibe 3.0.1 ACP instructions](https://github.com/mistralai/mistral-vibe/blob/v3.0.1/docs/acp-setup.md).
+Install Vibe separately; run `vibe` for its native authentication wizard (`vibe --setup`
+to repeat it). Run these as the **same OS user and in the same environment as the
+Kōbō server**. `vibe-acp` must be on that user's PATH. Kōbō inherits native provider
+configuration/authentication and does not store a Mistral key. Explicit native
+model/thinking selections can persist Vibe preferences as described below. In Docker, host installation/login is insufficient: install and
+configure Vibe inside the container and persist its native state; see
+[VPS setup](./docs/vps-projects-and-skills.md#use-mistral-vibe-inside-the-container).
+
+The health diagnostic checks `vibe-acp --version` without contacting a provider.
+A detected executable/version is **not an authentication check**. If a launch
+reports authentication required, complete native setup in the server environment;
+check PATH/permissions for executable errors. Kōbō does not launch browser login,
+install or update Vibe for you.
+
+Model and thinking **Auto** retain native selection and send no override. Native
+model aliases, display names and model-specific thinking levels are discovered
+from Vibe for the selected project/workspace and permission mode. Settings without
+a project use the server user's home. Discovery creates and closes a native session
+without sending a prompt, contacting a provider or changing configuration. It uses
+short-lived child environment overrides, never model/thinking setters. Discovery
+results are cached for 30 seconds; failed discovery leaves Auto available and keeps
+explicit saved choices visible. Use Retry to request the options again.
+
+**Explicit model or thinking selections may persist in native Vibe preferences**
+through Vibe's public ACP setters, including preferences used outside Kōbō. At each
+actual launch, Kōbō confirms native mode, model and thinking in that order before
+sending the prompt. Native profiles/admin policy remain authoritative; unavailable
+or overridden selections fail explicitly instead of falling back to Auto. Project
+preflight cannot guarantee a future worktree or resumed session has identical
+options, so launch validation remains mandatory. Thinking values are native values
+(e.g. `off`, `low`, `medium`, `high`, `max` when advertised); `none` and `xhigh` are
+not translated. Brainstorming has independent model/thinking choices. On return
+from a review, native saved-session thinking is retained separately from the
+workspace iteration settings. An Auto-model resume validates explicit thinking
+against the loaded session, not a new session using potentially different defaults.
+
+New Vibe workspaces visibly default to **Interactive**. Only these native execution
+modes are offered:
+
+| Kōbō mode | Native Vibe mode |
+|---|---|
+| `interactive` | `ask` |
+| `strict` | `accept-edits` |
+| `bypass` | `auto-approve` |
+
+These are native approval modes, not a Kōbō sandbox. Native profiles and admin
+policy may change effective permissions. Plan/read-only launches are rejected before spawning or changing the workspace. Existing Plan
+choices require an explicit supported mode; they are never promoted automatically.
+The comparison feature remains **Claude Code versus Codex**.
+
+Native tools, approval/question panels, managed tasks/memory/progress MCP, resume
+and whole-session Stop are supported. Messages wait in the normal queue until
+the native process closes, then resume the conversation. Live steering and
+**Send now** are unavailable while Vibe is busy, including forced immediate
+messages and external MCP sends; rejected sends are not silently queued.
+Account/quota controls, managed skills and sub-agent cards/individual stop are
+excluded. Native tools/skills remain Vibe's own configuration.
+
+A manual handoff can target Vibe with a supported execution mode. For a Vibe
+source, disable **Generate a handoff with the current agent** and use the existing
+mission/history handoff: Vibe cannot run the restricted read-only summary launch.
+Vibe is available for manual and automatic final reviews. Manual reviews always
+start a fresh session, defaulting to Interactive independently of source permissions;
+Accept edits and Bypass remain explicit manual choices. Automatic final reviews
+always use Interactive and may pause for human approval. Review instructions forbid
+all modifications, but native permissions provide no guaranteed filesystem read-only
+enforcement. Kōbō memory and managed MCP remain read/report-only, including under
+Automatic memory mode; final-verdict and progress grants stay scoped. Explicit
+review model/thinking choices use the same native catalogue and persistence rules.
+Other supported engines can also review Vibe's work. Stop/transfer waits for actual
+native exit; an ACP close acknowledgement alone does not release the worktree.
+
+On **2026-10-23, Linux x64, Node 26.12.1**, the installed 3.0.1 passed the real
+Kōbō adapter smoke using an isolated loopback provider and synthetic stdio MCP:
+permissions, question, all three modes with MCP, native resume without duplicated
+history, renewed MCP environment and managed-job cleanup after confirmed exit.
+This made no paid call. **Real-provider end-to-end compatibility remains unverified**;
+its separately opt-in scenario has not been run. Commands and exact limits are in
+[the compatibility record](./src/__tests__/fixtures/mistral-acp/README.md).
 
 ### Switch Claude Code and Codex accounts with ccswap
 
@@ -1658,7 +1755,7 @@ credential-directory environment. See [VPS account setup](./docs/vps-projects-an
 
 ### Permission modes
 
-Claude Code uses SDK permission modes; Codex uses sandbox and approval flags. These controls differ by engine. A Git worktree itself is not a security boundary.
+Claude Code uses SDK permission modes; Codex uses sandbox and approval flags; [Mistral Vibe](#mistral-vibe) uses native execution modes and excludes Plan. These controls differ by engine. A Git worktree itself is not a security boundary.
 
 **Claude Code** (controlled via SDK options):
 
@@ -2261,7 +2358,7 @@ Lets you bypass the bundled prompts entirely and write your own. The five `custo
 
 ## gbrain (companion MCP)
 
-[`gbrain`](https://github.com/garrytan/gbrain) is a separate companion tool: a per-project knowledge graph and semantic search index, with an MCP server interface. It's **not** a Kōbō skill suite (it doesn't change the auto-generated prompts) but it plugs into Kōbō workspaces transparently via the standard Claude Code MCP config: Claude Code sessions can inherit MCP servers registered in `~/.claude.json`. Codex uses its own native MCP configuration; Kōbō does not copy arbitrary Claude MCP entries into Codex. The managed Notion/Sentry connections described above are supplied explicitly to both engines.
+[`gbrain`](https://github.com/garrytan/gbrain) is a separate companion tool: a per-project knowledge graph and semantic search index, with an MCP server interface. It's **not** a Kōbō skill suite (it doesn't change the auto-generated prompts) but it plugs into Kōbō workspaces transparently via the standard Claude Code MCP config: Claude Code sessions can inherit MCP servers registered in `~/.claude.json`. Codex uses its own native MCP configuration; Kōbō does not copy arbitrary Claude MCP entries into Codex. The managed Notion/Sentry connections described above are supplied explicitly to all three engines.
 
 When gbrain is configured, the agent gets access to tools like:
 
@@ -2486,7 +2583,7 @@ as failures, with safe diagnostics; authentication/permission errors never justi
 modifying credentials or Kōbō storage to bypass the tools. Ambiguous mutation
 outcomes require checking available status/receipts before retrying.
 
-Plan launches remain conversation-only. Writable auto-loop launches prepare the plan and task list before returning control to the loop; writable manual launches implement after plan approval, under the configured Git policy. Custom brainstorming, Notion and Sentry templates are preserved; they cannot expand launch permissions or authorize commits automatically. Review returns and handoff reports remain read-only, with only their scoped report and operational progress tools allowed. Plan approval does not change permissions; explicitly select an execution mode in Kōbō and start a new launch to implement.
+Plan launches remain conversation-only. Writable auto-loop launches prepare the plan and task list before returning control to the loop; writable manual launches implement after plan approval, under the configured Git policy. Custom brainstorming, Notion and Sentry templates are preserved; they cannot expand launch permissions or authorize commits automatically. Returning Claude Code/Codex reviewers and handoff reports remain in read-only Plan mode. Vibe reviewers use native permissions (Interactive by default, fixed Interactive for automatic final reviews), which may require human approval and do not guarantee filesystem read-only access. These restricted review/report launches restrict Kōbō grants to reads, scoped reports and operational progress; review instructions forbid modifications. Plan approval does not change permissions; explicitly select an execution mode in Kōbō and start a new launch to implement.
 
 The expandable **Kōbō instructions** chat entry records the application-owned text prepared by the engine builder for the initial launch or a pending initial-prompt retry, including progress guidance, continuation rules, workflow policy and managed integration notices. The pending initial mission is retained until this entry is durably recorded, so a failure during asynchronous launch preparation remains retryable. A later replacement mission is never cleared by an earlier launch. Preparation is not proof of provider delivery. The provider's own system preset is not included. Retrieved memory bodies and capability tokens are not copied to chat; memory usage remains visible separately in the Memory panel. Existing historical prompt entries retain their original content. Ordinary resumes receive current instructions without creating another initial-prompt entry.
 

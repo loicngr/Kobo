@@ -1,6 +1,11 @@
 import { beforeEach, expect, it, vi } from 'vitest'
+import { preflightMistralConfiguration } from '../server/services/mistral-options-service.js'
 
+vi.mock('../server/services/mistral-options-service.js', () => ({
+  preflightMistralConfiguration: vi.fn().mockResolvedValue(undefined),
+}))
 vi.mock('../server/services/agent/orchestrator.js', () => ({
+  assertImmediateMessageSupported: vi.fn(),
   sendMessage: vi.fn(),
   startAgent: vi.fn(),
   isShuttingDown: vi.fn(() => false),
@@ -131,4 +136,89 @@ it('does not disable an active loop when a stale session rejects delivery', asyn
     'not active',
   )
   expect(autoLoop.disable).not.toHaveBeenCalled()
+})
+
+it.each([false, true])(
+  'rejects busy native delivery before discovery/upload/history/fallback (force=%s)',
+  async (force) => {
+    vi.mocked(workspaces.getWorkspace).mockReturnValue({
+      id: 'ws',
+      engine: 'mistral-vibe',
+      worktreePath: '/tmp/worktree',
+      status: 'executing',
+      model: 'explicit-native',
+      reasoningEffort: 'high',
+      agentPermissionMode: 'interactive',
+    } as never)
+    vi.mocked(agent.assertImmediateMessageSupported).mockImplementationOnce(() => {
+      throw new Error('Mistral Vibe live message delivery is unsupported')
+    })
+    await expect(
+      deliverWorkspaceMessage('ws', {
+        content: 'now',
+        force,
+        attachments: [{ name: 'file.txt', mime_type: 'text/plain', data_base64: 'YQ==' }],
+        clientMessageId: 'busy',
+      }),
+    ).rejects.toThrow('live message delivery is unsupported')
+    expect(preflightMistralConfiguration).not.toHaveBeenCalled()
+    expect(agent.sendMessage).not.toHaveBeenCalled()
+    expect(agent.startAgent).not.toHaveBeenCalled()
+    expect(emit).not.toHaveBeenCalled()
+    expect(emitEphemeral).toHaveBeenCalledWith(
+      'ws',
+      'chat:rejected',
+      expect.objectContaining({ clientMessageId: 'busy' }),
+    )
+  },
+)
+
+it('rejects a saved Mistral Plan fallback before attachments or agent/session creation', async () => {
+  vi.mocked(workspaces.getWorkspace).mockReturnValue({
+    id: 'ws',
+    engine: 'mistral-vibe',
+    model: 'auto',
+    reasoningEffort: 'auto',
+    agentPermissionMode: 'plan',
+  } as never)
+  await expect(
+    deliverWorkspaceMessage('ws', {
+      content: 'start',
+      attachments: [{ name: 'file.txt', mime_type: 'text/plain', data_base64: 'YQ==' }],
+    }),
+  ).rejects.toThrow('agentPermissionMode')
+  expect(agent.sendMessage).not.toHaveBeenCalled()
+  expect(agent.startAgent).not.toHaveBeenCalled()
+  expect(emit).not.toHaveBeenCalled()
+})
+
+it('preflights Auto with explicit thinking as a native resume before chat fallback', async () => {
+  vi.mocked(workspaces.getWorkspace).mockReturnValue({
+    id: 'ws',
+    engine: 'mistral-vibe',
+    worktreePath: '/tmp/worktree',
+    status: 'idle',
+    model: 'auto',
+    reasoningEffort: 'max',
+    agentPermissionMode: 'interactive',
+  } as never)
+  vi.mocked(agent.assertImmediateMessageSupported).mockImplementation(() => {})
+  vi.mocked(agent.sendMessage).mockRejectedValue(new Error('No agent running'))
+  await deliverWorkspaceMessage('ws', { content: 'Resume', sessionId: 'saved-b' })
+  expect(preflightMistralConfiguration).toHaveBeenCalledWith(
+    'mistral-vibe',
+    { workspaceId: 'ws' },
+    { model: 'auto', reasoningEffort: 'max', agentPermissionMode: 'interactive' },
+    true,
+  )
+  expect(agent.startAgent).toHaveBeenCalledWith(
+    'ws',
+    '/tmp/worktree',
+    'Resume',
+    'auto',
+    true,
+    'interactive',
+    'saved-b',
+    'max',
+  )
 })

@@ -736,6 +736,9 @@ export function createCodexEngine(): AgentEngine {
           }
           await terminateChild()
         },
+        hasPendingUserInput(callId): boolean {
+          return pendingByCallId.has(callId)
+        },
         resolvePendingUserInput(callId: string, response): boolean {
           const pending = pendingByCallId.get(callId)
           if (!pending) return false

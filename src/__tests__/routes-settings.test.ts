@@ -29,6 +29,7 @@ vi.mock('../server/services/network-access-service.js', async (importOriginal) =
 
 vi.mock('../server/services/agent/orchestrator.js', () => ({
   getBackendPort: vi.fn(() => 3300),
+  notifyCapacityAvailable: vi.fn(),
 }))
 
 vi.mock('../server/db/index.js', () => ({
@@ -45,6 +46,7 @@ vi.mock('../server/services/ws-events-retention-worker-service.js', () => ({
 // ── Imports (after mocks) ────────────────────────────────────────────────────
 
 import router from '../server/routes/settings.js'
+import { notifyCapacityAvailable } from '../server/services/agent/orchestrator.js'
 import * as settingsService from '../server/services/settings-service.js'
 import { previewWsEventsRetention } from '../server/services/ws-events-retention-worker-service.js'
 import { MASKED_SECRET } from '../shared/consts.js'
@@ -227,6 +229,50 @@ describe('malformed JSON bodies', () => {
 })
 
 describe('PUT /api/settings/global', () => {
+  it.each(['', null, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, '4'])(
+    'rejects invalid concurrency %s before saving any settings',
+    async (maxConcurrentAgents) => {
+      const res = await app.request('/api/settings/global', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ maxConcurrentAgents, editorCommand: 'changed' }),
+      })
+      expect(res.status).toBe(400)
+      expect(settingsService.updateGlobalSettings).not.toHaveBeenCalled()
+      expect(notifyCapacityAvailable).not.toHaveBeenCalled()
+    },
+  )
+
+  it('rejects a nonfinite JSON number without saving other fields', async () => {
+    const res = await app.request('/api/settings/global', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{"maxConcurrentAgents":1e999,"editorCommand":"changed"}',
+    })
+    expect(res.status).toBe(400)
+    expect(settingsService.updateGlobalSettings).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    [2, 4, true],
+    [2, 0, true],
+    [4, 2, false],
+    [0, 2, false],
+    [2, 2, false],
+    [2, Number.MAX_SAFE_INTEGER, true],
+  ])('applies concurrency %i -> %i and only notifies expanded capacity', async (previous, next, notify) => {
+    vi.mocked(settingsService.getGlobalSettings).mockReturnValue(makeGlobalSettings({ maxConcurrentAgents: previous }))
+    vi.mocked(settingsService.updateGlobalSettings).mockReturnValue(makeGlobalSettings({ maxConcurrentAgents: next }))
+    const res = await app.request('/api/settings/global', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ maxConcurrentAgents: next }),
+    })
+    expect(res.status).toBe(200)
+    expect((await res.json()).maxConcurrentAgents).toBe(next)
+    expect(notifyCapacityAvailable).toHaveBeenCalledTimes(notify ? 1 : 0)
+  })
+
   it('rejects an unknown memory mode before calling the settings writer', async () => {
     const res = await app.request('/api/settings/global', {
       method: 'PUT',

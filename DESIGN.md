@@ -2,7 +2,7 @@
 
 ## Product Context
 
-- **What this is:** Kōbō — a Claude Code and Codex multi-agent orchestrator. Each "workspace" is a
+- **What this is:** Kōbō — a Claude Code, Codex and Mistral Vibe multi-agent orchestrator. Each "workspace" is a
   self-contained mission with its own git worktree, branch, agent session, optional dev
   server, optional Notion source-of-truth, and a dedicated MCP tools server.
 - **Who it's for:** Developers using their own local instance, from a first mission to advanced parallel workflows,

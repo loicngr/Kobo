@@ -20,6 +20,8 @@ export const CLAUDE_CODE_CAPABILITIES: EngineCapabilities = {
   permissionModes: ['plan', 'bypass', 'strict', 'interactive'],
   supportsResume: true,
   supportsMcp: true,
+  supportsLiveSteering: true,
+  supportsReadOnly: true,
   supportsSkills: true,
   supportsSubagents: true,
   supportsQuotaStatus: true,

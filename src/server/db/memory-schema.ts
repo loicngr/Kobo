@@ -46,7 +46,7 @@ export function initMemorySchema(db: Database.Database): void {
       UNIQUE (scope_id, memory_key),
       CHECK (
         (actor_kind = 'human' AND source_workspace_id IS NULL AND source_session_id IS NULL AND source_engine IS NULL AND client_name IS NULL AND transport IS NULL) OR
-        (actor_kind = 'internal-agent' AND source_engine IN ('claude-code', 'codex') AND client_name IS NULL AND transport IS NULL) OR
+        (actor_kind = 'internal-agent' AND source_engine IN ('claude-code', 'codex', 'mistral-vibe') AND client_name IS NULL AND transport IS NULL) OR
         (actor_kind = 'external-mcp' AND source_workspace_id IS NULL AND source_session_id IS NULL AND source_engine IS NULL AND client_name IS NOT NULL AND transport IN ('http', 'stdio'))
       )
     );
@@ -75,7 +75,7 @@ export function initMemorySchema(db: Database.Database): void {
       CHECK ((target_entry_id IS NULL AND base_revision IS NULL) OR (target_entry_id IS NOT NULL AND base_revision IS NOT NULL)),
       CHECK (
         (actor_kind = 'human' AND source_workspace_id IS NULL AND source_session_id IS NULL AND source_engine IS NULL AND client_name IS NULL AND transport IS NULL) OR
-        (actor_kind = 'internal-agent' AND source_engine IN ('claude-code', 'codex') AND client_name IS NULL AND transport IS NULL) OR
+        (actor_kind = 'internal-agent' AND source_engine IN ('claude-code', 'codex', 'mistral-vibe') AND client_name IS NULL AND transport IS NULL) OR
         (actor_kind = 'external-mcp' AND source_workspace_id IS NULL AND source_session_id IS NULL AND source_engine IS NULL AND client_name IS NOT NULL AND transport IN ('http', 'stdio'))
       )
     );
@@ -108,7 +108,7 @@ export function initMemorySchema(db: Database.Database): void {
       CHECK (affected_proposals IS NULL OR affected_proposals >= 0),
       CHECK (
         (actor_kind = 'human' AND source_workspace_id IS NULL AND source_session_id IS NULL AND source_engine IS NULL AND client_name IS NULL AND transport IS NULL) OR
-        (actor_kind = 'internal-agent' AND source_engine IN ('claude-code', 'codex') AND client_name IS NULL AND transport IS NULL) OR
+        (actor_kind = 'internal-agent' AND source_engine IN ('claude-code', 'codex', 'mistral-vibe') AND client_name IS NULL AND transport IS NULL) OR
         (actor_kind = 'external-mcp' AND source_workspace_id IS NULL AND source_session_id IS NULL AND source_engine IS NULL AND client_name IS NOT NULL AND transport IN ('http', 'stdio'))
       )
     );
@@ -124,7 +124,7 @@ export function initMemorySchema(db: Database.Database): void {
       dispatch_id TEXT NOT NULL UNIQUE,
       budget_context_id TEXT REFERENCES memory_budget_contexts(id) ON DELETE SET NULL,
       budget_epoch INTEGER NOT NULL DEFAULT 0 CHECK (budget_epoch >= 0),
-      engine TEXT NOT NULL CHECK (engine IN ('claude-code', 'codex')),
+      engine TEXT NOT NULL CHECK (engine IN ('claude-code', 'codex', 'mistral-vibe')),
       state TEXT NOT NULL CHECK (state IN ('prepared', 'submitted', 'initialized', 'failed', 'unknown')),
       entry_revisions_json TEXT NOT NULL,
       scope_generations_json TEXT NOT NULL,
@@ -146,7 +146,7 @@ export function initMemorySchema(db: Database.Database): void {
       id TEXT PRIMARY KEY,
       kind TEXT NOT NULL CHECK (kind IN ('internal', 'external')),
       session_id TEXT REFERENCES agent_sessions(id) ON DELETE CASCADE,
-      engine TEXT CHECK (engine IS NULL OR engine IN ('claude-code', 'codex')),
+      engine TEXT CHECK (engine IS NULL OR engine IN ('claude-code', 'codex', 'mistral-vibe')),
       conversation_key TEXT CHECK (conversation_key IS NULL OR length(trim(conversation_key)) > 0),
       native_conversation_id TEXT,
       external_context_id TEXT,

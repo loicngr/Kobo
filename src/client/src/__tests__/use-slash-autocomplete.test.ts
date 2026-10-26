@@ -48,6 +48,21 @@ describe('useSlashAutocomplete', () => {
     return el as unknown as HTMLTextAreaElement
   }
 
+  it('hides cached managed skills for Vibe while retaining templates and Kobo commands', async () => {
+    const enabled = ref(true)
+    const ac = useSlashAutocomplete(ref('/'), () => makeFakeInput('/'), { supportsSkills: () => enabled.value })
+    await ac.fetchSkills()
+    expect(ac.groupedDropdown.value.skills.length).toBeGreaterThan(0)
+    const calls = vi.mocked(fetch).mock.calls.length
+    enabled.value = false
+    await ac.fetchSkills()
+    expect(vi.mocked(fetch).mock.calls).toHaveLength(calls)
+    expect(ac.groupedDropdown.value.skills).toEqual([])
+    expect(ac.flatDropdown.value.every((item) => item.type !== 'skill')).toBe(true)
+    expect(ac.groupedDropdown.value.kobo.length).toBeGreaterThan(0)
+    expect(ac.groupedDropdown.value.templates.length).toBeGreaterThan(0)
+  })
+
   it('opens the dropdown when the user types `/` followed by a fragment', async () => {
     const message = ref('hello /rev')
     const input = makeFakeInput('hello /rev', 10)

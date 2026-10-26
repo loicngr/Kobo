@@ -41,16 +41,19 @@ function text(messageId: string, value: string, streaming = true, sessionId: str
 }
 
 describe('engine handoff conversation', () => {
-  it.each(['claude-code', 'codex'])('combines %s deltas and retains the latest user instruction', async (engine) => {
-    event('user:message', { content: 'Preserve API compatibility.' })
-    const fragments = ['First ', 'check ', 'the ', 'API ', 'contract ', 'before ', 'changing ', 'code.']
-    for (const fragment of fragments) text('assistant-1', fragment)
-    event('agent:event', { kind: 'message:end', messageId: 'assistant-1' })
-    const handoff = await buildEngineHandoff(workspace, engine, 'codex', 'source')
-    expect(handoff).toContain('Preserve API compatibility.')
-    expect(handoff).toContain('First check the API contract before changing code.')
-    expect(handoff.match(/Preserve API compatibility\./g)).toHaveLength(1)
-  })
+  it.each(['claude-code', 'codex', 'mistral-vibe'])(
+    'combines %s deltas and retains the latest user instruction',
+    async (engine) => {
+      event('user:message', { content: 'Preserve API compatibility.' })
+      const fragments = ['First ', 'check ', 'the ', 'API ', 'contract ', 'before ', 'changing ', 'code.']
+      for (const fragment of fragments) text('assistant-1', fragment)
+      event('agent:event', { kind: 'message:end', messageId: 'assistant-1' })
+      const handoff = await buildEngineHandoff(workspace, engine, 'codex', 'source')
+      expect(handoff).toContain('Preserve API compatibility.')
+      expect(handoff).toContain('First check the API contract before changing code.')
+      expect(handoff.match(/Preserve API compatibility\./g)).toHaveLength(1)
+    },
+  )
 
   it('pins the latest user instruction when more than six assistant messages follow', async () => {
     event('user:message', { content: 'Do not commit any changes.' })

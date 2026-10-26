@@ -47,10 +47,10 @@
           <span v-if="!isMobile" class="q-ml-xs">{{ $t('workspacePage.configure') }}</span>
           <q-icon v-if="pendingSpawnChanges.size" name="schedule" size="12px" color="orange-6" class="q-ml-xs" />
           <q-tooltip>{{ $t('workspacePage.configure') }}</q-tooltip>
-          <q-menu><q-list class="wp-toolbar-menu">
+          <q-menu v-model="nativeConfigurationOpen"><q-list class="wp-toolbar-menu">
             <q-item><q-item-section>
               <q-item-label caption>{{ $t('engine.select') }}</q-item-label>
-              <q-item-label>{{ currentEngineId === 'codex' ? $t('workspacePage.engineCodex') : currentEngineId === 'claude-code' ? $t('workspacePage.engineClaude') : currentEngineId }}</q-item-label>
+              <q-item-label>{{ currentEngineId === 'codex' ? $t('workspacePage.engineCodex') : currentEngineId === 'claude-code' ? $t('workspacePage.engineClaude') : currentEngineId === 'mistral-vibe' ? $t('workspacePage.engineMistral') : currentEngineId }}</q-item-label>
             </q-item-section></q-item>
             <q-item>
               <q-item-section>
@@ -67,7 +67,8 @@
                 />
               </q-item-section>
             </q-item>
-            <WorkspaceToolbarSelectors section="configuration" :sessions="sessions" :session-options="sessionOptions"
+            <q-item v-if="currentEngineId === 'mistral-vibe'"><q-item-section class="text-caption">{{ $t('engine.mistralNativeHint') }}<div role="status">{{ nativeOptions.message }} <q-btn v-if="nativeOptions.message && !nativeOptions.loading" flat dense size="sm" :label="$t('common.retry')" @click="nativeOptions.refresh" /></div></q-item-section></q-item>
+            <WorkspaceToolbarSelectors :options-loading="nativeOptions.loading" section="configuration" :sessions="sessions" :session-options="sessionOptions"
               :permission-mode-options="permissionModeOptions" :model-options="modelOptions"
               :reasoning-options="reasoningOptions" :pending-spawn-changes="pendingSpawnChanges"
               :creating-session="creatingSession" :can-delete-session="sessionCanBeDeleted"
@@ -302,6 +303,7 @@
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
 import { useIsMobile } from 'src/composables/use-is-mobile'
+import { useMistralOptions } from 'src/composables/use-mistral-options'
 import { useSessionHandoff } from 'src/composables/use-session-handoff'
 import { useTours } from 'src/composables/use-tours'
 import { useWorktreeRestore } from 'src/composables/use-worktree-restore'
@@ -673,12 +675,24 @@ async function handleStop() {
 // schema change.
 const currentEngineId = computed<string>(() => store.selectedWorkspace?.engine ?? 'claude-code')
 
+const nativeConfigurationOpen = ref(false)
+const nativeOptions = useMistralOptions(() => ({
+  engine: currentEngineId.value,
+  workspaceId: store.selectedWorkspaceId ?? undefined,
+  model: store.selectedWorkspace?.model ?? 'auto',
+  reasoningEffort: store.selectedWorkspace?.reasoningEffort,
+  agentPermissionMode: store.selectedWorkspace?.agentPermissionMode ?? 'interactive',
+  enabled: nativeConfigurationOpen.value,
+}))
+
 const modelOptions = computed(() => {
+  if (currentEngineId.value === 'mistral-vibe') return nativeOptions.models
   const defs = MODEL_OPTION_DEFS_BY_ENGINE[currentEngineId.value] ?? MODEL_OPTION_DEFS
   return defs.map((option) => ({ label: t(option.i18nLabelKey), value: option.value }))
 })
 
 const reasoningOptions = computed(() => {
+  if (currentEngineId.value === 'mistral-vibe') return nativeOptions.efforts
   const defs = EFFORT_OPTION_DEFS_BY_ENGINE[currentEngineId.value] ?? EFFORT_OPTION_DEFS_BY_ENGINE['claude-code']
   return defs.map((d) => ({
     label: formatReasoningLabel(t(d.i18nLabelKey)),
@@ -801,7 +815,7 @@ const sessionOptions = computed(() => {
     label: s.name ?? t('workspacePage.session', { n: store.sessions.length - idx }),
     value: s.id,
     caption: s.engine
-      ? `${s.engine === 'codex' ? t('workspacePage.engineCodex') : t('workspacePage.engineClaude')} · ${timeAgo(s.startedAt)}`
+      ? `${s.engine === 'codex' ? t('workspacePage.engineCodex') : s.engine === 'mistral-vibe' ? t('workspacePage.engineMistral') : t('workspacePage.engineClaude')} · ${timeAgo(s.startedAt)}`
       : timeAgo(s.startedAt),
     isSession: true,
   }))

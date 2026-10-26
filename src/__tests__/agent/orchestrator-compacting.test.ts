@@ -26,6 +26,8 @@ async function fixture() {
       permissionModes: ['bypass'],
       supportsResume: true,
       supportsMcp: true,
+      supportsLiveSteering: true,
+      supportsReadOnly: true,
       supportsSkills: true,
       supportsSubagents: false,
       supportsQuotaStatus: false,

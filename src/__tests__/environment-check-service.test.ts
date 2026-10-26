@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
+import { CLAUDE_CODE_CAPABILITIES } from '../server/services/agent/engines/claude-code/capabilities.js'
+import { CODEX_CAPABILITIES } from '../server/services/agent/engines/codex/capabilities.js'
+import { MISTRAL_CAPABILITIES } from '../server/services/agent/engines/mistral-vibe/capabilities.js'
 import { checkEnvironment, type EnvironmentProbe } from '../server/services/environment-check-service.js'
+import { MISTRAL_MODELS } from '../shared/mistral-models.js'
 
 function probe(): EnvironmentProbe {
   return {
@@ -11,10 +15,58 @@ function probe(): EnvironmentProbe {
     claudeBinary: () => '/private/bin/claude',
     worktreesDirectory: () => '/private/worktrees',
     codexBinary: () => '/private/bin/codex',
+    mistralBinary: () => 'vibe-acp',
   }
 }
 
 describe('environment readiness', () => {
+  it('advertises only native execution capabilities for Mistral', () => {
+    expect(MISTRAL_MODELS.map((model) => model.id)).toEqual(['auto'])
+    expect(MISTRAL_CAPABILITIES).toEqual({
+      models: [{ id: 'auto', label: 'Auto' }],
+      effortLevels: [{ id: 'auto', label: 'Auto' }],
+      permissionModes: ['interactive', 'strict', 'bypass'],
+      supportsResume: true,
+      supportsMcp: true,
+      supportsReadOnly: false,
+      supportsLiveSteering: false,
+      supportsSkills: false,
+      supportsSubagents: false,
+      supportsQuotaStatus: false,
+    })
+    for (const capabilities of [CLAUDE_CODE_CAPABILITIES, CODEX_CAPABILITIES]) {
+      expect(capabilities.supportsReadOnly).toBe(true)
+      expect(capabilities.supportsLiveSteering).toBe(true)
+    }
+  })
+
+  it('checks the Vibe version without claiming authentication or model access', async () => {
+    const deps = probe()
+    const report = await checkEnvironment({ engine: 'mistral-vibe' }, deps)
+    expect(report.engine).toBe('mistral-vibe')
+    expect(report.checks.find((check) => check.code === 'runtime')?.status).toBe('ok')
+    expect(report.checks.find((check) => check.code === 'authentication')?.status).toBe('unknown')
+    expect(report.checks.find((check) => check.code === 'model')?.status).toBe('unknown')
+    expect(deps.run).toHaveBeenCalledWith('vibe-acp', ['--version'])
+    expect(deps.run).toHaveBeenCalledTimes(3)
+  })
+
+  it.each([
+    ['ENOENT', 'missing'],
+    ['ETIMEDOUT', 'error'],
+    ['ERR_CHILD_PROCESS_STDIO_MAXBUFFER', 'error'],
+  ])('sanitizes the Vibe diagnostic failure %s', async (code, expected) => {
+    const deps = probe()
+    deps.run = vi.fn(async (command) => {
+      if (command === 'vibe-acp') throw Object.assign(new Error('SECRET_CANARY /private/credentials'), { code })
+      return 'ok'
+    })
+    const report = await checkEnvironment({ engine: 'mistral-vibe' }, deps)
+    expect(report.checks.find((check) => check.code === 'runtime')?.status).toBe(expected)
+    expect(JSON.stringify(report)).not.toContain('SECRET_CANARY')
+    expect(JSON.stringify(report)).not.toContain('/private')
+  })
+
   it.each([
     ['24.21.0', 'error'],
     ['26.11.99', 'error'],

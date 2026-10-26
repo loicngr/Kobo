@@ -1100,6 +1100,9 @@ export function createClaudeCodeEngine(): AgentEngine {
             // swallow — best effort
           }
         },
+        hasPendingUserInput(toolCallId): boolean {
+          return pendingResolvers.has(toolCallId)
+        },
         resolvePendingUserInput(toolCallId, response): boolean {
           const resolver = pendingResolvers.get(toolCallId)
           if (!resolver) return false

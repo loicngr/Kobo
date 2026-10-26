@@ -3,7 +3,7 @@ import { isMemoryMode } from '../../shared/memory.js'
 import { isValidSkillSuite } from '../../shared/skill-suite-prompts.js'
 import { isWorkflowPolicy } from '../../shared/workflow-policy.js'
 import { getDb } from '../db/index.js'
-import { getBackendPort } from '../services/agent/orchestrator.js'
+import { getBackendPort, notifyCapacityAvailable } from '../services/agent/orchestrator.js'
 import {
   DEFAULT_NOTION_INITIAL_PROMPT,
   DEFAULT_SENTRY_INITIAL_PROMPT,
@@ -185,7 +185,16 @@ app.put('/global', async (c) => {
       return c.json({ error: 'Invalid workflowPolicy' }, 400)
     if (body.memoryMode !== undefined && !isMemoryMode(body.memoryMode))
       return c.json({ error: 'Invalid memoryMode' }, 400)
+    if (
+      'maxConcurrentAgents' in body &&
+      (!Number.isSafeInteger(body.maxConcurrentAgents) || (body.maxConcurrentAgents as number) < 0)
+    )
+      return c.json({ error: 'maxConcurrentAgents must be a non-negative safe integer' }, 400)
+    const previousLimit =
+      'maxConcurrentAgents' in body ? settingsService.getGlobalSettings().maxConcurrentAgents : undefined
     const updated = settingsService.updateGlobalSettings(body)
+    if (previousLimit && (updated.maxConcurrentAgents === 0 || updated.maxConcurrentAgents > previousLimit))
+      notifyCapacityAvailable()
     // The client assigns this response straight into its store, so echoing the
     // real credentials back would undo the masking on GET the first time
     // anyone saves anything.

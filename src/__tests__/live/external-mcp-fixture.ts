@@ -5,9 +5,11 @@ import { join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { closeDb, getDb } from '../../server/db/index.js'
 import { runMigrations } from '../../server/db/migrations.js'
+import { createExternalMcpCredential } from '../../server/services/external-mcp-credentials-service.js'
 import { createWorkspace, updateWorkspaceStatus } from '../../server/services/workspace-service.js'
+import { cleanupLiveFixture } from './cleanup-live-fixture.js'
 
-export async function createLiveMcpFixture(engine: 'codex' | 'claude-code', model: string) {
+export async function createLiveMcpFixture(engine: 'codex' | 'claude-code' | 'mistral-vibe', model: string) {
   const directory = mkdtempSync(join(tmpdir(), 'kobo-mcp-live-'))
   const previousHome = process.env.KOBO_HOME
   const repository = join(directory, 'repo')
@@ -24,6 +26,13 @@ export async function createLiveMcpFixture(engine: 'codex' | 'claude-code', mode
     KOBO_DEV_CLIENT_ORIGIN: '',
     KOBO_NETWORK_ACCESS_ENABLED: 'false',
     KOBO_NETWORK_ACCESS_BEHIND_PROXY: 'false',
+    ...(engine === 'mistral-vibe'
+      ? {
+          VIBE_ENABLE_UPDATE_CHECKS: 'false',
+          VIBE_ENABLE_AUTO_UPDATE: 'false',
+          VIBE_ENABLE_TELEMETRY: 'false',
+        }
+      : {}),
   }
   // This child is the production backend with an isolated home, not a Vitest module.
   delete env.VITEST
@@ -44,12 +53,20 @@ export async function createLiveMcpFixture(engine: 'codex' | 'claude-code', mode
     }
     await closed
   }
-  async function cleanup() {
-    await stop()
-    closeDb()
-    if (previousHome === undefined) delete process.env.KOBO_HOME
-    else process.env.KOBO_HOME = previousHome
-    rmSync(directory, { recursive: true, force: true })
+  async function cleanup(errors: unknown[] = [], clients: { close(): Promise<void> }[] = []) {
+    await cleanupLiveFixture(
+      {
+        stop: [stop],
+        close: [...clients.map((client) => () => client.close()), closeDb],
+        restore: () => {
+          if (previousHome === undefined) delete process.env.KOBO_HOME
+          else process.env.KOBO_HOME = previousHome
+        },
+        remove: () => rmSync(directory, { recursive: true, force: true }),
+        directory,
+      },
+      errors,
+    )
   }
   try {
     mkdirSync(repository)
@@ -77,10 +94,16 @@ export async function createLiveMcpFixture(engine: 'codex' | 'claude-code', mode
       workingBranch: 'smoke',
       engine,
       model,
-      agentPermissionMode: 'plan',
-      reasoningEffort: 'low',
+      agentPermissionMode: engine === 'mistral-vibe' ? 'interactive' : 'plan',
+      reasoningEffort: engine === 'mistral-vibe' ? 'auto' : 'low',
     })
     updateWorkspaceStatus(workspace.id, 'idle')
+    const { token } = createExternalMcpCredential({
+      name: 'Isolated live fixture',
+      tools: ['list_workspaces', 'read_workspace_messages', 'send_workspace_message'],
+      workspaceIds: [workspace.id],
+      expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(),
+    })
     closeDb()
     async function start(): Promise<string> {
       output = ''
@@ -110,6 +133,8 @@ export async function createLiveMcpFixture(engine: 'codex' | 'claude-code', mode
     }
     return {
       workspaceId: workspace.id,
+      token,
+      worktree,
       home,
       dbPath: join(home, 'kobo.db'),
       start,
@@ -125,7 +150,7 @@ export async function createLiveMcpFixture(engine: 'codex' | 'claude-code', mode
       },
     }
   } catch (error) {
-    await cleanup()
+    await cleanup([error])
     throw error
   }
 }

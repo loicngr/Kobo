@@ -4,7 +4,7 @@ import { promisify } from 'node:util'
 const execFileAsync = promisify(execFile)
 
 /** A zombie cannot mutate a checkout, even before its parent reaps it. */
-async function groupIsLive(pid: number): Promise<boolean> {
+export async function groupIsLive(pid: number): Promise<boolean> {
   try {
     process.kill(-pid, 0)
   } catch (err) {

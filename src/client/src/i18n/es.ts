@@ -1,4 +1,24 @@
 export default {
+  'review.mistralAutomaticHint':
+    'Las revisiones finales automáticas siempre usan Interactivo y pueden esperar aprobación humana.',
+  'review.mistralNativeHint':
+    'La revisión prohíbe todas las modificaciones, pero los permisos nativos de Vibe no garantizan acceso de solo lectura a los archivos. Interactivo (predeterminado) solicita aprobación; Aceptar cambios permite editar; Bypass aprueba las herramientas automáticamente. Las solicitudes nativas de aprobación pueden pausar la revisión. La selección explícita de modelo o razonamiento puede guardarse en las preferencias nativas de Vibe.',
+  'workspacePage.engineMistral': 'Mistral Vibe',
+  'memory.engine.mistral-vibe': 'Mistral Vibe',
+  'model.mistralAutoDescription': 'Usar el modelo configurado en Vibe',
+  'settings.defaultModelMistral': 'Modelo predeterminado — Mistral Vibe',
+  'settings.defaultPermissionModeMistral': 'Permisos predeterminados — Mistral Vibe',
+  'engine.mistralNativeHint':
+    'Auto conserva los ajustes nativos de Vibe. La selección explícita de modelo o razonamiento puede guardarse en las preferencias nativas de Vibe. Plan no está disponible.',
+  'engine.mistralOptionsLoading': 'Cargando opciones nativas de Vibe…',
+  'engine.mistralOptionsError':
+    'Opciones nativas no disponibles. Comprueba la configuración de Vibe y reintenta; Auto sigue disponible.',
+  'engine.mistralSelectionUnavailable':
+    'Selección guardada no disponible para este modelo o contexto nativo. Elige un valor disponible o Auto.',
+  'handoff.nativeHistoryHint': 'Transferir el historial existente sin pedir a Mistral Vibe que genere un resumen.',
+  'health.mistralCliTitle': 'CLI de Mistral Vibe',
+  'health.mistralCliMissing': 'vibe-acp no se encuentra en PATH',
+
   'settings.mcp.failed': 'La operación ha fallado',
   'settings.mcp.write': 'Escritura / acción',
   'settings.mcp.readOnly': 'Lectura',
@@ -64,7 +84,7 @@ export default {
   'autoLoop.finalReview.configure': 'Configurar reviewer',
   'autoLoop.finalReview.save': 'Guardar configuración',
   'autoLoop.finalReview.hint':
-    'Nueva sesión de review de solo lectura y regreso a la última sesión de trabajo para corregir hallazgos. La configuración se guarda con este workspace.',
+    'Revisión independiente en una sesión nueva y regreso a la sesión de trabajo final para corregir los hallazgos. Los ajustes se guardan con este espacio.',
   'autoLoop.finalReview.loadFailed': 'No se pudo cargar la configuración de la review final.',
   'autoLoop.finalReview.saveFailed': 'No se pudo guardar la configuración de la review final.',
   'autoLoop.finalReview.cycle': 'Ciclo de review {count}',
@@ -1299,7 +1319,7 @@ export default {
     'El agente completa las tareas y las verificaciones finales. Una review final independiente opcional se repite tras las correcciones hasta que no queden hallazgos; si no hay progreso, el bucle se pausa.',
   'tours.create.finalReview.title': 'Configurar la review final',
   'tours.create.finalReview.description':
-    'Elige de antemano el motor, el modelo, el esfuerzo y las instrucciones del reviewer. La review se ejecuta en una sesión separada de solo lectura; el agente original corrige los hallazgos y la review se repite hasta que no quede ninguno.',
+    'Elige de antemano el motor, el modelo, el esfuerzo y las instrucciones del reviewer. Una sesión separada revisa sin modificar el trabajo; los permisos dependen del motor. El agente original corrige los hallazgos y repite la review hasta que no quede ninguno.',
   'tours.workspace.finalReview.title': 'Review final y correcciones',
   'tours.workspace.finalReview.description':
     'Configura aquí el reviewer final opcional antes de iniciarlo. Tras las tareas y las verificaciones finales, una sesión separada revisa el trabajo. Los hallazgos vuelven a la sesión original para corregirlos automáticamente y repetir la review. Cerrar Kōbō conserva el ciclo.',
@@ -1901,7 +1921,8 @@ export default {
   'review.additionalInstructionsPlaceholder': 'Añade instrucciones específicas para la revisión…',
   'review.newSession': 'Nueva sesión',
   'review.newSessionHint': 'Inicia una sesión nueva en vez de continuar la actual.',
-  'review.newSessionRequired': 'Cambiar los ajustes del agente o volver automáticamente requiere una nueva sesión.',
+  'review.newSessionRequired':
+    'Las revisiones nativas de Vibe, los ajustes distintos o el retorno automático requieren una sesión nueva.',
   'review.returnToSession': 'Volver a la sesión actual después de la revisión',
   'review.returnToSessionHint':
     'Reanuda esta sesión con el resumen final del revisor. Si se desactiva, la conversación continúa en la sesión de revisión.',
@@ -2056,6 +2077,12 @@ export default {
   'tours.settings.agentWatchdog.title': 'Watchdogs de inactividad',
   'tours.settings.agentWatchdog.description':
     'Deja esta opción desactivada para permitir esperas largas sin actividad visible. Actívala para cerrar automáticamente sesiones bloqueadas. Se aplica al iniciar o reanudar el agente.',
+  'settings.maxConcurrentAgents': 'Agentes automáticos simultáneos',
+  'settings.maxConcurrentAgentsHint':
+    '0 = sin límite. Solo afecta a las sesiones automáticas; los inicios manuales están exentos.',
+  'settings.maxConcurrentAgentsInvalid': 'Introduce un entero no negativo dentro del rango de enteros seguros.',
+  'createPage.chooseNativePermissionMode':
+    'Elige un modo de ejecución nativo para continuar. Mistral Vibe no admite Plan.',
   'settings.autoLoopMaxRetries': 'Máximo de reintentos automáticos',
   'settings.awaitingUserReminder': 'Recordatorio de pregunta sin responder',
   'settings.awaitingUserReminderHint':

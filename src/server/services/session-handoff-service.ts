@@ -13,9 +13,11 @@ import { getDb } from '../db/index.js'
 import { assertAgentStopped } from '../utils/agent-stop-result.js'
 import { ensureDirectoryInside } from '../utils/safe-path.js'
 import { reserveWorkspaceLifecycle } from '../utils/workspace-lifecycle-guard.js'
+import { assertEngineConfigurationSupported } from './agent/engines/configuration.js'
 import { listEngines } from './agent/engines/registry.js'
 import * as agents from './agent/orchestrator.js'
 import { buildEngineHandoff } from './engine-handoff-service.js'
+import { preflightMistralConfiguration } from './mistral-options-service.js'
 import { getReviewReturn } from './review-return-service.js'
 import { activateSession, deactivateSession } from './session-activity-service.js'
 import { registerHandoffStopHandler } from './session-handoff-runtime.js'
@@ -224,6 +226,18 @@ function parseRequest(input: unknown): SessionHandoffRequest {
   }
 }
 
+export async function preflightSessionHandoff(workspaceId: string, input: unknown): Promise<void> {
+  const body = parseRequest(input)
+  // Existing requests are replayed by createSessionHandoff with fingerprint validation.
+  if (
+    getDb()
+      .prepare('SELECT 1 FROM session_handoffs WHERE workspace_id = ? AND request_id = ?')
+      .get(workspaceId, body.requestId)
+  )
+    return
+  await preflightMistralConfiguration(body.target.engine, { workspaceId }, body.target)
+}
+
 export function createSessionHandoff(workspaceId: string, input: unknown, suppliedReport?: string): SessionHandoff {
   if (agents.isShuttingDown()) throw new SessionHandoffError('Kōbō is shutting down')
   const body = parseRequest(input)
@@ -250,12 +264,24 @@ export function createSessionHandoff(workspaceId: string, input: unknown, suppli
   const engine = listEngines().find((item) => item.id === body.target.engine)
   if (
     !engine?.capabilities.permissionModes.includes(body.target.agentPermissionMode) ||
-    (!engine.capabilities.models.some((model) => model.id === body.target.model) &&
+    (engine.id !== 'mistral-vibe' &&
+      !engine.capabilities.models.some((model) => model.id === body.target.model) &&
       !(workspace.engine === body.target.engine && workspace.model === body.target.model)) ||
-    (body.target.reasoningEffort !== 'auto' &&
+    (engine.id !== 'mistral-vibe' &&
+      body.target.reasoningEffort !== 'auto' &&
       !engine.capabilities.effortLevels?.some((effort) => effort.id === body.target.reasoningEffort))
   )
     throw new SessionHandoffError('The target engine configuration is not supported', 400)
+  try {
+    assertEngineConfigurationSupported(engine, body.target)
+  } catch (error) {
+    throw new SessionHandoffError(error instanceof Error ? error.message : 'Invalid engine configuration', 400)
+  }
+  if (
+    body.generateSummary &&
+    !listEngines().find((item) => item.id === workspace.engine)?.capabilities.supportsReadOnly
+  )
+    throw new SessionHandoffError('The source engine does not support read-only handoff summaries', 400)
   const id = nanoid()
   const runtime = reserve(workspaceId, id)
   try {
@@ -354,6 +380,9 @@ async function run(runtime: Runtime): Promise<void> {
   runtime.running = true
   const row = read(runtime.id)
   try {
+    const target = map(row).target
+    await preflightMistralConfiguration(target.engine, { workspaceId: row.workspace_id }, target)
+    if (runtime.cancelled) return
     state(row.id, 'stopping')
     assertAgentStopped(await agents.stopAgentAndWait(row.workspace_id, undefined, 'handoff'))
     if (runtime.cancelled) return

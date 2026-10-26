@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 describe('GET /api/engines', () => {
   it('returns the registry with capabilities', async () => {
@@ -20,6 +20,11 @@ describe('GET /api/engines', () => {
       }
     }>
 
+    expect(body).toHaveLength(3)
+    expect(body.find((engine) => engine.id === 'mistral-vibe')).toMatchObject({
+      displayName: 'Mistral Vibe',
+      capabilities: { supportsReadOnly: false, supportsLiveSteering: false, supportsMcp: true, supportsResume: true },
+    })
     const claude = body.find((e) => e.id === 'claude-code')
     expect(claude).toBeDefined()
     expect(claude!.displayName.length).toBeGreaterThan(0)
@@ -41,4 +46,30 @@ describe('GET /api/engines', () => {
     expect(codex!.capabilities.models.some((m) => m.id === 'gpt-6.1-sol')).toBe(true)
     expect(codex!.capabilities.models.some((m) => m.id.startsWith('claude-'))).toBe(false)
   })
+})
+
+it('passes contextual native options through the operator engines route without exposing arbitrary configuration', async () => {
+  const service = await import('../server/services/mistral-options-service.js')
+  const projection = {
+    model: { currentValue: 'alias', options: [{ value: 'alias', name: 'Native model' }] },
+    thinking: { currentValue: 'off', options: [{ value: 'off', name: 'Disabled' }] },
+  }
+  const read = vi.spyOn(service, 'getMistralOptions').mockResolvedValue(projection)
+  try {
+    const { enginesRouter } = await import('../server/routes/engines.js')
+    const app = new Hono().route('/api/engines', enginesRouter)
+    const response = await app.request(
+      '/api/engines/mistral-vibe/options?workspaceId=workspace&model=alias&agentPermissionMode=strict',
+    )
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual(projection)
+    expect(read).toHaveBeenCalledWith({
+      workspaceId: 'workspace',
+      projectPath: undefined,
+      model: 'alias',
+      agentPermissionMode: 'strict',
+    })
+  } finally {
+    read.mockRestore()
+  }
 })

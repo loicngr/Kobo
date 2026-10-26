@@ -10,10 +10,30 @@ describe('create-page-prefs', () => {
     vi.restoreAllMocks()
   })
 
+  it.each([
+    { model: 'auto', reasoningEffort: 'auto' },
+    { model: 'native-reviewer-alias', reasoningEffort: 'off' },
+  ])('round-trips native final review preferences with $model/$reasoningEffort', (selection) => {
+    const prefs = {
+      autoLoop: true,
+      brainstormModel: 'auto',
+      reasoningEffortByModel: { auto: 'auto' },
+      autoLoopFinalReview: {
+        engine: 'mistral-vibe',
+        ...selection,
+        additionalInstructions: 'Check migrations',
+      },
+    }
+    saveCreatePagePrefs(prefs)
+    expect(loadCreatePagePrefs()).toEqual(prefs)
+    saveCreatePagePrefs({ ...loadCreatePagePrefs(), reasoningEffortByModel: { auto: 'off' } })
+    expect(loadCreatePagePrefs().autoLoopFinalReview).toEqual(prefs.autoLoopFinalReview)
+  })
+
   describe('loadCreatePagePrefs', () => {
-    it('retains final review settings and an explicit disabled choice', () => {
+    it.each(['claude-code', 'codex'])('retains %s final review settings and an explicit disabled choice', (engine) => {
       const autoLoopFinalReview = {
-        engine: 'codex',
+        engine,
         model: 'auto',
         reasoningEffort: 'high',
         additionalInstructions: 'Check migrations',
@@ -22,6 +42,22 @@ describe('create-page-prefs', () => {
       expect(loadCreatePagePrefs().autoLoopFinalReview).toEqual(autoLoopFinalReview)
       saveCreatePagePrefs({ autoLoopFinalReview: null })
       expect(loadCreatePagePrefs().autoLoopFinalReview).toBeNull()
+    })
+
+    it('ignores unknown final review engines with otherwise complete settings', () => {
+      localStorage.setItem(
+        'kobo:create-page-prefs',
+        JSON.stringify({
+          autoLoop: true,
+          autoLoopFinalReview: {
+            engine: 'unknown',
+            model: 'auto',
+            reasoningEffort: 'auto',
+            additionalInstructions: '',
+          },
+        }),
+      )
+      expect(loadCreatePagePrefs()).toEqual({ autoLoop: true })
     })
 
     it('ignores incomplete final review settings from browser storage', () => {

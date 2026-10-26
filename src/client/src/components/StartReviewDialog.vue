@@ -14,17 +14,17 @@
             <q-select v-model="engine" :options="engineOptions" :label="$t('engine.select')" :disable="loading" emit-value map-options outlined dark dense />
           </div>
           <div class="col-12 col-sm-6">
-            <q-select v-model="model" :options="modelOptions" :label="$t('engine.model')" :disable="loading" emit-value map-options outlined dark dense />
+            <q-select v-model="model" :options="modelOptions" :loading="nativeOptions.loading" :label="$t('engine.model')" :disable="loading" emit-value map-options outlined dark dense />
           </div>
           <div class="col-12 col-sm-6">
-            <q-select v-model="reasoningEffort" :options="effortOptions" :label="$t('engine.effort')" :disable="loading" emit-value map-options outlined dark dense />
+            <q-select v-model="reasoningEffort" :options="effortOptions" :loading="nativeOptions.loading" :label="$t('engine.effort')" :disable="loading" emit-value map-options outlined dark dense />
           </div>
           <div class="col-12 col-sm-6">
             <q-select
               :model-value="effectivePermissionMode"
               :options="permissionOptions"
               :label="$t('agentPermissionMode.label')"
-              :disable="loading || returnToSession"
+              :disable="loading || scheduled || (returnToSession && !nativeReview)"
               emit-value
               map-options
               outlined
@@ -32,8 +32,13 @@
               dense
               @update:model-value="agentPermissionMode = $event"
             />
-            <div v-if="returnToSession" class="text-caption text-kobo-3 q-mt-xs">{{ $t('review.readOnlyForced') }}</div>
+            <div v-if="returnToSession && !nativeReview" class="text-caption text-kobo-3 q-mt-xs">{{ $t('review.readOnlyForced') }}</div>
           </div>
+        </div>
+        <div v-if="nativeReview" class="text-caption text-kobo-3 q-mb-sm">
+          {{ $t('review.mistralNativeHint') }}
+          <div v-if="scheduled">{{ $t('review.mistralAutomaticHint') }}</div>
+          <div role="status">{{ nativeOptions.message }} <q-btn v-if="nativeOptions.message && !nativeOptions.loading" flat dense size="sm" :label="$t('common.retry')" @click="nativeOptions.refresh" /></div>
         </div>
         <q-input
           v-model="additionalInstructions"
@@ -73,6 +78,7 @@
 </template>
 
 <script setup lang="ts">
+import { useMistralOptions } from 'src/composables/use-mistral-options'
 import { EFFORT_OPTION_DEFS_BY_ENGINE } from 'src/constants/efforts'
 import { MODEL_OPTION_DEFS_BY_ENGINE } from 'src/constants/models'
 import { PERMISSION_MODES_BY_ENGINE } from 'src/constants/permissionModes'
@@ -87,6 +93,7 @@ const props = defineProps<{
   loading: boolean
   workspace: (ReviewConfiguration & { id: string }) | null
   canReturnToSession: boolean
+  projectPath?: string
   currentSession?: { engine?: string | null; model?: string | null } | null
   mode?: 'immediate' | 'auto-loop'
   scheduledConfiguration?: AutoLoopReviewConfiguration | null
@@ -105,11 +112,25 @@ const engine = ref('claude-code')
 const model = ref('auto')
 const reasoningEffort = ref('auto')
 const agentPermissionMode = ref<ReviewConfiguration['agentPermissionMode']>('bypass')
-// A review that returns to the original session always runs read-only (the
-// server enforces it too); the user's choice is kept for when the return is off.
+const nativeReview = computed(() => engine.value === 'mistral-vibe')
 const effectivePermissionMode = computed<ReviewConfiguration['agentPermissionMode']>(() =>
-  scheduled.value || returnToSession.value ? 'plan' : agentPermissionMode.value,
+  nativeReview.value
+    ? scheduled.value
+      ? 'interactive'
+      : agentPermissionMode.value
+    : scheduled.value || returnToSession.value
+      ? 'plan'
+      : agentPermissionMode.value,
 )
+const nativeOptions = useMistralOptions(() => ({
+  engine: engine.value,
+  model: model.value,
+  reasoningEffort: reasoningEffort.value,
+  agentPermissionMode: effectivePermissionMode.value,
+  workspaceId: props.workspace?.id === 'create' ? undefined : props.workspace?.id,
+  projectPath: props.workspace?.id === 'create' ? props.projectPath : undefined,
+  enabled: props.modelValue,
+}))
 const configuration = computed<ReviewConfiguration>(() => ({
   engine: engine.value,
   model: model.value,
@@ -119,6 +140,7 @@ const configuration = computed<ReviewConfiguration>(() => ({
 const forceNewSession = computed(() => {
   const current = props.currentSession
   return (
+    nativeReview.value ||
     scheduled.value ||
     returnToSession.value ||
     (!!props.workspace && reviewConfigurationChanged(configuration.value, props.workspace)) ||
@@ -135,8 +157,10 @@ const newSession = computed({
 const engineOptions = computed(() => [
   { value: 'claude-code', label: t('workspacePage.engineClaude') },
   { value: 'codex', label: t('workspacePage.engineCodex') },
+  { value: 'mistral-vibe', label: t('workspacePage.engineMistral') },
 ])
 const modelOptions = computed(() => {
+  if (nativeReview.value) return nativeOptions.models
   const options = (MODEL_OPTION_DEFS_BY_ENGINE[engine.value] ?? []).map((d) => ({
     value: d.value,
     label: t(d.i18nLabelKey),
@@ -150,7 +174,9 @@ const modelOptions = computed(() => {
   return options
 })
 const effortOptions = computed(() =>
-  (EFFORT_OPTION_DEFS_BY_ENGINE[engine.value] ?? []).map((d) => ({ value: d.value, label: t(d.i18nLabelKey) })),
+  nativeReview.value
+    ? nativeOptions.efforts
+    : (EFFORT_OPTION_DEFS_BY_ENGINE[engine.value] ?? []).map((d) => ({ value: d.value, label: t(d.i18nLabelKey) })),
 )
 const permissionOptions = computed(() =>
   (PERMISSION_MODES_BY_ENGINE[engine.value] ?? []).map((value) => ({
@@ -166,11 +192,13 @@ watch(
     model.value =
       current?.engine === engine.value
         ? current.model
-        : modelOptions.value.some((o) => o.value === configuredDefault)
+        : (nativeReview.value && configuredDefault) || modelOptions.value.some((o) => o.value === configuredDefault)
           ? configuredDefault!
           : 'auto'
     reasoningEffort.value = current?.engine === engine.value ? current.reasoningEffort : 'auto'
-    if (!permissionOptions.value.some((o) => o.value === agentPermissionMode.value)) agentPermissionMode.value = 'plan'
+    if (nativeReview.value) agentPermissionMode.value = 'interactive'
+    else if (!permissionOptions.value.some((o) => o.value === agentPermissionMode.value))
+      agentPermissionMode.value = 'plan'
   },
   { flush: 'sync' },
 )
@@ -193,6 +221,7 @@ watch(
       model.value = saved.model
       reasoningEffort.value = saved.reasoningEffort
     }
+    if (nativeReview.value) agentPermissionMode.value = 'interactive'
   },
   { immediate: true },
 )

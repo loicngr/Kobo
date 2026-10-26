@@ -12,28 +12,31 @@
             <q-select v-model="engine" data-test="handoff-engine" :options="engineOptions" :label="$t('engine.select')" :disable="loading" emit-value map-options outlined dark dense />
           </div>
           <div class="col-12 col-sm-6">
-            <q-select v-model="model" data-test="handoff-model" :options="modelOptions" :label="$t('engine.model')" :disable="loading" emit-value map-options outlined dark dense />
+            <q-select v-model="model" data-test="handoff-model" :options="modelOptions" :loading="nativeOptions.loading" :label="$t('engine.model')" :disable="loading" emit-value map-options outlined dark dense />
           </div>
           <div class="col-12 col-sm-6">
-            <q-select v-model="reasoningEffort" :options="effortOptions" :label="$t('engine.effort')" :disable="loading" emit-value map-options outlined dark dense />
+            <q-select v-model="reasoningEffort" :options="effortOptions" :loading="nativeOptions.loading" :label="$t('engine.effort')" :disable="loading" emit-value map-options outlined dark dense />
           </div>
           <div class="col-12 col-sm-6">
             <q-select v-model="agentPermissionMode" :options="permissionOptions" :label="$t('agentPermissionMode.label')" :disable="loading" emit-value map-options outlined dark dense />
           </div>
         </div>
-        <q-toggle v-model="generateSummary" :disable="loading" :label="$t('handoff.generate')" color="primary" dark />
-        <div class="text-caption text-kobo-3 q-mt-xs">{{ $t('handoff.generateHint') }}</div>
+        <div v-if="engine === 'mistral-vibe'" class="text-caption text-kobo-3 q-mb-sm">{{ $t('engine.mistralNativeHint') }}<div role="status">{{ nativeOptions.message }} <q-btn v-if="nativeOptions.message && !nativeOptions.loading" flat dense size="sm" :label="$t('common.retry')" @click="nativeOptions.refresh" /></div></div>
+        <q-toggle v-model="generateSummary" :disable="loading || !canGenerateSummary" :label="$t('handoff.generate')" color="primary" dark />
+        <div class="text-caption text-kobo-3 q-mt-xs">{{ $t(canGenerateSummary ? 'handoff.generateHint' : 'handoff.nativeHistoryHint') }}</div>
       </q-card-section>
       <q-card-actions align="right" class="q-pa-md">
         <q-btn flat no-caps :label="$t('common.cancel')" color="kobo-2" :disable="loading" @click="emit('update:modelValue', false)" />
-        <q-btn data-test="handoff-submit" no-caps color="primary" :label="$t('handoff.start')" :loading="loading" :disable="loading || !model" @click="submit" />
+        <q-btn data-test="handoff-submit" no-caps color="primary" :label="$t('handoff.start')" :loading="loading" :disable="loading || !model || !validPermissionMode" @click="submit" />
       </q-card-actions>
     </q-card>
   </q-dialog>
 </template>
 
 <script setup lang="ts">
+import { useMistralOptions } from 'src/composables/use-mistral-options'
 import { EFFORT_OPTION_DEFS_BY_ENGINE } from 'src/constants/efforts'
+import { supportsReadOnly } from 'src/constants/engineFeatures'
 import { MODEL_OPTION_DEFS_BY_ENGINE } from 'src/constants/models'
 import { PERMISSION_MODES_BY_ENGINE } from 'src/constants/permissionModes'
 import { useSettingsStore } from 'src/stores/settings'
@@ -60,14 +63,25 @@ const model = ref('auto')
 const reasoningEffort = ref('auto')
 const agentPermissionMode = ref<HandoffConfiguration['agentPermissionMode']>('bypass')
 const generateSummary = ref(true)
+const canGenerateSummary = computed(() => supportsReadOnly(props.workspace.engine))
 let capturedSourceSessionId: string | null = null
 let requestId = ''
 let requestFingerprint = ''
 const engineOptions = computed(() => [
   { value: 'claude-code', label: t('workspacePage.engineClaude') },
   { value: 'codex', label: t('workspacePage.engineCodex') },
+  { value: 'mistral-vibe', label: t('workspacePage.engineMistral') },
 ])
+const nativeOptions = useMistralOptions(() => ({
+  engine: engine.value,
+  workspaceId: props.workspace.id,
+  model: model.value,
+  reasoningEffort: reasoningEffort.value,
+  agentPermissionMode: agentPermissionMode.value,
+  enabled: props.modelValue,
+}))
 const modelOptions = computed(() => {
+  if (engine.value === 'mistral-vibe') return nativeOptions.models
   const options = (MODEL_OPTION_DEFS_BY_ENGINE[engine.value] ?? []).map((entry) => ({
     value: entry.value,
     label: t(entry.i18nLabelKey),
@@ -77,16 +91,21 @@ const modelOptions = computed(() => {
   return options
 })
 const effortOptions = computed(() =>
-  (EFFORT_OPTION_DEFS_BY_ENGINE[engine.value] ?? []).map((entry) => ({
-    value: entry.value,
-    label: t(entry.i18nLabelKey),
-  })),
+  engine.value === 'mistral-vibe'
+    ? nativeOptions.efforts
+    : (EFFORT_OPTION_DEFS_BY_ENGINE[engine.value] ?? []).map((entry) => ({
+        value: entry.value,
+        label: t(entry.i18nLabelKey),
+      })),
 )
 const permissionOptions = computed(() =>
   (PERMISSION_MODES_BY_ENGINE[engine.value] ?? []).map((value) => ({
     value,
     label: t(`agentPermissionMode.${value}`),
   })),
+)
+const validPermissionMode = computed(() =>
+  permissionOptions.value.some((option) => option.value === agentPermissionMode.value),
 )
 watch(
   engine,
@@ -96,12 +115,12 @@ watch(
     model.value =
       current.engine === engine.value
         ? current.model
-        : modelOptions.value.some((option) => option.value === configuredDefault)
+        : (engine.value === 'mistral-vibe' && configuredDefault) ||
+            modelOptions.value.some((option) => option.value === configuredDefault)
           ? configuredDefault!
           : 'auto'
     reasoningEffort.value = current.engine === engine.value ? current.reasoningEffort : 'auto'
-    if (!permissionOptions.value.some((option) => option.value === agentPermissionMode.value))
-      agentPermissionMode.value = 'plan'
+    // Preserve unsupported Plan until the user explicitly selects a native execution mode.
   },
   { flush: 'sync' },
 )
@@ -116,15 +135,15 @@ watch(
     model.value = props.workspace.model
     reasoningEffort.value = props.workspace.reasoningEffort
     agentPermissionMode.value = props.workspace.agentPermissionMode
-    generateSummary.value = true
+    generateSummary.value = canGenerateSummary.value
   },
   { immediate: true },
 )
 function submit() {
-  if (props.loading || !model.value) return
+  if (props.loading || !model.value || !validPermissionMode.value) return
   const input = {
     sourceSessionId: capturedSourceSessionId,
-    generateSummary: generateSummary.value,
+    generateSummary: canGenerateSummary.value && generateSummary.value,
     target: {
       engine: engine.value,
       model: model.value,

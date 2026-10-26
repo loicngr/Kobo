@@ -9,6 +9,7 @@ import { listEngines } from './agent/engines/registry.js'
 import * as agentManager from './agent/orchestrator.js'
 import { bindReviewSession, getFinalReviewSourceSession } from './auto-loop-final-review-service.js'
 import { canStartAutomatically } from './auto-loop-service.js'
+import { preflightMistralConfiguration } from './mistral-options-service.js'
 import { beginReviewLaunch, finishReviewLaunch } from './review-launch-runtime.js'
 import { getReviewReturn, registerReviewReturn, restoreReviewConfiguration } from './review-return-service.js'
 import { getActiveReviewTemplate, renderReviewTemplate } from './review-template-service.js'
@@ -61,22 +62,31 @@ function resolveConfiguration(
   const engineId = body.engine ?? workspace.engine
   const engine = listEngines().find((e) => e.id === engineId)
   if (!engine) throw new ReviewRequestError(`Unknown engine '${engineId}'`, 400)
+  if (!engine.capabilities.supportsReadOnly && engineId !== 'mistral-vibe')
+    throw new ReviewRequestError(`Engine '${engineId}' does not support read-only reviews`, 400)
   const changedEngine = engineId !== workspace.engine
   const config: ReviewConfiguration = {
     engine: engineId,
     model: body.model ?? (changedEngine ? 'auto' : workspace.model),
     reasoningEffort: body.reasoningEffort ?? (changedEngine ? 'auto' : workspace.reasoningEffort),
-    // A review that hands its report back must end by itself: always read-only.
-    agentPermissionMode: body.returnToSession ? 'plan' : (body.agentPermissionMode ?? workspace.agentPermissionMode),
+    // Native reviews have independent permissions; other returning reviewers use Plan.
+    agentPermissionMode:
+      engineId === 'mistral-vibe'
+        ? (body.agentPermissionMode ?? 'interactive')
+        : body.returnToSession
+          ? 'plan'
+          : (body.agentPermissionMode ?? workspace.agentPermissionMode),
   }
   // Preserve an existing custom model when unchanged; reject incompatible selections.
   if (
+    engineId !== 'mistral-vibe' &&
     !allowCustomModel &&
     (changedEngine || config.model !== workspace.model) &&
     !engine.capabilities.models.some((m) => m.id === config.model)
   )
     throw new ReviewRequestError(`Model '${config.model}' is not supported by '${engineId}'`, 400)
   if (
+    engineId !== 'mistral-vibe' &&
     (changedEngine || config.reasoningEffort !== workspace.reasoningEffort) &&
     !engine.capabilities.effortLevels?.some((e) => e.id === config.reasoningEffort)
   )
@@ -112,6 +122,13 @@ export async function startWorkspaceReview(
     if (!workspace) throw new ReviewRequestError(`Workspace '${id}' not found`, 404)
     const body = parseReviewRequest(input)
     const configuration = resolveConfiguration(workspace, body, internal?.autoLoopFinalReview)
+    const nativeReview = configuration.engine === 'mistral-vibe'
+    if (nativeReview && internal?.autoLoopFinalReview) configuration.agentPermissionMode = 'interactive'
+    try {
+      await preflightMistralConfiguration(configuration.engine, { workspaceId: id }, configuration)
+    } catch (error) {
+      throw new ReviewRequestError(error instanceof Error ? error.message : 'Invalid native review configuration', 400)
+    }
     assertWorkspaceLifecycleAvailable(id)
     if (workspace.archivedAt || workspace.worktreePurgedAt)
       throw new ReviewRequestError('Restore the workspace before starting a review', 409)
@@ -126,7 +143,8 @@ export async function startWorkspaceReview(
       !!originalSession &&
       ((!!originalSession.engine && originalSession.engine !== configuration.engine) ||
         (configuration.model !== 'auto' && !!originalSession.model && originalSession.model !== configuration.model))
-    const newSession = body.newSession === true || changed || differsFromSession || body.returnToSession === true
+    const newSession =
+      nativeReview || body.newSession === true || changed || differsFromSession || body.returnToSession === true
     if (
       body.returnToSession &&
       (!originalSession?.engineSessionId || (originalSession.engine && originalSession.engine !== workspace.engine))
@@ -172,7 +190,10 @@ export async function startWorkspaceReview(
     })
     // The return fires only when the review session ends by itself: a reviewer
     // that starts fixing, or waits on a question, never hands back.
-    if (body.returnToSession)
+    if (nativeReview)
+      rendered +=
+        '\n\nThis is a report-only review under native Vibe permissions, without guaranteed filesystem read-only enforcement. These rules override any template or skill suggesting fixes: do not modify, create or delete files, commit, push, or mutate tasks, workspace state or memory. Report findings and recommended fixes only. Respect native approval requests; never bypass or auto-approve them. If approval is required, wait for the user. Finish with a standalone report including severity, file/line references and remaining uncertainty.'
+    else if (body.returnToSession)
       rendered +=
         '\n\nThis is a read-only review session; these rules override any template instruction or skill that suggests fixing issues. Do not modify, create or delete files, and do not commit or push: the original agent session applies the fixes. Running read-only checks such as tests or linters is fine. Do not ask the user questions or wait for input: note any decision that needs the user in your summary instead.' +
         '\n\nFinish with a standalone summary of your review findings, including severity, file/line references, recommended fixes and any remaining uncertainty. This final message will be handed back to the original agent session. Do not rely on earlier messages to explain your findings.'
@@ -217,7 +238,10 @@ export async function startWorkspaceReview(
             original: {
               engine: workspace.engine,
               model: workspace.model,
-              ...(originalSession.model ? { sessionModel: originalSession.model } : {}),
+              ...((workspace.engine !== 'mistral-vibe' || workspace.model !== 'auto') && originalSession.model
+                ? { sessionModel: originalSession.model }
+                : {}),
+              // Restore iteration intent separately; native review returns retain saved session thinking.
               reasoningEffort: workspace.reasoningEffort,
               agentPermissionMode: workspace.agentPermissionMode,
             },
@@ -243,9 +267,9 @@ export async function startWorkspaceReview(
           pendingSessionId,
           configuration.reasoningEffort,
         ]
-        if (reviewLaunch) {
+        if (nativeReview || reviewLaunch) {
           startArgs[8] = undefined
-          startArgs[9] = { mcpEnv: reviewLaunch.mcpEnv }
+          startArgs[9] = { mcpEnv: { ...reviewLaunch?.mcpEnv, ...(nativeReview ? { KOBO_REVIEW_ONLY: '1' } : {}) } }
         }
         const agent = agentManager.startAgent(...startArgs)
         workspaceService.updateWorkspaceStatus(id, 'executing')

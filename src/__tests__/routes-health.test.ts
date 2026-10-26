@@ -1,3 +1,4 @@
+import { execFile } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -6,6 +7,13 @@ import { Hono } from 'hono'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { runMigrations } from '../server/db/migrations.js'
 import { initSchema } from '../server/db/schema.js'
+
+// Runtime diagnostics never execute installed provider CLIs in this suite.
+vi.mock('node:child_process', async (original) => {
+  const exec = vi.fn(async () => ({ stdout: 'test-runtime 1.0', stderr: '' }))
+  Object.assign(exec, { [Symbol.for('nodejs.util.promisify.custom')]: exec })
+  return { ...(await original<typeof import('node:child_process')>()), execFile: exec }
+})
 
 // settings-service refuses to read settings in test mode without isolation.
 // The /health endpoint reads global settings to surface integration config —
@@ -62,6 +70,18 @@ describe('GET /api/health/report — active state', () => {
     if (tmpDir && fs.existsSync(tmpDir)) {
       fs.rmSync(tmpDir, { recursive: true, force: true })
     }
+  })
+
+  it('reports the Mistral Vibe runtime without claiming authentication', async () => {
+    const res = await app.request('/api/health/report')
+    const body = await res.json()
+    expect(body.mistralCli).toEqual({ available: true, version: 'test-runtime 1.0' })
+    expect(execFile).toHaveBeenCalledWith(
+      'vibe-acp',
+      ['--version'],
+      expect.objectContaining({ timeout: 2_000, maxBuffer: 64 * 1024 }),
+    )
+    expect(body.mistralCli).not.toHaveProperty('authenticated')
   })
 
   it('reports direct connections even without a selected Claude MCP key', async () => {

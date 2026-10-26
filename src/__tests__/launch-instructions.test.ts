@@ -115,3 +115,19 @@ it('passes parent-owned scheduling rules into delegated progress instructions', 
   const { PROGRESS_BAR_PROMPT } = await import('../shared/progress-bar-prompts.js')
   expect(PROGRESS_BAR_PROMPT).toContain('Subagents must not schedule or replace workspace wakeups')
 })
+
+it('puts Vibe native discovery and continuation in the dispatched prompt', async () => {
+  const { buildKoboLaunchInstructions } = await import('../shared/launch-instructions.js')
+  const instructions = buildKoboLaunchInstructions({
+    engine: 'mistral-vibe',
+    permissionMode: 'interactive',
+    autoLoop: true,
+  })
+  expect(instructions.promptPrefix).toContain('search_tool_functions')
+  expect(instructions.promptPrefix).toContain('tools.mcp_kobo_tasks.<tool>')
+  expect(instructions.promptPrefix).toContain('run_typescript')
+  expect(instructions.promptPrefix).toContain('tools.process')
+  expect(instructions.promptPrefix).toContain('Auto-loop owns the next iteration')
+  expect(instructions.promptPrefix).not.toContain('mcp__kobo-tasks__')
+  expect(instructions.systemAppend).toBe('')
+})

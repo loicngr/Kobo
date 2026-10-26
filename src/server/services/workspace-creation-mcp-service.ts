@@ -1,9 +1,12 @@
 import { checkoutDecisionError, deriveSteps } from '../../shared/pr-checkout-steps.js'
 import { validateWorkspaceCreationArguments } from '../../shared/workspace-creation-tools.js'
-import { CLAUDE_CODE_CAPABILITIES } from './agent/engines/claude-code/capabilities.js'
-import { CODEX_CAPABILITIES } from './agent/engines/codex/capabilities.js'
+import { assertEngineConfigurationSupported } from './agent/engines/configuration.js'
+import { resolveEngine } from './agent/engines/registry.js'
+import { parseFinalReviewConfiguration } from './auto-loop-final-review-service.js'
+import { preflightMistralConfiguration } from './mistral-options-service.js'
 import { rollbackCreatedPrCheckout } from './pr-checkout-rollback-service.js'
 import type { PrCheckoutDecisions, PrCheckoutReport, ResolvePrCheckoutResult } from './pr-checkout-service.js'
+import { getGlobalSettings } from './settings-service.js'
 import { beginWorkspaceCreation } from './update-maintenance-service.js'
 
 type Dispatch = (path: string, init: RequestInit) => Promise<Response>
@@ -126,13 +129,72 @@ async function executeCreation(name: string, raw: unknown, dispatch: Dispatch): 
   } catch (error) {
     throw new WorkspaceCreationMcpError(error instanceof Error ? error.message : 'Invalid arguments', 400, 'validate')
   }
-  const config = input.auto_loop_final_review as Record<string, unknown> | undefined | null
-  if (config) {
-    const capabilities = config.engine === 'codex' ? CODEX_CAPABILITIES : CLAUDE_CODE_CAPABILITIES
-    if (!capabilities.effortLevels?.some((effort) => effort.id === config.reasoning_effort))
-      throw new WorkspaceCreationMcpError('Unsupported review reasoning effort', 400, 'validate')
-  }
   const body = mapInput(input)
+  try {
+    if (name === 'create_workspace') {
+      const engine = resolveEngine((input.engine as string | undefined) ?? 'claude-code')
+      const savedMode =
+        engine.id === 'mistral-vibe' ? getGlobalSettings().defaultPermissionModeByEngine?.[engine.id] : undefined
+      const defaultMode =
+        savedMode === 'plan' || engine.capabilities.permissionModes.some((mode) => mode === savedMode)
+          ? savedMode
+          : undefined
+      if (engine.id === 'mistral-vibe')
+        body.agentPermissionMode = input.agent_permission_mode ?? defaultMode ?? 'interactive'
+      assertEngineConfigurationSupported(engine, {
+        model: input.model,
+        reasoningEffort: input.reasoning_effort,
+        agentPermissionMode: body.agentPermissionMode,
+      })
+      await preflightMistralConfiguration(
+        engine.id,
+        { projectPath: input.project_path as string },
+        {
+          model: input.model,
+          reasoningEffort: input.reasoning_effort,
+          agentPermissionMode: body.agentPermissionMode,
+        },
+      )
+      assertEngineConfigurationSupported(engine, {
+        model: input.brainstorm_model,
+        reasoningEffort: input.brainstorm_reasoning_effort,
+      })
+      await preflightMistralConfiguration(
+        engine.id,
+        { projectPath: input.project_path as string },
+        {
+          model: input.brainstorm_model ?? input.model,
+          reasoningEffort: input.brainstorm_reasoning_effort ?? input.reasoning_effort,
+          agentPermissionMode: body.agentPermissionMode,
+        },
+      )
+    }
+  } catch (error) {
+    throw new WorkspaceCreationMcpError(
+      error instanceof Error ? error.message : 'Invalid engine configuration',
+      400,
+      'validate',
+    )
+  }
+  if (body.autoLoopFinalReview) {
+    try {
+      const config = parseFinalReviewConfiguration(body.autoLoopFinalReview)!
+      await preflightMistralConfiguration(
+        config.engine,
+        { projectPath: input.project_path as string },
+        {
+          ...config,
+          agentPermissionMode: 'interactive',
+        },
+      )
+    } catch (error) {
+      throw new WorkspaceCreationMcpError(
+        error instanceof Error ? error.message : 'Invalid final review configuration',
+        400,
+        'validate',
+      )
+    }
+  }
   let resolvedCheckout: ResolvePrCheckoutResult | undefined
   if (input.pr_url) {
     const supplied = prIdentity(input.pr_url as string)

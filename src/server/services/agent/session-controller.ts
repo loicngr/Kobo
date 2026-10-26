@@ -128,10 +128,18 @@ export class SessionController {
     await this._startPromise
     if (this._status === 'stopping') throw new Error('SessionController is stopping')
     if (!this._engineProcess) throw new Error('SessionController not started')
+    this.assertImmediateMessageSupported()
     // Startup may have yielded while the workspace's delivery mode changed.
     // Validate immediately before handing the message to the engine.
     beforeDispatch?.()
     await this._engineProcess.sendMessage(content)
+  }
+
+  assertImmediateMessageSupported(): void {
+    if (!this.engine.capabilities.supportsLiveSteering && !this.isClosed)
+      throw new Error(
+        `${this.engine.displayName} live message delivery is unsupported; wait for native closure and resume the conversation`,
+      )
   }
 
   interrupt(): void {

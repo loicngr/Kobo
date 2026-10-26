@@ -1,5 +1,5 @@
-import type { MessageSource } from '../../../shared/workspace-message-types'
-import type { AgentEvent, AgentEventOrigin } from '../types/agent-event'
+import type { MessageSource } from '../../../shared/workspace-message-types.js'
+import type { AgentEvent, AgentEventOrigin } from '../types/agent-event.js'
 
 export type ConversationItem =
   | {
@@ -306,6 +306,25 @@ function foldRange(
         break
       }
       case 'message:thinking': {
+        const previous = events[i - 1]
+        const item = items[items.length - 1]
+        if (
+          ev.streaming &&
+          previous?.kind === 'message:thinking' &&
+          previous.streaming &&
+          previous.messageId === ev.messageId &&
+          previous.origin?.kind === ev.origin?.kind &&
+          previous.origin?.toolCallId === ev.origin?.toolCallId &&
+          previous.origin?.threadId === ev.origin?.threadId &&
+          item?.type === 'thinking'
+        ) {
+          items[items.length - 1] = {
+            ...item,
+            text: item.text + ev.text,
+            eventIds: appendEventId(item.eventIds, eventId),
+          }
+          break
+        }
         items.push({
           type: 'thinking',
           messageId: ev.messageId,

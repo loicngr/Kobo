@@ -11,6 +11,9 @@ vi.mock('../server/services/settings-service.js', () => ({
   getProjectSettings: () => undefined,
   getEffectiveSettings: () => ({ model: 'auto', dangerouslySkipPermissions: true, sourceBranch: 'main' }),
 }))
+vi.mock('../server/services/mistral-options-service.js', () => ({
+  preflightMistralConfiguration: vi.fn().mockResolvedValue(undefined),
+}))
 vi.mock('../server/services/usage/poller.js', () => ({ refreshNow: vi.fn().mockResolvedValue(null) }))
 let directory: string
 beforeEach(async () => {
@@ -21,7 +24,10 @@ beforeEach(async () => {
 })
 afterEach(() => fs.rmSync(directory, { recursive: true, force: true }))
 
-async function fixture(targetReady?: Promise<void>) {
+async function fixture(
+  targetReady?: Promise<void>,
+  sourceEngine: 'claude-code' | 'codex' | 'mistral-vibe' = 'claude-code',
+) {
   const ws = await import('../server/services/workspace-service.js')
   const orch = await import('../server/services/agent/orchestrator.js')
   const service = await import('../server/services/session-handoff-service.js')
@@ -29,16 +35,18 @@ async function fixture(targetReady?: Promise<void>) {
   const { _registerEngineForTest } = await import('../server/services/agent/engines/registry.js')
   const starts: Array<{ engine: string; options: StartOptions; emit: (event: AgentEvent) => void; close: () => void }> =
     []
-  for (const engine of ['claude-code', 'codex'] as const) {
+  for (const engine of ['claude-code', 'codex', 'mistral-vibe'] as const) {
     _registerEngineForTest({
       id: engine,
       displayName: engine,
       capabilities: {
         models: [{ id: 'auto', label: 'Auto' }],
         effortLevels: [{ id: 'auto', label: 'Auto' }],
-        permissionModes: ['bypass'],
+        permissionModes: engine === 'mistral-vibe' ? ['interactive', 'bypass'] : ['bypass', 'plan'],
         supportsResume: true,
         supportsMcp: true,
+        supportsLiveSteering: engine !== 'mistral-vibe',
+        supportsReadOnly: engine !== 'mistral-vibe',
         supportsSkills: false,
         supportsSubagents: false,
         supportsQuotaStatus: false,
@@ -71,10 +79,12 @@ async function fixture(targetReady?: Promise<void>) {
   }
   const workspace = ws.createWorkspace({
     name: 'Mission',
+    engine: sourceEngine,
     projectPath: directory,
     sourceBranch: 'main',
     workingBranch: 'work',
     model: 'auto',
+    agentPermissionMode: sourceEngine === 'mistral-vibe' ? 'interactive' : 'bypass',
   })
   getDb()
     .prepare('UPDATE workspaces SET worktree_path = ?, initial_prompt = ? WHERE id = ?')
@@ -369,6 +379,8 @@ it('keeps target launch pending until the engine confirms that its first turn is
       permissionModes: ['bypass'],
       supportsResume: true,
       supportsMcp: true,
+      supportsLiveSteering: true,
+      supportsReadOnly: true,
       supportsSkills: false,
       supportsSubagents: false,
       supportsQuotaStatus: false,
@@ -578,34 +590,37 @@ it('rejects malformed transfer JSON before any agent side effect', async () => {
   await f.orch.stopAgentAndWait(f.workspace.id)
 })
 
-it('blocks a replacement when source shutdown is unconfirmed, and allows cancellation once it closes', async () => {
-  const f = await fixture()
-  const controller = f.orch._getControllers().get(f.workspace.id)!
-  let stopped!: () => void
-  const stop = vi.spyOn(controller, 'stop').mockImplementation(
-    () =>
-      new Promise<void>((resolve) => {
-        stopped = resolve
-      }),
-  )
-  vi.useFakeTimers()
-  try {
-    const h = f.service.createSessionHandoff(f.workspace.id, f.request)
-    await vi.advanceTimersByTimeAsync(f.orch.STOP_AGENT_TIMEOUT_MS + 1)
-    expect(f.service.getCurrentSessionHandoff(f.workspace.id)?.state).toBe('failed')
-    expect(f.starts).toHaveLength(1)
-    expect(f.orch.hasController(f.workspace.id)).toBe(true)
-    stopped()
-    await vi.advanceTimersByTimeAsync(1)
-    stop.mockRestore()
-    f.starts[0]!.emit({ kind: 'session:ended', reason: 'killed', exitCode: null })
-    f.starts[0]!.close()
-    await f.service.decideSessionHandoff(f.workspace.id, h.id, 'cancel')
-    expect(f.service.getCurrentSessionHandoff(f.workspace.id)?.state).toBe('cancelled')
-  } finally {
-    vi.useRealTimers()
-  }
-})
+it.each(['claude-code', 'mistral-vibe'] as const)(
+  'blocks replacement after unconfirmed %s shutdown and allows cancellation once closed',
+  async (source) => {
+    const f = await fixture(undefined, source)
+    const controller = f.orch._getControllers().get(f.workspace.id)!
+    let stopped!: () => void
+    const stop = vi.spyOn(controller, 'stop').mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          stopped = resolve
+        }),
+    )
+    vi.useFakeTimers()
+    try {
+      const h = f.service.createSessionHandoff(f.workspace.id, f.request)
+      await vi.advanceTimersByTimeAsync(f.orch.STOP_AGENT_TIMEOUT_MS + 1)
+      expect(f.service.getCurrentSessionHandoff(f.workspace.id)?.state).toBe('failed')
+      expect(f.starts).toHaveLength(1)
+      expect(f.orch.hasController(f.workspace.id)).toBe(true)
+      stopped()
+      await vi.advanceTimersByTimeAsync(1)
+      stop.mockRestore()
+      f.starts[0]!.emit({ kind: 'session:ended', reason: 'killed', exitCode: null })
+      f.starts[0]!.close()
+      await f.service.decideSessionHandoff(f.workspace.id, h.id, 'cancel')
+      expect(f.service.getCurrentSessionHandoff(f.workspace.id)?.state).toBe('cancelled')
+    } finally {
+      vi.useRealTimers()
+    }
+  },
+)
 
 it('rejects a retry from another tab while cancellation is still waiting for shutdown', async () => {
   const f = await fixture()
@@ -649,6 +664,8 @@ it('recovers a rejected target readiness only on explicit retry and reuses the s
       permissionModes: ['bypass'],
       supportsResume: true,
       supportsMcp: true,
+      supportsLiveSteering: true,
+      supportsReadOnly: true,
       supportsSkills: false,
       supportsSubagents: false,
       supportsQuotaStatus: false,
@@ -737,6 +754,8 @@ it('handles a target that finishes before its start promise settles as a normal 
       permissionModes: ['bypass'],
       supportsResume: true,
       supportsMcp: true,
+      supportsLiveSteering: true,
+      supportsReadOnly: true,
       supportsSkills: false,
       supportsSubagents: false,
       supportsQuotaStatus: false,
@@ -784,4 +803,251 @@ it('waits for every concurrent Stop outcome before accepting a retry', async () 
   await expect(f.service.decideSessionHandoff(f.workspace.id, h.id, 'skip')).rejects.toThrow(/cancel|stopp/i)
   second('not-running')
   expect(f.service.getCurrentSessionHandoff(f.workspace.id)?.state).toBe('cancelled')
+})
+
+it('rejects Mistral source summary before stop or handoff ledger mutation', async () => {
+  const f = await fixture(undefined, 'mistral-vibe')
+  const stop = vi.spyOn(f.orch, 'stopAgentAndWait')
+  expect(() => f.service.createSessionHandoff(f.workspace.id, { ...f.request, generateSummary: true })).toThrow(
+    'read-only handoff summaries',
+  )
+  expect(stop).not.toHaveBeenCalled()
+  expect(f.getDb().prepare('SELECT COUNT(*) AS n FROM session_handoffs').get()).toEqual({ n: 0 })
+  expect(f.starts).toHaveLength(1)
+  await f.orch.stopAgentAndWait(f.workspace.id)
+})
+it('rejects explicit Plan for a Mistral reviewer before stopping the source or changing configuration', async () => {
+  const f = await fixture()
+  const service = await import('../server/services/review-service.js')
+  const before = f.ws.getWorkspace(f.workspace.id)
+  const stop = vi.spyOn(f.orch, 'stopAgentAndWait')
+  await expect(
+    service.startWorkspaceReview(f.workspace.id, {
+      engine: 'mistral-vibe',
+      model: 'auto',
+      agentPermissionMode: 'plan',
+    }),
+  ).rejects.toThrow("Permission mode 'plan'")
+  expect(stop).not.toHaveBeenCalled()
+  expect(f.ws.getWorkspace(f.workspace.id)).toEqual(before)
+  expect(f.starts).toHaveLength(1)
+  await f.orch.stopAgentAndWait(f.workspace.id)
+})
+
+const transitions = [
+  ['claude-code', 'mistral-vibe'],
+  ['codex', 'mistral-vibe'],
+  ['mistral-vibe', 'claude-code'],
+  ['mistral-vibe', 'codex'],
+] as const
+
+it.each(transitions)('preserves identity, history and fresh capabilities across %s → %s', async (source, engine) => {
+  const f = await fixture(undefined, source)
+  const { emit } = await import('../server/services/websocket-service.js')
+  emit(f.workspace.id, 'user:message', { content: 'Original history' }, f.request.sourceSessionId)
+  const task = f.ws.createTask(f.workspace.id, { title: 'Keep task identity' })
+  const credentials = (index: number) => f.starts[index]!.options.mcpServers!.find((s) => s.name === 'kobo-tasks')!.env
+  const originalCredentials = credentials(0)
+  f.service.createSessionHandoff(f.workspace.id, {
+    ...f.request,
+    target: { ...f.request.target, engine, agentPermissionMode: engine === 'mistral-vibe' ? 'interactive' : 'bypass' },
+  })
+  await vi.waitFor(() => expect(f.service.getCurrentSessionHandoff(f.workspace.id)?.state).toBe('completed'))
+  expect(f.starts.map((start) => start.engine)).toEqual([source, engine])
+  expect(f.ws.getWorkspace(f.workspace.id)).toMatchObject({
+    id: f.workspace.id,
+    engine,
+    projectPath: directory,
+    worktreePath: directory,
+    sourceBranch: 'main',
+    workingBranch: 'work',
+  })
+  expect(f.ws.listTasks(f.workspace.id)).toEqual([task])
+  expect(f.ws.listSessions(f.workspace.id)).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ id: f.request.sourceSessionId, engine: source }),
+      expect.objectContaining({ id: f.service.getCurrentSessionHandoff(f.workspace.id)!.targetSessionId, engine }),
+    ]),
+  )
+  expect(
+    f
+      .getDb()
+      .prepare("SELECT payload FROM ws_events WHERE session_id=? AND type='user:message'")
+      .all(f.request.sourceSessionId),
+  ).toEqual([{ payload: JSON.stringify({ content: 'Original history' }) }])
+  expect(f.starts[1]!.options.prompt).toContain(f.request.sourceSessionId)
+  expect(f.starts[1]!.options.prompt).toContain('Original history')
+  expect(f.starts[1]!.options.resumeFromEngineSessionId).toBeUndefined()
+  for (const key of ['KOBO_MCP_SESSION_TOKEN', 'KOBO_MEMORY_SESSION_TOKEN', 'KOBO_PROGRESS_SESSION_TOKEN']) {
+    expect(credentials(1)[key]).toEqual(expect.any(String))
+    expect(credentials(1)[key]).not.toBe(originalCredentials[key])
+  }
+  await f.orch.stopAgentAndWait(f.workspace.id)
+  if (engine === 'mistral-vibe') {
+    const targetId = f.service.getCurrentSessionHandoff(f.workspace.id)!.targetSessionId!
+    f.orch.startAgent(f.workspace.id, directory, 'Resume target', 'auto', true, 'interactive', targetId, 'auto')
+    await vi.waitFor(() => expect(f.starts).toHaveLength(3))
+    expect(f.ws.getActiveSession(f.workspace.id)?.id).toBe(targetId)
+    expect(f.starts[2]!.options.resumeFromEngineSessionId).toBe('mistral-vibe-2')
+    for (const key of ['KOBO_MCP_SESSION_TOKEN', 'KOBO_MEMORY_SESSION_TOKEN', 'KOBO_PROGRESS_SESSION_TOKEN']) {
+      expect(credentials(2)[key]).not.toBe(credentials(1)[key])
+    }
+    await f.orch.stopAgentAndWait(f.workspace.id)
+  }
+})
+
+it.each(
+  transitions.flatMap(([source, target]) =>
+    (['failure', 'cancel'] as const).map((action) => ({ source, target, action })),
+  ),
+)(
+  'restores the exact $source configuration after $target startup $action',
+  async ({ source, target: engine, action }) => {
+    let reject!: (error: Error) => void
+    const f = await fixture(
+      new Promise<void>((_resolve, rejectReady) => {
+        reject = rejectReady
+      }),
+      source,
+    )
+    if (source !== 'mistral-vibe') {
+      f.ws.updateWorkspaceEngineConfiguration(f.workspace.id, source, 'custom-source-model', 'high', 'bypass')
+    }
+    const before = f.ws.getWorkspace(f.workspace.id)!
+    const h = f.service.createSessionHandoff(f.workspace.id, {
+      ...f.request,
+      target: { ...f.request.target, engine, agentPermissionMode: engine === 'mistral-vibe' ? 'interactive' : 'plan' },
+    })
+    await vi.waitFor(() => expect(f.starts).toHaveLength(2))
+    if (action === 'failure') {
+      reject(new Error('Target rejected native readiness'))
+      f.starts[1]!.emit({ kind: 'session:ended', reason: 'error', exitCode: 1 })
+      f.starts[1]!.close()
+      await vi.waitFor(() => expect(f.service.getCurrentSessionHandoff(f.workspace.id)?.state).toBe('failed'))
+    } else {
+      await f.service.decideSessionHandoff(f.workspace.id, h.id, 'cancel')
+    }
+    const expected = {
+      engine: before.engine,
+      model: before.model,
+      reasoningEffort: before.reasoningEffort,
+      agentPermissionMode: before.agentPermissionMode,
+      worktreePath: before.worktreePath,
+    }
+    expect(f.ws.getWorkspace(f.workspace.id)).toMatchObject(expected)
+    await f.service.decideSessionHandoff(f.workspace.id, h.id, 'cancel')
+    expect(f.ws.getWorkspace(f.workspace.id)).toMatchObject(expected)
+    expect(f.ws.getActiveSession(f.workspace.id)?.id).toBe(f.request.sourceSessionId)
+    expect(f.orch.hasController(f.workspace.id)).toBe(false)
+    f.orch.startAgent(
+      f.workspace.id,
+      directory,
+      'Resume original',
+      before.model,
+      true,
+      before.agentPermissionMode,
+      f.request.sourceSessionId,
+      before.reasoningEffort,
+    )
+    await vi.waitFor(() => expect(f.starts).toHaveLength(3))
+    expect(f.starts[2]!.engine).toBe(source)
+    expect(f.starts[2]!.options.resumeFromEngineSessionId).toBe(`${source}-1`)
+    await f.orch.stopAgentAndWait(f.workspace.id)
+  },
+)
+
+it.each(['claude-code', 'codex'] as const)(
+  'keeps %s review read-only and returns to the exact Mistral source',
+  async (engine) => {
+    const f = await fixture(undefined, 'mistral-vibe')
+    execFileSync(
+      'git',
+      ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '--allow-empty', '-qm', 'Initial'],
+      { cwd: directory },
+    )
+    execFileSync('git', ['update-ref', 'refs/remotes/origin/main', 'HEAD'], { cwd: directory })
+    execFileSync('git', ['branch', 'work'], { cwd: directory })
+    const gitOps = await import('../server/utils/git-ops.js')
+    const fetch = vi.spyOn(gitOps, 'fetchSourceBranchOrThrowAsync').mockResolvedValue(undefined)
+    try {
+      const { startWorkspaceReview } = await import('../server/services/review-service.js')
+      const returns = await import('../server/services/review-return-service.js')
+      await startWorkspaceReview(f.workspace.id, {
+        engine,
+        model: 'auto',
+        reasoningEffort: 'auto',
+        returnToSession: true,
+      })
+      await vi.waitFor(() => expect(f.starts).toHaveLength(2))
+      expect(f.starts[1]!.options).toMatchObject({ agentPermissionMode: 'plan', readOnly: true })
+      expect(f.starts[1]!.options.prompt).toContain('Do not modify, create or delete files')
+      expect(returns.getReviewReturn(f.workspace.id)).toMatchObject({
+        originalSessionId: f.request.sourceSessionId,
+        original: {
+          engine: 'mistral-vibe',
+          model: 'auto',
+          reasoningEffort: 'auto',
+          agentPermissionMode: 'interactive',
+        },
+      })
+      f.starts[1]!.emit({ kind: 'message:text', messageId: 'verdict', text: 'Fix the regression', streaming: false })
+      f.starts[1]!.emit({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
+      await new Promise((resolve) => setImmediate(resolve))
+      expect(f.starts).toHaveLength(2)
+      expect(f.orch.hasController(f.workspace.id)).toBe(true)
+      f.starts[1]!.close()
+      await vi.waitFor(() => expect(f.starts).toHaveLength(3))
+      expect(f.starts[2]!.engine).toBe('mistral-vibe')
+      expect(f.starts[2]!.options).toMatchObject({
+        model: 'auto',
+        effort: 'auto',
+        agentPermissionMode: 'interactive',
+        resumeFromEngineSessionId: 'mistral-vibe-1',
+      })
+      expect(f.starts[2]!.options.prompt).toContain('Fix the regression')
+      expect(f.ws.getActiveSession(f.workspace.id)?.id).toBe(f.request.sourceSessionId)
+      expect(f.ws.getWorkspace(f.workspace.id)).toMatchObject({
+        engine: 'mistral-vibe',
+        model: 'auto',
+        reasoningEffort: 'auto',
+        agentPermissionMode: 'interactive',
+      })
+    } finally {
+      fetch.mockRestore()
+      await f.orch.stopAgentAndWait(f.workspace.id)
+    }
+  },
+)
+
+it('validates explicit native handoff choices before stopping and carries alias/off to the launch', async () => {
+  const f = await fixture()
+  const request = {
+    ...f.request,
+    target: {
+      engine: 'mistral-vibe',
+      model: 'native-alias',
+      reasoningEffort: 'off',
+      agentPermissionMode: 'interactive' as const,
+    },
+  }
+  const native = await import('../server/services/mistral-options-service.js')
+  vi.mocked(native.preflightMistralConfiguration).mockRejectedValueOnce(new Error('Native selection unavailable'))
+  await expect(f.service.preflightSessionHandoff(f.workspace.id, request)).rejects.toThrow(
+    'Native selection unavailable',
+  )
+  expect(f.service.getCurrentSessionHandoff(f.workspace.id)).toBeNull()
+  expect(f.starts).toHaveLength(1)
+  expect(f.orch.hasController(f.workspace.id)).toBe(true)
+  await f.service.preflightSessionHandoff(f.workspace.id, request)
+  f.service.createSessionHandoff(f.workspace.id, request)
+  await vi.waitFor(() => expect(f.starts).toHaveLength(2))
+  expect(f.starts[1]!.options).toMatchObject({
+    model: 'native-alias',
+    effort: 'off',
+    agentPermissionMode: 'interactive',
+  })
+  vi.mocked(native.preflightMistralConfiguration).mockClear()
+  await f.service.preflightSessionHandoff(f.workspace.id, request)
+  expect(native.preflightMistralConfiguration).not.toHaveBeenCalled()
+  await f.orch.stopAgentAndWait(f.workspace.id)
 })

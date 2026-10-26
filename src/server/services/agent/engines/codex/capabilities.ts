@@ -15,6 +15,8 @@ export const CODEX_CAPABILITIES: EngineCapabilities = {
   permissionModes: ['plan', 'bypass', 'strict', 'interactive'],
   supportsResume: true,
   supportsMcp: true,
+  supportsLiveSteering: true,
+  supportsReadOnly: true,
   supportsSkills: false,
   supportsSubagents: true,
   supportsQuotaStatus: true,

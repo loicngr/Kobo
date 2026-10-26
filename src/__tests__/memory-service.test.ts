@@ -396,6 +396,54 @@ describe('memory service', () => {
     })
   })
 
+  it('persists Mistral provenance for entries, proposals and journal without relaxing session binding', async () => {
+    seedWorkspace('ws', '/repo')
+    seedSession('session', 'ws', 'mistral-vibe')
+    const memory = await import('../server/services/memory-service.js')
+    const actor = {
+      kind: 'internal-agent' as const,
+      workspaceId: 'ws',
+      sessionId: 'session',
+      engine: 'mistral-vibe' as const,
+    }
+    const project = memory.resolveMemoryScope({ level: 'project', projectPath: '/repo' })
+    const entry = memory.createMemory({ scopeId: project.id, key: 'rule', title: 'Rule', body: 'Kept', actor })
+    expect(entry.actor).toEqual(actor)
+    expect(() =>
+      memory.createMemory({
+        scopeId: project.id,
+        key: 'forged',
+        title: 'Rule',
+        body: 'No',
+        actor: { ...actor, engine: 'codex' },
+      }),
+    ).toThrow(/engine/i)
+    expect(
+      memory.remember({
+        scopeId: project.id,
+        key: 'rule',
+        title: 'Suggested',
+        body: 'Pending',
+        actor,
+        targetEntryId: entry.id,
+        expectedRevision: 1,
+        expectedGeneration: project.generation,
+      }),
+    ).toMatchObject({ status: 'proposed' })
+    expect(memory.listMemoryProposals({ scopeId: project.id })[0].actor).toEqual(actor)
+    expect(memory.listMemoryOperations({ scopeId: project.id }).items.map((operation) => operation.actor)).toEqual([
+      actor,
+      actor,
+    ])
+    getDb().prepare('DELETE FROM workspaces WHERE id = ?').run('ws')
+    expect(memory.readMemory({ scopeId: project.id, entryId: entry.id }).actor).toMatchObject({
+      engine: 'mistral-vibe',
+      sourceDeleted: true,
+      workspaceId: null,
+      sessionId: null,
+    })
+  })
+
   it('fails closed when the bound session engine is NULL or invalid in the database', async () => {
     seedWorkspace('ws-null', '/repos/null')
     seedWorkspace('ws-invalid', '/repos/invalid')

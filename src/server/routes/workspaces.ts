@@ -11,12 +11,14 @@ import {
   type WorkflowPolicy,
 } from '../../shared/workflow-policy.js'
 import * as finalReviewService from '../services/auto-loop-final-review-service.js'
+import { preflightMistralConfiguration } from '../services/mistral-options-service.js'
 import { getReviewReturnStatus } from '../services/review-return-service.js'
 import { getSearchIndexStatus, searchEvents } from '../services/search-service.js'
 import {
   createSessionHandoff,
   decideSessionHandoff,
   getCurrentSessionHandoff,
+  preflightSessionHandoff,
   SessionHandoffError,
   submitSessionHandoff,
   waitForSessionHandoff,
@@ -38,9 +40,11 @@ import { Hono } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
 import { MAX_ATTACHMENT_REQUEST_BYTES } from '../../shared/attachments.js'
 import { AUTO_LOOP_HARD_RULES, buildAutoLoopGroomingSteps, buildGroomingIntro } from '../../shared/auto-loop-prompts.js'
+import { parseQuestionSelections } from '../../shared/question-selections.js'
 import { getDb } from '../db/index.js'
 import { migrationGuard } from '../middleware/migration-guard.js'
 import { workspaceCreationMaintenance } from '../middleware/workspace-creation-maintenance.js'
+import { assertEngineConfigurationSupported } from '../services/agent/engines/configuration.js'
 import { listEngines } from '../services/agent/engines/registry.js'
 import * as agentManager from '../services/agent/orchestrator.js'
 import * as archiveScriptService from '../services/archive-script-service.js'
@@ -393,7 +397,7 @@ function resolveCreateAgentPermissionMode(
   if (isAgentPermissionMode(bodyValue)) return bodyValue
   const global = globalSettings.defaultPermissionModeByEngine?.[engineId]
   if (isAgentPermissionMode(global)) return global
-  return 'bypass'
+  return engineId === 'mistral-vibe' ? 'interactive' : 'bypass'
 }
 
 /**
@@ -439,7 +443,9 @@ function handoffError(c: import('hono').Context, error: unknown) {
 }
 app.post('/:id/session-handoffs', migrationGuard, async (c) => {
   try {
-    return c.json({ handoff: createSessionHandoff(c.req.param('id'), await c.req.json()) }, 202)
+    const input = await c.req.json()
+    await preflightSessionHandoff(c.req.param('id'), input)
+    return c.json({ handoff: createSessionHandoff(c.req.param('id'), input) }, 202)
   } catch (error) {
     return handoffError(c, error)
   }
@@ -508,7 +514,8 @@ app.post('/:id/switch-engine', migrationGuard, async (c) => {
     const engine = listEngines().find((item) => item.id === body.engine)
     if (!engine) return c.json({ error: `Unknown engine '${body.engine}'` }, 400)
     const model =
-      typeof body.model === 'string' && engine.capabilities.models.some((item) => item.id === body.model)
+      typeof body.model === 'string' &&
+      (engine.id === 'mistral-vibe' || engine.capabilities.models.some((item) => item.id === body.model))
         ? body.model
         : engine.capabilities.models[0]?.id
     if (!model) return c.json({ error: `Engine '${body.engine}' has no available model` }, 400)
@@ -519,6 +526,24 @@ app.post('/:id/switch-engine', migrationGuard, async (c) => {
       return c.json({ error: `Engine '${body.engine}' does not support the selected permission mode` }, 400)
     }
     const effort = typeof body.reasoningEffort === 'string' ? body.reasoningEffort : 'auto'
+    try {
+      assertEngineConfigurationSupported(engine, {
+        model: body.model,
+        reasoningEffort: body.reasoningEffort,
+        agentPermissionMode: body.agentPermissionMode,
+      })
+      await preflightMistralConfiguration(
+        engine.id,
+        { workspaceId: workspace.id },
+        {
+          model: body.model,
+          reasoningEffort: body.reasoningEffort,
+          agentPermissionMode: body.agentPermissionMode,
+        },
+      )
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : 'Invalid engine configuration' }, 400)
+    }
     const handoff =
       typeof body.handoff === 'string' && body.handoff.trim()
         ? body.handoff.trim().slice(0, 30_000)
@@ -678,6 +703,67 @@ app.post('/', workspaceCreationMaintenance, migrationGuard, creationBodyLimit, a
           emitCreateFailed(creationId, 'validate', message)
           return c.json({ error: message, step: 'validate' }, 400)
         }
+      }
+    }
+
+    if (
+      body.engine === 'mistral-vibe' &&
+      body.agentPermissionMode !== undefined &&
+      !isAgentPermissionMode(body.agentPermissionMode)
+    )
+      return c.json({ error: 'Invalid agentPermissionMode', step: 'validate' }, 400)
+    const selectedEngine = listEngines().find((engine) => engine.id === (body.engine ?? 'claude-code'))
+    if (selectedEngine) {
+      try {
+        const mode = resolveCreateAgentPermissionMode(
+          body.agentPermissionMode,
+          body.projectPath,
+          settingsService.getGlobalSettings(),
+          selectedEngine.id,
+        )
+        assertEngineConfigurationSupported(selectedEngine, {
+          model: body.model,
+          reasoningEffort: body.reasoningEffort,
+          agentPermissionMode: mode,
+        })
+        await preflightMistralConfiguration(
+          selectedEngine.id,
+          { projectPath: body.worktreePath ?? body.projectPath },
+          {
+            model: body.model,
+            reasoningEffort: body.reasoningEffort,
+            agentPermissionMode: mode,
+          },
+        )
+        assertEngineConfigurationSupported(selectedEngine, {
+          model: body.brainstormModel,
+          reasoningEffort: body.brainstormReasoningEffort,
+        })
+        await preflightMistralConfiguration(
+          selectedEngine.id,
+          { projectPath: body.worktreePath ?? body.projectPath },
+          {
+            model: body.brainstormModel ?? body.model,
+            reasoningEffort: body.brainstormReasoningEffort ?? body.reasoningEffort,
+            agentPermissionMode: mode,
+          },
+        )
+        if (body.autoLoopFinalReview) {
+          const review = finalReviewService.parseFinalReviewConfiguration(body.autoLoopFinalReview)!
+          await preflightMistralConfiguration(
+            review.engine,
+            { projectPath: body.worktreePath ?? body.projectPath },
+            {
+              ...review,
+              agentPermissionMode: 'interactive',
+            },
+          )
+        }
+        body.agentPermissionMode = mode
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Invalid engine configuration'
+        emitCreateFailed(creationId, 'validate', message)
+        return c.json({ error: message, step: 'validate' }, 400)
       }
     }
 
@@ -1994,7 +2080,14 @@ app.get('/:id/auto-loop/final-review', (c) => {
 app.patch('/:id/auto-loop/final-review', migrationGuard, async (c) => {
   try {
     const body = await c.req.json()
-    return c.json(finalReviewService.configureFinalReview(c.req.param('id'), body?.configuration))
+    const config = finalReviewService.parseFinalReviewConfiguration(body?.configuration)
+    if (config)
+      await preflightMistralConfiguration(
+        config.engine,
+        { workspaceId: c.req.param('id') },
+        { ...config, agentPermissionMode: 'interactive' },
+      )
+    return c.json(finalReviewService.configureFinalReview(c.req.param('id'), config))
   } catch (error) {
     return c.json(
       { error: error instanceof Error ? error.message : 'Invalid request' },
@@ -2322,7 +2415,13 @@ app.post('/:id/deferred-tool-use/answer', async (c) => {
   try {
     const id = c.req.param('id')
     const body = await c.req
-      .json<{ answers?: Record<string, string>; toolCallId?: string; awaitingFreeForm?: boolean; response?: string }>()
+      .json<{
+        answers?: Record<string, string>
+        toolCallId?: string
+        awaitingFreeForm?: boolean
+        response?: string
+        selections?: unknown
+      }>()
       .catch(
         () =>
           ({}) as {
@@ -2330,6 +2429,7 @@ app.post('/:id/deferred-tool-use/answer', async (c) => {
             toolCallId?: string
             awaitingFreeForm?: boolean
             response?: string
+            selections?: unknown
           },
       )
     if (!body?.answers || typeof body.answers !== 'object') {
@@ -2338,6 +2438,7 @@ app.post('/:id/deferred-tool-use/answer', async (c) => {
     await agentManager.answerPendingQuestion(id, body.answers, body.toolCallId, {
       awaitingFreeForm: body.awaitingFreeForm === true,
       ...(typeof body.response === 'string' ? { response: body.response } : {}),
+      ...(body.selections !== undefined ? { selections: parseQuestionSelections(body.selections) } : {}),
     })
     return c.json({ ok: true })
   } catch (err) {
@@ -3219,6 +3320,30 @@ app.patch('/:id', migrationGuard, async (c) => {
         )
       }
     }
+    const selectedEngine = listEngines().find((engine) => engine.id === workspace.engine)
+    if (
+      selectedEngine &&
+      (body.model !== undefined || body.reasoningEffort !== undefined || body.agentPermissionMode !== undefined)
+    ) {
+      try {
+        assertEngineConfigurationSupported(selectedEngine, {
+          model: body.model ?? workspace.model,
+          reasoningEffort: body.reasoningEffort ?? workspace.reasoningEffort,
+          agentPermissionMode: body.agentPermissionMode ?? workspace.agentPermissionMode,
+        })
+        await preflightMistralConfiguration(
+          selectedEngine.id,
+          { workspaceId: workspace.id },
+          {
+            model: body.model ?? workspace.model,
+            reasoningEffort: body.reasoningEffort ?? workspace.reasoningEffort,
+            agentPermissionMode: body.agentPermissionMode ?? workspace.agentPermissionMode,
+          },
+        )
+      } catch (error) {
+        return c.json({ error: error instanceof Error ? error.message : 'Invalid engine configuration' }, 400)
+      }
+    }
     if (body.status !== undefined) {
       if (!isWorkspaceStatus(body.status)) {
         return c.json({ error: `Invalid status. Must be one of: ${VALID_WORKSPACE_STATUSES.join(', ')}` }, 400)
@@ -3839,6 +3964,29 @@ app.post('/:id/start', migrationGuard, async (c) => {
         },
         409,
       )
+    }
+
+    const selectedEngine = listEngines().find((engine) => engine.id === workspaceEngine)
+    if (selectedEngine) {
+      try {
+        assertEngineConfigurationSupported(selectedEngine, {
+          model: workspace.model,
+          reasoningEffort: workspace.reasoningEffort,
+          agentPermissionMode: workspace.agentPermissionMode,
+        })
+        await preflightMistralConfiguration(
+          selectedEngine.id,
+          { workspaceId: workspace.id },
+          {
+            model: workspace.model,
+            reasoningEffort: workspace.reasoningEffort,
+            agentPermissionMode: workspace.agentPermissionMode,
+          },
+          resume,
+        )
+      } catch (error) {
+        return c.json({ error: error instanceof Error ? error.message : 'Invalid engine configuration' }, 400)
+      }
     }
 
     // A manual start supersedes any scheduled retry (quota or transient

@@ -17,7 +17,7 @@ export interface MemoryScopeCatalogueItem {
 
 export type MemoryWriteDecision = 'deny' | 'apply' | 'propose'
 
-export type MemoryEngineId = 'claude-code' | 'codex'
+export type MemoryEngineId = 'claude-code' | 'codex' | 'mistral-vibe'
 export type MemoryTransport = 'http' | 'stdio'
 
 export type MemoryActor =
@@ -199,7 +199,7 @@ export function deriveMemoryActor(source: MemoryActorSource, _callerActor?: unkn
     if (
       !isNonEmptyString(source.workspaceId) ||
       !isNonEmptyString(source.sessionId) ||
-      (source.engine !== 'claude-code' && source.engine !== 'codex')
+      (source.engine !== 'claude-code' && source.engine !== 'codex' && source.engine !== 'mistral-vibe')
     ) {
       throw new TypeError('Invalid internal memory actor source')
     }

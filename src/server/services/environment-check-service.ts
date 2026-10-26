@@ -28,6 +28,7 @@ export interface EnvironmentProbe {
   claudeBinary: () => string | undefined
   worktreesDirectory: (projectPath: string) => string
   codexBinary: () => string
+  mistralBinary: () => string
 }
 
 /** Probe the nearest existing parent without creating directories or test files. */
@@ -80,6 +81,7 @@ function liveProbe(): EnvironmentProbe {
     },
     worktreesDirectory: (project) => resolveWorktreesRoot(project, getGlobalSettings().worktreesPath),
     codexBinary: resolveCodexBinary,
+    mistralBinary: () => 'vibe-acp',
   }
 }
 
@@ -102,7 +104,12 @@ export async function checkEnvironment(
       return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'error'
     }
   }
-  const binary = request.engine === 'codex' ? probe.codexBinary() : probe.claudeBinary()
+  const binary =
+    request.engine === 'mistral-vibe'
+      ? probe.mistralBinary()
+      : request.engine === 'codex'
+        ? probe.codexBinary()
+        : probe.claudeBinary()
   const [git, shell, storage, runtime] = await Promise.all([
     commandAvailable('git', ['--version']),
     commandAvailable('bash', ['--version']),

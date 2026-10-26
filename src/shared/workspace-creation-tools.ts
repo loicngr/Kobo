@@ -24,8 +24,8 @@ const object = (properties: Record<string, Schema>, required: string[] = []): Sc
   required,
   additionalProperties: false,
 })
-const effort = choice('auto', 'none', 'low', 'medium', 'high', 'xhigh', 'max')
-const engine = choice('claude-code', 'codex')
+const effort = choice('auto', 'off', 'none', 'low', 'medium', 'high', 'xhigh', 'max')
+const engine = choice('claude-code', 'codex', 'mistral-vibe')
 const path = string(4096)
 const url = string(4096)
 const titles: Schema = { type: 'array', items: string(20_000), maxItems: 500 }
@@ -161,6 +161,14 @@ export function validateWorkspaceCreationArguments(name: string, input: unknown)
     }
   }
   if (name === 'create_workspace') {
+    if (
+      value.engine !== 'mistral-vibe' &&
+      (value.reasoning_effort === 'off' || value.brainstorm_reasoning_effort === 'off')
+    )
+      throw new Error('off is a native Mistral Vibe thinking value')
+    const review = value.auto_loop_final_review as Record<string, unknown> | null | undefined
+    if (review && review.engine !== 'mistral-vibe' && review.reasoning_effort === 'off')
+      throw new Error('off is a native Mistral Vibe thinking value')
     const { attachments: _attachments, ...metadataFields } = value
     // Keep room for multipart file headers within the downstream 1 MiB allowance.
     if (new TextEncoder().encode(JSON.stringify(metadataFields)).byteLength > 960 * 1024)

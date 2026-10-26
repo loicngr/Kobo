@@ -265,6 +265,21 @@
                 </div>
               </div>
 
+              <q-input
+                v-model.number="globalMaxConcurrentAgents"
+                data-test="max-concurrent-agents"
+                type="number"
+                min="0"
+                step="1"
+                :label="$t('settings.maxConcurrentAgents')"
+                :hint="$t('settings.maxConcurrentAgentsHint')"
+                :rules="[() => maxConcurrentAgentsValid || $t('settings.maxConcurrentAgentsInvalid')]"
+                dense
+                dark
+                outlined
+                class="q-mb-md"
+              />
+
               <div class="q-mb-md" data-tour="settings-immediate-messages">
                 <q-toggle v-model="globalForceImmediateMessages" :label="$t('settings.forceImmediateMessages')" color="primary" />
                 <div class="text-caption text-kobo-3 q-mt-xs">{{ $t('settings.forceImmediateMessagesHint') }}</div>
@@ -275,58 +290,6 @@
                 <div class="text-caption text-kobo-3 q-mt-xs">{{ $t('settings.showProgressBarsHint') }}</div>
               </div>
 
-              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.defaultModelClaude') }}</div>
-              <q-select
-                v-model="globalClaudeModel"
-                :options="modelOptions"
-                emit-value
-                map-options
-                option-value="value"
-                option-label="label"
-                dense
-                dark
-                outlined
-                class="settings-input q-mb-md"
-              />
-
-              <div class="text-subtitle2 q-mb-sm q-mt-md">{{ $t('settings.defaultModelCodex') }}</div>
-              <q-select
-                v-model="globalCodexModel"
-                :options="codexModelOptions"
-                emit-value
-                map-options
-                option-value="value"
-                option-label="label"
-                dense
-                dark
-                outlined
-                class="settings-input q-mb-md"
-              />
-
-              <div class="text-subtitle2 q-mb-sm q-mt-md">{{ $t('settings.defaultPermissionModeClaude') }}</div>
-              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.defaultPermissionModeHint') }}</div>
-              <q-select
-                v-model="globalClaudePermissionMode"
-                :options="claudePermissionModeOptions"
-                emit-value
-                map-options
-                dense
-                dark
-                outlined
-                class="settings-input q-mb-md"
-              />
-
-              <div class="text-subtitle2 q-mb-sm q-mt-md">{{ $t('settings.defaultPermissionModeCodex') }}</div>
-              <q-select
-                v-model="globalCodexPermissionMode"
-                :options="codexPermissionModeOptions"
-                emit-value
-                map-options
-                dense
-                dark
-                outlined
-                class="settings-input"
-              />
               <q-input
                 v-model.number="globalAutoLoopMaxRetries"
                 :label="$t('settings.autoLoopMaxRetries')"
@@ -337,9 +300,76 @@
                 dense
                 dark
                 outlined
-                class="settings-input q-mt-md"
+                class="settings-input q-mb-md"
               />
 
+              <section class="settings-subcard q-pa-md" aria-labelledby="settings-claude-title">
+                <h3 id="settings-claude-title" class="text-subtitle1 text-weight-medium q-mt-none q-mb-md">{{ $t('workspacePage.engineClaude') }}</h3>
+                <div class="text-subtitle2 q-mb-sm">{{ $t('settings.defaultModelClaude') }}</div>
+                <q-select
+                  v-model="globalClaudeModel"
+                  :options="modelOptions"
+                  emit-value
+                  map-options
+                  option-value="value"
+                  option-label="label"
+                  dense
+                  dark
+                  outlined
+                  class="settings-input q-mb-md"
+                />
+
+                <div class="text-subtitle2 q-mb-sm">{{ $t('settings.defaultPermissionModeClaude') }}</div>
+                <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.defaultPermissionModeHint') }}</div>
+                <q-select
+                  v-model="globalClaudePermissionMode"
+                  :options="claudePermissionModeOptions"
+                  emit-value
+                  map-options
+                  dense
+                  dark
+                  outlined
+                  class="settings-input q-mb-md"
+                />
+              </section>
+
+              <section class="settings-subcard q-pa-md" aria-labelledby="settings-codex-title">
+                <h3 id="settings-codex-title" class="text-subtitle1 text-weight-medium q-mt-none q-mb-md">{{ $t('health.codexCliTitle') }}</h3>
+                <div class="text-subtitle2 q-mb-sm">{{ $t('settings.defaultModelCodex') }}</div>
+                <q-select
+                  v-model="globalCodexModel"
+                  :options="codexModelOptions"
+                  emit-value
+                  map-options
+                  option-value="value"
+                  option-label="label"
+                  dense
+                  dark
+                  outlined
+                  class="settings-input q-mb-md"
+                />
+
+                <div class="text-subtitle2 q-mb-sm q-mt-md">{{ $t('settings.defaultPermissionModeCodex') }}</div>
+                <q-select
+                  v-model="globalCodexPermissionMode"
+                  :options="codexPermissionModeOptions"
+                  emit-value
+                  map-options
+                  dense
+                  dark
+                  outlined
+                  class="settings-input"
+                />
+              </section>
+
+              <section class="settings-subcard q-pa-md" aria-labelledby="settings-mistral-title">
+                <h3 id="settings-mistral-title" class="text-subtitle1 text-weight-medium q-mt-none q-mb-md">{{ $t('workspacePage.engineMistral') }}</h3>
+                <div class="text-subtitle2 q-mb-sm">{{ $t('settings.defaultModelMistral') }}</div>
+                <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('engine.mistralNativeHint') }}<div role="status">{{ nativeOptions.message }} <q-btn v-if="nativeOptions.message && !nativeOptions.loading" flat dense size="sm" :label="$t('common.retry')" @click="nativeOptions.refresh" /></div></div>
+                <q-select data-test="mistral-default-model" v-model="globalMistralModel" :options="mistralModelOptions" :loading="nativeOptions.loading" emit-value map-options dense dark outlined class="settings-input q-mb-md" />
+                <div class="text-subtitle2 q-mb-sm q-mt-md">{{ $t('settings.defaultPermissionModeMistral') }}</div>
+                <q-select data-test="mistral-default-permission" v-model="globalMistralPermissionMode" :options="mistralPermissionModeOptions" emit-value map-options dense dark outlined class="settings-input q-mb-md" />
+              </section>
             </div>
 
             <!-- Activity feed display -->
@@ -2821,6 +2851,7 @@ import TourReplayButton from 'src/components/TourReplayButton.vue'
 import WhipShortcutRecorder from 'src/components/WhipShortcutRecorder.vue'
 import WorkflowPolicyEditor from 'src/components/WorkflowPolicyEditor.vue'
 import { useIsMobile } from 'src/composables/use-is-mobile'
+import { useMistralOptions } from 'src/composables/use-mistral-options'
 import { useTours } from 'src/composables/use-tours'
 import { CODEX_MODEL_OPTION_DEFS, MODEL_OPTION_DEFS } from 'src/constants/models'
 import { type AgentPermissionMode, PERMISSION_MODES_BY_ENGINE } from 'src/constants/permissionModes'
@@ -2943,6 +2974,7 @@ const isGlobalSection = computed(() =>
 // Global form
 const globalClaudeModel = ref('auto')
 const globalCodexModel = ref('auto')
+const globalMistralModel = ref('auto')
 const globalPrPrompt = ref('')
 const globalReviewPrompt = ref('')
 const globalCiFixPrompt = ref('')
@@ -2952,6 +2984,13 @@ const globalEditorCommand = ref('')
 const globalFileManagerCommand = ref('')
 const globalTerminalCommand = ref('')
 const globalAutoPurgeOnPrMerged = ref(false)
+const globalMaxConcurrentAgents = ref<number | string | null>(2)
+const maxConcurrentAgentsValid = computed(
+  () =>
+    typeof globalMaxConcurrentAgents.value === 'number' &&
+    Number.isSafeInteger(globalMaxConcurrentAgents.value) &&
+    globalMaxConcurrentAgents.value >= 0,
+)
 const globalAutoLoopMaxRetries = ref(5)
 const globalAgentWatchdogEnabled = ref(false)
 const globalForceImmediateMessages = ref(false)
@@ -3225,6 +3264,7 @@ type ResettableField =
 const resettingField = ref<ResettableField | null>(null)
 const globalClaudePermissionMode = ref<AgentPermissionMode>('bypass')
 const globalCodexPermissionMode = ref<AgentPermissionMode>('bypass')
+const globalMistralPermissionMode = ref<AgentPermissionMode>('interactive')
 const globalNotionMcpKey = ref('')
 const globalSentryMcpKey = ref('')
 const globalBitbucketToken = ref('')
@@ -3891,6 +3931,16 @@ const codexModelOptions = computed(() => [
   ...CODEX_MODEL_OPTION_DEFS.map((option) => ({ label: t(option.i18nLabelKey), value: option.value })),
 ])
 
+const nativeOptions = useMistralOptions(() => ({
+  engine: 'mistral-vibe',
+  model: globalMistralModel.value,
+  agentPermissionMode: globalMistralPermissionMode.value,
+}))
+const mistralModelOptions = computed(() => nativeOptions.models)
+const mistralPermissionModeOptions = computed(() =>
+  PERMISSION_MODES_BY_ENGINE['mistral-vibe'].map((value) => ({ label: t(`agentPermissionMode.${value}`), value })),
+)
+
 const projectModelOptions = computed(() => [{ label: t('settings.useGlobal'), value: '' }, ...modelOptions.value])
 
 const forgeOptions = computed(() => [
@@ -4030,6 +4080,7 @@ function readGlobalForm(): Record<string, unknown> {
     workflowPolicy: globalWorkflowPolicy.value,
     claudeModel: globalClaudeModel.value,
     codexModel: globalCodexModel.value,
+    mistralModel: globalMistralModel.value,
     prPrompt: globalPrPrompt.value,
     reviewPrompt: globalReviewPrompt.value,
     ciFixPrompt: globalCiFixPrompt.value,
@@ -4039,6 +4090,7 @@ function readGlobalForm(): Record<string, unknown> {
     fileManagerCommand: globalFileManagerCommand.value,
     terminalCommand: globalTerminalCommand.value,
     autoPurgeOnPrMerged: globalAutoPurgeOnPrMerged.value,
+    maxConcurrentAgents: globalMaxConcurrentAgents.value,
     autoLoopMaxRetries: globalAutoLoopMaxRetries.value,
     agentWatchdogEnabled: globalAgentWatchdogEnabled.value,
     forceImmediateMessages: globalForceImmediateMessages.value,
@@ -4070,6 +4122,7 @@ function readGlobalForm(): Record<string, unknown> {
     sentryInitialPrompt: globalSentryInitialPrompt.value,
     claudePermissionMode: globalClaudePermissionMode.value,
     codexPermissionMode: globalCodexPermissionMode.value,
+    mistralPermissionMode: globalMistralPermissionMode.value,
     notionMcpKey: globalNotionMcpKey.value,
     sentryMcpKey: globalSentryMcpKey.value,
     bitbucketToken: globalBitbucketToken.value,
@@ -4169,6 +4222,7 @@ function syncGlobalForm() {
   const modelMap = store.global.defaultModelByEngine ?? {}
   globalClaudeModel.value = modelMap['claude-code'] ?? 'auto'
   globalCodexModel.value = modelMap.codex ?? 'auto'
+  globalMistralModel.value = modelMap['mistral-vibe'] ?? 'auto'
   globalPrPrompt.value = store.global.prPromptTemplate
   globalReviewPrompt.value = store.global.reviewPromptTemplate ?? ''
   globalCiFixPrompt.value = store.global.ciFixPromptTemplate ?? ''
@@ -4178,6 +4232,7 @@ function syncGlobalForm() {
   globalFileManagerCommand.value = store.global.fileManagerCommand ?? ''
   globalTerminalCommand.value = store.global.terminalCommand ?? ''
   globalAutoPurgeOnPrMerged.value = store.global.autoPurgeOnPrMerged ?? false
+  globalMaxConcurrentAgents.value = store.global.maxConcurrentAgents ?? 2
   globalAutoLoopMaxRetries.value = store.global.autoLoopMaxRetries ?? 5
   globalAgentWatchdogEnabled.value = store.global.agentWatchdogEnabled === true
   globalForceImmediateMessages.value = store.global.forceImmediateMessages === true
@@ -4239,6 +4294,8 @@ function syncGlobalForm() {
       v === 'plan' || v === 'bypass' || v === 'strict' || v === 'interactive'
     const claudeStored = modeMap['claude-code']
     globalClaudePermissionMode.value = isValidMode(claudeStored) ? claudeStored : 'bypass'
+    const mistralStored = modeMap['mistral-vibe']
+    globalMistralPermissionMode.value = isValidMode(mistralStored) ? mistralStored : 'interactive'
     const codexStored = modeMap.codex
     globalCodexPermissionMode.value = isValidMode(codexStored) ? codexStored : 'bypass'
   }
@@ -4543,6 +4600,10 @@ async function confirmRetentionReduction(): Promise<boolean> {
 }
 
 async function saveGlobal() {
+  if (!maxConcurrentAgentsValid.value) {
+    $q.notify({ type: 'negative', message: t('settings.maxConcurrentAgentsInvalid') })
+    return
+  }
   const worktreesPathValid = await globalWorktreesPathInput.value?.validate()
   if (worktreesPathValid === false) return
   if (!(await confirmRetentionReduction())) return
@@ -4552,6 +4613,8 @@ async function saveGlobal() {
     await store.updateGlobal({
       workflowPolicy: resolveWorkflowPolicy(globalWorkflowPolicy.value),
       defaultModelByEngine: {
+        ...store.global.defaultModelByEngine,
+        'mistral-vibe': globalMistralModel.value,
         'claude-code': globalClaudeModel.value,
         codex: globalCodexModel.value,
       },
@@ -4564,6 +4627,7 @@ async function saveGlobal() {
       fileManagerCommand: globalFileManagerCommand.value,
       terminalCommand: globalTerminalCommand.value,
       autoPurgeOnPrMerged: globalAutoPurgeOnPrMerged.value,
+      maxConcurrentAgents: globalMaxConcurrentAgents.value as number,
       autoLoopMaxRetries: globalAutoLoopMaxRetries.value,
       agentWatchdogEnabled: globalAgentWatchdogEnabled.value,
       forceImmediateMessages: globalForceImmediateMessages.value,
@@ -4594,6 +4658,8 @@ async function saveGlobal() {
       notionInitialPromptTemplate: globalNotionInitialPrompt.value,
       sentryInitialPromptTemplate: globalSentryInitialPrompt.value,
       defaultPermissionModeByEngine: {
+        ...store.global.defaultPermissionModeByEngine,
+        'mistral-vibe': globalMistralPermissionMode.value,
         'claude-code': globalClaudePermissionMode.value,
         codex: globalCodexPermissionMode.value,
       },

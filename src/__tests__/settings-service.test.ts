@@ -48,6 +48,54 @@ afterEach(() => {
   }
 })
 
+describe('Mistral defaults', () => {
+  it('defaults fresh installations to interactive native configuration', () => {
+    const global = getGlobalSettings()
+    expect(global.defaultModelByEngine['mistral-vibe']).toBe('auto')
+    expect(global.defaultPermissionModeByEngine['mistral-vibe']).toBe('interactive')
+    expect(global.defaultPermissionModeByEngine['claude-code']).toBe('plan')
+    expect(global.defaultPermissionModeByEngine.codex).toBe('plan')
+  })
+
+  it('backfills only missing Mistral keys on existing installations', () => {
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        schemaVersion: 67,
+        global: {
+          defaultModelByEngine: { 'claude-code': 'custom-claude', codex: 'custom-codex' },
+          defaultPermissionModeByEngine: { 'claude-code': 'plan', codex: 'strict' },
+        },
+        projects: [],
+      }),
+    )
+    const global = getGlobalSettings()
+    expect(global.defaultModelByEngine).toEqual({
+      'claude-code': 'custom-claude',
+      codex: 'custom-codex',
+      'mistral-vibe': 'auto',
+    })
+    expect(global.defaultPermissionModeByEngine).toEqual({
+      'claude-code': 'plan',
+      codex: 'strict',
+      'mistral-vibe': 'interactive',
+    })
+    const saved = JSON.parse(fs.readFileSync(settingsPath, 'utf8'))
+    expect(saved.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
+    expect(saved.global.defaultPermissionModeByEngine['mistral-vibe']).toBe('interactive')
+  })
+
+  it.each(['plan', 'strict', 'bypass'])('preserves explicit Mistral overrides (%s)', (mode) => {
+    const global = {
+      defaultModelByEngine: { 'mistral-vibe': 'custom-native-model' },
+      defaultPermissionModeByEngine: { 'mistral-vibe': mode },
+    }
+    const migrated = runSettingsMigrations({ schemaVersion: 67, global, projects: [] })
+    expect(migrated.global.defaultModelByEngine).toEqual({ 'mistral-vibe': 'custom-native-model' })
+    expect(migrated.global.defaultPermissionModeByEngine['mistral-vibe']).toBe(mode)
+  })
+})
+
 describe('agent watchdog setting', () => {
   it('defaults new installations to disabled', () => {
     expect(getGlobalSettings().agentWatchdogEnabled).toBe(false)
@@ -981,7 +1029,11 @@ describe('runSettingsMigrations()', () => {
       global: { defaultModelByEngine: { 'claude-code': 'auto', codex: 'auto' } },
       projects: [],
     })
-    expect(migrated.global.defaultModelByEngine).toEqual({ 'claude-code': 'claude-sonnet-5', codex: 'gpt-5.6-terra' })
+    expect(migrated.global.defaultModelByEngine).toEqual({
+      'claude-code': 'claude-sonnet-5',
+      codex: 'gpt-5.6-terra',
+      'mistral-vibe': 'auto',
+    })
   })
 
   it('v57 keeps a model the user picked explicitly', () => {
@@ -990,7 +1042,11 @@ describe('runSettingsMigrations()', () => {
       global: { defaultModelByEngine: { 'claude-code': 'claude-opus-4-7', codex: 'auto' } },
       projects: [],
     })
-    expect(migrated.global.defaultModelByEngine).toEqual({ 'claude-code': 'claude-opus-4-7', codex: 'gpt-5.6-terra' })
+    expect(migrated.global.defaultModelByEngine).toEqual({
+      'claude-code': 'claude-opus-4-7',
+      codex: 'gpt-5.6-terra',
+      'mistral-vibe': 'auto',
+    })
   })
 
   it('is a no-op when the file is already at the latest version', () => {
@@ -2075,6 +2131,7 @@ describe('settings migration v19 — split defaultModel by engine', () => {
     expect(settings.global.defaultModelByEngine).toEqual({
       'claude-code': 'claude-sonnet-4-6',
       codex: 'gpt-5.6-terra',
+      'mistral-vibe': 'auto',
     })
     // Legacy field must be deleted
     expect((settings.global as unknown as { defaultModel?: string }).defaultModel).toBeUndefined()
@@ -2109,6 +2166,7 @@ describe('settings migration v20 — split defaultPermissionMode by engine', () 
     expect(settings.global.defaultPermissionModeByEngine).toEqual({
       'claude-code': 'strict',
       codex: 'strict',
+      'mistral-vibe': 'interactive',
     })
     // Legacy field must be deleted
     expect((settings.global as unknown as { defaultPermissionMode?: string }).defaultPermissionMode).toBeUndefined()

@@ -46,7 +46,8 @@ export type AgentEvent =
   | { kind: 'session:brainstorm-complete' }
   // Conversation
   | { kind: 'message:text'; messageId: string; text: string; streaming: boolean; origin?: AgentEventOrigin }
-  | { kind: 'message:thinking'; messageId: string; text: string; origin?: AgentEventOrigin }
+  // Explicit streaming thoughts carry deltas; absent/false preserves complete native blocks.
+  | { kind: 'message:thinking'; messageId: string; text: string; streaming?: boolean; origin?: AgentEventOrigin }
   | { kind: 'message:end'; messageId: string; origin?: AgentEventOrigin }
   | { kind: 'message:raw'; content: string }
   | {

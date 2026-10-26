@@ -7,7 +7,11 @@ import es from '../i18n/es'
 import fr from '../i18n/fr'
 import itLocale from '../i18n/it'
 
-const engines: Record<MemoryEngineId, string> = { 'claude-code': 'Claude Code', codex: 'Codex' }
+const engines: Record<MemoryEngineId, string> = {
+  'claude-code': 'Claude Code',
+  codex: 'Codex',
+  'mistral-vibe': 'Mistral Vibe',
+}
 const states: Record<MemoryContextState, true> = {
   prepared: true,
   submitted: true,

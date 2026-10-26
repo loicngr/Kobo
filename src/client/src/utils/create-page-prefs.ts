@@ -44,7 +44,7 @@ export function loadCreatePagePrefs(): CreatePagePrefs {
   if (review === null) out.autoLoopFinalReview = null
   else if (
     isPlainObject(review) &&
-    (review.engine === 'claude-code' || review.engine === 'codex') &&
+    (review.engine === 'claude-code' || review.engine === 'codex' || review.engine === 'mistral-vibe') &&
     typeof review.model === 'string' &&
     review.model.trim() &&
     typeof review.reasoningEffort === 'string' &&

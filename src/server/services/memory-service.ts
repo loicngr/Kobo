@@ -1,5 +1,12 @@
 import { nanoid } from 'nanoid'
-import type { MemoryActor, MemoryEntry, MemoryOperation, MemoryProvenance, MemoryScope } from '../../shared/memory.js'
+import type {
+  MemoryActor,
+  MemoryEngineId,
+  MemoryEntry,
+  MemoryOperation,
+  MemoryProvenance,
+  MemoryScope,
+} from '../../shared/memory.js'
 import {
   deriveMemoryActor,
   isMemoryScope,
@@ -56,7 +63,7 @@ interface EntryRow {
   actor_kind: MemoryActor['kind']
   source_workspace_id: string | null
   source_session_id: string | null
-  source_engine: 'claude-code' | 'codex' | null
+  source_engine: MemoryEngineId | null
   client_name: string | null
   transport: 'http' | 'stdio' | null
   created_at: string
@@ -70,7 +77,7 @@ interface OperationRow {
   actor_kind: MemoryActor['kind']
   source_workspace_id: string | null
   source_session_id: string | null
-  source_engine: 'claude-code' | 'codex' | null
+  source_engine: MemoryEngineId | null
   source_project_path: string | null
   client_name: string | null
   transport: 'http' | 'stdio' | null
@@ -246,7 +253,7 @@ function assertInternalActorCanAccessScope(actor: MemoryActor, scope: ScopeRow):
   if (!source || source.workspace_id !== actor.workspaceId) {
     throw new MemoryNotFoundError('Agent session is not bound to the stated workspace')
   }
-  if (source.engine !== 'claude-code' && source.engine !== 'codex') {
+  if (source.engine !== 'claude-code' && source.engine !== 'codex' && source.engine !== 'mistral-vibe') {
     throw new MemoryNotFoundError('Bound agent session has no valid engine')
   }
   if (source.engine !== actor.engine) throw new MemoryNotFoundError('Agent engine does not match the bound session')

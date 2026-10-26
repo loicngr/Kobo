@@ -359,3 +359,26 @@ it.each(['ordinary message', '/kobo-check-progress'])(
     expect(wrapper.get('textarea').element.value).toBe(content)
   },
 )
+
+it('retains a busy Vibe draft on refused immediate delivery without queueing or resending', async () => {
+  const { store, wrapper } = await setup('executing')
+  store.workspaces[0]!.engine = 'mistral-vibe'
+  store.sessions[0]!.status = 'running'
+  useSettingsStore().global.forceImmediateMessages = true
+  const ws = useWebSocketStore()
+  vi.spyOn(ws, 'isConnected').mockReturnValue(true)
+  const send = vi.spyOn(ws, 'sendChatMessageConfirmed').mockRejectedValue(new Error('Live steering unsupported'))
+  const queue = vi.spyOn(store, 'queueMessage')
+  vi.spyOn(console, 'error').mockImplementation(() => {})
+  await wrapper.get('textarea').setValue('Keep this draft')
+  await wrapper.get('button[data-icon="send"]').trigger('click')
+  await flushPromises()
+  expect(send).toHaveBeenCalledTimes(1)
+  expect(queue).not.toHaveBeenCalled()
+  expect(wrapper.get('textarea').element.value).toBe('Keep this draft')
+  useSettingsStore().global.forceImmediateMessages = false
+  await wrapper.get('button[data-icon="send"]').trigger('click')
+  await flushPromises()
+  expect(queue).toHaveBeenCalledTimes(1)
+  expect(send).toHaveBeenCalledTimes(1)
+})

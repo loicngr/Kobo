@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { MISTRAL_CAPABILITIES } from '../../server/services/agent/engines/mistral-vibe/capabilities.js'
 import type { AgentEngine, AgentEvent, EngineProcess, StartOptions } from '../../server/services/agent/engines/types.js'
 import { resetDb } from '../helpers/reset-db.js'
 
@@ -39,22 +40,28 @@ interface EngineCapture {
   releaseStop: () => void
 }
 
-function makeEngine(id: 'claude-code' | 'codex', gateStop = false): EngineCapture {
+function makeEngine(id: 'claude-code' | 'codex' | 'mistral-vibe', gateStop = false): EngineCapture {
   const starts: StartOptions[] = []
   const events: Array<(event: AgentEvent) => void> = []
   const pendingStops: Array<() => void> = []
   const engine: AgentEngine = {
     id,
     displayName: id,
-    capabilities: {
-      models: [{ id: 'auto', label: 'Auto' }],
-      permissionModes: ['bypass'],
-      supportsResume: true,
-      supportsMcp: true,
-      supportsSkills: true,
-      supportsSubagents: false,
-      supportsQuotaStatus: false,
-    },
+    capabilities:
+      id === 'mistral-vibe'
+        ? { ...MISTRAL_CAPABILITIES }
+        : {
+            models: [{ id: 'auto', label: 'Auto' }],
+            effortLevels: [{ id: 'auto', label: 'Auto' }],
+            permissionModes: ['bypass'],
+            supportsResume: true,
+            supportsMcp: true,
+            supportsLiveSteering: true,
+            supportsReadOnly: true,
+            supportsSkills: true,
+            supportsSubagents: false,
+            supportsQuotaStatus: false,
+          },
     async start(options, onEvent) {
       starts.push(options)
       events.push(onEvent)
@@ -80,7 +87,7 @@ function makeEngine(id: 'claude-code' | 'codex', gateStop = false): EngineCaptur
   return { engine, starts, events, releaseStop: () => pendingStops.shift()?.() }
 }
 
-async function createWorkspace(engine: 'claude-code' | 'codex' = 'claude-code') {
+async function createWorkspace(engine: 'claude-code' | 'codex' | 'mistral-vibe' = 'claude-code') {
   const { createWorkspace } = await import('../../server/services/workspace-service.js')
   const workspace = createWorkspace({
     name: `Memory ${engine}`,
@@ -99,7 +106,7 @@ describe('orchestrator progress capabilities', () => {
     vi.clearAllMocks()
     await resetDb()
   })
-  it.each(['claude-code', 'codex'] as const)(
+  it.each(['claude-code', 'codex', 'mistral-vibe'] as const)(
     'scopes initial and resumed %s launches and preserves instructions',
     async (engineId) => {
       const workspace = await createWorkspace(engineId)
@@ -147,6 +154,21 @@ describe('orchestrator progress capabilities', () => {
       await flush()
       const token2 = capture.starts[1].mcpServers!.find((s) => s.name === 'kobo-tasks')!.env.KOBO_PROGRESS_SESSION_TOKEN
       expect(token2).not.toBe(token)
+      const env2 = capture.starts[1].mcpServers!.find((s) => s.name === 'kobo-tasks')!.env
+      expect(env2.KOBO_MCP_SESSION_TOKEN).not.toBe(internalToken)
+      expect(env2.KOBO_MEMORY_SESSION_TOKEN).not.toBe(managedEnv.KOBO_MEMORY_SESSION_TOKEN)
+      expect(() => internal.authorizeInternalMcpTool(internalToken, 'create_task', {})).toThrow()
+      expect(() => internal.authorizeInternalMcpTool(env2.KOBO_MCP_SESSION_TOKEN, 'create_task', {})).not.toThrow()
+      if (engineId === 'mistral-vibe') {
+        const { buildMistralOptions } = await import(
+          '../../server/services/agent/engines/mistral-vibe/options-builder.js'
+        )
+        const native = buildMistralOptions(capture.starts[1])
+        const managed = native.mcpServers.find((server) => server.name === 'kobo-tasks')!
+        expect('env' in managed ? managed.env : undefined).toEqual(
+          Object.entries(env2).map(([name, value]) => ({ name, value })),
+        )
+      }
       expect(runtime.resolveProgressCapability(token2).launchId).not.toBe(owner.launchId)
       expect(capture.starts[1].prompt).not.toContain('<kobo-progress-reporting>')
       const stopping2 = orchestrator.stopAgentAndWait(workspace.id)
@@ -176,7 +198,7 @@ describe('orchestrator progress capabilities', () => {
     expect(() => internal.authorizeInternalMcpTool(token, 'list_tasks', {})).toThrow()
   })
 
-  it.each(['claude-code', 'codex'] as const)(
+  it.each(['claude-code', 'codex', 'mistral-vibe'] as const)(
     'persists prepared %s instructions once, scoped to the initial session without memory or capabilities',
     async (engineId) => {
       const workspace = await createWorkspace(engineId)
@@ -348,34 +370,37 @@ describe('orchestrator progress capabilities', () => {
     await orchestrator.stopAgentAndWait(workspace.id)
   })
 
-  it('does not interrupt reporting at a logical session end before the actual runtime closes', async () => {
-    const workspace = await createWorkspace()
-    const capture = makeEngine('claude-code')
-    let close!: () => void
-    const closed = new Promise<void>((resolve) => {
-      close = resolve
-    })
-    const original = capture.engine.start.bind(capture.engine)
-    capture.engine.start = async (...args) => ({ ...(await original(...args)), closed })
-    const { _registerEngineForTest } = await import('../../server/services/agent/engines/registry.js')
-    _registerEngineForTest(capture.engine)
-    const orchestrator = await import('../../server/services/agent/orchestrator.js')
-    const runtime = await import('../../server/services/progress-bar-runtime.js')
-    const progress = await import('../../server/services/progress-bar-service.js')
-    orchestrator.startAgent(workspace.id, workspace.projectPath, 'Task')
-    await flush()
-    const token = capture.starts[0].mcpServers!.find((s) => s.name === 'kobo-tasks')!.env.KOBO_PROGRESS_SESSION_TOKEN
-    const owner = runtime.resolveProgressCapability(token)
-    progress.createProgressBar(owner, { activityKey: 'child', label: 'Child tests' })
-    capture.events[0]({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
-    await flush()
-    expect(runtime.resolveProgressCapability(token)).toEqual(owner)
-    expect(progress.listProgressBars(owner).items[0].status).toBe('running')
-    close()
-    await flush()
-    expect(() => runtime.resolveProgressCapability(token)).toThrow()
-    expect(progress.listProgressBars(owner).items[0].status).toBe('interrupted')
-  })
+  it.each(['claude-code', 'mistral-vibe'] as const)(
+    'does not interrupt %s reporting at logical end before actual closure',
+    async (engineId) => {
+      const workspace = await createWorkspace(engineId)
+      const capture = makeEngine(engineId)
+      let close!: () => void
+      const closed = new Promise<void>((resolve) => {
+        close = resolve
+      })
+      const original = capture.engine.start.bind(capture.engine)
+      capture.engine.start = async (...args) => ({ ...(await original(...args)), closed })
+      const { _registerEngineForTest } = await import('../../server/services/agent/engines/registry.js')
+      _registerEngineForTest(capture.engine)
+      const orchestrator = await import('../../server/services/agent/orchestrator.js')
+      const runtime = await import('../../server/services/progress-bar-runtime.js')
+      const progress = await import('../../server/services/progress-bar-service.js')
+      orchestrator.startAgent(workspace.id, workspace.projectPath, 'Task')
+      await flush()
+      const token = capture.starts[0].mcpServers!.find((s) => s.name === 'kobo-tasks')!.env.KOBO_PROGRESS_SESSION_TOKEN
+      const owner = runtime.resolveProgressCapability(token)
+      progress.createProgressBar(owner, { activityKey: 'child', label: 'Child tests' })
+      capture.events[0]({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
+      await flush()
+      expect(runtime.resolveProgressCapability(token)).toEqual(owner)
+      expect(progress.listProgressBars(owner).items[0].status).toBe('running')
+      close()
+      await flush()
+      expect(() => runtime.resolveProgressCapability(token)).toThrow()
+      expect(progress.listProgressBars(owner).items[0].status).toBe('interrupted')
+    },
+  )
   it('revokes a capability when synchronous dispatch admission fails', async () => {
     const workspace = await createWorkspace()
     const capture = makeEngine('claude-code')
@@ -455,5 +480,101 @@ describe('orchestrator progress capabilities', () => {
     await stopping
     await flush()
     expect(capture.starts).toHaveLength(1)
+  })
+})
+
+describe('Mistral launch integration', () => {
+  beforeEach(async () => {
+    vi.resetModules()
+    vi.clearAllMocks()
+    await resetDb()
+  })
+  it('ignores prepared-prompt and ready callbacks from a physically closed Mistral launch', async () => {
+    const workspace = await createWorkspace('mistral-vibe')
+    const capture = makeEngine('mistral-vibe')
+    let settleReady!: () => void
+    const ready = new Promise<void>((resolve) => {
+      settleReady = resolve
+    })
+    const start = capture.engine.start.bind(capture.engine)
+    capture.engine.start = async (...args) => ({ ...(await start(...args)), ready })
+    const { _registerEngineForTest } = await import('../../server/services/agent/engines/registry.js')
+    _registerEngineForTest(capture.engine)
+    const memory = await import('../../server/services/memory-context-service.js')
+    const initialized = vi.spyOn(memory, 'markMemoryContextInitialized')
+    const orch = await import('../../server/services/agent/orchestrator.js')
+    const { emit } = await import('../../server/services/websocket-service.js')
+    orch.startAgent(
+      workspace.id,
+      workspace.projectPath,
+      'First',
+      'auto',
+      false,
+      'bypass',
+      undefined,
+      'auto',
+      undefined,
+      { persistInitialPrompt: true },
+    )
+    await flush()
+    const callback = capture.starts[0].onPromptPrepared!
+    await orch.stopAgentAndWait(workspace.id)
+    await flush()
+    vi.mocked(emit).mockClear()
+    initialized.mockClear()
+    const database = await import('../../server/db/index.js')
+    database.closeDb()
+    const dbRead = vi.spyOn(database, 'getDb').mockClear()
+    callback({ promptPrefix: 'Stale launch instructions', systemAppend: '' })
+    settleReady()
+    await flush()
+    expect(emit).not.toHaveBeenCalled()
+    expect(initialized).not.toHaveBeenCalled()
+    expect(dbRead).not.toHaveBeenCalled()
+  })
+  it('publishes Mistral completion only after native closure so queued chat can resume safely', async () => {
+    const workspace = await createWorkspace('mistral-vibe')
+    const capture = makeEngine('mistral-vibe')
+    let close!: () => void
+    const closed = new Promise<void>((resolve) => {
+      close = resolve
+    })
+    const start = capture.engine.start.bind(capture.engine)
+    capture.engine.start = async (...args) => ({
+      ...(await start(...args)),
+      ...(capture.starts.length === 1 ? { closed } : {}),
+    })
+    const { _registerEngineForTest } = await import('../../server/services/agent/engines/registry.js')
+    _registerEngineForTest(capture.engine)
+    const orch = await import('../../server/services/agent/orchestrator.js')
+    const { emit } = await import('../../server/services/websocket-service.js')
+    const terminalEvents = () =>
+      vi
+        .mocked(emit)
+        .mock.calls.filter(
+          (call) => call[1] === 'agent:event' && (call[2] as { kind?: string }).kind === 'session:ended',
+        )
+    const workspaces = await import('../../server/services/workspace-service.js')
+    workspaces.updateWorkspaceStatus(workspace.id, 'brainstorming')
+    const initial = orch.startAgent(workspace.id, workspace.projectPath, 'Initial native turn', 'auto')
+    await flush()
+    capture.events[0]({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
+    await flush()
+    expect(terminalEvents()).toHaveLength(0)
+    expect(orch.hasController(workspace.id)).toBe(true)
+    expect(() => orch.assertImmediateMessageSupported(workspace.id)).toThrow('live message delivery is unsupported')
+    close()
+    await flush()
+    expect(terminalEvents()).toHaveLength(1)
+    expect(orch.hasController(workspace.id)).toBe(false)
+    const { deliverWorkspaceMessage } = await import('../../server/services/workspace-message-service.js')
+    await expect(
+      deliverWorkspaceMessage(workspace.id, { content: 'Queued follow-up', sessionId: initial.agentSessionId }),
+    ).resolves.toEqual({ sessionId: initial.agentSessionId })
+    await flush()
+    expect(capture.starts).toHaveLength(2)
+    expect(capture.starts[1].resumeFromEngineSessionId).toBe('mistral-vibe-native-1')
+    expect(capture.starts[1].prompt).toContain('Queued follow-up')
+    await orch.stopAgentAndWait(workspace.id)
   })
 })

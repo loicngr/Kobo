@@ -54,7 +54,7 @@ describe('agent integration MCP configuration', () => {
     expect(servers[1].env).toEqual({ SENTRY_ACCESS_TOKEN: 'direct-sentry' })
     expect(JSON.stringify(servers)).not.toContain('must-not-be-serialized')
   })
-  it.each(['claude-code', 'codex'] as const)(
+  it.each(['claude-code', 'codex', 'mistral-vibe'] as const)(
     'prefers direct configuration and rereads on each %s launch',
     (engineId) => {
       legacy()
@@ -71,14 +71,17 @@ describe('agent integration MCP configuration', () => {
       expect(buildIntegrationMcpServers(settings, engineId)[0].args).toEqual(['legacy-notion.js'])
     },
   )
-  it.each(['claude-code', 'codex'] as const)('uses exact selected legacy entries for %s', (engineId) => {
-    legacy()
-    const servers = buildIntegrationMcpServers(
-      { ...enabled, notionMcpKey: 'notion-team', sentryMcpKey: 'sentry-team' },
-      engineId,
-    )
-    expect(servers.map((s) => s.args)).toEqual([['legacy-notion.js'], ['legacy-sentry.js']])
-  })
+  it.each(['claude-code', 'codex', 'mistral-vibe'] as const)(
+    'uses exact selected legacy entries for %s',
+    (engineId) => {
+      legacy()
+      const servers = buildIntegrationMcpServers(
+        { ...enabled, notionMcpKey: 'notion-team', sentryMcpKey: 'sentry-team' },
+        engineId,
+      )
+      expect(servers.map((s) => s.args)).toEqual([['legacy-notion.js'], ['legacy-sentry.js']])
+    },
+  )
   it('omits disabled or unconfigured integrations without breaking ordinary sessions', () => {
     expect(buildIntegrationMcpServers(enabled, 'claude-code')).toEqual([])
     saveIntegrationConfig('notion', { command: 'node', args: [], env: { NOTION_TOKEN: 'unused' } })

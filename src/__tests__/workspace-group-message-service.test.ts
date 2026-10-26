@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 const runtime = vi.hoisted(() => ({ db: undefined as unknown as Database.Database }))
 vi.mock('../server/db/index.js', () => ({ getDb: () => runtime.db }))
 vi.mock('../server/services/agent/orchestrator.js', () => ({
+  assertImmediateMessageSupported: vi.fn(),
   sendMessage: vi.fn(async (_id: string, _content: string, _session: unknown, before?: () => void) => before?.()),
   startAgent: vi.fn(),
   isShuttingDown: () => false,
@@ -239,4 +240,20 @@ it('preserves authenticated MCP provenance in chat receipts', async () => {
   await completed(startGroupMessageBatch({ ...input(), workspaceIds: ['a'] }, source).id)
   const row = runtime.db.prepare("SELECT payload FROM ws_events WHERE type='user:message'").get() as { payload: string }
   expect(JSON.parse(row.payload).source).toEqual(source)
+})
+
+it('reports busy native immediate refusal while preserving independent next-iteration delivery', async () => {
+  runtime.db.prepare('UPDATE workspaces SET auto_loop=1 WHERE id=?').run('b')
+  vi.mocked(agent.assertImmediateMessageSupported).mockImplementationOnce(() => {
+    throw new Error('Mistral Vibe live message delivery is unsupported')
+  })
+  const batch = await completed(startGroupMessageBatch(input()).id)
+  expect(batch.recipients).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ workspaceId: 'a', state: 'rejected' }),
+      expect.objectContaining({ workspaceId: 'b', state: 'queued' }),
+    ]),
+  )
+  expect(agent.startAgent).not.toHaveBeenCalled()
+  expect(loop.queueInstruction).toHaveBeenCalledOnce()
 })

@@ -1,5 +1,11 @@
 import { Hono } from 'hono'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { preflightMistralConfiguration } from '../server/services/mistral-options-service.js'
+
+vi.mock('../server/services/mistral-options-service.js', () => ({
+  preflightMistralConfiguration: vi.fn().mockResolvedValue(undefined),
+}))
+
 import * as reviewReturns from '../server/services/review-return-service.js'
 
 // ── Mocks (kept in sync with routes-workspaces.test.ts) ──────────────────────
@@ -63,11 +69,13 @@ vi.mock('../server/services/agent/orchestrator.js', () => ({
 
 vi.mock('../server/services/agent/engines/registry.js', async () => {
   const { CLAUDE_CODE_CAPABILITIES } = await import('../server/services/agent/engines/claude-code/capabilities.js')
+  const { MISTRAL_CAPABILITIES } = await import('../server/services/agent/engines/mistral-vibe/capabilities.js')
   const { CODEX_CAPABILITIES } = await import('../server/services/agent/engines/codex/capabilities.js')
   return {
     listEngines: vi.fn().mockReturnValue([
       { id: 'claude-code', capabilities: CLAUDE_CODE_CAPABILITIES },
       { id: 'codex', capabilities: CODEX_CAPABILITIES },
+      { id: 'mistral-vibe', capabilities: MISTRAL_CAPABILITIES },
     ]),
     resolveEngine: vi.fn(),
   }
@@ -1008,65 +1016,180 @@ it.each(['before-stop', 'after-stop'])(
   },
 )
 
-it('returns a final review to the loop writer independently of the selected UI session', async () => {
-  const loops = await import('../server/services/auto-loop-service.js')
-  const admission = vi.spyOn(loops, 'canStartAutomatically').mockReturnValue(true)
-  const finalReview = await import('../server/services/auto-loop-final-review-service.js')
-  const { startWorkspaceReview } = await import('../server/services/review-service.js')
-  const source = vi.spyOn(finalReview, 'getFinalReviewSourceSession').mockReturnValue('final-writer')
-  const bind = vi.spyOn(finalReview, 'bindReviewSession').mockReturnValue({
-    mcpEnv: { KOBO_FINAL_REVIEW_TOKEN: 'scoped-token' },
-    promptSuffix: ' Submit the structured report.',
-  })
-  vi.mocked(workspaceService.getWorkspace).mockReturnValue({ ...fakeWorkspace, autoLoop: true })
-  vi.mocked(workspaceService.listSessions).mockReturnValue([
-    { ...fakeSession, id: 'final-writer', engineSessionId: 'writer-native', engine: fakeWorkspace.engine },
-  ] as never)
-  vi.mocked(workspaceService.getActiveSession).mockReturnValue({ ...fakeSession, id: 'ui-selected-other' } as never)
-  vi.mocked(workspaceService.createIdleSession).mockReturnValue({ ...fakeSession, id: 'review-session' } as never)
-  try {
-    await startWorkspaceReview('ws-1', { returnToSession: true }, { autoLoopFinalReview: true })
-    expect(reviewReturns.registerReviewReturn).toHaveBeenCalledWith(
-      expect.objectContaining({ originalSessionId: 'final-writer', reviewSessionId: 'review-session' }),
-    )
-    expect(bind).toHaveBeenCalledWith('ws-1', 'review-session', 'final-writer')
-    expect(agentManager.startAgent).toHaveBeenCalledWith(
-      'ws-1',
-      fakeWorkspace.worktreePath,
-      expect.stringContaining('structured report'),
-      fakeWorkspace.model,
-      false,
-      'plan',
-      'review-session',
-      'auto',
-      undefined,
-      { mcpEnv: { KOBO_FINAL_REVIEW_TOKEN: 'scoped-token' } },
-    )
-  } finally {
-    source.mockRestore()
-    bind.mockRestore()
-    admission.mockRestore()
-  }
-})
+it.each(['claude-code', 'mistral-vibe'])(
+  'returns a %s final review to the loop writer independently of the selected UI session',
+  async (engine) => {
+    const loops = await import('../server/services/auto-loop-service.js')
+    const admission = vi.spyOn(loops, 'canStartAutomatically').mockReturnValue(true)
+    const finalReview = await import('../server/services/auto-loop-final-review-service.js')
+    const { startWorkspaceReview } = await import('../server/services/review-service.js')
+    const source = vi.spyOn(finalReview, 'getFinalReviewSourceSession').mockReturnValue('final-writer')
+    const bind = vi.spyOn(finalReview, 'bindReviewSession').mockReturnValue({
+      mcpEnv: { KOBO_FINAL_REVIEW_TOKEN: 'scoped-token' },
+      promptSuffix: ' Submit the structured report.',
+    })
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ ...fakeWorkspace, autoLoop: true })
+    vi.mocked(workspaceService.listSessions).mockReturnValue([
+      { ...fakeSession, id: 'final-writer', engineSessionId: 'writer-native', engine: fakeWorkspace.engine },
+    ] as never)
+    vi.mocked(workspaceService.getActiveSession).mockReturnValue({ ...fakeSession, id: 'ui-selected-other' } as never)
+    vi.mocked(workspaceService.createIdleSession).mockReturnValue({ ...fakeSession, id: 'review-session' } as never)
+    try {
+      await startWorkspaceReview('ws-1', { engine, returnToSession: true }, { autoLoopFinalReview: true })
+      expect(reviewReturns.registerReviewReturn).toHaveBeenCalledWith(
+        expect.objectContaining({ originalSessionId: 'final-writer', reviewSessionId: 'review-session' }),
+      )
+      expect(bind).toHaveBeenCalledWith('ws-1', 'review-session', 'final-writer')
+      expect(agentManager.startAgent).toHaveBeenCalledWith(
+        'ws-1',
+        fakeWorkspace.worktreePath,
+        expect.stringContaining('structured report'),
+        engine === 'mistral-vibe' ? 'auto' : fakeWorkspace.model,
+        false,
+        engine === 'mistral-vibe' ? 'interactive' : 'plan',
+        'review-session',
+        'auto',
+        undefined,
+        {
+          mcpEnv: {
+            KOBO_FINAL_REVIEW_TOKEN: 'scoped-token',
+            ...(engine === 'mistral-vibe' ? { KOBO_REVIEW_ONLY: '1' } : {}),
+          },
+        },
+      )
+    } finally {
+      source.mockRestore()
+      bind.mockRestore()
+      admission.mockRestore()
+    }
+  },
+)
 
-it('defers final review when another workspace fills capacity during git preparation', async () => {
-  const loops = await import('../server/services/auto-loop-service.js')
-  const finalReview = await import('../server/services/auto-loop-final-review-service.js')
-  const { startWorkspaceReview } = await import('../server/services/review-service.js')
-  const admission = vi.spyOn(loops, 'canStartAutomatically').mockReturnValue(false)
-  const source = vi.spyOn(finalReview, 'getFinalReviewSourceSession').mockReturnValue('final-writer')
-  vi.mocked(workspaceService.getWorkspace).mockReturnValue({ ...fakeWorkspace, autoLoop: true })
-  vi.mocked(workspaceService.listSessions).mockReturnValue([
-    { ...fakeSession, id: 'final-writer', engineSessionId: 'writer-native', engine: fakeWorkspace.engine },
-  ] as never)
-  try {
-    await expect(
-      startWorkspaceReview('ws-1', { returnToSession: true }, { autoLoopFinalReview: true }),
-    ).rejects.toThrow('capacity')
-    expect(agentManager.startAgent).not.toHaveBeenCalled()
-    expect(reviewReturns.registerReviewReturn).not.toHaveBeenCalled()
-  } finally {
-    source.mockRestore()
-    admission.mockRestore()
-  }
+it.each(['claude-code', 'mistral-vibe'])(
+  'defers %s final review when another workspace fills capacity during git preparation',
+  async (engine) => {
+    const loops = await import('../server/services/auto-loop-service.js')
+    const finalReview = await import('../server/services/auto-loop-final-review-service.js')
+    const { startWorkspaceReview } = await import('../server/services/review-service.js')
+    const admission = vi.spyOn(loops, 'canStartAutomatically').mockReturnValue(false)
+    const source = vi.spyOn(finalReview, 'getFinalReviewSourceSession').mockReturnValue('final-writer')
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ ...fakeWorkspace, autoLoop: true })
+    vi.mocked(workspaceService.listSessions).mockReturnValue([
+      { ...fakeSession, id: 'final-writer', engineSessionId: 'writer-native', engine: fakeWorkspace.engine },
+    ] as never)
+    try {
+      await expect(
+        startWorkspaceReview('ws-1', { engine, returnToSession: true }, { autoLoopFinalReview: true }),
+      ).rejects.toThrow('capacity')
+      expect(agentManager.startAgent).not.toHaveBeenCalled()
+      expect(reviewReturns.registerReviewReturn).not.toHaveBeenCalled()
+    } finally {
+      source.mockRestore()
+      admission.mockRestore()
+    }
+  },
+)
+
+it.each(['auto', 'configured-iteration'])(
+  'captures configured %s separately from the observed Mistral model for a review return',
+  async (model) => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      engine: 'mistral-vibe',
+      model,
+      reasoningEffort: 'high',
+      agentPermissionMode: 'interactive',
+    })
+    vi.mocked(workspaceService.getActiveSession).mockReturnValue({
+      ...fakeSession,
+      engine: 'mistral-vibe',
+      model: 'native-custom',
+      engineSessionId: 'original-native',
+    } as never)
+    vi.mocked(workspaceService.createIdleSession).mockReturnValue({ id: 'review-session' } as never)
+    const response = await app.request('/api/workspaces/ws-1/start-review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ engine: 'codex', model: 'gpt-6.1-sol', returnToSession: true }),
+    })
+    expect(response.status).toBe(200)
+    expect(vi.mocked(reviewReturns.registerReviewReturn).mock.calls[0]![0].original).toEqual({
+      engine: 'mistral-vibe',
+      model,
+      ...(model !== 'auto' ? { sessionModel: 'native-custom' } : {}),
+      reasoningEffort: 'high',
+      agentPermissionMode: 'interactive',
+    })
+  },
+)
+
+it.each(['plan', 'bypass', 'interactive'] as const)(
+  'starts a fresh Interactive Vibe review from source %s even with newSession=false',
+  async (sourceMode) => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      engine: 'mistral-vibe',
+      model: 'auto',
+      reasoningEffort: 'auto',
+      agentPermissionMode: sourceMode,
+    })
+    const res = await app.request(`/api/workspaces/${fakeWorkspace.id}/start-review`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ newSession: false }),
+    })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ newSession: true })
+    expect(agentManager.sendMessageForFallback).not.toHaveBeenCalled()
+    expect(agentManager.stopAgentAndWait).toHaveBeenCalled()
+    const args = vi.mocked(agentManager.startAgent).mock.calls[0]!
+    expect(args[5]).toBe('interactive')
+    expect(args[2]).toContain('do not modify, create or delete files')
+    expect(args[9]?.mcpEnv?.KOBO_REVIEW_ONLY).toBe('1')
+  },
+)
+it.each(['interactive', 'strict', 'bypass'] as const)(
+  'preserves an explicit native manual mode %s with a durable return',
+  async (mode) => {
+    vi.mocked(workspaceService.getActiveSession).mockReturnValue({
+      ...fakeSession,
+      engineSessionId: 'original-native',
+      engine: fakeWorkspace.engine,
+    } as never)
+    vi.mocked(workspaceService.createIdleSession).mockReturnValue({ ...fakeSession, id: 'review-session' } as never)
+    const res = await app.request(`/api/workspaces/${fakeWorkspace.id}/start-review`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        engine: 'mistral-vibe',
+        model: 'native-alias',
+        reasoningEffort: 'off',
+        agentPermissionMode: mode,
+        returnToSession: true,
+      }),
+    })
+    expect(res.status).toBe(200)
+    expect(vi.mocked(agentManager.startAgent).mock.calls[0]![5]).toBe(mode)
+    expect(reviewReturns.registerReviewReturn).toHaveBeenCalledWith(
+      expect.objectContaining({ review: expect.objectContaining({ agentPermissionMode: mode }) }),
+    )
+    expect(preflightMistralConfiguration).toHaveBeenCalledWith(
+      'mistral-vibe',
+      { workspaceId: fakeWorkspace.id },
+      expect.objectContaining({ model: 'native-alias', reasoningEffort: 'off' }),
+    )
+  },
+)
+it('rejects explicit native Plan and removed models before stopping the source', async () => {
+  const request = (selection: object) =>
+    app.request(`/api/workspaces/${fakeWorkspace.id}/start-review`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ engine: 'mistral-vibe', ...selection }),
+    })
+  expect((await request({ agentPermissionMode: 'plan' })).status).toBe(400)
+  vi.mocked(preflightMistralConfiguration).mockRejectedValueOnce(new Error('Native model removed'))
+  expect((await request({ model: 'removed' })).status).toBe(400)
+  expect(agentManager.stopAgentAndWait).not.toHaveBeenCalled()
+  expect(workspaceService.updateWorkspaceEngineConfiguration).not.toHaveBeenCalled()
 })

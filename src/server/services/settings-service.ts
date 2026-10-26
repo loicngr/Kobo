@@ -1352,6 +1352,23 @@ const settingsMigrations: SettingsMigration[] = [
       if (typeof global.forceImmediateMessages !== 'boolean') global.forceImmediateMessages = false
     },
   },
+  {
+    version: 68,
+    name: 'mistral-native-defaults',
+    migrate: ({ global }) => {
+      for (const [key, value] of [
+        ['defaultModelByEngine', 'auto'],
+        ['defaultPermissionModeByEngine', 'interactive'],
+      ] as const) {
+        const map = global[key]
+        // Missing maps inherit the full fresh-install defaults when settings are read.
+        if (map && typeof map === 'object' && !Array.isArray(map)) {
+          const defaults = map as Record<string, unknown>
+          if (typeof defaults['mistral-vibe'] !== 'string') defaults['mistral-vibe'] = value
+        }
+      }
+    },
+  },
 ]
 
 /** Current settings schema version — always equals the highest migration version. */
@@ -1494,7 +1511,7 @@ function defaultSettings(): Settings {
       notionInProgressStatus: '',
       notionAssigneeProperty: '',
       notionUserId: '',
-      defaultPermissionModeByEngine: { 'claude-code': 'plan', codex: 'plan' },
+      defaultPermissionModeByEngine: { 'claude-code': 'plan', codex: 'plan', 'mistral-vibe': 'interactive' },
       notionMcpKey: '',
       sentryMcpKey: '',
       notionEnabled: false,

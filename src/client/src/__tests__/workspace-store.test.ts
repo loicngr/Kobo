@@ -1499,6 +1499,59 @@ describe('workspace store', () => {
       }
     })
 
+    it('keeps an invalid native form visible and dequeues it after a corrected answer succeeds', async () => {
+      const store = useWorkspaceStore()
+      store.enqueuePending('w1', {
+        kind: 'question',
+        agentSessionId: 'sA',
+        toolCallId: 'native-form',
+        toolName: 'AskUserQuestion',
+        input: { questions: [{ id: 'name', freeText: true, minLength: 2 }] },
+      })
+      vi.spyOn(store, 'fetchWorkspaces').mockResolvedValue(undefined)
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 400,
+          json: async () => ({ error: 'Invalid response for pending user input' }),
+        } as Response)
+        .mockResolvedValueOnce({ ok: true } as Response)
+      vi.stubGlobal('fetch', fetchMock)
+      try {
+        await expect(store.submitDeferredAnswer('w1', { name: 'x' }, 'native-form')).rejects.toThrow('Invalid response')
+        expect(store.peekPending('w1')?.toolCallId).toBe('native-form')
+        await store.submitDeferredAnswer('w1', { name: 'valid' }, 'native-form')
+        expect(store.peekPending('w1')).toBeUndefined()
+      } finally {
+        vi.unstubAllGlobals()
+      }
+    })
+
+    it('preserves typed multi-select values instead of splitting their display strings', async () => {
+      const store = useWorkspaceStore()
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true } as Response)
+      vi.stubGlobal('fetch', fetchMock)
+      try {
+        await store.submitDeferredAnswer('w1', { q: 'One, Two, Three' }, 'q1', false, undefined, {
+          q: ['One, Two', 'Three'],
+        })
+        expect(fetchMock).toHaveBeenCalledWith(
+          '/api/workspaces/w1/deferred-tool-use/answer',
+          expect.objectContaining({
+            body: JSON.stringify({
+              answers: { q: 'One, Two, Three' },
+              toolCallId: 'q1',
+              awaitingFreeForm: false,
+              selections: { q: ['One, Two', 'Three'] },
+            }),
+          }),
+        )
+      } finally {
+        vi.unstubAllGlobals()
+      }
+    })
+
     it('clearPendingForSession drops items of one session, leaves the other', () => {
       const store = useWorkspaceStore()
       store.enqueuePending('w1', {

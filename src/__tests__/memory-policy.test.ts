@@ -79,6 +79,20 @@ describe('memory policy', () => {
     expect(Object.isFrozen(actor)).toBe(true)
   })
 
+  it('accepts Mistral provenance while rejecting unsupported internal engines', () => {
+    const source = {
+      kind: 'internal-agent' as const,
+      workspaceId: 'ws',
+      sessionId: 'session',
+      engine: 'mistral-vibe' as const,
+    }
+    expect(deriveMemoryActor(source)).toEqual(source)
+    expect(Object.isFrozen(deriveMemoryActor(source))).toBe(true)
+    expect(() => deriveMemoryActor({ ...source, engine: 'unknown-engine' } as never)).toThrow(
+      'Invalid internal memory actor source',
+    )
+  })
+
   it('bounds external client labels, removes control characters and validates transport', () => {
     const actor = deriveMemoryActor({
       kind: 'external-mcp',

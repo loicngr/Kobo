@@ -670,7 +670,7 @@
                   <q-chip dense color="kobo-surface-2" text-color="kobo-1" icon="psychology">
                     {{ reasoningOptions.find((item) => item.value === reasoningEffort)?.label ?? reasoningEffort }}
                   </q-chip>
-                  <q-chip dense color="kobo-surface-2" text-color="kobo-1" :icon="agentPermissionModeIcon">
+                  <q-chip v-if="permissionModeSupported" dense color="kobo-surface-2" text-color="kobo-1" :icon="agentPermissionModeIcon">
                     {{
                       agentPermissionModeOptions.find((item) => item.value === resolvedOverrides.agentPermissionMode)
                         ?.label ?? resolvedOverrides.agentPermissionMode
@@ -681,7 +681,7 @@
             </template>
 
             <q-card-section class="responsive-fields row q-col-gutter-x-md q-pt-md">
-              <div v-if="engineSelectOptions.length > 1" class="col-12 q-mb-sm" data-tour="create-comparison">
+              <div v-if="engineSelectOptions.length > 1 && selectedEngineId !== 'mistral-vibe'" class="col-12 q-mb-sm" data-tour="create-comparison">
                 <q-toggle
                   v-model="comparisonMode"
                   :label="$t('createPage.compareEngines')"
@@ -695,6 +695,7 @@
                 </div>
               </div>
 
+              <div v-if="selectedEngineId === 'mistral-vibe'" class="col-12 text-caption text-kobo-3">{{ $t('engine.mistralNativeHint') }}<div role="status">{{ nativeOptions.message }} <q-btn v-if="nativeOptions.message && !nativeOptions.loading" flat dense size="sm" :label="$t('common.retry')" @click="nativeOptions.refresh" /></div></div>
               <div v-if="comparisonMode" class="col-12 text-overline text-kobo-3 q-mb-xs">
                 {{ $t('createPage.engineA') }}
               </div>
@@ -717,6 +718,7 @@
                 <q-select
                   v-model="model"
                   :options="modelOptions"
+                  :loading="nativeOptions.loading"
                   dark
                   dense
                   outlined
@@ -741,6 +743,7 @@
                 <q-select
                   v-model="reasoningEffort"
                   :options="reasoningOptions"
+                  :loading="nativeOptions.loading"
                   dark
                   dense
                   outlined
@@ -763,7 +766,8 @@
               </div>
               <div class="col-12 col-sm-6">
                 <q-select
-                  :model-value="resolvedOverrides.agentPermissionMode"
+                  :model-value="permissionModeSupported ? resolvedOverrides.agentPermissionMode : null"
+                  :display-value="permissionModeSupported ? $t(`agentPermissionMode.${resolvedOverrides.agentPermissionMode}`) : undefined"
                   :options="agentPermissionModeOptions"
                   dark
                   dense
@@ -775,7 +779,8 @@
                   option-label="label"
                   :option-disable="isOptionDisabled"
                   :label="$t('agentPermissionMode.label')"
-                  :hint="autoLoop ? $t('workflow.planExecution') : undefined"
+                  :hint="!permissionModeSupported ? $t('createPage.chooseNativePermissionMode') : autoLoop ? $t('workflow.planExecution') : undefined"
+                  :rules="[() => permissionModeSupported || $t('createPage.chooseNativePermissionMode')]"
                   @update:model-value="(val) => (agentPermissionMode = val as AgentPermissionMode)"
                 />
               </div>
@@ -899,7 +904,8 @@
                 <div class="col-12 col-sm-6">
                   <q-select
                     v-model="brainstormModel"
-                    :options="modelOptions"
+                    :options="brainstormModelOptions"
+                    :loading="nativeBrainstormOptions.loading"
                     dark
                     dense
                     outlined
@@ -915,7 +921,8 @@
                 <div class="col-12 col-sm-6">
                   <q-select
                     v-model="brainstormReasoningEffort"
-                    :options="reasoningOptions"
+                    :options="brainstormReasoningOptions"
+                    :loading="nativeBrainstormOptions.loading"
                     dark
                     dense
                     outlined
@@ -929,8 +936,10 @@
                   />
                 </div>
               </div>
+              <div v-if="selectedEngineId === 'mistral-vibe'" role="status" class="text-caption text-kobo-3">{{ nativeBrainstormOptions.message }}</div>
               <AutoLoopFinalReviewSettings
                 data-tour="create-final-review"
+                :project-path="projectPath"
                 v-model="autoLoopFinalReview"
                 :workspace="{ id: 'create', engine: selectedEngineId, model, reasoningEffort, agentPermissionMode }"
                 :disabled="submitting"
@@ -974,7 +983,7 @@
                 icon-right="arrow_forward"
                 :label="$t('createPage.createWorkspace')"
                 :loading="submitting"
-                :disable="submitting || (useExistingWorktree && !selectedWorktreePath)"
+                :disable="submitting || !permissionModeSupported || (useExistingWorktree && !selectedWorktreePath)"
                 @click="handleCreate"
               />
             </div>
@@ -1012,9 +1021,11 @@ import PrPickerDialog, { type PullRequestSummary } from 'src/components/PrPicker
 import SlashSuggestionsPopup from 'src/components/SlashSuggestionsPopup.vue'
 import TourReplayButton from 'src/components/TourReplayButton.vue'
 import WorkflowPolicyEditor from 'src/components/WorkflowPolicyEditor.vue'
+import { useMistralOptions } from 'src/composables/use-mistral-options'
 import { type SlashDropdownItem, useSlashAutocomplete } from 'src/composables/use-slash-autocomplete'
 import { useTours } from 'src/composables/use-tours'
 import { EFFORT_OPTION_DEFS_BY_ENGINE } from 'src/constants/efforts'
+import { supportsSkills } from 'src/constants/engineFeatures'
 import { MODEL_OPTION_DEFS, MODEL_OPTION_DEFS_BY_ENGINE } from 'src/constants/models'
 import { PERMISSION_MODES_BY_ENGINE } from 'src/constants/permissionModes'
 import { useSettingsStore } from 'src/stores/settings'
@@ -1062,6 +1073,7 @@ interface EngineDto {
 }
 
 const router = useRouter()
+const route = useRoute()
 const $q = useQuasar()
 const store = useWorkspaceStore()
 const settingsStore = useSettingsStore()
@@ -1095,6 +1107,7 @@ const model = ref('auto')
 // different value in its own select.
 const brainstormModel = ref('auto')
 const brainstormReasoningEffort = ref('auto')
+const autoLoop = ref(false)
 const reasoningEffort = ref('auto')
 const reasoningEffortByModel = ref<Record<string, string>>({})
 const projectPath = ref('')
@@ -1106,7 +1119,11 @@ const createTagOptions = computed(() => settingsStore.global.tags ?? [])
 
 // Engine selector state — engine list is loaded from `/api/engines` on mount.
 const engines = ref<EngineDto[]>([])
-const selectedEngineId = ref<string>('claude-code')
+const selectedEngineId = ref<string>(
+  typeof route.query.engine === 'string' && Object.hasOwn(PERMISSION_MODES_BY_ENGINE, route.query.engine)
+    ? route.query.engine
+    : 'claude-code',
+)
 const selectedEngine = computed<EngineDto | undefined>(() => engines.value.find((e) => e.id === selectedEngineId.value))
 /** Run the same task on two engines, in two sibling worktrees, to compare them. */
 const comparisonMode = ref(false)
@@ -1120,10 +1137,16 @@ const comparisonModel = ref<string>('auto')
 const comparisonReasoningEffort = ref<string>('auto')
 const workflowPolicy = ref<Partial<WorkflowPolicy>>({})
 const comparisonPermissionMode = ref<AgentPermissionMode>('bypass')
-const engineSelectOptions = computed(() => engines.value.map((e) => ({ value: e.id, label: e.displayName })))
+const engineSelectOptions = computed(() =>
+  engines.value
+    .filter((e) => !comparisonMode.value || e.id !== 'mistral-vibe')
+    .map((e) => ({ value: e.id, label: e.displayName })),
+)
 /** The engine to compare against — never the one already selected. */
 const comparisonEngineOptions = computed(() =>
-  engines.value.filter((e) => e.id !== selectedEngineId.value).map((e) => ({ value: e.id, label: e.displayName })),
+  engines.value
+    .filter((e) => e.id !== 'mistral-vibe' && e.id !== selectedEngineId.value)
+    .map((e) => ({ value: e.id, label: e.displayName })),
 )
 // Branch prefix options are user-managed in global settings (stored without
 // the trailing `/`). The select emits the bare prefix; `/` is added at display
@@ -1157,6 +1180,7 @@ function deriveDefaultAgentPermissionMode(projectPath: string, engineId: string)
   if (typeof global === 'string' && (ALL_AGENT_PERMISSION_MODES as string[]).includes(global)) {
     return global as AgentPermissionMode
   }
+  if (engineId === 'mistral-vibe') return 'interactive'
   // Legacy fallback for installs that only ever saw the boolean toggle.
   const skip =
     (project as { dangerouslySkipPermissions?: boolean } | null)?.dangerouslySkipPermissions ??
@@ -1170,6 +1194,11 @@ function deriveDefaultAgentPermissionMode(projectPath: string, engineId: string)
 }
 
 const agentPermissionMode = ref<AgentPermissionMode>(deriveDefaultAgentPermissionMode('', selectedEngineId.value))
+const permissionModeSupported = computed(() =>
+  (PERMISSION_MODES_BY_ENGINE[selectedEngineId.value] ?? ALL_AGENT_PERMISSION_MODES).includes(
+    agentPermissionMode.value,
+  ),
+)
 
 const agentPermissionModeIcon = computed<string>(() => {
   switch (resolvedOverrides.value.agentPermissionMode) {
@@ -1244,7 +1273,10 @@ const {
   detectSlashFragment: detectSlash,
   replaceFragmentWith: replaceSlash,
   closeDropdown: closeSlash,
-} = useSlashAutocomplete(description, getDescriptionEl, { excludeKoboCommands: true })
+} = useSlashAutocomplete(description, getDescriptionEl, {
+  excludeKoboCommands: true,
+  supportsSkills: () => supportsSkills(selectedEngineId.value),
+})
 
 void fetchSlashSkills()
 
@@ -1395,13 +1427,31 @@ function onCreateVisibilityChange() {
   }
 }
 
-// Model options — derived from the per-engine catalogue in
-// `src/constants/models.ts` (which mirrors the shared shared/*-models.ts
-// definitions). Server-side capabilities are used only for validation in
-// `POST /api/workspaces`, not for UI rendering. Falls back to Claude's
-// catalogue if the engine id isn't recognised (e.g. third-party engine
-// added server-side before the frontend ships the matching list).
+// Static catalogues for Claude/Codex; Vibe reads its contextual native options.
+const nativeOptions = useMistralOptions(() => ({
+  engine: selectedEngineId.value,
+  projectPath: projectPath.value,
+  model: model.value,
+  reasoningEffort: reasoningEffort.value,
+  agentPermissionMode: agentPermissionMode.value,
+}))
+const nativeBrainstormOptions = useMistralOptions(() => ({
+  engine: selectedEngineId.value,
+  projectPath: projectPath.value,
+  model: brainstormModel.value,
+  reasoningEffort: brainstormReasoningEffort.value,
+  agentPermissionMode: agentPermissionMode.value,
+  enabled: autoLoop.value,
+}))
+const brainstormModelOptions = computed(() =>
+  selectedEngineId.value === 'mistral-vibe' ? nativeBrainstormOptions.models : modelOptions.value,
+)
+const brainstormReasoningOptions = computed(() =>
+  selectedEngineId.value === 'mistral-vibe' ? nativeBrainstormOptions.efforts : reasoningOptions.value,
+)
+
 const modelOptions = computed(() => {
+  if (selectedEngineId.value === 'mistral-vibe') return nativeOptions.models
   const defs = MODEL_OPTION_DEFS_BY_ENGINE[selectedEngineId.value] ?? MODEL_OPTION_DEFS
   return defs.map((option) => ({
     label: t(option.i18nLabelKey),
@@ -1497,6 +1547,15 @@ watch(
  * unknown one (e.g. an id that has since left the catalogue) falls back.
  */
 function normaliseForEngine(preferGlobalDefault = false): void {
+  if (selectedEngineId.value === 'mistral-vibe') {
+    if (preferGlobalDefault) {
+      model.value = settingsStore.global.defaultModelByEngine?.['mistral-vibe'] ?? 'auto'
+      brainstormModel.value = 'auto'
+      reasoningEffort.value = 'auto'
+      brainstormReasoningEffort.value = 'auto'
+    }
+    return
+  }
   const validIds = modelOptions.value.map((m) => m.value)
   if (validIds.length > 0) {
     const globalDefault = settingsStore.global.defaultModelByEngine?.[selectedEngineId.value]
@@ -1511,7 +1570,12 @@ function normaliseForEngine(preferGlobalDefault = false): void {
     brainstormModel.value = validIds.includes('auto') ? 'auto' : (validIds[0] ?? 'auto')
   }
   const supportedModes = PERMISSION_MODES_BY_ENGINE[selectedEngineId.value] ?? []
-  if (supportedModes.length > 0 && !supportedModes.includes(agentPermissionMode.value)) {
+  // An unsupported Plan remains restrictive until the user explicitly chooses an execution mode.
+  if (
+    supportedModes.length > 0 &&
+    !supportedModes.includes(agentPermissionMode.value) &&
+    agentPermissionMode.value !== 'plan'
+  ) {
     agentPermissionMode.value = deriveDefaultAgentPermissionMode(projectPath.value, selectedEngineId.value)
   }
   // Reasoning effort: drop a value that isn't supported by the new engine
@@ -1522,7 +1586,10 @@ function normaliseForEngine(preferGlobalDefault = false): void {
   }
 }
 
-watch(selectedEngineId, () => normaliseForEngine(true))
+watch(selectedEngineId, () => {
+  if (selectedEngineId.value === 'mistral-vibe') comparisonMode.value = false
+  normaliseForEngine(true)
+})
 
 function formatReasoningLabel(label: string): string {
   const separatorIndex = label.indexOf(':')
@@ -1536,6 +1603,7 @@ function formatReasoningLabel(label: string): string {
 // flight. Labels/descriptions stay engine-agnostic via the shared i18n keys
 // `reasoning.<id>` / `reasoning.<id>Description`.
 const reasoningOptions = computed(() => {
+  if (selectedEngineId.value === 'mistral-vibe') return nativeOptions.efforts
   const defs = EFFORT_OPTION_DEFS_BY_ENGINE[selectedEngineId.value] ?? EFFORT_OPTION_DEFS_BY_ENGINE['claude-code']
   return defs.map((d) => ({
     value: d.value,
@@ -1546,7 +1614,10 @@ const reasoningOptions = computed(() => {
 
 watch(model, (selectedModel) => {
   const savedEffort = reasoningEffortByModel.value[selectedModel]
-  if (savedEffort && reasoningOptions.value.some((option) => option.value === savedEffort)) {
+  if (
+    savedEffort &&
+    (selectedEngineId.value === 'mistral-vibe' || reasoningOptions.value.some((option) => option.value === savedEffort))
+  ) {
     reasoningEffort.value = savedEffort
   }
 })
@@ -1623,7 +1694,6 @@ function toggleNotion() {
 }
 
 const useSentry = ref(false)
-const autoLoop = ref(false)
 const autoLoopSessionMode = ref<'per_task' | 'continuous'>('per_task')
 const autoLoopFinalReview = ref<AutoLoopReviewConfiguration | null>(null)
 // NOTE: auto-loop no longer mutates `agentPermissionMode` directly. Doing so
@@ -1634,7 +1704,6 @@ const autoLoopFinalReview = ref<AutoLoopReviewConfiguration | null>(null)
 // preference + autoLoop on every read — for both the request payload and
 // everywhere the mode is displayed — without ever touching the ref itself.
 
-const route = useRoute()
 const workspaceTemplatesStore = useWorkspaceTemplatesStore()
 
 /** The slice of the form a preset describes, read from the refs in one place. */
@@ -2090,12 +2159,16 @@ function applyProjectDefaults(path: string) {
       model.value = project.defaultModel
     } else {
       const globalDefault = settingsStore.global.defaultModelByEngine?.[selectedEngineId.value]
-      if (typeof globalDefault === 'string' && validIds.includes(globalDefault)) {
+      if (
+        typeof globalDefault === 'string' &&
+        (selectedEngineId.value === 'mistral-vibe' || validIds.includes(globalDefault))
+      ) {
         model.value = globalDefault
       }
     }
   }
-  agentPermissionMode.value = deriveDefaultAgentPermissionMode(path, selectedEngineId.value)
+  if (selectedEngineId.value !== 'mistral-vibe' || agentPermissionMode.value !== 'plan')
+    agentPermissionMode.value = deriveDefaultAgentPermissionMode(path, selectedEngineId.value)
 }
 
 // Debounce for project path input
@@ -2152,7 +2225,7 @@ watch(
   () => [route.query.engine, route.query.project, route.query.setupRequest],
   ([engine, project]) => {
     if (!settingsStore.loaded) return
-    if (engine === 'claude-code' || engine === 'codex') selectedEngineId.value = engine
+    if (engine === 'claude-code' || engine === 'codex' || engine === 'mistral-vibe') selectedEngineId.value = engine
     if (typeof project === 'string' && settingsStore.projectPaths.includes(project)) projectPath.value = project
   },
 )
@@ -2166,7 +2239,8 @@ onMounted(async () => {
 
   // The setup flow hands off to the ordinary creation form; it never starts an agent itself.
   const setupEngine = route.query.engine
-  if (setupEngine === 'claude-code' || setupEngine === 'codex') selectedEngineId.value = setupEngine
+  if (setupEngine === 'claude-code' || setupEngine === 'codex' || setupEngine === 'mistral-vibe')
+    selectedEngineId.value = setupEngine
 
   // Default the branch-type selector to the first configured prefix when the
   // current value isn't part of the user's list (e.g. legacy 'feature' default
@@ -2199,7 +2273,8 @@ onMounted(async () => {
     projectPath.value = setupProject
   }
 
-  agentPermissionMode.value = deriveDefaultAgentPermissionMode(projectPath.value, selectedEngineId.value)
+  if (selectedEngineId.value !== 'mistral-vibe' || agentPermissionMode.value !== 'plan')
+    agentPermissionMode.value = deriveDefaultAgentPermissionMode(projectPath.value, selectedEngineId.value)
   try {
     const res = await apiFetchResponse('/api/engines')
     if (res.ok) {
@@ -2215,17 +2290,23 @@ onMounted(async () => {
   {
     const validIds = modelOptions.value.map((m) => m.value)
     const globalDefault = settingsStore.global.defaultModelByEngine?.[selectedEngineId.value]
-    if (typeof globalDefault === 'string' && validIds.includes(globalDefault)) {
+    if (
+      typeof globalDefault === 'string' &&
+      (selectedEngineId.value === 'mistral-vibe' || validIds.includes(globalDefault))
+    ) {
       model.value = globalDefault
     } else if (validIds.length > 0 && !validIds.includes(model.value)) {
       model.value = validIds.includes('auto') ? 'auto' : (validIds[0] ?? 'auto')
     }
   }
   const savedEffort = reasoningEffortByModel.value[model.value]
-  if (savedEffort && reasoningOptions.value.some((option) => option.value === savedEffort)) {
+  if (
+    savedEffort &&
+    (selectedEngineId.value === 'mistral-vibe' || reasoningOptions.value.some((option) => option.value === savedEffort))
+  ) {
     reasoningEffort.value = savedEffort
   }
-  {
+  if (selectedEngineId.value !== 'mistral-vibe') {
     const validIds = modelOptions.value.map((m) => m.value)
     if (validIds.length > 0 && !validIds.includes(brainstormModel.value)) {
       brainstormModel.value = validIds.includes('auto') ? 'auto' : (validIds[0] ?? 'auto')
@@ -2431,7 +2512,7 @@ async function handleCreate() {
   // button's `:disable="submitting"` — guard here too, or a key-repeat /
   // fast double-press fires two concurrent POST /api/workspaces calls,
   // creating two duplicate workspaces from one user action.
-  if (submitting.value) return
+  if (submitting.value || !permissionModeSupported.value) return
 
   const error = validate()
   if (error) {

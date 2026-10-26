@@ -4,7 +4,7 @@ Guidance for AI coding agents (Claude Code, Cursor, etc.) working on this reposi
 
 ## What this project is
 
-**Kōbō** (工房, Japanese for "workshop") orchestrates Claude Code and OpenAI Codex agents across isolated git worktrees. Each "workspace" is a self-contained mission with its own worktree, branch, agent sessions, optional dev server, optional Notion/Sentry context, and a dedicated MCP tools server. A Vue 3 UI lets the human track progress, read live agent output, review Git changes, and manage the lifecycle. A workspace can switch engines through a handoff to a fresh session while preserving its worktree and history.
+**Kōbō** (工房, Japanese for "workshop") orchestrates Claude Code, OpenAI Codex and Mistral Vibe agents across isolated git worktrees. Each "workspace" is a self-contained mission with its own worktree, branch, agent sessions, optional dev server, optional Notion/Sentry context, and a dedicated MCP tools server. A Vue 3 UI lets the human track progress, read live agent output, review Git changes, and manage the lifecycle. A workspace can switch engines through a handoff to a fresh session while preserving its worktree and history.
 
 Single-user dev tool, local by default. The server binds `127.0.0.1` unless the opt-in "network access" setting is enabled. Operator HTTP access uses the network token or a 12-hour HttpOnly browser session; browsers use 60-second single-use path-bound tickets for WebSocket upgrades, never the operator token in the URL or localStorage. Behind-a-reverse-proxy mode also gates loopback operator requests. Rotation, network disable and proxy-mode changes revoke sessions, tickets and active WebSockets. `/api/health` stays exempt. Host/Origin checks apply separately; public proxy origin must be declared explicitly. No multi-tenant concerns.
 
@@ -70,7 +70,7 @@ src/
 │   │   │   ├── orchestrator.ts     # per-workspace engine map, retry/quota handling, watchdog, public API
 │   │   │   ├── session-controller.ts # lifecycle wrapper around an AgentEngine instance
 │   │   │   ├── event-router.ts     # persists/broadcasts normalized AgentEvent via WebSocket
-│   │   │   └── engines/{claude-code,codex}/ # per-engine adapters implementing the AgentEngine contract
+│   │   │   └── engines/{claude-code,codex,mistral-vibe}/ # per-engine adapters implementing the AgentEngine contract
 │   │   ├── forge/                  # github / gitlab / bitbucket-community / none, registry + auto-resolve
 │   │   ├── change-source-branch-service.ts # re-target a workspace onto a new source branch (built-in cherry-pick or custom bash)
 │   │   ├── git-stats-service.ts    # pure compute of commit/ahead-behind/diff stats + forge availability for a workspace
@@ -178,7 +178,7 @@ and [VPS setup](./docs/vps-projects-and-skills.md#switch-engine-accounts-inside-
 
 ## Persistent memory
 
-Kōbō memory is independent of provider chat history/native memory and shared by Claude Code and Codex. `memoryMode` is a global setting defaulting to `hybrid`: Manual permits reads only; Hybrid applies workspace writes and proposes project/global writes; Automatic applies writes to the explicitly targeted scope. Mode is checked per operation, so a setting change affects existing agent sessions; pending/rejected proposals are never automatically approved or revived. Plan/review/report-only capabilities cannot write.
+Kōbō memory is independent of provider chat history/native memory and shared by Claude Code, Codex and Mistral Vibe. `memoryMode` is a global setting defaulting to `hybrid`: Manual permits reads only; Hybrid applies workspace writes and proposes project/global writes; Automatic applies writes to the explicitly targeted scope. Mode is checked per operation, so a setting change affects existing agent sessions; pending/rejected proposals are never automatically approved or revived. Plan/review/report-only capabilities cannot write.
 
 `memory_scopes` identify global, normalized configured project path, or durable workspace id. Project identity is not a display name, branch, or worktree path. Clear is transactional: it deletes entries and pending proposals only from the exact scope, increments generation, and writes content-free journal metadata. Every delayed writer supplies its expected generation. Workspace archive/purge preserves memory; workspace deletion cascades its own scope and launch records while leaving global/project scopes intact. Provenance FKs become null when the source session/workspace is deleted; saved memory remains in its scope until explicitly erased.
 
@@ -444,7 +444,7 @@ See the "Notion integration" section of the README for the end-user setup guide.
 ### Launch instructions
 
 `src/shared/launch-instructions.ts` composes application-owned MCP discovery,
-permissions, progress reporting and continuation rules for both engines on every
+permissions, progress reporting and continuation rules for all three engines on every
 fresh/resumed launch. Prefer discovering the available tool schemas to embedding
 a duplicate catalogue. Keep Plan conversation-only; template approval cannot
 expand tool permissions. Initial writable auto-loop launches seed tasks and end;
@@ -493,11 +493,58 @@ through `ExitPlanMode`; a permission change requires a new launch.
 
 ### Agent engines
 
-Two engines live under `src/server/services/agent/engines/`, both implementing the `AgentEngine` contract in `types.ts`:
+**Mistral Vibe** (`mistral-vibe/`, engine id `mistral-vibe`) uses ACP v1 through
+SDK 2.0.1 and the server user's PATH-resolved `vibe-acp`. Native setup/authentication
+belongs to that same user/environment, including Docker; Kōbō stores no Vibe key.
+Model/thinking choices come from validated native ACP `configOptions`, including
+model-specific thinking levels. `auto` omits setters; explicit launch selections
+use public ACP setters and may persist native Vibe preferences. Discovery uses
+child-only native environment overrides and session/new without prompts, setters,
+provider requests or Kōbō MCP grants. Resolve workspace/project context server-side;
+cache/coalesce only after confirmed native closure and retain failed shutdown slots.
+Preflight explicit choices before mutations, then confirm mode → model → thinking
+again on the actual new/load session before prompting. Static Auto catalogues are
+fallbacks, never complete membership validators. Configured Auto must not acquire
+an observed session-model override during resume or review return; explicit source
+configuration may restore the observed source/brainstorm alias. Native review
+return thinking comes from the pinned saved session, never the workspace iteration
+effort. Auto-model resumes with explicit thinking defer catalogue membership to
+the loaded native session because session/new defaults may use another model.
+Fresh Vibe workspaces default to `interactive`;
+`interactive`/`strict`/`bypass` select advertised native `ask`/`accept-edits`/
+`auto-approve`. Native profiles/admin policy remain authoritative. Reject Plan,
+readOnly and restricted handoff-summary launches before spawn or workspace mutations.
+Manual Vibe reviews always use a fresh controlled launch, Interactive by default;
+automatic final reviews are fixed Interactive. Native permissions do not enforce
+filesystem read-only access: prompts forbid every modification and approvals may
+pause the review. Kōbō MCP/memory grants and bootstrap remain read-only even in
+Automatic memory mode. Returning/final reviewers derive this role from durable
+state; no-return reviews use the private KOBO_REVIEW_ONLY launch marker.
+Explicit native Plan requests still fail; only explicitly starting a native review
+chooses its independent Interactive default. Ordinary saved Plan is never promoted.
+
+No live steering, account/quota panel, managed skills or sub-agent cards/individual
+stop. Queue messages until confirmed native closure, then resume; immediate sends
+fail while busy. Normal task/memory/progress MCP and manual handoff destinations
+remain supported. Shared memory migration v55 preserves existing facts and adds
+Mistral provenance. Setup requests have 20-second initialize/30-second session
+limits; prompts have no absolute deadline. Opt-in liveness uses 120 seconds
+foreground silence or 30 minutes unresolved tools, paused for human input.
+
+Native shutdown drains stdout, ends stdin and awaits actual exit and an empty
+owned process group; a close ACK is insufficient. Allow 15 seconds for native EOF
+cleanup before bounded signal fallback. Unconfirmed/abnormal exit retains ownership.
+Do not claim arbitrary unmanaged descendant containment. Vibe 3.0.1 has passed the
+real-adapter offline provider/MCP smoke on Linux; paid-provider compatibility is
+still unverified. Health version detection proves executable availability only,
+never authentication. See [setup](CONFIGURATION.md#mistral-vibe) and
+[compatibility evidence](src/__tests__/fixtures/mistral-acp/README.md).
+
+Three engines live under `src/server/services/agent/engines/`, implementing the `AgentEngine` contract in `types.ts`:
 
 Global `agentWatchdogEnabled` is opt-in (false for fresh and existing installs;
 settings migration v64). The orchestrator snapshots it into `StartOptions.watchdogEnabled`
-on every launch/resume for both engines. Gate stream/tool inactivity, background
+on every launch/resume for all three engines. Gate stream/tool inactivity, background
 stall, compaction and failed-result-drain watchdogs; retain normal completion,
 manual stop, protocol/startup deadlines and confirmed-dead-process cleanup.
 The toggle is first in Settings → Agents and does not reconfigure active launches.
@@ -616,8 +663,10 @@ never automatically resend a possibly delivered summary. Explicit user stop canc
 the continuation. Errors retain recoverable intent and restore original settings.
 
 `auto_loop_final_reviews` (migration v52) adds an optional final gate configured
-before execution. Each pass starts a separate Plan review session with its own
-engine/model/effort/instructions. Only the active reviewer capability may submit
+before execution. Each pass starts a separate review session with its own
+engine/model/effort/instructions: Plan for Claude Code/Codex, native Interactive
+for Vibe. Kōbō grants allow only reads and scoped reports; native Vibe permissions
+do not guarantee filesystem read-only access and may require human approval. Only the active reviewer capability may submit
 the structured `kobo__submit_final_review` verdict. Findings become work tasks,
 invalidate finalization, and return to the exact original working session for
 automatic corrections under its original permissions. Repeat verification and a
@@ -716,7 +765,7 @@ global and project settings; keep this help and CONFIGURATION.md in sync.
 
 Successful paired creation opens the existing `split` route with `left` and `right` workspace ids in creation order. A single successful creation keeps the normal workspace route, including when the second creation fails.
 
-One task, two engines, two sibling worktrees. `POST /api/workspaces` accepts a `comparisonId`; the client posts twice with the same one (sequentially — parallel creations contend on the git index lock), suffixing the name with the engine's display name and the branch with the engine id and giving the non-configured engine the model picked for it on the form and its own effort / permission defaults. `workspaces.comparison_id` (migration v40) groups them; `listComparisonMembers` reads them back, treating an empty id as no group rather than as a match against the NULL majority. `GET /api/workspaces/:id/comparison` returns each member with its cached git stats (`null`, never zeros, when nothing has been measured). `ComparisonPanel.vue` renders the table at the top of the Git tab, only for workspaces that belong to a comparison. See [CONFIGURATION.md → Comparing two engines on one task](CONFIGURATION.md#comparing-two-engines-on-one-task).
+One task, Claude Code versus Codex, two sibling worktrees. Mistral Vibe is excluded from comparisons. `POST /api/workspaces` accepts a `comparisonId`; the client posts twice with the same one (sequentially — parallel creations contend on the git index lock), suffixing the name with the engine's display name and the branch with the engine id and giving the non-configured engine the model picked for it on the form and its own effort / permission defaults. `workspaces.comparison_id` (migration v40) groups them; `listComparisonMembers` reads them back, treating an empty id as no group rather than as a match against the NULL majority. `GET /api/workspaces/:id/comparison` returns each member with its cached git stats (`null`, never zeros, when nothing has been measured). `ComparisonPanel.vue` renders the table at the top of the Git tab, only for workspaces that belong to a comparison. See [CONFIGURATION.md → Comparing two engines on one task](CONFIGURATION.md#comparing-two-engines-on-one-task).
 
 ### Unanswered question reminder
 

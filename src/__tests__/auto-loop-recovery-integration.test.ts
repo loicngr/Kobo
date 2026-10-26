@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest'
+import { MISTRAL_CAPABILITIES } from '../server/services/agent/engines/mistral-vibe/capabilities.js'
 import type { AgentEngine, AgentEvent } from '../server/services/agent/engines/types.js'
 
 vi.mock('../server/services/websocket-service.js', () => ({ emit: vi.fn(), emitEphemeral: vi.fn() }))
@@ -70,20 +71,27 @@ beforeEach(async () => {
       resolvePendingUserInput: () => false,
     }
   })
-  _registerEngineForTest({
-    id: 'claude-code',
-    displayName: 'Audit fake',
-    capabilities: {
-      models: [],
-      permissionModes: ['bypass'],
-      supportsResume: true,
-      supportsMcp: true,
-      supportsSkills: true,
-      supportsSubagents: false,
-      supportsQuotaStatus: false,
-    },
-    start: starts,
-  })
+  for (const engine of ['claude-code', 'mistral-vibe'] as const)
+    _registerEngineForTest({
+      id: engine,
+      displayName: 'Audit fake',
+      capabilities:
+        engine === 'mistral-vibe'
+          ? { ...MISTRAL_CAPABILITIES }
+          : {
+              models: [{ id: 'auto', label: 'Auto' }],
+              effortLevels: [{ id: 'auto', label: 'Auto' }],
+              permissionModes: ['interactive', 'bypass'],
+              supportsResume: true,
+              supportsMcp: true,
+              supportsLiveSteering: true,
+              supportsReadOnly: true,
+              supportsSkills: true,
+              supportsSubagents: false,
+              supportsQuotaStatus: false,
+            },
+      start: starts,
+    })
   orch = await import('../server/services/agent/orchestrator.js')
   loop = await import('../server/services/auto-loop-service.js')
   quota = await import('../server/services/quota-backoff-service.js')
@@ -257,35 +265,41 @@ describe('auto-loop recovery integration', () => {
     expect(quota.getPending(id)).toBeNull()
     expect(starts).toHaveBeenCalledTimes(1)
   })
-  it('visibly blocks an unconfirmed close without releasing ownership or restarting after late closure', async () => {
-    let close!: () => void
-    const closed = new Promise<void>((resolve) => {
-      close = resolve
-    })
-    starts.mockImplementationOnce(async (_options, onEvent) => {
-      emitter = onEvent
-      return {
-        pid: undefined,
-        engineSessionId: 'audit-engine',
-        closed,
-        isAlive: () => true,
-        sendMessage() {},
-        interrupt() {},
-        async stop() {},
-        resolvePendingUserInput: () => false,
-      }
-    })
-    orch.startAgent(id, '/tmp', 'work')
-    await flush()
-    emitter({ kind: 'session:ended', reason: 'watchdog', exitCode: null })
-    await vi.advanceTimersByTimeAsync(orch.STOP_AGENT_TIMEOUT_MS)
-    expect(loop.getStatus(id)).toMatchObject({ state: 'blocked', reason: 'engine-stop-unconfirmed', auto_loop: true })
-    expect(orch.hasController(id)).toBe(true)
-    close()
-    await flush()
-    expect(starts).toHaveBeenCalledTimes(1)
-    expect(quota.getPending(id)).toBeNull()
-  })
+  it.each(['claude-code', 'mistral-vibe'] as const)(
+    'blocks %s on unconfirmed close without restarting after late closure',
+    async (engine) => {
+      db.prepare(
+        "UPDATE workspaces SET engine=?,model='auto',reasoning_effort='auto',agent_permission_mode='bypass' WHERE id=?",
+      ).run(engine, id)
+      let close!: () => void
+      const closed = new Promise<void>((resolve) => {
+        close = resolve
+      })
+      starts.mockImplementationOnce(async (_options, onEvent) => {
+        emitter = onEvent
+        return {
+          pid: undefined,
+          engineSessionId: 'audit-engine',
+          closed,
+          isAlive: () => true,
+          sendMessage() {},
+          interrupt() {},
+          async stop() {},
+          resolvePendingUserInput: () => false,
+        }
+      })
+      orch.startAgent(id, '/tmp', 'work')
+      await flush()
+      emitter({ kind: 'session:ended', reason: 'watchdog', exitCode: null })
+      await vi.advanceTimersByTimeAsync(orch.STOP_AGENT_TIMEOUT_MS)
+      expect(loop.getStatus(id)).toMatchObject({ state: 'blocked', reason: 'engine-stop-unconfirmed', auto_loop: true })
+      expect(orch.hasController(id)).toBe(true)
+      close()
+      await flush()
+      expect(starts).toHaveBeenCalledTimes(1)
+      expect(quota.getPending(id)).toBeNull()
+    },
+  )
   it('treats HTTP 429 as quota even when surfaced as a generic SDK exception', async () => {
     starts.mockRejectedValueOnce(new Error('HTTP 429 Too Many Requests'))
     orch.startAgent(id, '/tmp', 'work')
@@ -300,37 +314,43 @@ describe('auto-loop recovery integration', () => {
     expect(loop.getStatus(id)).toMatchObject({ auto_loop: true, state: 'blocked', reason: 'retry-exhausted' })
     expect(quota.getPending(id)).toBeNull()
   })
-  it('retains ownership until the engine closes and handles one terminal event', async () => {
-    let close!: () => void
-    const closed = new Promise<void>((resolve) => {
-      close = resolve
-    })
-    starts.mockImplementationOnce(async (_options, onEvent) => {
-      emitter = onEvent
-      return {
-        pid: undefined,
-        engineSessionId: 'audit-engine',
-        closed,
-        isAlive: () => true,
-        sendMessage() {},
-        interrupt() {},
-        async stop() {},
-        resolvePendingUserInput: () => false,
-      }
-    })
-    const first = orch.startAgent(id, '/tmp', 'work')
-    await flush()
-    const firstEmitter = emitter
-    firstEmitter({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
-    firstEmitter({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
-    await flush()
-    expect(starts).toHaveBeenCalledTimes(1)
-    expect(orch._getControllers().get(id)?.agentSessionId).toBe(first.agentSessionId)
-    close()
-    await flush()
-    expect(starts).toHaveBeenCalledTimes(2)
-    expect(loop.getStatus(id).no_progress_streak).toBe(1)
-  })
+  it.each(['claude-code', 'mistral-vibe'] as const)(
+    'retains %s ownership until actual closure before one next iteration',
+    async (engine) => {
+      db.prepare(
+        "UPDATE workspaces SET engine=?,model='auto',reasoning_effort='auto',agent_permission_mode='bypass' WHERE id=?",
+      ).run(engine, id)
+      let close!: () => void
+      const closed = new Promise<void>((resolve) => {
+        close = resolve
+      })
+      starts.mockImplementationOnce(async (_options, onEvent) => {
+        emitter = onEvent
+        return {
+          pid: undefined,
+          engineSessionId: 'audit-engine',
+          closed,
+          isAlive: () => true,
+          sendMessage() {},
+          interrupt() {},
+          async stop() {},
+          resolvePendingUserInput: () => false,
+        }
+      })
+      const first = orch.startAgent(id, '/tmp', 'work')
+      await flush()
+      const firstEmitter = emitter
+      firstEmitter({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
+      firstEmitter({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
+      await flush()
+      expect(starts).toHaveBeenCalledTimes(1)
+      expect(orch._getControllers().get(id)?.agentSessionId).toBe(first.agentSessionId)
+      close()
+      await flush()
+      expect(starts).toHaveBeenCalledTimes(2)
+      expect(loop.getStatus(id).no_progress_streak).toBe(1)
+    },
+  )
   it('counts neither metadata touches nor a previously reached task milestone as progress', async () => {
     db.prepare('UPDATE workspaces SET auto_loop=0 WHERE id=?').run(id)
     const spy = vi.spyOn(loop, 'onSessionEnded')
@@ -346,13 +366,19 @@ describe('auto-loop recovery integration', () => {
       expect(spy).toHaveBeenLastCalledWith(id, 'completed', expected[n], false, session.agentSessionId)
     }
   })
-  it('honors a known quota reset several days away', async () => {
-    orch._test_setRateLimitInfo(id, { buckets: [{ id: 'weekly', usedPct: 100, resetsAt: '2026-09-20T10:00:00Z' }] })
-    expect(await orch.computeQuotaBackoffMs(id, 0)).toMatchObject({
-      delayMs: 3 * 24 * 3600000 + 30000,
-      source: 'rate_limit_info',
-    })
-  })
+  it.each(['claude-code', 'mistral-vibe'] as const)(
+    'honors a known %s quota reset several days away',
+    async (engine) => {
+      db.prepare(
+        "UPDATE workspaces SET engine=?,model='auto',reasoning_effort='auto',agent_permission_mode='bypass' WHERE id=?",
+      ).run(engine, id)
+      orch._test_setRateLimitInfo(id, { buckets: [{ id: 'weekly', usedPct: 100, resetsAt: '2026-09-20T10:00:00Z' }] })
+      expect(await orch.computeQuotaBackoffMs(id, 0)).toMatchObject({
+        delayMs: 3 * 24 * 3600000 + 30000,
+        source: 'rate_limit_info',
+      })
+    },
+  )
   it('a genuine quota does not exhaust the transient failure budget', async () => {
     orch._getRetryCounts().set(id, 5)
     await orch._handleQuota(id)
@@ -464,6 +490,62 @@ describe('auto-loop recovery integration', () => {
 })
 
 describe('shared scheduler admission visibility', () => {
+  it.each([2, 0])('reconsiders existing waiting loops immediately after increasing capacity to %i', async (limit) => {
+    admissionConfig.maxConcurrentAgents = 1
+    const { createWorkspace } = await import('../server/services/workspace-service.js')
+    const active = createWorkspace({
+      name: 'active',
+      projectPath: '/tmp',
+      sourceBranch: 'main',
+      workingBranch: 'active',
+    }).id
+    db.prepare("UPDATE workspaces SET agent_permission_mode='interactive' WHERE id=?").run(id)
+    orch.startAgent(active, '/tmp', 'manual')
+    await flush()
+    loop.resumeWaitingWorkspaces()
+    expect(starts).toHaveBeenCalledTimes(1)
+    const originalController = orch._getControllers().get(active)
+    const { setRuntime } = await import('../server/services/auto-loop-state-service.js')
+    db.prepare('UPDATE workspaces SET no_progress_streak=2 WHERE id=?').run(id)
+    setRuntime(id, { state: 'waiting', iteration: 8, diagnostic_attempts: 1 })
+    admissionConfig.maxConcurrentAgents = limit
+    orch.notifyCapacityAvailable()
+    await vi.advanceTimersByTimeAsync(1)
+    await flush()
+    expect(starts).toHaveBeenCalledTimes(2)
+    expect(orch._getControllers().get(active)).toBe(originalController)
+    expect(orch.hasController(id)).toBe(true)
+    expect(loop.getStatus(id)).toMatchObject({
+      auto_loop: true,
+      no_progress_streak: 2,
+      iteration: 9,
+      diagnostic_attempts: 2,
+    })
+  })
+
+  it('preserves active ownership on reduction and honors quota when capacity expands', async () => {
+    const { createWorkspace } = await import('../server/services/workspace-service.js')
+    const active = createWorkspace({
+      name: 'active',
+      projectPath: '/tmp',
+      sourceBranch: 'main',
+      workingBranch: 'active',
+    }).id
+    orch.startAgent(active, '/tmp', 'manual')
+    await flush()
+    const controller = orch._getControllers().get(active)
+    admissionConfig.maxConcurrentAgents = 1
+    expect(orch._getControllers().get(active)).toBe(controller)
+    expect(loop.getAutomaticAdmissionStatus(id)).toMatchObject({ allowed: false, reason: 'capacity', running: 1 })
+    quota.arm(id, 3_600_000, { resetsAt: null, source: 'fallback_ladder', reason: 'quota', retryCount: 2 })
+    admissionConfig.maxConcurrentAgents = 4
+    orch.notifyCapacityAvailable()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(starts).toHaveBeenCalledTimes(1)
+    expect(orch._getControllers().get(active)).toBe(controller)
+    expect(quota.getPending(id)?.retryCount).toBe(2)
+  })
+
   it('keeps a capacity-deferred wakeup across a ten-minute shutdown until the slot actually closes', async () => {
     admissionConfig.maxConcurrentAgents = 1
     const { createWorkspace } = await import('../server/services/workspace-service.js')
@@ -531,4 +613,48 @@ describe('shared scheduler admission visibility', () => {
     expect(wakeup.getPending(waiting)).toBeNull()
     wakeup.suspendForShutdown()
   })
+})
+
+it.each(['bash', 'TodoWrite'])('does not accept Mistral %s activity as task verification', async (name) => {
+  const { listTasks, updateTask } = await import('../server/services/workspace-service.js')
+  db.prepare(
+    "UPDATE workspaces SET engine='mistral-vibe',model='auto',reasoning_effort='auto',agent_permission_mode='interactive' WHERE id=?",
+  ).run(id)
+  orch.startAgent(id, '/tmp', 'work', 'auto', false, 'interactive')
+  await flush()
+  const task = listTasks(id)[0]!
+  emitter({
+    kind: 'tool:call',
+    messageId: 'native-message',
+    toolCallId: 'native-tool',
+    name,
+    input:
+      name === 'TodoWrite'
+        ? { todos: [{ content: task.title, status: 'completed', activeForm: 'Done' }] }
+        : { command: 'test' },
+  })
+  emitter({ kind: 'tool:result', toolCallId: 'native-tool', output: 'passed', isError: false })
+  expect(listTasks(id)).toEqual([task])
+  expect(() => updateTask(task.id, { status: 'done' })).toThrow(/verification/i)
+  emitter({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
+  await flush()
+  expect(listTasks(id)[0]).toMatchObject({ id: task.id, status: 'pending', verification: null })
+  expect(loop.getStatus(id)).toMatchObject({ auto_loop: true, no_progress_streak: 1 })
+})
+
+it('keeps an unknown Mistral quota reset null and does not query another provider', async () => {
+  db.prepare(
+    "UPDATE workspaces SET engine='mistral-vibe',model='auto',reasoning_effort='auto',agent_permission_mode='interactive' WHERE id=?",
+  ).run(id)
+  const poller = await import('../server/services/usage/poller.js')
+  vi.mocked(poller.refreshNow).mockClear()
+  expect(await orch.computeQuotaBackoffMs(id, 0)).toEqual({ delayMs: 15 * 60_000, source: 'fallback_ladder' })
+  orch.startAgent(id, '/tmp', 'work', 'auto', false, 'interactive')
+  await flush()
+  emitter({ kind: 'error', category: 'quota', code: 'acp_quota', message: 'Mistral quota exhausted' })
+  emitter({ kind: 'session:ended', reason: 'error', exitCode: null })
+  await flush()
+  expect(quota.getPending(id)).toMatchObject({ resetsAt: null, source: 'fallback_ladder', reason: 'quota' })
+  expect(loop.getStatus(id).auto_loop).toBe(true)
+  expect(poller.refreshNow).not.toHaveBeenCalled()
 })

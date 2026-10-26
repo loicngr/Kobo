@@ -1,3 +1,5 @@
+import fs from 'node:fs'
+import path from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentEngine, AgentEvent } from '../../server/services/agent/engines/types.js'
 import { resetDb } from '../helpers/reset-db.js'
@@ -37,7 +39,7 @@ async function flush(): Promise<void> {
 }
 
 /** Engine whose stop() only settles when the test releases it. */
-function makeGatedEngine(): {
+function makeGatedEngine(id: 'claude-code' | 'mistral-vibe' = 'claude-code'): {
   engine: AgentEngine
   releaseStop: () => void
   startCount: () => number
@@ -47,14 +49,17 @@ function makeGatedEngine(): {
   let startCount = 0
   let memoryCapability: string | undefined
   const engine: AgentEngine = {
-    id: 'claude-code',
-    displayName: 'Claude Code',
+    id,
+    displayName: id,
     capabilities: {
       models: [{ id: 'auto', label: 'Auto' }],
-      permissionModes: ['bypass'],
+      effortLevels: [{ id: 'auto', label: 'Auto' }],
+      permissionModes: ['interactive', 'bypass'],
       supportsResume: true,
       supportsMcp: true,
-      supportsSkills: true,
+      supportsLiveSteering: id !== 'mistral-vibe',
+      supportsReadOnly: id !== 'mistral-vibe',
+      supportsSkills: id !== 'mistral-vibe',
       supportsSubagents: false,
       supportsQuotaStatus: false,
     },
@@ -1067,6 +1072,8 @@ describe('Orchestrator — watchdog respects the stopping window', () => {
         permissionModes: ['bypass'],
         supportsResume: true,
         supportsMcp: true,
+        supportsLiveSteering: true,
+        supportsReadOnly: true,
         supportsSkills: true,
         supportsSubagents: false,
         supportsQuotaStatus: false,
@@ -1122,5 +1129,94 @@ describe('Orchestrator — watchdog respects the stopping window', () => {
 
     resolveStop?.()
     await expect(stopped).resolves.toBe('stopped')
+  })
+})
+
+describe('Mistral ownership before destructive work', () => {
+  it.each([
+    ['delete', 'delayed-close'],
+    ['purge-worktree', 'delayed-close'],
+    ['delete', 'inspection-failed'],
+    ['purge-worktree', 'inspection-failed'],
+  ] as const)('retains files and records for %s after %s', async (operation, failure) => {
+    vi.resetModules()
+    vi.clearAllMocks()
+    const { tmpDir } = await resetDb()
+    const { createWorkspace, createTask, getWorkspace, listTasks } = await import(
+      '../../server/services/workspace-service.js'
+    )
+    const { _registerEngineForTest } = await import('../../server/services/agent/engines/registry.js')
+    const { getDb } = await import('../../server/db/index.js')
+    const gated = makeGatedEngine('mistral-vibe')
+    const start = gated.engine.start
+    let close!: () => void
+    const closed = new Promise<void>((resolve) => {
+      close = resolve
+    })
+    let end!: (event: AgentEvent) => void
+    gated.engine.start = async (options, emit) => {
+      end = emit
+      const process = await start(options, emit)
+      return {
+        ...process,
+        closed,
+        stop:
+          failure === 'inspection-failed'
+            ? async () => {
+                throw new Error('Owned process-group inspection failed')
+              }
+            : async () => {},
+      }
+    }
+    _registerEngineForTest(gated.engine)
+    const workspace = createWorkspace({
+      name: 'Owned Vibe',
+      engine: 'mistral-vibe',
+      model: 'auto',
+      agentPermissionMode: 'interactive',
+      projectPath: tmpDir,
+      sourceBranch: 'main',
+      workingBranch: 'owned',
+    })
+    getDb().prepare('UPDATE workspaces SET worktree_path=?,worktree_owned=1 WHERE id=?').run(tmpDir, workspace.id)
+    const task = createTask(workspace.id, { title: 'Do not lose this task' })
+    const marker = path.join(tmpDir, 'uncommitted.txt')
+    fs.writeFileSync(marker, 'Keep uncommitted work')
+    const orch = await import('../../server/services/agent/orchestrator.js')
+    const { default: app } = await import('../../server/routes/workspaces.js')
+    orch.startAgent(workspace.id, tmpDir, 'work', 'auto', false, 'interactive')
+    await flush()
+    end({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
+    await flush()
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.useFakeTimers()
+    try {
+      const response = app.request(`/${workspace.id}${operation === 'delete' ? '' : '/purge-worktree'}`, {
+        method: operation === 'delete' ? 'DELETE' : 'POST',
+      })
+      await vi.advanceTimersByTimeAsync(orch.STOP_AGENT_TIMEOUT_MS + 1)
+      const result = await response
+      expect(result.status).toBe(409)
+      expect(await result.json()).toMatchObject({ error: expect.stringContaining('Agent stop is not confirmed') })
+      expect(orch.hasController(workspace.id)).toBe(true)
+      expect(() => orch.startAgent(workspace.id, tmpDir, 'replacement')).toThrow(/stopping/i)
+      expect(gated.startCount()).toBe(1)
+      expect(fs.readFileSync(marker, 'utf8')).toBe('Keep uncommitted work')
+      expect(getWorkspace(workspace.id)).toMatchObject({ worktreePurgedAt: null })
+      expect(listTasks(workspace.id)).toEqual([task])
+      close()
+      await vi.advanceTimersByTimeAsync(1)
+      if (failure === 'inspection-failed') {
+        expect(orch.hasController(workspace.id)).toBe(true)
+        orch._getControllers().get(workspace.id)!.engineProcess!.stop = async () => {}
+        await expect(orch.stopAgentAndWait(workspace.id)).resolves.toBe('stopped')
+      }
+      expect(orch.hasController(workspace.id)).toBe(false)
+      expect(gated.startCount()).toBe(1)
+      expect(fs.existsSync(marker)).toBe(true)
+    } finally {
+      errors.mockRestore()
+      vi.useRealTimers()
+    }
   })
 })

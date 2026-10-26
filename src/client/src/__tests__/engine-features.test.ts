@@ -23,3 +23,14 @@ describe('supportsSubagentStop', () => {
     expect(supportsSubagentStop(undefined)).toBe(false)
   })
 })
+
+import * as features from '../constants/engineFeatures'
+
+it('exposes only native execution capabilities for Mistral Vibe', () => {
+  expect(features.supportsSubagents('mistral-vibe')).toBe(false)
+  expect(features.supportsQuotaStatus('mistral-vibe')).toBe(false)
+  expect(features.supportsLiveSteering('mistral-vibe')).toBe(false)
+  expect(features.supportsSubagentStop('mistral-vibe')).toBe(false)
+  expect(features.supportsReadOnly('mistral-vibe')).toBe(false)
+  expect(features.supportsSkills('mistral-vibe')).toBe(false)
+})

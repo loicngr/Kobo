@@ -18,6 +18,7 @@ interface UseSlashAutocompleteOptions {
    * progress" on or "prep for auto-loop" yet).
    */
   excludeKoboCommands?: boolean
+  supportsSkills?: () => boolean
 }
 
 /**
@@ -54,6 +55,7 @@ export function useSlashAutocomplete(
   let lastFetch = 0
 
   async function fetchSkills(): Promise<void> {
+    if (opts.supportsSkills?.() === false) return
     const now = Date.now()
     if (now - lastFetch < 5000 && skills.value.length > 0) return
     lastFetch = now
@@ -128,7 +130,7 @@ export function useSlashAutocomplete(
     const q = skillFilter.value.toLowerCase()
     const matches = (name: string) => (q === '' ? true : name.toLowerCase().includes(q))
 
-    const claudeSkills = skills.value
+    const claudeSkills = (opts.supportsSkills?.() === false ? [] : skills.value)
       .filter((s) => matches(s))
       .map<SlashDropdownItem>((s) => ({ type: 'skill', name: s }))
 

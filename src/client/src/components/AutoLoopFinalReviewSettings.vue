@@ -11,7 +11,7 @@
     />
     <StartReviewDialog
       v-model="open" mode="auto-loop" :loading="loading ?? false"
-      :workspace="workspace" :scheduled-configuration="draftConfiguration ?? modelValue" :can-return-to-session="true"
+      :workspace="workspace" :project-path="projectPath" :scheduled-configuration="draftConfiguration ?? modelValue" :can-return-to-session="true"
       @submit="save"
     />
   </div>
@@ -27,6 +27,7 @@ import StartReviewDialog from './StartReviewDialog.vue'
 const props = defineProps<{
   modelValue: AutoLoopReviewConfiguration | null
   workspace: ReviewConfiguration & { id: string }
+  projectPath?: string
   disabled?: boolean
   loading?: boolean
 }>()

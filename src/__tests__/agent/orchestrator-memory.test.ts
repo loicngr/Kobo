@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { MISTRAL_CAPABILITIES } from '../../server/services/agent/engines/mistral-vibe/capabilities.js'
 import type { AgentEngine, AgentEvent, EngineProcess, StartOptions } from '../../server/services/agent/engines/types.js'
 import { resetDb } from '../helpers/reset-db.js'
 
@@ -48,22 +49,28 @@ interface EngineCapture {
   releaseStop: () => void
 }
 
-function makeEngine(id: 'claude-code' | 'codex', gateStop = false): EngineCapture {
+function makeEngine(id: 'claude-code' | 'codex' | 'mistral-vibe', gateStop = false): EngineCapture {
   const starts: StartOptions[] = []
   const events: Array<(event: AgentEvent) => void> = []
   const pendingStops: Array<() => void> = []
   const engine: AgentEngine = {
     id,
     displayName: id,
-    capabilities: {
-      models: [{ id: 'auto', label: 'Auto' }],
-      permissionModes: ['bypass'],
-      supportsResume: true,
-      supportsMcp: true,
-      supportsSkills: true,
-      supportsSubagents: false,
-      supportsQuotaStatus: false,
-    },
+    capabilities:
+      id === 'mistral-vibe'
+        ? { ...MISTRAL_CAPABILITIES }
+        : {
+            models: [{ id: 'auto', label: 'Auto' }],
+            effortLevels: [{ id: 'auto', label: 'Auto' }],
+            permissionModes: ['bypass'],
+            supportsResume: true,
+            supportsMcp: true,
+            supportsLiveSteering: true,
+            supportsReadOnly: true,
+            supportsSkills: true,
+            supportsSubagents: false,
+            supportsQuotaStatus: false,
+          },
     async start(options, onEvent) {
       starts.push(options)
       events.push(onEvent)
@@ -72,7 +79,7 @@ function makeEngine(id: 'claude-code' | 'codex', gateStop = false): EngineCaptur
       void ready.catch(() => {})
       const process: EngineProcess = {
         pid: undefined,
-        engineSessionId: `${id}-native-${starts.length}`,
+        engineSessionId: options.resumeFromEngineSessionId ?? `${id}-native-${starts.length}`,
         ready,
         isAlive: () => true,
         sendMessage() {},
@@ -89,7 +96,7 @@ function makeEngine(id: 'claude-code' | 'codex', gateStop = false): EngineCaptur
   return { engine, starts, events, releaseStop: () => pendingStops.shift()?.() }
 }
 
-async function createWorkspace(engine: 'claude-code' | 'codex' = 'claude-code') {
+async function createWorkspace(engine: 'claude-code' | 'codex' | 'mistral-vibe' = 'claude-code') {
   const { createWorkspace } = await import('../../server/services/workspace-service.js')
   const workspace = createWorkspace({
     name: `Memory ${engine}`,
@@ -111,7 +118,7 @@ describe('orchestrator memory context', () => {
     await resetDb()
   })
 
-  it.each(['claude-code', 'codex'] as const)(
+  it.each(['claude-code', 'codex', 'mistral-vibe'] as const)(
     'captures the global watchdog setting on each %s launch',
     async (engineId) => {
       const workspace = await createWorkspace(engineId)
@@ -134,6 +141,8 @@ describe('orchestrator memory context', () => {
     ['claude-code', true],
     ['codex', false],
     ['codex', true],
+    ['mistral-vibe', false],
+    ['mistral-vibe', true],
   ] as const)('authenticates internal %s MCP calls with behind-proxy mode %s', async (engineId, behindProxy) => {
     networkSettings.networkAccessBehindProxy = behindProxy
     const workspace = await createWorkspace(engineId)
@@ -176,7 +185,7 @@ describe('orchestrator memory context', () => {
     }
   })
 
-  it.each(['claude-code', 'codex'] as const)(
+  it.each(['claude-code', 'codex', 'mistral-vibe'] as const)(
     'passes one bounded memory prompt through %s StartOptions',
     async (engineId) => {
       const { createMemory, resolveMemoryScope } = await import('../../server/services/memory-service.js')
@@ -243,50 +252,53 @@ describe('orchestrator memory context', () => {
     await orchestrator.stopAgentAndWait(codexWorkspace.id)
   })
 
-  it('resumes the same native conversation with only newly added memory', async () => {
-    const { createMemory, resolveMemoryScope } = await import('../../server/services/memory-service.js')
-    const workspace = await createWorkspace()
-    const scope = resolveMemoryScope({ level: 'workspace', workspaceId: workspace.id })
-    createMemory({
-      scopeId: scope.id,
-      key: 'old',
-      title: 'Old',
-      body: 'Already in conversation.',
-      actor: { kind: 'human' },
-    })
-    const capture = makeEngine('claude-code')
-    const { _registerEngineForTest } = await import('../../server/services/agent/engines/registry.js')
-    _registerEngineForTest(capture.engine)
-    const orchestrator = await import('../../server/services/agent/orchestrator.js')
+  it.each(['claude-code', 'mistral-vibe'] as const)(
+    'resumes the same %s native conversation with only newly added memory',
+    async (engineId) => {
+      const { createMemory, resolveMemoryScope } = await import('../../server/services/memory-service.js')
+      const workspace = await createWorkspace(engineId)
+      const scope = resolveMemoryScope({ level: 'workspace', workspaceId: workspace.id })
+      createMemory({
+        scopeId: scope.id,
+        key: 'old',
+        title: 'Old',
+        body: 'Already in conversation.',
+        actor: { kind: 'human' },
+      })
+      const capture = makeEngine(engineId)
+      const { _registerEngineForTest } = await import('../../server/services/agent/engines/registry.js')
+      _registerEngineForTest(capture.engine)
+      const orchestrator = await import('../../server/services/agent/orchestrator.js')
 
-    const initial = orchestrator.startAgent(workspace.id, workspace.projectPath, 'First')
-    await flush()
-    await orchestrator.stopAgentAndWait(workspace.id)
-    createMemory({
-      scopeId: scope.id,
-      key: 'new',
-      title: 'New',
-      body: 'Added before resume.',
-      actor: { kind: 'human' },
-    })
+      const initial = orchestrator.startAgent(workspace.id, workspace.projectPath, 'First')
+      await flush()
+      await orchestrator.stopAgentAndWait(workspace.id)
+      createMemory({
+        scopeId: scope.id,
+        key: 'new',
+        title: 'New',
+        body: 'Added before resume.',
+        actor: { kind: 'human' },
+      })
 
-    orchestrator.startAgent(
-      workspace.id,
-      workspace.projectPath,
-      'Resume',
-      undefined,
-      true,
-      undefined,
-      initial.agentSessionId,
-    )
-    await flush()
+      orchestrator.startAgent(
+        workspace.id,
+        workspace.projectPath,
+        'Resume',
+        undefined,
+        true,
+        undefined,
+        initial.agentSessionId,
+      )
+      await flush()
 
-    expect(capture.starts).toHaveLength(2)
-    expect(capture.starts[1].resumeFromEngineSessionId).toBe('claude-code-native-1')
-    expect(capture.starts[1].prompt).toContain('Added before resume.')
-    expect(capture.starts[1].prompt).not.toContain('Already in conversation.')
-    await orchestrator.stopAgentAndWait(workspace.id)
-  })
+      expect(capture.starts).toHaveLength(2)
+      expect(capture.starts[1].resumeFromEngineSessionId).toBe(`${engineId}-native-1`)
+      expect(capture.starts[1].prompt).toContain('Added before resume.')
+      expect(capture.starts[1].prompt).not.toContain('Already in conversation.')
+      await orchestrator.stopAgentAndWait(workspace.id)
+    },
+  )
 
   it('opens exactly one new budget epoch only for confirmed compaction by the current controller', async () => {
     const workspace = await createWorkspace()
@@ -432,5 +444,203 @@ describe('orchestrator memory context', () => {
     await flush()
     const state = getDb().prepare('SELECT state FROM memory_contexts WHERE workspace_id = ?').get(nextWorkspace.id)
     expect(state).toEqual({ state: 'failed' })
+  })
+})
+
+describe('Mistral launch integration', () => {
+  beforeEach(async () => {
+    vi.resetModules()
+    vi.clearAllMocks()
+    await resetDb()
+  })
+  it.each(['plan', 'handoff'] as const)(
+    'rejects unsupported %s launch before clearing grants, stopping or allocating state',
+    async (kind) => {
+      const workspace = await createWorkspace('mistral-vibe')
+      const capture = makeEngine('mistral-vibe')
+      const { _registerEngineForTest } = await import('../../server/services/agent/engines/registry.js')
+      _registerEngineForTest(capture.engine)
+      const orch = await import('../../server/services/agent/orchestrator.js')
+      const { getDb } = await import('../../server/db/index.js')
+      const policy = await import('../../server/services/workspace-permission-policy-service.js')
+      orch.startAgent(workspace.id, workspace.projectPath, 'First', 'auto')
+      await flush()
+      getDb().prepare("UPDATE workspaces SET status='idle' WHERE id=?").run(workspace.id)
+      const original = orch._getControllers().get(workspace.id)
+      const clear = vi.spyOn(policy, 'clearTurnPermissions').mockClear()
+      const count = () => getDb().prepare('SELECT COUNT(*) AS n FROM agent_sessions').get()
+      const before = count()
+      const launch = kind === 'handoff' ? { handoffGeneration: true } : undefined
+      expect(() =>
+        orch.startAgent(
+          workspace.id,
+          workspace.projectPath,
+          'Unsupported',
+          'auto',
+          false,
+          kind === 'plan' ? 'plan' : 'bypass',
+          undefined,
+          'auto',
+          undefined,
+          launch,
+        ),
+      ).toThrow('read-only')
+      expect(clear).not.toHaveBeenCalled()
+      expect(count()).toEqual(before)
+      expect(orch._getControllers().get(workspace.id)).toBe(original)
+      expect(original?.status).toBe('running')
+      expect(capture.starts).toHaveLength(1)
+      await orch.stopAgentAndWait(workspace.id)
+    },
+  )
+
+  it('starts a native final reviewer with restricted memory/MCP grants independently of Interactive mode', async () => {
+    const workspace = await createWorkspace('mistral-vibe')
+    const capture = makeEngine('mistral-vibe')
+    const { _registerEngineForTest } = await import('../../server/services/agent/engines/registry.js')
+    _registerEngineForTest(capture.engine)
+    const orch = await import('../../server/services/agent/orchestrator.js')
+    const { createIdleSession } = await import('../../server/services/workspace-service.js')
+    const session = createIdleSession(workspace.id)
+    const { authorizeInternalMcpTool, resolveInternalMcpCapability } = await import(
+      '../../server/services/internal-mcp-capability-service.js'
+    )
+    const { getMemoryCapability } = await import('../../server/services/memory-agent-runtime.js')
+    orch.startAgent(
+      workspace.id,
+      workspace.projectPath,
+      'Review only',
+      'auto',
+      false,
+      'interactive',
+      session.id,
+      'auto',
+      undefined,
+      {
+        mcpEnv: { KOBO_FINAL_REVIEW_TOKEN: 'test-report', KOBO_FINAL_REVIEW_SESSION_ID: session.id },
+      },
+    )
+    await flush()
+    try {
+      expect(capture.starts).toHaveLength(1)
+      const options = capture.starts[0]!
+      expect(options).toMatchObject({ agentPermissionMode: 'interactive', readOnly: false })
+      expect(options.prompt).toContain('Read-only launch: do not call remember or attempt writes.')
+      const token = options.mcpServers!.find((server) => server.name === 'kobo-tasks')!.env.KOBO_MCP_SESSION_TOKEN
+      const capability = resolveInternalMcpCapability(token)
+      expect(capability.readOnly).toBe(true)
+      expect(getMemoryCapability(capability.env.KOBO_MEMORY_SESSION_TOKEN)).toMatchObject({
+        readOnly: true,
+        sessionId: session.id,
+      })
+      for (const tool of ['list_memory_scopes', 'list_tasks', 'submit_final_review', 'create_progress_bar'])
+        expect(() => authorizeInternalMcpTool(token, tool, {})).not.toThrow()
+      for (const tool of ['remember', 'create_task', 'create_workspace', 'delete_workspace'])
+        expect(() => authorizeInternalMcpTool(token, tool, {})).toThrow('read-only')
+    } finally {
+      await orch.stopAgentAndWait(workspace.id)
+    }
+  })
+
+  it('preserves Mistral native resume identity after acp_load_failed without a fresh fallback', async () => {
+    const workspace = await createWorkspace('mistral-vibe')
+    const capture = makeEngine('mistral-vibe')
+    const { _registerEngineForTest } = await import('../../server/services/agent/engines/registry.js')
+    _registerEngineForTest(capture.engine)
+    const orch = await import('../../server/services/agent/orchestrator.js')
+    const { getDb } = await import('../../server/db/index.js')
+    const first = orch.startAgent(workspace.id, workspace.projectPath, 'First', 'auto')
+    await flush()
+    await orch.stopAgentAndWait(workspace.id)
+    const { createMemory, resolveMemoryScope } = await import('../../server/services/memory-service.js')
+    const scope = resolveMemoryScope({ level: 'workspace', workspaceId: workspace.id })
+    createMemory({
+      scopeId: scope.id,
+      key: 'resume-fact',
+      title: 'Resume fact',
+      body: 'Charge this uncertain native load conservatively.',
+      actor: { kind: 'human' },
+    })
+    const saved = 'mistral-vibe-native-1'
+    capture.engine.start = async (options, emit) => {
+      capture.starts.push(options)
+      capture.events.push(emit)
+      return {
+        pid: undefined,
+        engineSessionId: saved,
+        ready: Promise.reject(new Error('Native load failed')),
+        sendMessage() {},
+        interrupt() {},
+        async stop() {},
+        resolvePendingUserInput: () => false,
+      }
+    }
+    orch.startAgent(workspace.id, workspace.projectPath, 'Resume', 'auto', true, undefined, first.agentSessionId)
+    await flush()
+    expect(capture.starts[1].resumeFromEngineSessionId).toBe(saved)
+    expect(capture.starts[1].prompt).toContain('Charge this uncertain native load conservatively.')
+    const budget = () =>
+      getDb().prepare('SELECT id, epoch, cumulative_estimated_tokens FROM memory_budget_contexts').all() as Array<{
+        id: string
+        epoch: number
+        cumulative_estimated_tokens: number
+      }>
+    const charged = budget()
+    expect(charged).toHaveLength(1)
+    expect(charged[0].epoch).toBe(0)
+    expect(charged[0].cumulative_estimated_tokens).toBeGreaterThan(0)
+    expect(getDb().prepare('SELECT state FROM memory_contexts ORDER BY rowid DESC LIMIT 1').get()).toEqual({
+      state: 'failed',
+    })
+    capture.events[1]({
+      kind: 'error',
+      category: 'other',
+      code: 'acp_load_failed',
+      message: 'Mistral Vibe could not load the saved session',
+    })
+    capture.events[1]({ kind: 'session:ended', reason: 'error', exitCode: 1 })
+    await flush()
+    expect(
+      getDb().prepare('SELECT engine_session_id FROM agent_sessions WHERE id=?').get(first.agentSessionId),
+    ).toEqual({ engine_session_id: saved })
+    expect(capture.starts).toHaveLength(2)
+    expect(budget()).toEqual(charged)
+    expect((await import('../../server/services/workspace-service.js')).getWorkspace(workspace.id)?.status).toBe(
+      'error',
+    )
+  })
+
+  it('keeps an exhausted Mistral memory ledger exhausted across repeated native resume', async () => {
+    const workspace = await createWorkspace('mistral-vibe')
+    const capture = makeEngine('mistral-vibe')
+    const { _registerEngineForTest } = await import('../../server/services/agent/engines/registry.js')
+    _registerEngineForTest(capture.engine)
+    const orch = await import('../../server/services/agent/orchestrator.js')
+    const { getDb } = await import('../../server/db/index.js')
+    const { reserveMemoryBudget, reserveMemoryBudgetDenial } = await import(
+      '../../server/services/memory-budget-service.js'
+    )
+    const first = orch.startAgent(workspace.id, workspace.projectPath, 'First', 'auto')
+    await flush()
+    await orch.stopAgentAndWait(workspace.id)
+    const ledger = getDb()
+      .prepare('SELECT id,epoch,cumulative_estimated_tokens AS charged FROM memory_budget_contexts')
+      .get() as { id: string; epoch: number; charged: number }
+    expect(reserveMemoryBudget({ budgetContextId: ledger.id, estimatedTokens: 5_500 - ledger.charged }).accepted).toBe(
+      true,
+    )
+    expect(reserveMemoryBudgetDenial(ledger.id, 500).responseAllowed).toBe(true)
+    const exhausted = getDb().prepare('SELECT id,epoch,cumulative_estimated_tokens FROM memory_budget_contexts').all()
+    for (let attempt = 0; attempt < 2; attempt++) {
+      orch.startAgent(workspace.id, workspace.projectPath, 'Resume', 'auto', true, undefined, first.agentSessionId)
+      await flush()
+      expect(capture.starts[attempt + 1]!.resumeFromEngineSessionId).toBe('mistral-vibe-native-1')
+      expect(getDb().prepare('SELECT id,epoch,cumulative_estimated_tokens FROM memory_budget_contexts').all()).toEqual(
+        exhausted,
+      )
+      expect(reserveMemoryBudget({ budgetContextId: ledger.id, estimatedTokens: 1 }).accepted).toBe(false)
+      expect(reserveMemoryBudgetDenial(ledger.id, 1).responseAllowed).toBe(false)
+      await orch.stopAgentAndWait(workspace.id)
+    }
   })
 })

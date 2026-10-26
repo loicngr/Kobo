@@ -5,9 +5,11 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { closeDb, getDb } from '../server/db/index.js'
 import { runMigrations } from '../server/db/migrations.js'
 import { reconcileMessageRequests } from '../server/services/mcp-message-request-service.js'
+import * as mistralOptions from '../server/services/mistral-options-service.js'
 import { executeWorkspaceDialogueTool } from '../server/services/workspace-dialogue-service.js'
 
 vi.mock('../server/services/agent/orchestrator.js', () => ({
+  assertImmediateMessageSupported: vi.fn(),
   sendMessage: vi.fn(async () => {}),
   startAgent: vi.fn(),
   isShuttingDown: vi.fn(() => false),
@@ -20,7 +22,7 @@ vi.mock('../server/services/auto-loop-service.js', () => ({
   disable: vi.fn(),
 }))
 
-import { sendMessage, startAgent } from '../server/services/agent/orchestrator.js'
+import { assertImmediateMessageSupported, sendMessage, startAgent } from '../server/services/agent/orchestrator.js'
 
 let directory: string
 const args = { workspace_id: 'ws', content: 'hello', session_id: 's', idempotency_key: 'one-intent' }
@@ -39,6 +41,7 @@ beforeEach(() => {
   )
 })
 afterEach(() => {
+  vi.restoreAllMocks()
   closeDb()
   rmSync(directory, { recursive: true, force: true })
 })
@@ -211,4 +214,22 @@ it.each(['worktree', 'status'])('revalidates attachment ownership at dispatch af
   })
   expect(await send({ ...args, attachments: [note] })).toMatchObject({ code: 'delivery_rejected' })
   expect(nativeDispatches).toBe(0)
+})
+
+it('keeps a busy Mistral attachment refusal definitive across idempotent retries', async () => {
+  const preflight = vi.spyOn(mistralOptions, 'preflightMistralConfiguration').mockResolvedValue(undefined)
+  getDb()
+    .prepare("UPDATE workspaces SET engine='mistral-vibe', model='explicit-native', worktree_path=? WHERE id='ws'")
+    .run(directory)
+  vi.mocked(assertImmediateMessageSupported).mockImplementationOnce(() => {
+    throw new Error('Mistral Vibe live message delivery is unsupported')
+  })
+  const input = { ...args, attachments: [{ name: 'file.txt', mime_type: 'text/plain', data_base64: 'YQ==' }] }
+  expect(await send(input)).toMatchObject({ accepted: false, code: 'delivery_rejected' })
+  expect(await send(input)).toMatchObject({ accepted: false, code: 'delivery_rejected' })
+  expect(preflight).not.toHaveBeenCalled()
+  expect(sendMessage).not.toHaveBeenCalled()
+  expect(startAgent).not.toHaveBeenCalled()
+  expect(getDb().prepare("SELECT COUNT(*) AS n FROM ws_events WHERE type='user:message'").get()).toEqual({ n: 0 })
+  expect(readdirSync(directory).some((name) => name.includes('attachment'))).toBe(false)
 })

@@ -15,6 +15,6 @@ export type EnvironmentCheckCode =
 
 export interface EnvironmentReport {
   checkedAt: string
-  engine: 'claude-code' | 'codex'
+  engine: 'claude-code' | 'codex' | 'mistral-vibe'
   checks: Array<{ code: EnvironmentCheckCode; status: EnvironmentCheckStatus }>
 }

@@ -69,3 +69,19 @@ it('retains submitted instructions when the parent cannot persist them', async (
   expect(dialog.props('scheduledConfiguration')).toEqual(configuration)
   view.unmount()
 })
+
+it('passes the creation project to discovery and persists native fields without a permission preference', async () => {
+  const view = panel()
+  await view.setProps({ workspace: { ...workspace, id: 'create' }, projectPath: '/selected/project' })
+  const dialog = view.findComponent(StartReviewDialog)
+  expect(dialog.props('projectPath')).toBe('/selected/project')
+  const native = {
+    engine: 'mistral-vibe',
+    model: 'native-alias',
+    reasoningEffort: 'off',
+    additionalInstructions: 'Report only',
+  }
+  dialog.vm.$emit('submit', { ...native, newSession: true, returnToSession: true, agentPermissionMode: 'interactive' })
+  expect(view.emitted('update:modelValue')?.[0]).toEqual([native])
+  view.unmount()
+})

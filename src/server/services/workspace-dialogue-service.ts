@@ -1,5 +1,6 @@
 import { nanoid } from 'nanoid'
 import type { McpAttachment } from '../../shared/mcp-attachments.js'
+import { parseQuestionSelections } from '../../shared/question-selections.js'
 import { validateDialogueArguments } from '../../shared/workspace-dialogue-tools.js'
 import { type MessageSource, parseMessageSource } from '../../shared/workspace-message-types.js'
 import { getDb } from '../db/index.js'
@@ -88,6 +89,7 @@ export async function executeWorkspaceDialogueTool(
       throw new Error('The requested question is not the current pending question')
     await answerPendingQuestion(workspaceId, args.answers as Record<string, string>, args.tool_call_id as string, {
       source,
+      ...(args.selections !== undefined ? { selections: parseQuestionSelections(args.selections) } : {}),
     })
     return { accepted: true }
   }

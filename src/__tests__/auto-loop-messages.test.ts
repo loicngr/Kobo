@@ -110,6 +110,50 @@ describe('durable auto-loop messages', () => {
     })
   })
 
+  it.each(['pending', 'unknown'] as const)(
+    'does not complete verified Mistral work with a %s instruction',
+    async (state) => {
+      const { getDb } = await import('../server/db/index.js')
+      const svc = await import('../server/services/auto-loop-service.js')
+      const orch = await import('../server/services/agent/orchestrator.js')
+      const { createTask, updateTask } = await import('../server/services/workspace-service.js')
+      getDb()
+        .prepare(
+          "UPDATE workspaces SET engine='mistral-vibe',model='auto',reasoning_effort='auto',agent_permission_mode='interactive',auto_loop=1,auto_loop_ready=1 WHERE id=?",
+        )
+        .run(wsId)
+      const final = createTask(wsId, { title: '[FINAL] Verify everything', role: 'finalization' })
+      updateTask(final.id, {
+        status: 'done',
+        verification: { method: 'test', summary: 'Verified', checks: [{ name: 'regression', status: 'passed' }] },
+      })
+      getDb()
+        .prepare(
+          'INSERT INTO auto_loop_messages(workspace_id,client_message_id,content,state,created_at) VALUES (?,?,?,?,?)',
+        )
+        .run(wsId, 'still-needed', 'Unsettled instruction', state, new Date().toISOString())
+      vi.mocked(orch.hasController).mockReturnValue(false)
+      svc.onSessionEnded(wsId, 'completed', 0)
+      expect(svc.getStatus(wsId).auto_loop).toBe(true)
+      expect(svc.getStatus(wsId).state).not.toBe('completed')
+      if (state === 'unknown') {
+        expect(svc.getStatus(wsId).reason).toBe('message-delivery-unknown')
+        expect(orch.startAgent).not.toHaveBeenCalled()
+      } else {
+        expect(orch.startAgent).toHaveBeenCalledWith(
+          wsId,
+          expect.any(String),
+          expect.stringContaining('Unsettled instruction'),
+          'auto',
+          false,
+          'interactive',
+          undefined,
+          'auto',
+        )
+      }
+    },
+  )
+
   it('pauses instead of resending an instruction whose delivery was interrupted', async () => {
     const { getDb } = await import('../server/db/index.js')
     const svc = await import('../server/services/auto-loop-service.js')

@@ -84,6 +84,10 @@ interface HealthReport {
     available: boolean
     version: string | null
   }
+  mistralCli: {
+    available: boolean
+    version: string | null
+  }
   /** Kōbō ships no forge credentials: `gh` / `glab` are the user's own. Toute
    *  la moitié « intégrer » du produit en dépend, et rien ne les sondait. */
   forgeCli: {
@@ -114,7 +118,11 @@ interface HealthReport {
 
 async function checkCli(binary: string): Promise<{ available: boolean; version: string | null }> {
   try {
-    const { stdout } = await execFileAsync(binary, ['--version'], { encoding: 'utf-8', timeout: 2_000 })
+    const { stdout } = await execFileAsync(binary, ['--version'], {
+      encoding: 'utf-8',
+      timeout: 2_000,
+      maxBuffer: 64 * 1024,
+    })
     return { available: true, version: stdout.trim() || null }
   } catch {
     return { available: false, version: null }
@@ -171,7 +179,13 @@ app.get('/report', async (c) => {
   const db = getDb()
   const dbPath = getDbPath()
   const home = getKoboHome()
-  const cliChecks = Promise.all([checkClaudeCli(), checkCodexCli(), checkCli('gh'), checkCli('glab')])
+  const cliChecks = Promise.all([
+    checkClaudeCli(),
+    checkCodexCli(),
+    checkCli('vibe-acp'),
+    checkCli('gh'),
+    checkCli('glab'),
+  ])
 
   // DB schema version
   const row = db.prepare('SELECT MAX(version) as v FROM schema_migrations').get() as { v: number | null }
@@ -285,7 +299,7 @@ app.get('/report', async (c) => {
     n: number
   }
 
-  const [claudeCli, codexCli, ghCli, glabCli] = await cliChecks
+  const [claudeCli, codexCli, mistralCli, ghCli, glabCli] = await cliChecks
   const report: HealthReport = {
     version: getPackageVersion(),
     koboHome: home,
@@ -298,6 +312,7 @@ app.get('/report', async (c) => {
     settings: { schemaVersion: SETTINGS_SCHEMA_VERSION },
     claudeCli,
     codexCli,
+    mistralCli,
     forgeCli: { gh: ghCli, glab: glabCli },
     workspaces: {
       total: settingsRow.n,

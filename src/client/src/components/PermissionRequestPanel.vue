@@ -80,6 +80,16 @@ const pending = computed(() => {
 
 const operationApprovalAvailable = computed(() => {
   const input = pending.value?.toolInput
+  const session = store.sessions.find(
+    (s) => s.id === pending.value?.agentSessionId && s.workspaceId === props.workspaceId,
+  )
+  const engine = session?.engine ?? store.workspaces.find((w) => w.id === props.workspaceId)?.engine
+  if (engine === 'mistral-vibe')
+    return (
+      !!input &&
+      typeof input === 'object' &&
+      (input as { operationApprovalAvailable?: boolean }).operationApprovalAvailable === true
+    )
   return (
     !input ||
     typeof input !== 'object' ||

@@ -1,4 +1,5 @@
 import type { KoboLaunchInstructions } from '../../../../shared/launch-instructions.js'
+import type { QuestionSelections } from '../../../../shared/question-selections.js'
 import type { EffectiveSettings } from '../../settings-service.js'
 
 // ── Engine contract ───────────────────────────────────────────────────────────
@@ -22,7 +23,7 @@ export const AGENT_NO_LONGER_RUNNING_TEXT = 'agent is no longer running'
  * values are untyped — validation happens at workspace creation via
  * `listEngines()` (see `workspace-service.ts` / `mapWorkspace`).
  */
-export type EngineId = 'claude-code' | 'codex'
+export type EngineId = 'claude-code' | 'codex' | 'mistral-vibe'
 
 export interface AgentEngine {
   readonly id: EngineId
@@ -32,10 +33,17 @@ export interface AgentEngine {
 }
 
 export type PendingUserInputResponse =
-  | { kind: 'question'; answers: Record<string, string>; response?: string }
+  | { kind: 'question'; answers: Record<string, string>; response?: string; selections?: QuestionSelections }
   | { kind: 'question-cancel'; reason?: string }
   | { kind: 'permission-allow' }
   | { kind: 'permission-deny'; reason?: string }
+
+export class PendingUserInputValidationError extends Error {
+  constructor() {
+    super('Invalid response for pending user input')
+    this.name = 'PendingUserInputValidationError'
+  }
+}
 
 export interface EngineProcess {
   /** Resolves once the initial native conversation/turn is accepted; rejects on launch failure. */
@@ -62,10 +70,13 @@ export interface EngineProcess {
    */
   stopSubagents?(ids?: string[]): number
   stop(): Promise<void>
+  /** Non-consuming synchronous lookup in the same live map used by resolution. */
+  hasPendingUserInput?(toolCallId: string): boolean
   /**
    * Resolve a pending `canUseTool` callback by `toolCallId`. Returns true if
    * a pending entry was found and resolved, false if no entry exists for the
    * given id (already resolved, never registered, or different session).
+   * Invalid answers may throw without consuming the existing callback.
    */
   resolvePendingUserInput(toolCallId: string, response: PendingUserInputResponse): boolean
   /**
@@ -123,6 +134,8 @@ export interface EngineCapabilities {
   permissionModes: Array<'plan' | 'bypass' | 'strict' | 'interactive'>
   supportsResume: boolean
   supportsMcp: boolean
+  supportsLiveSteering: boolean
+  supportsReadOnly: boolean
   supportsSkills: boolean
   /**
    * Whether the engine surfaces sub-agent spawn/progress events to Kōbō.
@@ -198,7 +211,8 @@ export type AgentEvent =
   | { kind: 'session:brainstorm-complete' }
   // Conversation
   | { kind: 'message:text'; messageId: string; text: string; streaming: boolean; origin?: AgentEventOrigin }
-  | { kind: 'message:thinking'; messageId: string; text: string; origin?: AgentEventOrigin }
+  // Explicit streaming thoughts carry deltas; absent/false preserves complete native blocks.
+  | { kind: 'message:thinking'; messageId: string; text: string; streaming?: boolean; origin?: AgentEventOrigin }
   | { kind: 'message:end'; messageId: string; origin?: AgentEventOrigin }
   | { kind: 'message:raw'; content: string }
   | {

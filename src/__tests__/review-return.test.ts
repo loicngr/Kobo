@@ -1,13 +1,31 @@
 import { execFileSync } from 'node:child_process'
-import { beforeEach, expect, it, vi } from 'vitest'
+import { EventEmitter } from 'node:events'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { MISTRAL_CAPABILITIES } from '../server/services/agent/engines/mistral-vibe/capabilities.js'
 import type { AgentEvent, StartOptions } from '../server/services/agent/engines/types.js'
 import { resetDb } from './helpers/reset-db.js'
+
+const nativePeer = vi.hoisted(() => ({ spawn: vi.fn(), connect: vi.fn(), request: vi.fn() }))
+vi.mock('../server/services/agent/engines/mistral-vibe/spawn.js', () => ({ spawnVibeAcp: nativePeer.spawn }))
+vi.mock('../server/services/agent/engines/mistral-vibe/client.js', () => ({
+  connectVibeAcp: nativePeer.connect,
+  requestVibeAcp: nativePeer.request,
+  closeVibeAcpSession: vi.fn().mockResolvedValue(undefined),
+}))
+const nativeReviewDirectories: string[] = []
+afterEach(() => {
+  for (const directory of nativeReviewDirectories.splice(0)) rmSync(directory, { recursive: true, force: true })
+})
 
 const admissionConfig = vi.hoisted(() => ({ maxConcurrentAgents: 0 }))
 
 vi.mock('../server/services/settings-service.js', () => ({
   getGlobalSettings: () => ({
     autoLoopMaxRetries: 5,
+    memoryMode: 'automatic',
     maxConcurrentAgents: admissionConfig.maxConcurrentAgents,
     onSessionEndedScript: '',
     onAutoLoopDisabledScript: '',
@@ -45,6 +63,11 @@ async function fixture(
     retriedReturnReady?: Promise<void>
     returnAccepted?: Promise<void>
   },
+  sourceEngine: 'claude-code' | 'mistral-vibe' = 'claude-code',
+  configuredModel?: string,
+  configuredEffort?: string,
+  captureReview = false,
+  nativeReview?: 'returning' | 'no-return' | 'final',
 ) {
   const ws = await import('../server/services/workspace-service.js')
   const orch = await import('../server/services/agent/orchestrator.js')
@@ -52,20 +75,25 @@ async function fixture(
   const { getDb } = await import('../server/db/index.js')
   const { _registerEngineForTest } = await import('../server/services/agent/engines/registry.js')
   const starts: Array<{ engine: string; options: StartOptions; emit: (event: AgentEvent) => void }> = []
-  for (const engine of ['claude-code', 'codex'] as const) {
+  for (const engine of ['claude-code', 'codex', 'mistral-vibe'] as const) {
     _registerEngineForTest({
       id: engine,
       displayName: engine,
-      capabilities: {
-        models: [],
-        permissionModes: ['bypass', 'plan'],
-        effortLevels: [{ id: 'high', label: 'High' }],
-        supportsResume: true,
-        supportsMcp: false,
-        supportsSkills: false,
-        supportsSubagents: false,
-        supportsQuotaStatus: false,
-      },
+      capabilities:
+        engine === 'mistral-vibe'
+          ? { ...MISTRAL_CAPABILITIES }
+          : {
+              models: captureReview ? [{ id: 'auto', label: 'Auto' }] : [],
+              permissionModes: ['bypass', 'plan'],
+              effortLevels: [{ id: 'high', label: 'High' }, ...(captureReview ? [{ id: 'auto', label: 'Auto' }] : [])],
+              supportsResume: true,
+              supportsMcp: false,
+              supportsLiveSteering: true,
+              supportsReadOnly: true,
+              supportsSkills: false,
+              supportsSubagents: false,
+              supportsQuotaStatus: false,
+            },
       async start(options, emit) {
         starts.push({ engine, options, emit })
         return {
@@ -92,24 +120,57 @@ async function fixture(
     projectPath: '/tmp',
     sourceBranch: 'main',
     workingBranch: 'work',
-    model: 'claude-opus-4-7',
-    reasoningEffort: 'high',
+    engine: sourceEngine,
+    model: configuredModel ?? (sourceEngine === 'mistral-vibe' ? 'auto' : 'claude-opus-4-7'),
+    reasoningEffort: configuredEffort ?? (sourceEngine === 'mistral-vibe' ? 'auto' : 'high'),
   })
   ws.updateWorkspaceStatus(workspace.id, 'brainstorming')
   const originalSessionId = orch.startAgent(
     workspace.id,
     '/tmp',
     'Original work',
-    workspace.model,
+    captureReview ? (sessionModel ?? workspace.model) : workspace.model,
     false,
     'bypass',
     undefined,
-    workspace.reasoningEffort,
+    captureReview ? 'max' : workspace.reasoningEffort,
   ).agentSessionId
   await Promise.resolve()
   await Promise.resolve()
-  starts[0]!.emit({ kind: 'session:started', engineSessionId: 'original-native-conversation' })
+  starts[0]!.emit({
+    kind: 'session:started',
+    engineSessionId: 'original-native-conversation',
+    ...(sessionModel ? { model: sessionModel } : {}),
+  })
   await orch.stopAgentAndWait(workspace.id, undefined, 'replacement')
+  if (captureReview) {
+    const directory = mkdtempSync(join(tmpdir(), 'kobo-native-review-return-'))
+    nativeReviewDirectories.push(directory)
+    execFileSync('git', ['init', '-q', '-b', 'main', directory])
+    execFileSync(
+      'git',
+      ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-qm', 'Initial'],
+      { cwd: directory },
+    )
+    execFileSync('git', ['update-ref', 'refs/remotes/origin/main', 'HEAD'], { cwd: directory })
+    execFileSync('git', ['branch', 'work'], { cwd: directory })
+    getDb().prepare('UPDATE workspaces SET worktree_path = ? WHERE id = ?').run(directory, workspace.id)
+    const gitOps = await import('../server/utils/git-ops.js')
+    const fetch = vi.spyOn(gitOps, 'fetchSourceBranchOrThrowAsync').mockResolvedValue(undefined)
+    try {
+      const { startWorkspaceReview } = await import('../server/services/review-service.js')
+      await startWorkspaceReview(workspace.id, {
+        engine: 'codex',
+        model: 'auto',
+        reasoningEffort: 'auto',
+        returnToSession: true,
+      })
+    } finally {
+      fetch.mockRestore()
+    }
+    const reviewSessionId = returns.getReviewReturn(workspace.id)!.reviewSessionId
+    return { ws, orch, returns, getDb, starts, workspace, reviewSessionId, originalSessionId }
+  }
   const original = {
     ...(sessionModel ? { sessionModel } : {}),
     engine: workspace.engine,
@@ -117,7 +178,9 @@ async function fixture(
     reasoningEffort: workspace.reasoningEffort,
     agentPermissionMode: workspace.agentPermissionMode,
   }
-  const review = { engine: 'codex', model: 'gpt-5.4', reasoningEffort: 'xhigh', agentPermissionMode: 'bypass' as const }
+  const review = nativeReview
+    ? { engine: 'mistral-vibe', model: 'auto', reasoningEffort: 'auto', agentPermissionMode: 'interactive' as const }
+    : { engine: 'codex', model: 'gpt-5.4', reasoningEffort: 'xhigh', agentPermissionMode: 'bypass' as const }
   ws.updateWorkspaceEngineConfiguration(
     workspace.id,
     review.engine,
@@ -126,16 +189,28 @@ async function fixture(
     review.agentPermissionMode,
   )
   const reviewSessionId = ws.createIdleSession(workspace.id).id
-  returns.registerReviewReturn({ workspaceId: workspace.id, reviewSessionId, originalSessionId, original, review })
+  if (nativeReview !== 'no-return')
+    returns.registerReviewReturn({ workspaceId: workspace.id, reviewSessionId, originalSessionId, original, review })
+  let mcpEnv: Record<string, string> | undefined = nativeReview === 'no-return' ? { KOBO_REVIEW_ONLY: '1' } : undefined
+  if (nativeReview === 'final') {
+    getDb().prepare('UPDATE workspaces SET auto_loop=1 WHERE id=?').run(workspace.id)
+    getDb()
+      .prepare('INSERT INTO auto_loop_final_reviews(workspace_id,configuration,updated_at) VALUES(?,?,?)')
+      .run(workspace.id, JSON.stringify({ ...review, additionalInstructions: '' }), new Date().toISOString())
+    const finalReview = await import('../server/services/auto-loop-final-review-service.js')
+    mcpEnv = finalReview.bindReviewSession(workspace.id, reviewSessionId, originalSessionId).mcpEnv
+  }
   orch.startAgent(
     workspace.id,
     '/tmp',
     'Review',
     review.model,
     false,
-    'bypass',
+    review.agentPermissionMode,
     reviewSessionId,
     review.reasoningEffort,
+    undefined,
+    { mcpEnv },
   )
   ws.updateWorkspaceStatus(workspace.id, 'executing')
   await Promise.resolve()
@@ -638,5 +713,255 @@ it('starts fresh after a failed implicit resume without erasing older conversati
   expect(f.getDb().prepare('SELECT engine_session_id FROM agent_sessions WHERE id=?').get(older.id)).toEqual({
     engine_session_id: 'older-healthy',
   })
+  await f.orch.stopAgentAndWait(f.workspace.id)
+})
+
+it('returns to Mistral with configured Auto despite a durable observed session model, then resumes normally', async () => {
+  const f = await fixture('native-custom', undefined, 'mistral-vibe')
+  f.starts[1]!.emit({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
+  await vi.waitFor(() => expect(f.starts).toHaveLength(3))
+  expect(f.starts[2]).toMatchObject({
+    engine: 'mistral-vibe',
+    options: { model: 'auto', resumeFromEngineSessionId: 'original-native-conversation' },
+  })
+  f.starts[2]!.emit({
+    kind: 'session:started',
+    engineSessionId: 'original-native-conversation',
+    model: 'native-custom',
+  })
+  expect(f.ws.getActiveSession(f.workspace.id)?.model).toBe('native-custom')
+  expect(f.ws.getWorkspace(f.workspace.id)?.model).toBe('auto')
+  await vi.waitFor(() => expect(f.returns.getReviewReturn(f.workspace.id)).toBeNull())
+  await f.orch.stopAgentAndWait(f.workspace.id)
+  f.orch.startAgent(
+    f.workspace.id,
+    '/tmp',
+    'Resume native',
+    f.ws.getWorkspace(f.workspace.id)!.model,
+    true,
+    'bypass',
+    f.originalSessionId,
+  )
+  await vi.waitFor(() => expect(f.starts).toHaveLength(4))
+  expect(f.starts[3]).toMatchObject({
+    engine: 'mistral-vibe',
+    options: { model: 'auto', resumeFromEngineSessionId: 'original-native-conversation' },
+  })
+  await f.orch.stopAgentAndWait(f.workspace.id)
+})
+
+it.each(['explicit-source', undefined])(
+  'returns to explicit native source/brainstorm model with observed metadata %s',
+  async (observed) => {
+    const f = await fixture(observed, undefined, 'mistral-vibe', 'configured-iteration')
+    f.starts[1]!.emit({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
+    await vi.waitFor(() => expect(f.starts).toHaveLength(3))
+    expect(f.starts[2]).toMatchObject({
+      engine: 'mistral-vibe',
+      options: { model: observed ?? 'configured-iteration', resumeFromEngineSessionId: 'original-native-conversation' },
+    })
+    expect(f.ws.getWorkspace(f.workspace.id)?.model).toBe('configured-iteration')
+    await f.orch.stopAgentAndWait(f.workspace.id)
+  },
+)
+
+it.each(['auto', 'iteration-a'])(
+  'preserves native source thinking while restoring %s/high iteration intent',
+  async (model) => {
+    const f = await fixture('brainstorm-b', undefined, 'mistral-vibe', model, 'high')
+    f.starts[1]!.emit({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
+    await vi.waitFor(() => expect(f.starts).toHaveLength(3))
+    expect(f.starts[2]!.options).toMatchObject({
+      model: model === 'auto' ? 'auto' : 'brainstorm-b',
+      effort: 'auto',
+      resumeFromEngineSessionId: 'original-native-conversation',
+    })
+    expect(f.ws.getWorkspace(f.workspace.id)).toMatchObject({ model, reasoningEffort: 'high' })
+    await f.orch.stopAgentAndWait(f.workspace.id)
+  },
+)
+
+it.each(['auto', 'iteration-a'])(
+  'captures and returns %s/high intent to native saved brainstorm-b/max before the prompt',
+  async (model) => {
+    const f = await fixture('brainstorm-b', undefined, 'mistral-vibe', model, 'high', true)
+    expect(f.starts[0]!.options).toMatchObject({ model: 'brainstorm-b', effort: 'max' })
+    expect(f.returns.getReviewReturn(f.workspace.id)?.original).toMatchObject({ model, reasoningEffort: 'high' })
+    let close!: () => void
+    const closed = new Promise<void>((resolve) => {
+      close = resolve
+    })
+    nativePeer.spawn.mockReturnValue({ child: new EventEmitter(), closed, stop: async () => close() })
+    nativePeer.connect.mockReturnValue({ closed: new Promise(() => {}), close: vi.fn() })
+    const configOptions = [
+      {
+        id: 'mode',
+        type: 'select',
+        currentValue: 'auto-approve',
+        options: [{ value: 'auto-approve', name: 'Auto approve' }],
+      },
+      {
+        id: 'model',
+        type: 'select',
+        currentValue: 'brainstorm-b',
+        options: ['iteration-a', 'brainstorm-b'].map((value) => ({ value, name: value })),
+      },
+      {
+        id: 'thinking',
+        type: 'select',
+        currentValue: 'max',
+        options: ['off', 'low', 'max'].map((value) => ({ value, name: value })),
+      },
+    ]
+    nativePeer.request.mockReset()
+    nativePeer.request.mockImplementation(async (_connection, method) => {
+      if (method === 'initialize')
+        return { protocolVersion: 1, agentCapabilities: { loadSession: true, sessionCapabilities: { close: {} } } }
+      if (method === 'session/load')
+        return {
+          configOptions,
+          modes: { currentModeId: 'auto-approve', availableModes: [{ id: 'auto-approve', name: 'Auto approve' }] },
+        }
+      if (method === 'session/set_config_option') return { configOptions }
+      if (method === 'session/prompt') return { stopReason: 'end_turn' }
+      throw new Error(`Unexpected native method ${method}`)
+    })
+    const { createMistralVibeEngine } = await import('../server/services/agent/engines/mistral-vibe/engine.js')
+    const { _registerEngineForTest } = await import('../server/services/agent/engines/registry.js')
+    _registerEngineForTest(createMistralVibeEngine())
+    f.starts[1]!.emit({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
+    await vi.waitFor(() =>
+      expect(nativePeer.request.mock.calls.some((call) => call[1] === 'session/prompt')).toBe(true),
+    )
+    expect(
+      nativePeer.request.mock.calls.filter((call) => call[1] === 'session/set_config_option').map((call) => call[2]),
+    ).toEqual([
+      { sessionId: 'original-native-conversation', configId: 'mode', value: 'auto-approve' },
+      ...(model === 'auto'
+        ? []
+        : [{ sessionId: 'original-native-conversation', configId: 'model', value: 'brainstorm-b' }]),
+    ])
+    expect(f.ws.getWorkspace(f.workspace.id)).toMatchObject({ model, reasoningEffort: 'high' })
+    await vi.waitFor(() => expect(f.returns.getReviewReturn(f.workspace.id)).toBeNull())
+    await f.orch.stopAgentAndWait(f.workspace.id)
+  },
+)
+
+it.each(['no-return', 'returning', 'final'] as const)(
+  'restricts actual orchestrator-issued native %s grants, including automatic memory, and revokes at stopping',
+  async (kind) => {
+    const f = await fixture(undefined, undefined, 'claude-code', undefined, undefined, false, kind)
+    const options = f.starts[1]!.options
+    expect(options).toMatchObject({ agentPermissionMode: 'interactive', readOnly: false })
+    const { authorizeInternalMcpTool, resolveInternalMcpCapability } = await import(
+      '../server/services/internal-mcp-capability-service.js'
+    )
+    const token = options.mcpServers!.find((server) => server.name === 'kobo-tasks')!.env.KOBO_MCP_SESSION_TOKEN
+    const capability = resolveInternalMcpCapability(token)
+    expect(capability.readOnly).toBe(true)
+    for (const tool of [
+      'remember',
+      'create_task',
+      'mark_task_done',
+      'set_auto_loop',
+      'create_workspace',
+      'delete_workspace',
+      'archive_workspace',
+      'send_workspace_message',
+    ]) {
+      expect(() => authorizeInternalMcpTool(token, tool, {}), tool).toThrow('read-only')
+    }
+    for (const tool of ['list_tasks', 'get_workspace_info', 'list_memory_scopes', 'read_memory'])
+      expect(() => authorizeInternalMcpTool(token, tool, {}), tool).not.toThrow()
+    expect(options.prompt).toContain('Read-only launch: do not call remember or attempt writes.')
+    const { PROGRESS_BAR_TOOLS } = await import('../shared/progress-bar-tools.js')
+    for (const tool of PROGRESS_BAR_TOOLS) expect(() => authorizeInternalMcpTool(token, tool.name, {})).not.toThrow()
+    const { getMemoryCapability } = await import('../server/services/memory-agent-runtime.js')
+    expect(getMemoryCapability(capability.env.KOBO_MEMORY_SESSION_TOKEN)?.readOnly).toBe(true)
+    const memory = (await import('../server/routes/memory.js')).default
+    const headers = {
+      'Content-Type': 'application/json',
+      'X-Kobo-Memory-Session': capability.env.KOBO_MEMORY_SESSION_TOKEN!,
+    }
+    expect((await memory.request('/agent/list_memory_scopes', { method: 'POST', headers, body: '{}' })).status).toBe(
+      200,
+    )
+    expect(
+      (
+        await memory.request('/agent/remember', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            scope_id: 'anything',
+            expected_generation: 0,
+            key: 'x',
+            title: 'X',
+            body: 'forbidden',
+          }),
+        })
+      ).status,
+    ).toBe(403)
+    if (kind === 'final') {
+      expect(() => authorizeInternalMcpTool(token, 'submit_final_review', {})).not.toThrow()
+      const final = await import('../server/services/auto-loop-final-review-service.js')
+      expect(() =>
+        final.submitFinalReviewReport(f.workspace.id, f.reviewSessionId, 'wrong', { summary: 'clear', findings: [] }),
+      ).toThrow()
+    } else expect(() => authorizeInternalMcpTool(token, 'submit_final_review', {})).toThrow()
+    const stop = f.orch.stopAgentAndWait(f.workspace.id)
+    expect(() => authorizeInternalMcpTool(token, 'list_tasks', {})).toThrow('revoked')
+    expect(getMemoryCapability(capability.env.KOBO_MEMORY_SESSION_TOKEN)).toBeUndefined()
+    await stop
+  },
+)
+it('retries a native final reviewer in Interactive and returns only after physical closure', async () => {
+  let close!: () => void
+  const f = await fixture(
+    undefined,
+    {
+      reviewClosed: new Promise<void>((resolve) => {
+        close = resolve
+      }),
+    },
+    'claude-code',
+    undefined,
+    undefined,
+    false,
+    'final',
+  )
+  f.starts[1]!.emit({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
+  expect(f.starts).toHaveLength(2)
+  close()
+  await vi.waitFor(() => expect(f.returns.getReviewReturn(f.workspace.id)?.phase).toBe('blocked'))
+  f.orch.retryReviewReturn(f.workspace.id)
+  await vi.waitFor(() => expect(f.starts).toHaveLength(3))
+  expect(f.starts[2]!.options).toMatchObject({
+    agentPermissionMode: 'interactive',
+    readOnly: false,
+    resumeFromEngineSessionId: 'review-native',
+  })
+  const { resolveInternalMcpCapability } = await import('../server/services/internal-mcp-capability-service.js')
+  const recovered = resolveInternalMcpCapability(
+    f.starts[2]!.options.mcpServers!.find((server) => server.name === 'kobo-tasks')!.env.KOBO_MCP_SESSION_TOKEN,
+  )
+  expect(recovered.readOnly).toBe(true)
+  expect(recovered.env.KOBO_REVIEW_ONLY).toBe('1')
+
+  const final = await import('../server/services/auto-loop-final-review-service.js')
+  const launch = final.getAutoLoopReviewLaunch(f.workspace.id, f.reviewSessionId)!
+  final.submitFinalReviewReport(f.workspace.id, f.reviewSessionId, launch.mcpEnv.KOBO_FINAL_REVIEW_TOKEN, {
+    summary: 'Native clear',
+    findings: [],
+  })
+  f.starts[2]!.emit({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
+  await vi.waitFor(() => expect(f.starts).toHaveLength(4))
+  expect(f.starts[3]!.options).toMatchObject({
+    resumeFromEngineSessionId: 'original-native-conversation',
+    model: 'claude-opus-4-7',
+    effort: 'high',
+    agentPermissionMode: 'bypass',
+  })
+  expect(f.starts[3]!.options.prompt).toContain('Native clear')
+  expect(f.starts[3]!.options.prompt).not.toContain('independent read-only review')
   await f.orch.stopAgentAndWait(f.workspace.id)
 })

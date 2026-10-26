@@ -1983,23 +1983,31 @@ it('rehydrates the selected progress scope on live-state refresh after reconnect
   progress.reset()
 })
 
-it('uses forced confirmed delivery and reports rejection without creating a queued message', async () => {
-  setActivePinia(createPinia())
-  const { useWebSocketStore } = await import('../stores/websocket')
-  const { useWorkspaceStore } = await import('../stores/workspace')
-  const ws = useWebSocketStore()
-  const queue = vi.spyOn(useWorkspaceStore(), 'queueMessage')
-  const send = vi.spyOn(ws, '_send').mockReturnValue(true)
-  const pending = ws.sendChatMessageConfirmed('w1', 'now', 's1', true)
-  const payload = send.mock.calls[0]![0].payload as { clientMessageId: string; force: boolean }
-  expect(payload.force).toBe(true)
-  const rejected = expect(pending).rejects.toThrow('Session is not active')
-  ws._routeMessage({
-    type: 'chat:rejected',
-    workspaceId: 'w1',
-    payload: { ...payload, sessionId: 's1', content: 'now', message: 'Session is not active' },
-  })
-  await rejected
-  expect(queue).not.toHaveBeenCalled()
-  send.mockRestore()
-})
+it.each(['claude-code', 'mistral-vibe'])(
+  'reports refused forced delivery for %s without queueing or resending',
+  async (engine) => {
+    setActivePinia(createPinia())
+    const { useWebSocketStore } = await import('../stores/websocket')
+    const { useWorkspaceStore } = await import('../stores/workspace')
+    const ws = useWebSocketStore()
+    const workspace = useWorkspaceStore()
+    workspace.workspaces = [{ ...workspaceFixture(), engine }]
+    workspace.queueMessage('w1', 'already queued', 's1')
+    const queue = vi.spyOn(workspace, 'queueMessage')
+    const send = vi.spyOn(ws, '_send').mockReturnValue(true)
+    const pending = ws.sendChatMessageConfirmed('w1', 'now', 's1', true)
+    const payload = send.mock.calls[0]![0].payload as { clientMessageId: string; force: boolean }
+    expect(payload.force).toBe(true)
+    const rejected = expect(pending).rejects.toThrow('Session is not active')
+    ws._routeMessage({
+      type: 'chat:rejected',
+      workspaceId: 'w1',
+      payload: { ...payload, sessionId: 's1', content: 'now', message: 'Session is not active' },
+    })
+    await rejected
+    expect(queue).not.toHaveBeenCalled()
+    expect(send).toHaveBeenCalledOnce()
+    expect(workspace.getQueuedMessage('w1', 's1')?.content).toBe('already queued')
+    send.mockRestore()
+  },
+)

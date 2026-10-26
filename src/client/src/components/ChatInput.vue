@@ -259,7 +259,7 @@ import { useChatAttachments } from 'src/composables/use-chat-attachments'
 import { useFileMention } from 'src/composables/use-file-mention'
 import { useIsMobile } from 'src/composables/use-is-mobile'
 import { type SlashDropdownItem, useSlashAutocomplete } from 'src/composables/use-slash-autocomplete'
-import { supportsLiveSteering, supportsQuotaStatus } from 'src/constants/engineFeatures'
+import { supportsLiveSteering, supportsQuotaStatus, supportsSkills } from 'src/constants/engineFeatures'
 import { useSessionHandoffStore } from 'src/stores/session-handoff'
 import { useSettingsStore } from 'src/stores/settings'
 import { useTemplatesStore } from 'src/stores/templates'
@@ -378,7 +378,9 @@ const {
   detectSlashFragment,
   replaceFragmentWith,
   closeDropdown,
-} = useSlashAutocomplete(message, () => getChatInputEl())
+} = useSlashAutocomplete(message, () => getChatInputEl(), {
+  supportsSkills: () => supportsSkills(store.selectedWorkspace?.engine),
+})
 
 // `@<file>` mention autocomplete — fuzzy-ranked over the worktree's files.
 const {
@@ -737,8 +739,7 @@ async function sendMessageNow() {
   )
     return
 
-  const immediate =
-    settingsStore.global.forceImmediateMessages === true && supportsLiveSteering(store.selectedWorkspace?.engine)
+  const immediate = settingsStore.global.forceImmediateMessages === true
   let session = currentSession.value
 
   const autoLoopEnabled =
@@ -799,7 +800,7 @@ async function sendMessageNow() {
     attachments.take()
     return
   }
-  store.cancelQueuedMessage(workspaceId, store.selectedSessionId)
+  if (!immediate) store.cancelQueuedMessage(workspaceId, store.selectedSessionId)
 
   const forceSend = immediate && (isAgentBusy.value || !!autoLoopEnabled)
 

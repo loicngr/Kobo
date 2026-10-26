@@ -3,6 +3,7 @@
 // makes sure a model can't be added without its five translations.
 import { describe, expect, it } from 'vitest'
 import { CODEX_MODELS } from '../../../shared/codex-models'
+import { MISTRAL_MODELS } from '../../../shared/mistral-models'
 import { CLAUDE_MODELS } from '../../../shared/models'
 import de from '../i18n/de'
 import en from '../i18n/en'
@@ -53,11 +54,15 @@ describe('Claude model catalogue', () => {
 })
 
 describe('model i18n keys', () => {
-  const models = [...CLAUDE_MODELS, ...CODEX_MODELS]
+  const models = [...CLAUDE_MODELS, ...CODEX_MODELS, ...MISTRAL_MODELS]
 
   it.each(Object.entries(locales))('locale %s translates every model label and description', (_name, messages) => {
     const dictionary = messages as Record<string, string>
     const missing = models.flatMap((m) => [m.i18nLabelKey, m.i18nDescriptionKey]).filter((key) => !dictionary[key])
     expect(missing).toEqual([])
   })
+})
+
+it('keeps native Vibe auto copy separate from Claude auto', () => {
+  expect(MISTRAL_MODELS[0]?.i18nDescriptionKey).toBe('model.mistralAutoDescription')
 })

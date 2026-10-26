@@ -8,13 +8,14 @@ import { createLiveMcpFixture } from './external-mcp-fixture.js'
 
 it('exchanges a real engine reply through MCP and replays the receipt after restart', async () => {
   const engine = process.env.KOBO_LIVE_ENGINE
-  const model = process.env.KOBO_LIVE_MODEL
-  if ((engine !== 'codex' && engine !== 'claude-code') || !model)
+  const model = process.env.KOBO_LIVE_MODEL ?? (engine === 'mistral-vibe' ? 'auto' : undefined)
+  if ((engine !== 'codex' && engine !== 'claude-code' && engine !== 'mistral-vibe') || !model)
     throw new Error(
-      'Set KOBO_LIVE_ENGINE=codex|claude-code and KOBO_LIVE_MODEL to an available model; this explicit test requires real credentials',
+      'Set KOBO_LIVE_ENGINE=codex|claude-code|mistral-vibe and KOBO_LIVE_MODEL (Vibe defaults to auto); this explicit test requires real credentials',
     )
   const fixture = await createLiveMcpFixture(engine, model)
   let client = new Client({ name: 'kobo-live-http', version: '1' })
+  const errors: unknown[] = []
   const stdio = new Client({ name: 'kobo-live-stdio', version: '1' })
   async function call(
     name: string,
@@ -29,7 +30,9 @@ it('exchanges a real engine reply through MCP and replays the receipt after rest
     const url = await fixture.start()
     await client.connect(
       new StreamableHTTPClientTransport(new URL(`${url}/api/mcp`), {
-        requestInit: { headers: { 'X-Kobo-Client-Name': 'Live HTTP client' } },
+        requestInit: {
+          headers: { 'X-Kobo-Client-Name': 'Live HTTP client', Authorization: `Bearer ${fixture.token}` },
+        },
       }),
     )
     const workspace_id = fixture.workspaceId
@@ -75,6 +78,7 @@ it('exchanges a real engine reply through MCP and replays the receipt after rest
           KOBO_DB_PATH: fixture.dbPath,
           KOBO_WORKSPACE_ID: '',
           KOBO_BACKEND_URL: url,
+          KOBO_MCP_TOKEN: fixture.token,
         },
         stderr: 'pipe',
       }),
@@ -86,13 +90,17 @@ it('exchanges a real engine reply through MCP and replays the receipt after rest
     await fixture.stop()
     const restarted = await fixture.start()
     client = new Client({ name: 'kobo-live-restart', version: '1' })
-    await client.connect(new StreamableHTTPClientTransport(new URL(`${restarted}/api/mcp`)))
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL(`${restarted}/api/mcp`), {
+        requestInit: { headers: { Authorization: `Bearer ${fixture.token}` } },
+      }),
+    )
     expect(await call('send_workspace_message', args)).toEqual({ ...receipt, replayed: true })
     const finalHistory = await call('read_workspace_messages', { workspace_id })
     expect((finalHistory.messages as { role: string }[]).filter((message) => message.role === 'user')).toHaveLength(1)
+  } catch (error) {
+    errors.push(error)
   } finally {
-    await stdio.close()
-    await client.close()
-    await fixture.cleanup()
+    await fixture.cleanup(errors, [stdio, client])
   }
 })

@@ -2325,11 +2325,12 @@ export const useWorkspaceStore = defineStore('workspace', {
       toolCallId?: string,
       awaitingFreeForm?: boolean,
       response?: string,
+      selections?: Record<string, string[]>,
     ): Promise<void> {
       const res = await apiFetchResponseForStatus(`/api/workspaces/${workspaceId}/deferred-tool-use/answer`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ answers, toolCallId, awaitingFreeForm, response }),
+        body: JSON.stringify({ answers, toolCallId, awaitingFreeForm, response, selections }),
       })
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string }

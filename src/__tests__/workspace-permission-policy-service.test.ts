@@ -45,6 +45,76 @@ afterEach(async () => {
 const bashLs = { engine: 'claude-code', toolName: 'Bash', payload: { command: 'ls -la' } }
 const bashRm = { engine: 'claude-code', toolName: 'Bash', payload: { command: 'rm -rf /' } }
 
+describe('Mistral exact operation permissions', () => {
+  it('refuses incomplete metadata regardless of titles or forged eligibility flags', async () => {
+    const svc = await import('../server/services/workspace-permission-policy-service.js')
+    for (const payload of [
+      { title: 'bash: pwd' },
+      { operationApprovalAvailable: true, rawInput: {} },
+      { operationApprovalAvailable: true, effectKind: 'shell', rawInput: {} },
+    ]) {
+      const request = { engine: 'mistral-vibe', toolName: 'bash', payload }
+      expect(() => svc.createWorkspacePermissionRule('ws-1', request, 'operation')).toThrow(/details/i)
+      expect(svc.isWorkspacePermissionAllowed('ws-1', request)).toBe(false)
+    }
+  })
+  it('fingerprints native operation fields, excludes display titles, and isolates engines', async () => {
+    const svc = await import('../server/services/workspace-permission-policy-service.js')
+    const request = {
+      engine: 'mistral-vibe',
+      toolName: 'bash',
+      payload: { effectKind: 'shell', kind: 'execute', operationApprovalAvailable: true, rawInput: { command: 'pwd' } },
+    }
+    svc.createWorkspacePermissionRule('ws-1', request, 'operation')
+    expect(
+      svc.isWorkspacePermissionAllowed('ws-1', {
+        ...request,
+        payload: { ...request.payload, title: 'changed display' },
+      }),
+    ).toBe(true)
+    expect(
+      svc.isWorkspacePermissionAllowed('ws-1', {
+        ...request,
+        payload: { ...request.payload, rawInput: { command: 'rm -rf /' } },
+      }),
+    ).toBe(false)
+    expect(svc.isWorkspacePermissionAllowed('ws-1', { ...request, engine: 'codex' })).toBe(false)
+  })
+
+  it('remembers full file writes and refuses unknown or incomplete effect semantics', async () => {
+    const svc = await import('../server/services/workspace-permission-policy-service.js')
+    const request = {
+      engine: 'mistral-vibe',
+      toolName: 'write_file',
+      payload: { effectKind: 'file_write', kind: 'edit', rawInput: { filePath: '/repo/a.txt', content: 'safe' } },
+    }
+    svc.createWorkspacePermissionRule('ws-1', request, 'operation')
+    expect(svc.isWorkspacePermissionAllowed('ws-1', request)).toBe(true)
+    expect(
+      svc.isWorkspacePermissionAllowed('ws-1', {
+        ...request,
+        payload: { ...request.payload, rawInput: { filePath: '/repo/a.txt', content: 'changed' } },
+      }),
+    ).toBe(false)
+    expect(
+      svc.isOperationApprovalAvailable({
+        ...request,
+        payload: { ...request.payload, rawInput: { filePath: 'relative.txt', content: 'safe' } },
+      }),
+    ).toBe(false)
+    expect(svc.isOperationApprovalAvailable({ ...request, toolName: 'unknown' })).toBe(false)
+    expect(
+      svc.isOperationApprovalAvailable({
+        engine: 'mistral-vibe',
+        toolName: 'mcp_probe.tool',
+        payload: { effectKind: 'tool', kind: 'other', rawInput: {} },
+      }),
+    ).toBe(false)
+    svc.createWorkspacePermissionRule('ws-1', { ...request, toolName: 'unknown' }, 'tool')
+    expect(svc.isWorkspacePermissionAllowed('ws-1', { ...request, toolName: 'unknown' })).toBe(true)
+  })
+})
+
 describe('permissionFingerprint()', () => {
   it('is stable under key reordering — same operation, same fingerprint', async () => {
     const { permissionFingerprint } = await import('../server/services/workspace-permission-policy-service.js')

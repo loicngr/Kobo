@@ -99,6 +99,7 @@
         :label="$t('engine.model')"
         v-model="model"
         :options="modelOptions"
+        :loading="optionsLoading"
         emit-value
         map-options
         dense
@@ -158,6 +159,7 @@
         :label="$t('engine.effort')"
         v-model="reasoningEffort"
         :options="reasoningOptions"
+        :loading="optionsLoading"
         emit-value
         map-options
         dense
@@ -213,6 +215,7 @@ const props = defineProps<{
   sessions: AgentSession[]
   sessionOptions: SessionOption[]
   permissionModeOptions: SelectOption[]
+  optionsLoading?: boolean
   modelOptions: SelectOption[]
   reasoningOptions: SelectOption[]
   pendingSpawnChanges: Set<SpawnField>

@@ -51,12 +51,23 @@
           {{ t('askUserQuestion.multiSelectHint') }}
         </div>
         <div class="aukq-options column q-gutter-xs">
-          <template v-if="q.multiSelect">
+          <q-input
+            v-if="q.freeText"
+            v-model="singleAnswers[answerKey(q)]"
+            :label="q.header || q.question"
+            :maxlength="q.maxLength"
+            :disable="submitting"
+            outlined dark dense
+            @update:model-value="touched = { ...touched, [answerKey(q)]: true }"
+          />
+          <template v-else-if="q.multiSelect">
             <q-checkbox
               v-for="opt in q.options"
               :key="opt.label"
               v-model="answers[answerKey(q)]"
               :val="opt.label"
+              :aria-label="opt.label || q.question"
+              @update:model-value="touched = { ...touched, [answerKey(q)]: true }"
               dark
               dense
               color="primary"
@@ -73,6 +84,8 @@
               :key="opt.label"
               v-model="singleAnswers[answerKey(q)]"
               :val="opt.label"
+              :aria-label="opt.label || q.question"
+              @update:model-value="touched = { ...touched, [answerKey(q)]: true }"
               dark
               dense
               color="primary"
@@ -169,6 +182,12 @@ interface Question {
   options: QuestionOption[]
   isOther?: boolean
   multiSelect?: boolean
+  freeText?: boolean
+  required?: boolean
+  minLength?: number
+  maxLength?: number
+  minItems?: number
+  maxItems?: number
 }
 
 const props = defineProps<{ workspaceId: string }>()
@@ -202,8 +221,9 @@ const currentQuestion = computed(() => questions.value[stepIndex.value])
 // For multi-select questions: array of selected labels.
 const answers = ref<Record<string, string[]>>({})
 // For single-select questions: scalar selected label.
-const singleAnswers = ref<Record<string, string>>({})
+const singleAnswers = ref<Record<string, string | undefined>>({})
 const freeFormResponses = ref<Record<string, string>>({})
+const touched = ref<Record<string, boolean>>({})
 const submitting = ref(false)
 const error = ref<string | null>(null)
 const stepIndex = ref(0)
@@ -213,8 +233,11 @@ watch(
   questions,
   (qs) => {
     answers.value = Object.fromEntries(qs.map((q) => [answerKey(q), []]))
-    singleAnswers.value = Object.fromEntries(qs.map((q) => [answerKey(q), '']))
+    singleAnswers.value = Object.fromEntries(
+      qs.map((q) => [answerKey(q), q.required !== undefined && !q.freeText ? undefined : '']),
+    )
     freeFormResponses.value = createOtherResponses(qs.map(answerKey))
+    touched.value = Object.fromEntries(qs.map((q) => [answerKey(q), false]))
     error.value = null
     stepIndex.value = 0
     submitting.value = false
@@ -237,11 +260,33 @@ function stepFilled(idx: number): boolean {
   const q = questions.value[idx]
   if (!q) return false
   const selected = q.multiSelect ? (answers.value[answerKey(q)] ?? []) : (singleAnswers.value[answerKey(q)] ?? '')
+  if (q.required === false && !touched.value[answerKey(q)]) return true
+  if (q.freeText) {
+    const length = String(selected).length
+    return length >= (q.minLength ?? 0) && length <= (q.maxLength ?? Infinity)
+  }
+  if (q.multiSelect && q.required !== undefined) {
+    const length = selected.length
+    return length >= (q.minItems ?? 0) && length <= (q.maxItems ?? Infinity)
+  }
+  if (q.required !== undefined) {
+    return (
+      !!touched.value[answerKey(q)] &&
+      q.options.some((option) => option.label === selected) &&
+      selected.length >= (q.minLength ?? 0) &&
+      selected.length <= (q.maxLength ?? Infinity)
+    )
+  }
   if (Array.isArray(selected) ? selected.length === 0 : !selected) return false
-  return !hasOtherSelection([selected]) || (freeFormResponses.value[answerKey(q)] ?? '').trim().length > 0
+  return (
+    q.isOther === false ||
+    !hasOtherSelection([selected]) ||
+    (freeFormResponses.value[answerKey(q)] ?? '').trim().length > 0
+  )
 }
 
 function questionHasOtherSelection(question: Question): boolean {
+  if (question.isOther === false) return false
   const selected = question.multiSelect
     ? (answers.value[answerKey(question)] ?? [])
     : (singleAnswers.value[answerKey(question)] ?? '')
@@ -264,21 +309,42 @@ function goPrev(): void {
 }
 
 async function submit(): Promise<void> {
-  if (submitting.value) return
+  if (submitting.value || !allFilled.value) return
   submitting.value = true
   error.value = null
   try {
-    const payload: Record<string, string> = {}
+    const selections: Record<string, string[]> = Object.create(null)
+    const payload: Record<string, string> = Object.create(null)
     for (const q of questions.value) {
+      if (q.required === false && !touched.value[answerKey(q)]) continue
       if (q.multiSelect) {
         const sel = answers.value[answerKey(q)] ?? []
-        payload[answerKey(q)] = expandOtherAnswerWithResponse(sel, true, freeFormResponses.value[answerKey(q)] ?? '')
+        selections[answerKey(q)] =
+          q.isOther === false
+            ? [...sel]
+            : sel.map((label) =>
+                label === OTHER_OPTION_VALUE ? (freeFormResponses.value[answerKey(q)] ?? '').trim() : label,
+              )
+        payload[answerKey(q)] =
+          q.isOther === false
+            ? sel.join(', ')
+            : expandOtherAnswerWithResponse(sel, true, freeFormResponses.value[answerKey(q)] ?? '')
       } else {
         const sel = singleAnswers.value[answerKey(q)] ?? ''
-        payload[answerKey(q)] = expandOtherAnswerWithResponse(sel, false, freeFormResponses.value[answerKey(q)] ?? '')
+        payload[answerKey(q)] =
+          q.isOther === false
+            ? sel
+            : expandOtherAnswerWithResponse(sel, false, freeFormResponses.value[answerKey(q)] ?? '')
       }
     }
-    await store.submitDeferredAnswer(props.workspaceId, payload, pending.value?.toolCallId, false, undefined)
+    await store.submitDeferredAnswer(
+      props.workspaceId,
+      payload,
+      pending.value?.toolCallId,
+      false,
+      undefined,
+      Object.keys(selections).length ? selections : undefined,
+    )
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
   } finally {

@@ -17,6 +17,7 @@ export const SUPPORTS_SUBAGENTS_BY_ENGINE: Record<string, boolean> = {
   // protocol exposes sub-agent items as part of the standard event stream,
   // so Kōbō can render them like Claude's Task tool subagents.
   codex: true,
+  'mistral-vibe': false,
 }
 
 export function supportsSubagents(engineId: string | undefined): boolean {
@@ -29,6 +30,7 @@ export const SUPPORTS_QUOTA_STATUS_BY_ENGINE: Record<string, boolean> = {
   // The footer can expose optional account controls without a provider quota
   // snapshot. Per-turn token usage is distinct from provider-wide quotas.
   codex: true,
+  'mistral-vibe': false,
 }
 
 export function supportsQuotaStatus(engineId: string | undefined): boolean {
@@ -40,6 +42,7 @@ export function supportsQuotaStatus(engineId: string | undefined): boolean {
 export const SUPPORTS_LIVE_STEERING_BY_ENGINE: Record<string, boolean> = {
   'claude-code': true,
   codex: true,
+  'mistral-vibe': false,
 }
 
 export function supportsLiveSteering(engineId: string | undefined): boolean {
@@ -54,9 +57,19 @@ export function supportsLiveSteering(engineId: string | undefined): boolean {
 export const SUPPORTS_SUBAGENT_STOP_BY_ENGINE: Record<string, boolean> = {
   'claude-code': true,
   codex: false,
+  'mistral-vibe': false,
 }
 
 export function supportsSubagentStop(engineId: string | undefined): boolean {
   if (!engineId) return false
   return SUPPORTS_SUBAGENT_STOP_BY_ENGINE[engineId] ?? false
+}
+
+/** Native Vibe execution cannot provide a read-only session or managed skills. */
+export function supportsReadOnly(engineId: string | undefined): boolean {
+  return engineId === 'claude-code' || engineId === 'codex'
+}
+
+export function supportsSkills(engineId: string | undefined): boolean {
+  return engineId !== 'mistral-vibe'
 }

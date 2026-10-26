@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { isAbsolute } from 'node:path'
 import { nanoid } from 'nanoid'
 import { getDb } from '../db/index.js'
 
@@ -48,6 +49,27 @@ export function permissionFingerprint(payload: unknown): string {
 const CODEX_EDIT_FINGERPRINT_PREFIX = 'codex-edit-v2:'
 
 function operationFingerprint(request: PermissionRequest): string | null {
+  if (request.engine === 'mistral-vibe') {
+    const payload = request.payload as Record<string, unknown> | null
+    const input = payload?.rawInput as Record<string, unknown> | null
+    if (!input || typeof input !== 'object' || Array.isArray(input) || payload?.operationApprovalAvailable === false)
+      return null
+    const shell =
+      request.toolName === 'bash' &&
+      payload?.effectKind === 'shell' &&
+      payload.kind === 'execute' &&
+      typeof input.command === 'string' &&
+      input.command.trim().length > 0
+    const write =
+      request.toolName === 'write_file' &&
+      payload?.effectKind === 'file_write' &&
+      payload.kind === 'edit' &&
+      typeof input.filePath === 'string' &&
+      isAbsolute(input.filePath) &&
+      typeof input.content === 'string'
+    if (!shell && !write) return null
+    return `mistral-vibe-operation-v1:${permissionFingerprint({ rawInput: input, effectKind: payload?.effectKind, kind: payload?.kind })}`
+  }
   if (request.engine !== 'codex' || request.toolName !== 'Edit') return permissionFingerprint(request.payload)
   const payload = request.payload as Record<string, unknown> | null
   if (payload?.operationApprovalAvailable !== true || !Array.isArray(payload.changes) || payload.changes.length === 0)
@@ -72,6 +94,10 @@ function operationFingerprint(request: PermissionRequest): string | null {
       grantRoot: payload.grantRoot ?? null,
     })
   )
+}
+
+export function isOperationApprovalAvailable(request: PermissionRequest): boolean {
+  return operationFingerprint(request) !== null
 }
 
 function toRule(row: Record<string, unknown>): WorkspacePermissionRule {

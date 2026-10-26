@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import Database from 'better-sqlite3'
 import { describe, expect, it, vi } from 'vitest'
 import {
@@ -58,8 +58,8 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 54', () => {
-    expect(SCHEMA_VERSION).toBe(54)
+  it('exporte SCHEMA_VERSION = 55', () => {
+    expect(SCHEMA_VERSION).toBe(55)
   })
 
   it('migration v33 records and backfills the engine on agent sessions', () => {
@@ -2628,7 +2628,7 @@ describe('persistent memory schema migration v51', () => {
     const beforeUpgrade = memoryObjects(old)
     expect(beforeUpgrade.objects).toEqual([])
     expect(getMigrationHistory(old).at(-1)?.version).toBe(50)
-    expect(getPendingMigrations(old)).toEqual([51, 52, 53, 54])
+    expect(getPendingMigrations(old)).toEqual([51, 52, 53, 54, 55])
 
     runMigrations(old)
     migrations.find((entry) => entry.version === 51)!.migrate(old)
@@ -2768,7 +2768,7 @@ describe('durable final reviews v52', () => {
       INSERT INTO pending_review_returns VALUES('w','review','original','{"engine":"codex"}','{"engine":"claude-code"}','c');`)
     for (const migration of migrations.filter((m) => m.version <= 51))
       old.prepare('INSERT INTO schema_migrations VALUES(?,?,?)').run(migration.version, migration.name, 'v51')
-    expect(getPendingMigrations(old)).toEqual([52, 53, 54])
+    expect(getPendingMigrations(old)).toEqual([52, 53, 54, 55])
     runMigrations(old)
     migrations.find((m) => m.version === 52)!.migrate(old)
     expect(old.prepare('SELECT * FROM pending_review_returns').get()).toEqual({
@@ -2847,5 +2847,136 @@ describe('session progress migration v54', () => {
     expect(shape(upgraded)).toEqual(shape(fresh))
     upgraded.close()
     fresh.close()
+  })
+})
+
+describe('Mistral memory engine migration v55', () => {
+  const tables = [
+    'memory_entries',
+    'memory_proposals',
+    'memory_operations',
+    'memory_contexts',
+    'memory_budget_contexts',
+  ]
+
+  function previousDatabase() {
+    const db = new Database(':memory:')
+    db.pragma('foreign_keys = ON')
+    db.exec(readFileSync(new URL('./fixtures/memory-v54.sql', import.meta.url), 'utf8'))
+    db.exec(
+      `CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)`,
+    )
+    const record = db.prepare('INSERT INTO schema_migrations VALUES (?, ?, ?)')
+    record.run(1, 'init-schema', '2026-01-01')
+    for (const migration of migrations.filter((migration) => migration.version <= 54)) {
+      record.run(migration.version, migration.name, '2026-01-01')
+    }
+    return db
+  }
+
+  function rows(db: Database.Database) {
+    return Object.fromEntries(
+      [...tables, 'memory_scopes', 'workspaces', 'agent_sessions', 'sqlite_sequence', 'schema_migrations'].map(
+        (table) => [table, db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()],
+      ),
+    )
+  }
+
+  function shape(db: Database.Database) {
+    return tables.map((table) => ({
+      table,
+      columns: db.prepare(`PRAGMA table_info(${table})`).all(),
+      foreignKeys: db.prepare(`PRAGMA foreign_key_list(${table})`).all(),
+      indexes: (
+        db.prepare(`PRAGMA index_list(${table})`).all() as Array<{
+          name: string
+          unique: number
+          origin: string
+          partial: number
+        }>
+      )
+        .map(({ name, unique, origin, partial }) => ({
+          name,
+          unique,
+          origin,
+          partial,
+          columns: db.prepare(`PRAGMA index_xinfo(${name})`).all(),
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    }))
+  }
+
+  it('preserves every row, FK, index and deleted journal high-water mark while admitting Mistral', () => {
+    const db = previousDatabase()
+    db.exec('CREATE INDEX idx_memory_entries_custom_title ON memory_entries(title) WHERE revision > 1')
+    const before = rows(db)
+    const insertMistral = () =>
+      db
+        .prepare(
+          "INSERT INTO memory_entries (id, scope_id, memory_key, title, body, actor_kind, source_engine, created_at, updated_at) VALUES ('mistral', 'scope', 'new-rule', 'Mistral rule', 'New memory', 'internal-agent', 'mistral-vibe', '2026-02-01', '2026-02-01')",
+        )
+        .run()
+    expect(insertMistral).toThrow(/CHECK/)
+    const indexes = db.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name").all()
+    for (const table of tables) {
+      const column = table === 'memory_contexts' || table === 'memory_budget_contexts' ? 'engine' : 'source_engine'
+      expect(() => db.exec(`UPDATE ${table} SET ${column} = 'mistral-vibe'`)).toThrow(/CHECK/)
+    }
+    expect(getPendingMigrations(db)).toEqual([55])
+    runMigrations(db)
+    expect({ ...rows(db), schema_migrations: before.schema_migrations }).toEqual(before)
+    expect(db.pragma('foreign_keys', { simple: true })).toBe(1)
+    expect(db.pragma('foreign_key_check')).toEqual([])
+    expect(db.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name").all()).toEqual(indexes)
+    expect(getMigrationHistory(db).at(-1)).toMatchObject({
+      version: SCHEMA_VERSION,
+      name: 'mistral-vibe-memory-engine',
+    })
+    const fresh = new Database(':memory:')
+    initSchema(fresh)
+    fresh.exec('CREATE INDEX idx_memory_entries_custom_title ON memory_entries(title) WHERE revision > 1')
+    expect(shape(db)).toEqual(shape(fresh))
+    migrations.find((migration) => migration.version === 55)!.migrate(db)
+    expect(shape(db)).toEqual(shape(fresh))
+    for (const table of tables) {
+      const column = table === 'memory_contexts' || table === 'memory_budget_contexts' ? 'engine' : 'source_engine'
+      db.exec(`UPDATE ${table} SET ${column} = 'mistral-vibe'`)
+      expect(() => db.exec(`UPDATE ${table} SET ${column} = 'unknown-engine'`)).toThrow(/CHECK/)
+    }
+    expect(insertMistral).not.toThrow()
+    const operation = db
+      .prepare(
+        "INSERT INTO memory_operations (scope_id, operation, actor_kind, created_at) VALUES ('scope', 'read', 'human', '2026-02-01')",
+      )
+      .safeIntegers()
+      .run()
+    expect(operation.lastInsertRowid).toBeGreaterThan(9007199254740993n)
+    expect(db.pragma('foreign_key_check')).toEqual([])
+    db.exec("DELETE FROM memory_entries WHERE id = 'entry'; DELETE FROM memory_budget_contexts WHERE id = 'budget'")
+    expect(db.prepare('SELECT * FROM memory_proposals').all()).toEqual([])
+    expect(db.prepare('SELECT budget_context_id FROM memory_contexts').get()).toEqual({ budget_context_id: null })
+    db.close()
+    fresh.close()
+  })
+
+  it('rolls back a mid-rebuild error and can successfully retry', () => {
+    const db = previousDatabase()
+    const before = rows(db)
+    const schema = db.prepare('SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY name').all()
+    const exec = db.exec.bind(db)
+    const spy = vi.spyOn(db, 'exec').mockImplementation((sql) => {
+      if (/DROP TABLE ["`]?memory_entries\b/.test(sql)) throw new Error('Injected migration failure')
+      return exec(sql)
+    })
+    expect(() => runMigrations(db)).toThrow('Injected migration failure')
+    spy.mockRestore()
+    expect(rows(db)).toEqual(before)
+    expect(db.prepare('SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY name').all()).toEqual(schema)
+    expect(getPendingMigrations(db)).toEqual([55])
+    expect(db.pragma('foreign_key_check')).toEqual([])
+    runMigrations(db)
+    expect(getPendingMigrations(db)).toEqual([])
+    expect(db.pragma('foreign_key_check')).toEqual([])
+    db.close()
   })
 })

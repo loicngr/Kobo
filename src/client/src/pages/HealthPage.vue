@@ -97,6 +97,13 @@
                 {{ $t('health.codexCliMissing') }}
               </span>
             </div>
+            <div class="row items-center">
+              <q-icon :name="statusIcon(report.mistralCli.available)" :color="statusColor(report.mistralCli.available)" size="sm" />
+              <span class="q-ml-sm text-body2">{{ $t('health.mistralCliTitle') }}</span>
+              <q-space />
+              <span v-if="report.mistralCli.available" class="text-caption text-kobo-2">{{ report.mistralCli.version }}</span>
+              <span v-else class="text-caption text-negative">{{ $t('health.mistralCliMissing') }}</span>
+            </div>
             <div class="row items-center q-py-xs">
               <q-icon
                 :name="statusIcon(report.forgeCli.gh.available || report.forgeCli.glab.available)"
@@ -407,6 +414,7 @@ interface HealthReport {
   settings: { schemaVersion: number }
   claudeCli: { available: boolean; version: string | null }
   codexCli: { available: boolean; version: string | null }
+  mistralCli: { available: boolean; version: string | null }
   forgeCli: {
     gh: { available: boolean; version: string | null }
     glab: { available: boolean; version: string | null }

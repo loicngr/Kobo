@@ -8,7 +8,8 @@
  * descriptions come from i18n: `reasoning.<id>` / `reasoning.<id>Description`.
  *
  * Keep this list in sync with the backend capabilities — both sides need to
- * agree on which effort ids are valid for a given engine. The id `'auto'` is
+ * agree on which effort ids are valid for Claude/Codex. Vibe uses contextual
+ * native options through useMistralOptions; its Auto entry is a fallback. The id `'auto'` is
  * a Kōbō sentinel: the options-builder drops the effort field so the engine
  * picks its default.
  */
@@ -51,4 +52,5 @@ export const CODEX_EFFORT_OPTION_DEFS: readonly EffortDef[] = [
 export const EFFORT_OPTION_DEFS_BY_ENGINE: Record<string, readonly EffortDef[]> = {
   'claude-code': CLAUDE_EFFORT_OPTION_DEFS,
   codex: CODEX_EFFORT_OPTION_DEFS,
+  'mistral-vibe': [effort('auto')],
 }

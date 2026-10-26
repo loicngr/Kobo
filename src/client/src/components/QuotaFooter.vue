@@ -84,11 +84,12 @@ import type { AccountProviderId, ProviderAccount, ProviderAccounts } from '../..
 
 const store = useWorkspaceStore()
 const { t } = useI18n()
-const providerId = computed<AccountProviderId>(() => {
+const providerId = computed<AccountProviderId | null>(() => {
   const session = store.sessions.find(
     (item) => item.id === store.selectedSessionId && item.workspaceId === store.selectedWorkspace?.id,
   )
-  return (session?.engine ?? store.selectedWorkspace?.engine) === 'codex' ? 'codex' : 'claude-code'
+  const engine = session?.engine ?? store.selectedWorkspace?.engine ?? 'claude-code'
+  return engine === 'codex' || engine === 'claude-code' ? engine : null
 })
 const providerName = computed(() => (providerId.value === 'codex' ? 'Codex' : 'Claude Code'))
 const title = computed(() =>
@@ -105,7 +106,9 @@ const switching = ref(false)
 const accountError = ref('')
 const menuOpen = ref(false)
 const refreshing = ref(false)
-const visible = computed(() => providerId.value === 'claude-code' || accounts.value?.available || !!accountError.value)
+const visible = computed(
+  () => !!providerId.value && (providerId.value === 'claude-code' || accounts.value?.available || !!accountError.value),
+)
 const currentAccount = computed(() => accounts.value?.accounts.find((account) => account.active))
 const accountOptions = computed(
   () => accounts.value?.accounts.map((account) => ({ ...account, label: accountLabel(account) })) ?? [],
@@ -133,7 +136,7 @@ function accountErrorKey(error: unknown, fallback: string): string {
 }
 
 async function loadAccounts(preserveError = false): Promise<void> {
-  if (switching.value) return
+  if (switching.value || !providerId.value) return
   const context = generation
   const sequence = ++readSequence
   const provider = providerId.value
@@ -160,7 +163,7 @@ async function loadAccounts(preserveError = false): Promise<void> {
 }
 
 async function switchAccount(): Promise<void> {
-  if (!canSwitch.value) return
+  if (!canSwitch.value || !providerId.value) return
   const context = generation
   const provider = providerId.value
   const accountId = selectedAccountId.value

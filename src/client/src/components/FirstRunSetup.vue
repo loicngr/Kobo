@@ -4,7 +4,7 @@
     <p>{{ $t('setup.intro') }}</p>
     <div class="row q-col-gutter-md">
       <q-select v-model="engine" class="col-12 col-sm-4" outlined emit-value map-options :disable="saving"
-        :options="[{ label: 'Claude Code', value: 'claude-code' }, { label: 'OpenAI Codex', value: 'codex' }]"
+        :options="[{ label: 'Claude Code', value: 'claude-code' }, { label: 'OpenAI Codex', value: 'codex' }, { label: $t('workspacePage.engineMistral'), value: 'mistral-vibe' }]"
         :label="$t('engine.select')" />
       <div class="col-12 col-sm-8">
         <div class="row items-center no-wrap q-gutter-x-sm">

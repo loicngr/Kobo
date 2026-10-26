@@ -25,3 +25,17 @@ describe('engine registry', () => {
     expect(claude.capabilities.models.length).toBeGreaterThan(0)
   })
 })
+
+it('registers native Mistral execution without read-only or live steering', () => {
+  expect(listEngines().map((engine) => engine.id)).toEqual(['claude-code', 'codex', 'mistral-vibe'])
+  expect(resolveEngine('mistral-vibe')).toMatchObject({
+    displayName: 'Mistral Vibe',
+    capabilities: {
+      permissionModes: ['interactive', 'strict', 'bypass'],
+      supportsReadOnly: false,
+      supportsLiveSteering: false,
+      supportsMcp: true,
+      supportsResume: true,
+    },
+  })
+})

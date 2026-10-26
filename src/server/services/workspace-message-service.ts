@@ -1,11 +1,20 @@
 import { type McpAttachment, validateMcpAttachments } from '../../shared/mcp-attachments.js'
 import type { MessageSource } from '../../shared/workspace-message-types.js'
 import { assertWorkspaceLifecycleAvailable, withWorkspaceLifecycleGuard } from '../utils/workspace-lifecycle-guard.js'
-import { isAgentUnavailableError, isShuttingDown, sendMessage, startAgent } from './agent/orchestrator.js'
+import { assertEngineConfigurationSupported } from './agent/engines/configuration.js'
+import { resolveEngine } from './agent/engines/registry.js'
+import {
+  assertImmediateMessageSupported,
+  isAgentUnavailableError,
+  isShuttingDown,
+  sendMessage,
+  startAgent,
+} from './agent/orchestrator.js'
 import { attachmentReference, removeAttachments, type SavedAttachment, saveAttachments } from './attachment-service.js'
 import { hasLoopMessage } from './auto-loop-message-service.js'
 import * as autoLoop from './auto-loop-service.js'
 import { createChatReceipt } from './chat-receipt-service.js'
+import { preflightMistralConfiguration } from './mistral-options-service.js'
 import { emitEphemeral } from './websocket-service.js'
 import { getActiveSession, getWorkspace, updateWorkspaceStatus } from './workspace-service.js'
 
@@ -75,6 +84,26 @@ export async function deliverWorkspaceMessage(
     if (workspace.status === 'awaiting-user') {
       reason = 'awaiting-user'
       throw new Error('Answer the pending question or permission request before sending a chat message')
+    }
+    if (workspace.engine === 'mistral-vibe') {
+      assertEngineConfigurationSupported(resolveEngine(workspace.engine), {
+        model: workspace.model,
+        reasoningEffort: workspace.reasoningEffort,
+        agentPermissionMode: message.agentPermissionModeOverride ?? workspace.agentPermissionMode,
+      })
+    }
+    assertImmediateMessageSupported(workspaceId)
+    if (workspace.engine === 'mistral-vibe') {
+      await preflightMistralConfiguration(
+        workspace.engine,
+        { workspaceId },
+        {
+          model: workspace.model,
+          reasoningEffort: workspace.reasoningEffort,
+          agentPermissionMode: message.agentPermissionModeOverride ?? workspace.agentPermissionMode,
+        },
+        true,
+      )
     }
     if (attachments.length) {
       attachmentWorktree = workspace.worktreePath

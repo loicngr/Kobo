@@ -34,6 +34,8 @@ function fakeEngine(
       permissionModes: ['bypass'],
       supportsResume: true,
       supportsMcp: true,
+      supportsLiveSteering: true,
+      supportsReadOnly: true,
       supportsSkills: true,
       supportsSubagents: false,
       supportsQuotaStatus: false,
@@ -67,6 +69,45 @@ const BASE_OPTS: StartOptions = {
 }
 
 describe('SessionController', () => {
+  it('retains ownership when asynchronous setup fails and native shutdown is unconfirmed', async () => {
+    const { SessionController } = await import('../../server/services/agent/session-controller.js')
+    const { engine, process } = fakeEngine()
+    let rejectReady!: (error: Error) => void
+    let releaseClosed!: () => void
+    const ready = new Promise<void>((_resolve, reject) => {
+      rejectReady = reject
+    })
+    void ready.catch(() => {})
+    Object.defineProperties(process, {
+      ready: { value: ready },
+      closed: {
+        value: new Promise<void>((resolve) => {
+          releaseClosed = resolve
+        }),
+      },
+    })
+    process.stop = async () => {
+      throw new Error('Native shutdown unconfirmed')
+    }
+    engine.start = async (_options, emit) => {
+      queueMicrotask(() => {
+        rejectReady(new Error('Session setup failed'))
+        emit({ kind: 'session:ended', reason: 'error', exitCode: null })
+      })
+      return process
+    }
+    const ctrl = new SessionController('w1', 'sess-1', engine, () => {})
+    await ctrl.start(BASE_OPTS)
+    await expect(process.ready).rejects.toThrow('Session setup failed')
+    await expect(ctrl.stop()).rejects.toThrow('Native shutdown unconfirmed')
+    expect(ctrl.engineProcess).toBe(process)
+    expect(ctrl.isClosed).toBe(false)
+    expect(ctrl.status).toBe('stopping')
+    releaseClosed()
+    await ctrl.closed
+    expect(ctrl.isClosed).toBe(true)
+  })
+
   it('retains an end received during startup until the engine confirms closure', async () => {
     const { SessionController } = await import('../../server/services/agent/session-controller.js')
     const { engine, process } = fakeEngine()
@@ -200,6 +241,8 @@ describe('SessionController', () => {
         permissionModes: ['bypass'],
         supportsResume: true,
         supportsMcp: true,
+        supportsLiveSteering: true,
+        supportsReadOnly: true,
         supportsSkills: true,
         supportsSubagents: false,
         supportsQuotaStatus: false,
@@ -239,6 +282,8 @@ describe('SessionController', () => {
         permissionModes: ['bypass'],
         supportsResume: true,
         supportsMcp: true,
+        supportsLiveSteering: true,
+        supportsReadOnly: true,
         supportsSkills: true,
         supportsSubagents: false,
         supportsQuotaStatus: false,
@@ -282,6 +327,8 @@ describe('SessionController', () => {
         permissionModes: ['bypass'],
         supportsResume: true,
         supportsMcp: true,
+        supportsLiveSteering: true,
+        supportsReadOnly: true,
         supportsSkills: true,
         supportsSubagents: false,
         supportsQuotaStatus: false,
@@ -335,6 +382,8 @@ describe('SessionController', () => {
         permissionModes: ['bypass'],
         supportsResume: true,
         supportsMcp: true,
+        supportsLiveSteering: true,
+        supportsReadOnly: true,
         supportsSkills: true,
         supportsSubagents: false,
         supportsQuotaStatus: false,
@@ -388,6 +437,8 @@ describe('SessionController', () => {
         permissionModes: ['bypass'],
         supportsResume: true,
         supportsMcp: true,
+        supportsLiveSteering: true,
+        supportsReadOnly: true,
         supportsSkills: true,
         supportsSubagents: false,
         supportsQuotaStatus: false,
@@ -463,4 +514,17 @@ describe('SessionController', () => {
     await ctrl.start(BASE_OPTS)
     await expect(ctrl.start(BASE_OPTS)).rejects.toThrow(/already started/i)
   })
+})
+
+it('rejects unsupported native live steering before dispatch hooks or process delivery', async () => {
+  const { SessionController } = await import('../../server/services/agent/session-controller.js')
+  const fake = fakeEngine()
+  fake.engine.capabilities.supportsLiveSteering = false
+  const controller = new SessionController('w1', 's1', fake.engine, () => {})
+  await controller.start(BASE_OPTS)
+  const before = vi.fn()
+  await expect(controller.sendMessage('busy', before)).rejects.toThrow('live message delivery is unsupported')
+  expect(before).not.toHaveBeenCalled()
+  expect(fake.sentMessages).toEqual([])
+  await controller.stop()
 })

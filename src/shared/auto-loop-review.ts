@@ -1,4 +1,4 @@
-/** The final reviewer always runs in a fresh read-only session. */
+/** The final reviewer always runs in a fresh report-only session; native Vibe permissions do not enforce filesystem read-only. */
 export interface AutoLoopReviewConfiguration {
   engine: string
   model: string

@@ -20,4 +20,5 @@ export const CODEX_PERMISSION_MODES: readonly AgentPermissionMode[] = ['plan', '
 export const PERMISSION_MODES_BY_ENGINE: Record<string, readonly AgentPermissionMode[]> = {
   'claude-code': CLAUDE_PERMISSION_MODES,
   codex: CODEX_PERMISSION_MODES,
+  'mistral-vibe': ['interactive', 'strict', 'bypass'],
 }

@@ -42,7 +42,17 @@ function setup(loaded = true, complete = false) {
   const wrapper = mount(FirstRunSetup, {
     global: {
       plugins: [pinia, createI18n({ legacy: false, locale: 'en', messages: { en } })],
-      stubs: { QBtn: Button, QInput: Input, QSelect: true, FolderPickerDialog: true },
+      stubs: {
+        QBtn: Button,
+        QInput: Input,
+        QSelect: {
+          name: 'QSelect',
+          props: ['modelValue', 'options'],
+          emits: ['update:modelValue'],
+          template: '<div />',
+        },
+        FolderPickerDialog: true,
+      },
     },
   })
   return { wrapper, settings }
@@ -159,4 +169,24 @@ describe('first run setup', () => {
     expect(router.currentRoute.value.query.project).toBe('/demo/project')
     wrapper.unmount()
   })
+})
+
+it('offers Mistral Vibe and preserves it in the creation query', async () => {
+  const { wrapper, settings } = setup()
+  const engine = wrapper.findComponent({ name: 'QSelect' })
+  expect(engine.props('options')).toContainEqual({ label: 'Mistral Vibe', value: 'mistral-vibe' })
+  engine.vm.$emit('update:modelValue', 'mistral-vibe')
+  vi.spyOn(settings, 'upsertProject').mockResolvedValue(undefined)
+  vi.spyOn(settings, 'updateGlobal').mockResolvedValue(undefined)
+  api.mockResolvedValue({ checks: [] })
+  push.mockResolvedValue(undefined)
+  await wrapper.get('input').setValue('/demo/project')
+  await wrapper.get('[data-test="check"]').trigger('click')
+  await flushPromises()
+  await wrapper.get('[data-test="start"]').trigger('click')
+  await flushPromises()
+  expect(push).toHaveBeenCalledWith(
+    expect.objectContaining({ query: expect.objectContaining({ engine: 'mistral-vibe' }) }),
+  )
+  wrapper.unmount()
 })

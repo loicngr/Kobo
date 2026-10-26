@@ -1,5 +1,6 @@
 import type { Tool } from '@modelcontextprotocol/sdk/types.js'
 import { MCP_ATTACHMENTS_SCHEMA, validateMcpAttachments } from './mcp-attachments.js'
+import { parseQuestionSelections } from './question-selections.js'
 
 const workspace = { type: 'string', minLength: 1, maxLength: 200, description: 'Workspace ID from list_workspaces.' }
 const session = {
@@ -80,11 +81,17 @@ export const WORKSPACE_DIALOGUE_TOOLS: Tool[] = [
   ),
   tool(
     'answer_workspace_question',
-    'Answer the current pending question using its exact tool_call_id. Answer keys are question IDs for Codex, question text for Claude. Tool permission requests require human approval in Kōbō.',
+    'Answer the current pending question using its exact tool_call_id. Answer keys are question IDs for Codex/Mistral Vibe, question text for Claude. Native multiple-choice arrays use selections; never split comma-joined display answers. Tool permission requests require human approval in Kōbō.',
     {
       workspace_id: workspace,
       tool_call_id: { type: 'string', minLength: 1, maxLength: 200 },
-      answers: { type: 'object', minProperties: 1, additionalProperties: { type: 'string' } },
+      answers: { type: 'object', additionalProperties: { type: 'string' } },
+      selections: {
+        type: 'object',
+        maxProperties: 20,
+        propertyNames: { minLength: 1, maxLength: 200 },
+        additionalProperties: { type: 'array', maxItems: 32, items: { type: 'string', maxLength: 2000 } },
+      },
     },
     ['workspace_id', 'tool_call_id', 'answers'],
     false,
@@ -105,11 +112,14 @@ export function validateDialogueArguments(name: string, value: unknown): Record<
   >
   for (const key of definition.inputSchema.required ?? [])
     if (!Object.hasOwn(args, key)) throw new Error(`${key} is required`)
+  if (name === 'answer_workspace_question') parseQuestionSelections(args.selections)
   for (const [key, input] of Object.entries(args)) {
     const property = properties[key]
     if (!Object.hasOwn(properties, key)) throw new Error(`Unknown argument '${key}'`)
     if (key === 'attachments') {
       validateMcpAttachments(input)
+    } else if (key === 'selections') {
+      // Validated above; native forms may omit all optional fields.
     } else if (property.type === 'string') {
       if (
         typeof input !== 'string' ||
@@ -131,10 +141,9 @@ export function validateDialogueArguments(name: string, value: unknown): Record<
       !input ||
       typeof input !== 'object' ||
       Array.isArray(input) ||
-      Object.keys(input).length === 0 ||
       Object.values(input).some((answer) => typeof answer !== 'string' || answer.length > 100_000)
     ) {
-      throw new Error(`${key} must be a non-empty object of string answers`)
+      throw new Error(`${key} must be an object of string answers`)
     }
   }
   if (name === 'send_workspace_message') {

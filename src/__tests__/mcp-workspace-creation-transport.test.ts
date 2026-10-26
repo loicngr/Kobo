@@ -1,3 +1,8 @@
+const nativeDefaults = vi.hoisted(() => ({ permissionMode: 'interactive' }))
+vi.mock('../server/services/settings-service.js', () => ({
+  getGlobalSettings: () => ({ defaultPermissionModeByEngine: { 'mistral-vibe': nativeDefaults.permissionMode } }),
+}))
+
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -313,6 +318,31 @@ it.each(['', 'internal-workspace'])(
       )
       expect(large.isError).not.toBe(true)
       expect(captured.requests[1]?.files[0]?.length).toBe('large.txt:'.length + 8 * 1024 * 1024)
+      const native = await client.callTool({
+        name: 'create_workspace',
+        arguments: {
+          name: 'Vibe',
+          project_path: '/tmp/project',
+          source_branch: 'main',
+          working_branch: 'feature/vibe',
+          engine: 'mistral-vibe',
+          agent_permission_mode: 'interactive',
+          model: 'auto',
+        },
+      })
+      expect(native.isError).not.toBe(true)
+      expect(content(native)).toMatchObject({ engine: 'mistral-vibe', agentPermissionMode: 'interactive' })
+      const invalid = await client.callTool({
+        name: 'create_workspace',
+        arguments: {
+          name: 'Bad',
+          project_path: '/tmp/project',
+          source_branch: 'main',
+          working_branch: 'feature/bad',
+          engine: 'unknown',
+        },
+      })
+      expect(invalid.isError).toBe(true)
       await exerciseLifecycleTools(client)
     } finally {
       await client.close()
@@ -460,6 +490,29 @@ it('exposes archive, purge, delete and restoration with their options through HT
       ]),
     )
     await exerciseLifecycleTools(client)
+  } finally {
+    await client.close()
+  }
+})
+
+it('accepts Mistral creation and rejects invalid native selections through HTTP MCP', async () => {
+  const client = await httpClient()
+  try {
+    const base = {
+      name: 'Vibe',
+      project_path: '/tmp/project',
+      source_branch: 'main',
+      working_branch: 'feature/vibe',
+      engine: 'mistral-vibe',
+    }
+    const good = await client.callTool({ name: 'create_workspace', arguments: base })
+    expect(good.isError).not.toBe(true)
+    expect(content(good)).toMatchObject({ engine: 'mistral-vibe' })
+    for (const selection of [{ engine: 'unknown' }, { agent_permission_mode: 'plan' }, { model: 'custom' }]) {
+      const bad = await client.callTool({ name: 'create_workspace', arguments: { ...base, ...selection } })
+      expect(bad.isError).toBe(true)
+    }
+    expect(captured.requests).toHaveLength(1)
   } finally {
     await client.close()
   }

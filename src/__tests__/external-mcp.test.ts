@@ -20,6 +20,7 @@ import { createInternalMcpCapability } from '../server/services/internal-mcp-cap
 import { executeWorkspaceDialogueTool } from '../server/services/workspace-dialogue-service.js'
 
 vi.mock('../server/services/agent/orchestrator.js', () => ({
+  assertImmediateMessageSupported: vi.fn(),
   getPendingInputs: vi.fn(() => []),
   answerPendingQuestion: vi.fn(),
 }))
@@ -283,6 +284,47 @@ it('reads streamed and legacy replies, filters sessions and advances past non-me
     await executeWorkspaceDialogueTool('read_workspace_messages', { ...args, after_cursor: 'legacy' }),
   ).toMatchObject({ messages: [{ text: 'new reply' }], nextCursor: 'new' })
 })
+
+it('forwards native typed selections including commas through external dialogue', async () => {
+  vi.mocked(agent.getPendingInputs).mockReturnValue([
+    { kind: 'question', toolCallId: 'q', toolName: 'AskUserQuestion', input: {}, agentSessionId: 's' },
+  ])
+  await executeWorkspaceDialogueTool('answer_workspace_question', {
+    workspace_id: 'a',
+    tool_call_id: 'q',
+    answers: {},
+    selections: { q0: ['One, Two', 'Three'] },
+  })
+  expect(agent.answerPendingQuestion).toHaveBeenCalledWith(
+    'a',
+    {},
+    'q',
+    expect.objectContaining({ selections: { q0: ['One, Two', 'Three'] } }),
+  )
+})
+
+it('allows an explicit empty form answer when native fields are all optional', async () => {
+  vi.mocked(agent.getPendingInputs).mockReturnValue([
+    { kind: 'question', toolCallId: 'q', toolName: 'AskUserQuestion', input: {}, agentSessionId: 's' },
+  ])
+  await executeWorkspaceDialogueTool('answer_workspace_question', { workspace_id: 'a', tool_call_id: 'q', answers: {} })
+  expect(agent.answerPendingQuestion).toHaveBeenCalledWith('a', {}, 'q', expect.any(Object))
+})
+
+it.each([null, [], { q: 'ambiguous' }, { q: [1] }, { q: Array(33).fill('x') }, { q: ['x'.repeat(2001)] }])(
+  'rejects malformed native typed selections before external dispatch',
+  async (selections) => {
+    await expect(
+      executeWorkspaceDialogueTool('answer_workspace_question', {
+        workspace_id: 'a',
+        tool_call_id: 'q',
+        answers: {},
+        selections,
+      }),
+    ).rejects.toThrow(/selections/i)
+    expect(agent.answerPendingQuestion).not.toHaveBeenCalled()
+  },
+)
 
 it(
   'limits a handoff-generation MCP to reading and submitting its backend-bound report',

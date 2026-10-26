@@ -65,6 +65,40 @@ describe('foldEvents', () => {
     expect(items[0]).toMatchObject({ type: 'thinking', text: 'reasoning' })
   })
 
+  it('folds explicit thought deltas with copy-on-write and preserves completed provider blocks', () => {
+    const cache = createFoldCache()
+    const events: AgentEvent[] = [{ kind: 'message:thinking', messageId: 'm1', text: 'Read ', streaming: true }]
+    const first = foldEventsCached(cache, events, ['first'], true, ['e1'])[0]
+    events.push({ kind: 'message:thinking', messageId: 'm1', text: 'the code.', streaming: true })
+    const second = foldEventsCached(cache, events, ['first', 'second'], true, ['e1', 'e2'])[0]
+    expect(first).toMatchObject({ text: 'Read ' })
+    expect(second).not.toBe(first)
+    expect(second).toMatchObject({ text: 'Read the code.', ts: 'first', eventIds: ['e1', 'e2'] })
+    expect(foldEventsCached(cache, [...events])).toEqual([second])
+    expect(foldEventsCached(cache, events.slice(1)).map((item) => item.type === 'thinking' && item.text)).toEqual([
+      'the code.',
+    ])
+    for (const boundary of [
+      { kind: 'message:end', messageId: 'm1' },
+      { kind: 'message:text', messageId: 'm1', text: 'Answer', streaming: true },
+      { kind: 'tool:call', messageId: 'm1', toolCallId: 't1', name: 'Read', input: {} },
+      { kind: 'session:ended', reason: 'completed', exitCode: 0 },
+    ] satisfies AgentEvent[]) {
+      expect(
+        foldEvents([...events, boundary, { kind: 'message:thinking', messageId: 'm1', text: 'New', streaming: true }])
+          .filter((item) => item.type === 'thinking')
+          .map((item) => item.text),
+      ).toEqual(['Read the code.', 'New'])
+    }
+    expect(
+      foldEvents([
+        { kind: 'message:thinking', messageId: 'claude', text: 'Completed Claude block' },
+        { kind: 'message:thinking', messageId: 'claude', text: 'Another completed block' },
+        { kind: 'message:thinking', messageId: 'codex', text: 'Completed Codex summary' },
+      ]).map((item) => item.type === 'thinking' && item.text),
+    ).toEqual(['Completed Claude block', 'Another completed block', 'Completed Codex summary'])
+  })
+
   it('emits session items for started/ended/compacted', () => {
     const items = foldEvents([
       { kind: 'session:started', engineSessionId: 's1' },

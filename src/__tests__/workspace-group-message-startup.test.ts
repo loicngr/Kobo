@@ -54,6 +54,8 @@ it.each([false, true])('checks the delivery mode after engine startup (enable au
       permissionModes: ['bypass'],
       supportsResume: true,
       supportsMcp: true,
+      supportsLiveSteering: true,
+      supportsReadOnly: true,
       supportsSkills: true,
       supportsSubagents: false,
       supportsQuotaStatus: false,

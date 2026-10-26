@@ -148,6 +148,59 @@ afterEach(() => {
 })
 
 describe('settings drafts', () => {
+  it('saves, reloads and discards concurrent-agent limits, preserving unlimited on unrelated saves', async () => {
+    const { wrapper, store, tab, vm } = await setup()
+    await tab('agents')
+    const control = () => wrapper.getComponent<typeof Field>('[data-test="max-concurrent-agents"]')
+    expect(control().props('modelValue')).toBe(2)
+    expect(control().attributes()).toMatchObject({ min: '0', step: '1', type: 'number' })
+    for (const value of [0, 4]) {
+      control().vm.$emit('update:modelValue', value)
+      await flushPromises()
+      expect(hasUnsavedWork()).toBe(true)
+      vm.savebarSave()
+      await flushPromises()
+      expect(store.global.maxConcurrentAgents).toBe(value)
+      expect(hasUnsavedWork()).toBe(false)
+      vm.syncGlobalForm()
+      await flushPromises()
+      expect(control().props('modelValue')).toBe(value)
+    }
+    store.global.maxConcurrentAgents = 0
+    vm.syncGlobalForm()
+    control().vm.$emit('update:modelValue', 8)
+    await flushPromises()
+    vm.syncGlobalForm()
+    await flushPromises()
+    expect(control().props('modelValue')).toBe(0)
+    expect(hasUnsavedWork()).toBe(false)
+    wrapper
+      .getComponent<typeof Field>('[data-tour="settings-immediate-messages"] input')
+      .vm.$emit('update:modelValue', true)
+    await flushPromises()
+    vm.savebarSave()
+    await flushPromises()
+    expect(store.global.maxConcurrentAgents).toBe(0)
+  })
+
+  it.each(['', -1, 1.5, null, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1])(
+    'rejects invalid concurrent-agent limit %s without saving other drafts',
+    async (value) => {
+      const { wrapper, store, tab, vm } = await setup()
+      await tab('agents')
+      wrapper.getComponent<typeof Field>('[data-test="max-concurrent-agents"]').vm.$emit('update:modelValue', value)
+      wrapper
+        .getComponent<typeof Field>('[data-tour="settings-immediate-messages"] input')
+        .vm.$emit('update:modelValue', true)
+      await flushPromises()
+      vm.savebarSave()
+      await flushPromises()
+      expect(api.mock.calls.filter(([url]) => url === '/api/settings/global')).toHaveLength(0)
+      expect(store.global.forceImmediateMessages).toBe(false)
+      expect(hasUnsavedWork()).toBe(true)
+    },
+  )
+
   it('saves the watchdog toggle at the top of Agents and restores the persisted value', async () => {
     const { wrapper, store, tab, vm } = await setup()
     await tab('agents')
@@ -432,4 +485,46 @@ describe('settings drafts', () => {
     await tab('notion')
     expect(wrapper.getComponent(IntegrationConnectionSettings).findAll('input')[2]!.element.value).toBe('')
   })
+})
+
+it('saves and reloads native Mistral defaults without rewriting unrelated engine settings or templates', async () => {
+  const { wrapper, store, tab, vm } = await setup()
+  store.global.defaultModelByEngine = {
+    'claude-code': 'claude-sonnet-5-5',
+    codex: 'gpt-6.1-sol',
+    'mistral-vibe': 'auto',
+    custom: 'kept',
+  }
+  store.global.defaultPermissionModeByEngine = {
+    'claude-code': 'plan',
+    codex: 'strict',
+    'mistral-vibe': 'strict',
+    custom: 'plan',
+  }
+  const templates = useWorkspaceTemplatesStore()
+  const originalTemplates = JSON.parse(JSON.stringify(templates.templates))
+  vm.syncGlobalForm()
+  await tab('agents')
+  const native = wrapper.getComponent<typeof Field>('[data-test="mistral-default-permission"]')
+  expect(native).toBeDefined()
+  native!.vm.$emit('update:modelValue', 'interactive')
+  await flushPromises()
+  await vm.savebarSave()
+  await flushPromises()
+  expect(store.global.defaultModelByEngine).toEqual({
+    'claude-code': 'claude-sonnet-5-5',
+    codex: 'gpt-6.1-sol',
+    'mistral-vibe': 'auto',
+    custom: 'kept',
+  })
+  expect(store.global.defaultPermissionModeByEngine).toEqual({
+    'claude-code': 'plan',
+    codex: 'strict',
+    'mistral-vibe': 'interactive',
+    custom: 'plan',
+  })
+  vm.syncGlobalForm()
+  await flushPromises()
+  expect(native!.props('modelValue')).toBe('interactive')
+  expect(templates.templates).toEqual(originalTemplates)
 })
