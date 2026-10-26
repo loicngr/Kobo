@@ -6,18 +6,20 @@ section — the in-app "What's new" dialog reads released version sections.
 
 ## 2.1.30
 
-- fix(workspaces): preserve pr merge transitions and mobile focus
-- feat(agents): integrate mistral vibe through acp
-
-## Unreleased
-
-- Add Mistral Vibe through the official ACP SDK alongside Claude Code and Codex,
-  with native model/thinking discovery, permissions, resume, managed MCP and reviews.
-  Vibe is installed separately and does not support Plan mode.
-- Expose automatic-agent concurrency in Settings and group agent defaults by provider.
-- Preserve PR merge hooks and archiving across UI refreshes, show mergeability
-  recalculation explicitly, and keep branch deletion usable after worktree cleanup.
-- Avoid automatically opening the phone keyboard when switching workspaces.
+- Use Mistral Vibe alongside Claude Code and Codex for workspace missions and code
+  reviews. Vibe requires a separate installation and uses native permissions;
+  Plan mode is unavailable.
+- Choose from the models and reasoning levels offered by your Vibe installation,
+  with loading indicators while the available options are retrieved.
+- Fix the display of Vibe's streamed reasoning text.
+- Set the maximum number of simultaneous automatic agents in Settings, with
+  agent defaults grouped by provider.
+- Run PR merge hooks and automatically archive workspaces when merging from
+  Kōbō. Keep the remote-branch deletion confirmation available after archiving.
+- Keep workspace cards in place while the forge rechecks merge readiness,
+  without repeating ready-to-merge notifications.
+- Prevent PR watching from replaying a merge that happened while it was disabled.
+- Stop the phone keyboard from opening automatically when switching workspaces.
 
 ## 2.1.29
 
