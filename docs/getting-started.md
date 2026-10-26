@@ -1,10 +1,11 @@
 # Your first Kōbō workspace
 
-Kōbō is a local, single-user application that runs Claude Code or OpenAI Codex in Git worktrees. Each user installs their own instance and supplies their own provider account. A shared network token is not a multi-user account system.
+Kōbō is a local, single-user application that runs Claude Code, OpenAI Codex or Mistral Vibe in Git worktrees. Each user installs their own instance and supplies their own provider account. A shared network token is not a multi-user account system.
 
 ## Requirements
 
 - Node.js 26.12.1 or later, Git and Bash, with a writable local Git repository containing at least one commit.
+- For Mistral Vibe, install and authenticate Vibe separately as the Kōbō server user; `vibe-acp` must be on its PATH. See [Mistral Vibe setup](../CONFIGURATION.md#mistral-vibe).
 - A working login or API credential for the engine you choose. Kōbō ships neither credentials nor a provider subscription. Provider usage can incur charges.
 - Linux is the locally exercised platform for this readiness change. CI is configured to exercise Linux and macOS; a configured job is not a completed compatibility test. Windows users need a Linux environment such as WSL; native Windows and WSL have not been validated in this release rehearsal.
 
@@ -36,7 +37,7 @@ Open <http://localhost:3000>. The server binds to loopback by default. Do not ex
 1. In the first-run panel, choose an engine and the path of your local Git repository.
 2. Run **Check environment**. Resolve missing Git, Bash, runtime, or write access before continuing. Authentication and model availability remain **unverified**: diagnostics do not contact a paid model or read your credentials.
 3. Continue to the creation form. Name the mission and describe a small change, including its acceptance criteria.
-4. Keep **Standard** and **Plan** for the first review. Standard requires no external skill suite. Plan does not silently become unrestricted when you prepare or enable auto-loop.
+4. Keep **Standard** for a first mission. Use **Plan** with Claude Code/Codex, or **Interactive** with Mistral Vibe. Vibe has no Plan mode: review prompts forbid modifications, but native permissions do not guarantee filesystem read-only access. Standard requires no external skill suite. Plan does not silently become unrestricted when you prepare or enable auto-loop.
 5. Review the plan, explicitly select an execution permission mode when you are ready, and send the implementation instruction. Review the resulting diff before committing or publishing.
 
 New installations use manual commit, push and PR/MR publication preferences, disable audio and optional ticket integrations, and admit at most two concurrent unattended starts. Manual sessions can exceed that threshold. Agent workflow preferences are instructions; the engine permission mode supplies the actual sandbox and approval behavior.

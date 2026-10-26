@@ -1,6 +1,6 @@
 # Kōbō Tasks MCP Server
 
-Standalone MCP (Model Context Protocol) server configured for each Claude Code or Codex agent running inside a workspace. Exposes workspace-scoped tools that the agent can invoke to interact with Kōbō state: tasks, settings, dev server, images, git, etc.
+Standalone MCP (Model Context Protocol) server configured for each Claude Code, Codex or Mistral Vibe agent running inside a workspace. Exposes workspace-scoped tools that the agent can invoke to interact with Kōbō state: tasks, settings, dev server, images, git, etc.
 
 Kōbō also exposes workspace creation, PR checkout diagnosis, conversation and [session progress tools](#session-progress-tools) to external MCP clients over HTTP and through the global stdio server.
 
@@ -60,7 +60,7 @@ Leave `KOBO_WORKSPACE_ID` unset or empty for an external client. Set `KOBO_MCP_T
 | `read_workspace_messages` | `workspace_id`, optional `session_id`, `after_cursor`, `limit` | Chronological conversation fragments, `nextCursor`, `hasMore`, `workspaceStatus`, `activeSessionId`. |
 | `send_workspace_message` | `workspace_id`, `content` and/or `attachments`, optional `session_id`, `idempotency_key` | `{ accepted: true, sessionId }`; keyed sends also return `requestId`, `eventId`, and `replayed` on a successful retry. |
 | `get_workspace_questions` | `workspace_id` | Pending `questions` and `requiresHumanApproval` for a permission request at the head of the queue. |
-| `answer_workspace_question` | `workspace_id`, `tool_call_id`, `answers` | `{ accepted: true }` after answering the current question. |
+| `answer_workspace_question` | `workspace_id`, `tool_call_id`, `answers`, optional `selections` | `{ accepted: true }` after answering the current question. |
 
 Typical dialogue:
 
@@ -68,7 +68,7 @@ Typical dialogue:
 2. Read existing messages, following `nextCursor` while `hasMore` is true. Keep the final cursor.
 3. Call `send_workspace_message` with the workspace ID and your text and/or inline attachments. An inactive agent is resumed; a selected session must belong to this workspace and must be the running session if one is already running.
 4. Poll `read_workspace_messages` with the saved cursor for the reply. Acceptance means the message was delivered, not that the agent finished its work. `workspaceStatus` and `get_workspace_questions` expose progress and blockers.
-5. To answer a question, pass the current `toolCallId` as `tool_call_id`, and map its question identifiers to string answers in `answers` (Codex uses question IDs; Claude questions use their question text). Tool permission requests must be approved by the human in Kōbō.
+5. To answer a question, pass the current `toolCallId` as `tool_call_id`, and map its question identifiers to string answers in `answers` (Codex and Mistral Vibe use question IDs; Claude questions use their question text). For native multi-select questions, pass exact choice values as arrays in `selections`, keyed by question ID; never derive them by splitting comma-separated display text. Tool permission requests must be approved by the human in Kōbō.
 
 Each message fragment has `{ id, sessionId, role, text, messageId, createdAt }`, optionally `source` and `clientMessageId`. Concatenate assistant fragments sharing a `messageId` and `sessionId` in returned order. `limit` bounds **source events scanned**, from 1 to 200 (default 100): a page can contain no text while still advancing its cursor. Session filtering also includes older untagged events (`sessionId: null`). Keep the same session filter when continuing a cursor. Cursors are workspace-specific; if retention removes a cursor, the tool returns an explicit error and reading must restart without it.
 
@@ -145,12 +145,18 @@ KOBO_LIVE_ENGINE=claude-code KOBO_LIVE_MODEL=<available-model-id> make test-mcp-
 
 Use a concrete model available to your configured provider. This invokes the real engine and uses its existing credentials; it may consume quota. Cleanup stops the test's owned backend/agents and deletes temporary files. Missing credentials, provider errors and a missing reply fail the explicit test rather than being counted as successful validation.
 
+Mistral Vibe has an additional native ACP validation harness, including an offline
+adapter smoke and separately opted-in provider scenarios. See its
+[compatibility record](../__tests__/fixtures/mistral-acp/README.md) for commands,
+required native runtime and the scope of the checks actually performed.
+
 ## How it runs
 
 The orchestrator builds the workspace's MCP server specification in
 `buildMcpServers()`. The Claude engine passes it through the SDK's `mcpServers`
 option; the Codex engine supplies it through the app-server thread's
-`config.mcp_servers`. The agent runtime launches the server over stdio with the
+`config.mcp_servers`; the Mistral Vibe engine supplies it through ACP session
+creation/loading's `mcpServers`. The agent runtime launches the server over stdio with the
 following environment. This wiring does not require writing a `.mcp.json` file
 into the worktree.
 
@@ -422,7 +428,7 @@ Create a workspace through the same backend handlers as the Create page, includi
 |---|---|
 | `name`, `project_path` | Required. Select a project configured in Kōbō. |
 | `source_branch`, `working_branch` | Required for ordinary creation; supply branch names explicitly. With `worktree_path`, only `source_branch` is required. With `pr_url`, canonical PR base/head branches are derived. |
-| `engine`, `model`, `reasoning_effort`, `agent_permission_mode` | Same engine and permissions as the form (`claude-code` / `codex`; `plan` / `bypass` / `strict` / `interactive`, subject to engine support). |
+| `engine`, `model`, `reasoning_effort`, `agent_permission_mode` | Same engine and permissions as the form (`claude-code` / `codex` / `mistral-vibe`; `plan` / `bypass` / `strict` / `interactive`, subject to engine support; Vibe rejects `plan`). |
 | `description`, `tags`, `tasks`, `acceptance_criteria` | Description and arrays of strings. |
 | `auto_loop`, `auto_loop_session_mode` | Enable auto-loop; mode is `per_task` or `continuous`. |
 | `brainstorm_model`, `brainstorm_reasoning_effort` | Separate initial brainstorm configuration, on the workspace's engine. |
@@ -434,7 +440,13 @@ Create a workspace through the same backend handlers as the Create page, includi
 | `comparison_id`, `creation_id` | Group separate creations for comparison; correlate creation progress. These are not idempotency keys. |
 | `attachments` | Up to 10 `{name, mime_type, data_base64}` files, 50 MiB decoded total. Same file types as the form; send inline base64, never a server file path. |
 
-For an engine comparison, create two workspaces with distinct working branches and the same `comparison_id`, configuring each engine separately. Selecting a saved form preset in an MCP client means sending its effective field values.
+Mistral Vibe uses native model aliases and thinking levels; `auto` preserves native
+settings. Vibe reviews use native execution permissions with instructions forbidding
+modifications, while managed MCP/memory grants remain restricted. Busy Vibe sessions
+reject immediate external messages; send again after the native process closes.
+See [Mistral Vibe capabilities](../../CONFIGURATION.md#mistral-vibe).
+
+For a Claude Code/Codex engine comparison, create two workspaces with distinct working branches and the same `comparison_id`, configuring each engine separately. Selecting a saved form preset in an MCP client means sending its effective field values.
 
 Example with final review:
 

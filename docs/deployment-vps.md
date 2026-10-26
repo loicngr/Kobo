@@ -97,7 +97,7 @@ these checks.
 
 After installation, continue with [opening Kōbō](#2-start-and-open-kōbō) and
 [authenticating agent engines](#3-authenticate-and-choose-a-project). The installer
-does not log you into Claude or Codex. Obtain the Kōbō browser token through the
+does not log you into Claude Code, Codex or Mistral Vibe. Obtain the Kōbō browser token through the
 existing startup-log command below. For installer-managed deployments, invoke the
 updater as `/opt/kobo/bin/kobo-update --directory /opt/kobo`; the `./kobo-update`
 examples later in this guide describe the manual installation layout.
@@ -312,6 +312,11 @@ and login requirements can vary; `claude auth login --help` and `codex login --h
 show the supported options. You can also configure your own provider API key.
 No paid agent turn is needed for these setup commands.
 
+For **Mistral Vibe**, install Vibe separately in the image/container and authenticate
+as the same agent user. The server must be able to run `vibe-acp`. Follow
+[Use Mistral Vibe inside the container](./vps-projects-and-skills.md#use-mistral-vibe-inside-the-container);
+an installation or login on the host is insufficient.
+
 For a personal GitHub account, complete the CLI's browser login flow from your PC,
 then connect Git HTTPS credentials to it:
 
@@ -337,7 +342,9 @@ In the first-run form, **Local project directory** means
 nor a folder on the PC running the browser. Then follow [your first mission](./getting-started.md#create-a-mission).
 
 The named `kobo-home` volume covers `/root`: it preserves Kōbō's database/settings,
-Claude/Codex state and Git/forge configuration across container replacement.
+Claude/Codex state, Vibe state stored under that home, and Git/forge configuration
+across container replacement. A custom `VIBE_HOME` outside the volume needs its own
+persistence.
 Do not run `docker compose down -v`. Authentication performed only on the host is
 not automatically available inside a container. See [Docker volume persistence](https://docs.docker.com/reference/compose-file/volumes/).
 
@@ -616,7 +623,7 @@ the reservation deliberately has no expiry that could reopen the race. Follow
 container and confirm its exit before restarting it. Restart clears the in-memory
 reservation. Never release it while a Docker stop could still be in progress.
 
-Claude/Codex configuration and credentials, skills/plugins, caches, browser
+Claude Code/Codex/Mistral Vibe configuration and credentials, skills/plugins, caches, browser
 downloads, repositories/worktrees, bind-mounted App keys/scripts and project
 database volumes are **not included** in `kobo.tar.gz`. Files outside the Kōbō
 directory remain in the existing volume; the updater neither archives nor deletes

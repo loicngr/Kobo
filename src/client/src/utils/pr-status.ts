@@ -29,6 +29,10 @@ export function isCiFailed(snapshot: PrSnapshot): boolean {
   return snapshot.state === 'OPEN' && snapshot.ci.rollup === 'FAILURE'
 }
 
+export function isMergeabilityPending(snapshot: PrSnapshot | undefined): boolean {
+  return snapshot?.state === 'OPEN' && snapshot.mergeable === 'UNKNOWN'
+}
+
 /**
  * True when a PR snapshot warrants pulling its workspace into the
  * "Needs Attention" group — failing CI or blocking changes-requested.

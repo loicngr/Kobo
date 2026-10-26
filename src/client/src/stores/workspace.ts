@@ -10,7 +10,7 @@ import type { MergeMethod } from '../../../shared/forge-merge'
 import { isSubagentTask } from '../../../shared/subagent-classification'
 import type { WorkflowPolicy } from '../../../shared/workflow-policy'
 import type { ProviderId, UsageSnapshot } from '../types/usage'
-import { hasPrAttention } from '../utils/pr-status'
+import { hasPrAttention, isMergeabilityPending } from '../utils/pr-status'
 import { isBusyStatus } from '../utils/workspace-status'
 import { useAgentStreamStore } from './agent-stream'
 import { useAutoLoopReviewStore } from './auto-loop-review'
@@ -378,6 +378,7 @@ export interface PrSnapshot {
   unresolvedReviewThreadsCount: number
   /** Computed in the backend: OPEN + CI all green + not blocked by changes-requested. */
   readyToMerge: boolean
+  mergeable?: 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN' | null
 }
 
 export interface PendingCron {
@@ -553,7 +554,8 @@ export const useWorkspaceStore = defineStore('workspace', {
         (w) =>
           ['error', 'quota', 'awaiting-user'].includes(w.status) ||
           hasPrAttention(state.prSnapshots[w.id]) ||
-          (!isBusyStatus(w.status) && !!state.prSnapshots[w.id]?.readyToMerge),
+          (!isBusyStatus(w.status) &&
+            (!!state.prSnapshots[w.id]?.readyToMerge || isMergeabilityPending(state.prSnapshots[w.id]))),
       )
     },
 
@@ -566,7 +568,8 @@ export const useWorkspaceStore = defineStore('workspace', {
         (w) =>
           ['completed', 'idle', 'created'].includes(w.status) &&
           !hasPrAttention(state.prSnapshots[w.id]) &&
-          !state.prSnapshots[w.id]?.readyToMerge,
+          !state.prSnapshots[w.id]?.readyToMerge &&
+          !isMergeabilityPending(state.prSnapshots[w.id]),
       )
     },
 

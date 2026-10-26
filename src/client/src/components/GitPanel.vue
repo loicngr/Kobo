@@ -1936,16 +1936,17 @@ function handleMergeRequest() {
         message: t(data.merged ? 'git.mergeRequestSuccess' : 'git.mergeRequestPending', { request }),
         position: 'top',
       })
-      await Promise.allSettled([loadGitStats({ freshFetch: true }), store.refreshPrSnapshot(workspace.id)])
-      if (data.merged && canDeleteBranch && props.workspace?.id === workspace.id) {
+      void Promise.allSettled([loadGitStats({ freshFetch: true }), store.refreshPrSnapshot(workspace.id)])
+      if (data.merged && canDeleteBranch) {
         $q.dialog({
           title: t('git.deleteRemoteBranchTitle'),
           message: t('git.deleteRemoteBranchMessage', { branch: data.branch }),
           dark: true,
+          noRouteDismiss: true,
           cancel: { flat: true, label: t('common.cancel'), color: 'kobo-2' },
           ok: { flat: true, label: t('git.deleteRemoteBranch'), color: 'negative' },
         }).onOk(() => {
-          if (props.workspace?.id === workspace.id) void deleteRemoteBranch(data.branch)
+          void deleteRemoteBranch(workspace.id, data.branch)
         })
       }
     } catch (e) {
@@ -1957,14 +1958,13 @@ function handleMergeRequest() {
   }
 }
 
-async function deleteRemoteBranch(branch: string) {
-  if (!props.workspace) return
+async function deleteRemoteBranch(workspaceId: string, branch: string) {
   // Suppression d'une branche distante : destructive et lente (aller-retour
   // réseau). Elle n'avait aucun indicateur — l'utilisateur ne savait pas si
   // son clic était parti.
   deletingRemoteBranch.value = true
   try {
-    const res = await apiFetchResponseForStatus(`/api/workspaces/${props.workspace.id}/delete-remote-branch`, {
+    const res = await apiFetchResponseForStatus(`/api/workspaces/${workspaceId}/delete-remote-branch`, {
       method: 'POST',
     })
     if (!res.ok) {

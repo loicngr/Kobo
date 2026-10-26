@@ -94,6 +94,15 @@ describe('getAttentionReasons', () => {
     expect(reasons).toEqual([])
   })
 
+  it('shows the merge check while the forge recalculates, without claiming the PR is ready', () => {
+    const snapshot = snap({ readyToMerge: false, mergeable: 'UNKNOWN' })
+    expect(getAttentionReasons(ws('idle'), snapshot)).toEqual([
+      { kind: 'mergeability-pending', icon: 'sync', color: 'kobo-2' },
+    ])
+    expect(getAttentionReasons(ws('executing'), snapshot)).toEqual([])
+    expect(getAttentionReasons(ws('idle'), { ...snapshot, state: 'MERGED' })).toEqual([])
+  })
+
   it('stacks the status reason before ready-to-merge', () => {
     const reasons = getAttentionReasons(ws('awaiting-user'), snap({ readyToMerge: true }))
     expect(reasons.map((r) => r.kind)).toEqual(['awaiting-user', 'ready-to-merge'])

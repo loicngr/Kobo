@@ -6,7 +6,7 @@ import { hasController } from './agent/orchestrator.js'
 import { stopDevServer } from './dev-server-service.js'
 import { getForgeProvider } from './forge/registry.js'
 import { resolveForge } from './forge/resolve.js'
-import type { PrSnapshot } from './forge/types.js'
+import { deriveReadyToMerge, type PrSnapshot } from './forge/types.js'
 import { computeGitStats, type GitStatsResult } from './git-stats-service.js'
 import * as lifecycleHookService from './lifecycle-hook-service.js'
 import { getGlobalSettings } from './settings-service.js'
@@ -56,9 +56,25 @@ async function runBounded<T>(
   await Promise.all(workers)
 }
 
-/** Tracks the last known PR snapshot per workspace, used to detect transitions
- *  (state, base, reviewDecision). */
+/** Latest snapshot for the UI, including explicit refreshes. */
 const lastKnownPr = new Map<string, PrSnapshot>()
+/** Only the watcher consumes transitions; refreshing the UI must not consume a merge. */
+const lastProcessedPr = new Map<string, PrSnapshot>()
+
+function recordProcessedPr(workspaceId: string, snapshot: PrSnapshot, displayedAtStart: PrSnapshot | undefined): void {
+  const previous = lastProcessedPr.get(workspaceId)
+  // A refresh completed during this tick's Git work may already have newer data.
+  if (lastKnownPr.get(workspaceId) === displayedAtStart) lastKnownPr.set(workspaceId, snapshot)
+  // Keep notification history through a recalculation, while the public snapshot
+  // still blocks merging until the forge has actually confirmed mergeability.
+  const keepReadiness =
+    previous?.number === snapshot.number &&
+    previous.url === snapshot.url &&
+    previous.readyToMerge &&
+    snapshot.mergeable === 'UNKNOWN' &&
+    deriveReadyToMerge({ ...snapshot, mergeable: 'MERGEABLE' })
+  lastProcessedPr.set(workspaceId, keepReadiness ? { ...snapshot, readyToMerge: true } : snapshot)
+}
 
 /** Latest git-stats snapshot per workspace, refreshed each watcher tick. */
 const lastKnownGitStats = new Map<string, GitStatsResult>()
@@ -67,6 +83,7 @@ const activeChecks = new Map<string, Set<{ invalidated: boolean }>>()
 /** Also cancels stale results from checks that started before restoration. */
 export function invalidateWorkspacePrCaches(workspaceId: string): void {
   lastKnownPr.delete(workspaceId)
+  lastProcessedPr.delete(workspaceId)
   lastKnownGitStats.delete(workspaceId)
   for (const check of activeChecks.get(workspaceId) ?? []) check.invalidated = true
 }
@@ -99,6 +116,8 @@ export function getAllGitStats(): Record<string, GitStatsResult> {
  *  workspace's entry, so this must be done explicitly by the caller). */
 export function clearPrSnapshotCache(workspaceId: string): void {
   lastKnownPr.delete(workspaceId)
+  lastProcessedPr.delete(workspaceId)
+  for (const check of activeChecks.get(workspaceId) ?? []) check.invalidated = true
 }
 
 /**
@@ -107,6 +126,7 @@ export function clearPrSnapshotCache(workspaceId: string): void {
  */
 export function _resetForTest(): void {
   lastKnownPr.clear()
+  lastProcessedPr.clear()
   lastKnownGitStats.clear()
 }
 
@@ -148,9 +168,10 @@ export async function checkPrStatuses(): Promise<void> {
   const workspaces = listWorkspaces(false) // non-archived only
 
   // Clean up entries for workspaces that no longer exist
-  for (const id of lastKnownPr.keys()) {
+  for (const id of new Set([...lastKnownPr.keys(), ...lastProcessedPr.keys()])) {
     if (!workspaces.some((ws) => ws.id === id)) {
       lastKnownPr.delete(id)
+      lastProcessedPr.delete(id)
     }
   }
   for (const id of lastKnownGitStats.keys()) {
@@ -163,6 +184,7 @@ export async function checkPrStatuses(): Promise<void> {
     // Without this guard, every git/forge spawn below fails with ENOENT and
     // floods the logs when a worktree was deleted externally.
     if (isWorkspaceLifecycleBusy(ws.id) || !fs.existsSync(ws.worktreePath)) return
+    const displayedAtStart = lastKnownPr.get(ws.id)
     const check = { invalidated: false }
     const checks = activeChecks.get(ws.id) ?? new Set<{ invalidated: boolean }>()
     checks.add(check)
@@ -197,7 +219,7 @@ export async function checkPrStatuses(): Promise<void> {
       // `gh pr edit --base …`, the lag was painful and confusing.
       let baseTransitionedFrom: string | null = null
       if (pr?.state === 'OPEN' && pr.base) {
-        const prevBase = lastKnownPr.get(ws.id)?.base ?? ws.sourceBranch
+        const prevBase = ws.sourceBranch
         if (prevBase !== pr.base) {
           try {
             updateWorkspaceSourceBranch(ws.id, pr.base)
@@ -237,7 +259,8 @@ export async function checkPrStatuses(): Promise<void> {
 
       if (stale() || !pr) return
 
-      const prev = lastKnownPr.get(ws.id)
+      const processed = lastProcessedPr.get(ws.id)
+      const prev = processed?.number === pr.number && processed.url === pr.url ? processed : undefined
       // We delay updating `lastKnownPr` until after the actions succeed.
       // Setting it eagerly would poison the cache: if updateWorkspaceSourceBranch
       // throws (transient DB issue, race with workspace deletion), the cache
@@ -269,7 +292,7 @@ export async function checkPrStatuses(): Promise<void> {
           // manual archive route and purge-worktree, this path never stops the
           // agent, so archiving under one orphans its pending question and
           // leaves it writing into a workspace the UI now shows as archived.
-          lastKnownPr.set(ws.id, pr)
+          recordProcessedPr(ws.id, pr, displayedAtStart)
           return
         }
         console.log(`[pr-watcher] PR ${pr.state.toLowerCase()} for workspace '${ws.name}' — archiving`)
@@ -304,6 +327,7 @@ export async function checkPrStatuses(): Promise<void> {
         })
         if (!archived) return
         lastKnownPr.delete(ws.id)
+        lastProcessedPr.delete(ws.id)
         emitEphemeral(ws.id, 'workspace:archived', {
           reason: `PR ${pr.state.toLowerCase()}`,
           prUrl: pr.url,
@@ -384,10 +408,10 @@ export async function checkPrStatuses(): Promise<void> {
       // missing one — keeps the OPEN→CLOSED/MERGED archiving logic stable.
       if (pr.state !== 'OPEN' || !pr.base) {
         const next: PrSnapshot = pr.base ? pr : { ...pr, base: prev?.base ?? pr.base }
-        lastKnownPr.set(ws.id, next)
+        recordProcessedPr(ws.id, next, displayedAtStart)
         return
       }
-      lastKnownPr.set(ws.id, pr)
+      recordProcessedPr(ws.id, pr, displayedAtStart)
 
       // Emit the base-change event AFTER the snapshot is committed so a
       // sync:response replay on reconnect sees a consistent state. The
@@ -414,9 +438,8 @@ export async function checkPrStatuses(): Promise<void> {
 
 /**
  * On-demand refresh of a single workspace's PR snapshot. Bypasses the 30s tick.
- * No side effects beyond cache update — no archive, no transition emits. The
- * user is watching the UI; we don't replay events for state they're already
- * looking at.
+ * Publishes the snapshot and synchronizes the PR base. Lifecycle transitions
+ * remain pending for the watcher, including OPEN → MERGED after a UI merge.
  *
  * Returns the fresh snapshot, or null if the workspace has no PR (cache entry
  * cleared in that case). Throws if the workspace doesn't exist.
@@ -466,6 +489,13 @@ export async function refreshPrSnapshot(workspaceId: string): Promise<PrSnapshot
       }
     }
     lastKnownPr.set(workspaceId, snap)
+    const processed = lastProcessedPr.get(workspaceId)
+    if (
+      !ws.prWatchDisabledAt &&
+      !current.prWatchDisabledAt &&
+      (processed?.number !== snap.number || processed.url !== snap.url)
+    )
+      lastProcessedPr.set(workspaceId, snap)
     return snap
   } finally {
     checks.delete(check)

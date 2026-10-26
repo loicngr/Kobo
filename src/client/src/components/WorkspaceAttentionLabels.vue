@@ -6,7 +6,8 @@
         :key="reason.kind"
         class="row items-center no-wrap"
       >
-        <q-icon :name="reason.icon" size="xs" :color="reason.color" class="q-mr-xs" />
+        <q-spinner v-if="reason.kind === 'mergeability-pending'" size="xs" :color="reason.color" class="q-mr-xs" />
+        <q-icon v-else :name="reason.icon" size="xs" :color="reason.color" class="q-mr-xs" />
         <span :class="`text-${reason.color}`">{{ labelFor(reason.kind) }}</span>
         <q-btn
           v-if="reason.kind === 'ci-failed' && !workspace.archivedAt"
@@ -147,6 +148,8 @@ function labelFor(kind: AttentionKind): string {
       return t('workspaceList.attentionChangesRequested')
     case 'ready-to-merge':
       return t('workspaceList.attentionReadyToMerge')
+    case 'mergeability-pending':
+      return t('git.pr.mergeabilityPending')
   }
 }
 </script>

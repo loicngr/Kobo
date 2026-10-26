@@ -70,6 +70,21 @@ describe('workspace sorting', () => {
       'z-quota',
     ])
   })
+
+  it('keeps the same priority while a ready PR is being checked again', () => {
+    const items = [ws('a'), ws('b')]
+    const snapshot = {
+      readyToMerge: true,
+      state: 'OPEN',
+      ci: { rollup: null, checks: [] },
+    } as unknown as PrSnapshot
+    const before = { a: snapshot, b: snapshot }
+    const during = { ...before, a: { ...snapshot, readyToMerge: false, mergeable: 'UNKNOWN' as const } }
+    const sort = { field: 'attention', direction: 'desc' } as const
+    expect(ids(sortWorkspaces(items, sort, { snapshots: during }))).toEqual(
+      ids(sortWorkspaces(items, sort, { snapshots: before })),
+    )
+  })
   it('resolves ties consistently and handles invalid dates in archived records', () => {
     const items = [ws('b', { createdAt: 'invalid', updatedAt: '' }), ws('a', { createdAt: '', updatedAt: '' })]
     expect(ids(sortWorkspaces(items, { field: 'activity', direction: 'desc' }))).toEqual(['a', 'b'])

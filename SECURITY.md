@@ -50,10 +50,15 @@ capabilities. This tool boundary does not sandbox arbitrary code executed by an
 agent or other integrations running as the same OS account.
 
 Git workflow preferences express which automatic actions are wanted. They are not
-a sandbox for arbitrary shell commands or external MCP tools. Claude and Codex
-permission modes have different enforcement mechanisms; unrestricted access can
+a sandbox for arbitrary shell commands or external MCP tools. Claude Code, Codex
+and Mistral Vibe permission modes have different enforcement mechanisms; unrestricted access can
 modify files outside a worktree. Provider authentication is separate from Kōbō's
 network token.
+
+Mistral Vibe uses native ACP execution modes and has no Plan/read-only mode.
+Review prompts forbid modifications, but native permissions do not guarantee
+filesystem read-only access. Kōbō-managed review tools and memory remain restricted
+to reads, scoped reports and progress. See [Mistral Vibe](./CONFIGURATION.md#mistral-vibe).
 
 ## Data and credentials
 

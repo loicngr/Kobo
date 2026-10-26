@@ -4953,7 +4953,8 @@ app.post('/:id/merge-pr', async (c) => {
       )
     }
 
-    const snapshot = await provider.getPrStatus(workspace.worktreePath, workspace.workingBranch)
+    // Record OPEN before merging, even if the watcher has not run since startup.
+    const snapshot = await refreshPrSnapshot(id)
     if (snapshot?.state !== 'OPEN') {
       return c.json({ error: 'No open PR found for this workspace', code: 'pr_not_open' }, 409)
     }
@@ -4995,11 +4996,13 @@ app.post('/:id/delete-remote-branch', async (c) => {
     if (!provider.capabilities.canDeleteRemoteBranch) {
       return c.json({ error: 'This project cannot delete remote branches', code: 'forge_unsupported' }, 409)
     }
-    const availability = await provider.isAvailable(workspace.worktreePath)
+    // The merge watcher may have already archived and purged this worktree.
+    const repoPath = workspace.projectPath
+    const availability = await provider.isAvailable(repoPath)
     if (!availability.available) return c.json({ error: 'Forge CLI unavailable', code: 'forge_unavailable' }, 409)
-    const snapshot = await provider.getPrStatus(workspace.worktreePath, workspace.workingBranch)
+    const snapshot = await provider.getPrStatus(repoPath, workspace.workingBranch)
     if (snapshot?.state !== 'MERGED') return c.json({ error: 'The PR is not merged yet', code: 'pr_not_merged' }, 409)
-    await provider.deleteRemoteBranch(workspace.worktreePath, workspace.workingBranch)
+    await provider.deleteRemoteBranch(repoPath, workspace.workingBranch)
     return c.json({ success: true })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)

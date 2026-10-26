@@ -31,6 +31,7 @@ const ATTENTION_PRIORITY: Record<AttentionKind, number> = {
   quota: 3,
   'quota-retry': 2,
   'ready-to-merge': 1,
+  'mergeability-pending': 1,
 }
 
 function timestamp(value: string | undefined): number {

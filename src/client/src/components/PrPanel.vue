@@ -40,6 +40,11 @@
       />
     </div>
 
+    <div v-if="isMergeabilityPending(snapshot)" class="row items-center q-gutter-xs text-kobo-2 q-mb-sm" role="status">
+      <q-spinner size="16px" />
+      <span>{{ $t('git.pr.mergeabilityPending') }}</span>
+    </div>
+
     <!-- Grid rows -->
     <div class="pr-panel__grid">
       <span class="pr-panel__label">{{ $t('git.pr.author') }}</span>
@@ -182,7 +187,7 @@
 import type { PrSnapshot } from 'src/stores/workspace'
 import { summarizeCiChecks } from 'src/utils/ci-summary'
 import { pickReadableForeground } from 'src/utils/color'
-import { isChangesRequestedBlocking } from 'src/utils/pr-status'
+import { isChangesRequestedBlocking, isMergeabilityPending } from 'src/utils/pr-status'
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 

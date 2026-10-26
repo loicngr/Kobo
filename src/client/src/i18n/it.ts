@@ -1755,6 +1755,7 @@ export default {
   'git.pr.labels': 'Etichette',
   'git.pr.changesRequestedBadge': 'Modifiche richieste',
   'git.pr.approvedBadge': 'Approvata',
+  'git.pr.mergeabilityPending': 'Verifica della possibilità di merge in corso',
   'git.pr.ci.passed': 'CI OK',
   'git.pr.ci.failed': 'CI fallita',
   'git.pr.ci.pending': 'CI in corso',

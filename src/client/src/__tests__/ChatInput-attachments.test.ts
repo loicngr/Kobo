@@ -9,13 +9,20 @@ import { useSettingsStore } from '../stores/settings'
 import { useWebSocketStore } from '../stores/websocket'
 import { useWorkspaceStore, type Workspace } from '../stores/workspace'
 
+const device = vi.hoisted(() => ({ narrow: false, mobile: false }))
 vi.mock('quasar', async () => ({
   ...(await vi.importActual('quasar')),
-  useQuasar: () => ({ screen: { lt: { sm: false, md: false } }, notify: vi.fn() }),
+  useQuasar: () => ({
+    screen: { lt: { sm: device.narrow, md: device.narrow } },
+    platform: { is: { mobile: device.mobile } },
+    notify: vi.fn(),
+  }),
 }))
 const wrappers: VueWrapper[] = []
 let fetchMock: ReturnType<typeof vi.fn>
 beforeEach(() => {
+  device.narrow = false
+  device.mobile = false
   setActivePinia(createPinia())
   fetchMock = vi.fn(async (url: string, options?: RequestInit) => {
     if (url.endsWith('/attachments'))
@@ -122,6 +129,26 @@ async function setup(status: Workspace['status'] = 'idle') {
   await flushPromises()
   return { store, wrapper }
 }
+
+it.each([
+  { name: 'desktop', narrow: false, mobile: false, autoFocus: true },
+  { name: 'phone portrait', narrow: true, mobile: true, autoFocus: false },
+  { name: 'phone landscape', narrow: false, mobile: true, autoFocus: false },
+])('only focuses automatically on desktop ($name)', async ({ narrow, mobile, autoFocus }) => {
+  device.narrow = narrow
+  device.mobile = mobile
+  const focus = vi.spyOn(HTMLTextAreaElement.prototype, 'focus')
+  const { wrapper } = await setup()
+  expect(focus).toHaveBeenCalledTimes(autoFocus ? 1 : 0)
+  focus.mockClear()
+  await wrapper.setProps({ workspaceId: 'b' })
+  await flushPromises()
+  expect(focus).toHaveBeenCalledTimes(autoFocus ? 1 : 0)
+  focus.mockClear()
+  ;(wrapper.vm as unknown as { focus: () => void }).focus()
+  expect(focus).toHaveBeenCalledOnce()
+})
+
 async function attach(wrapper: VueWrapper) {
   await wrapper.trigger('drop', { dataTransfer: { files: [new File(['# Brief'], 'brief.md')] } })
   await flushPromises()

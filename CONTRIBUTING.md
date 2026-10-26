@@ -52,7 +52,7 @@ Run a single test file with `npx vitest run src/__tests__/<file>.test.ts`, filte
 
 TDD for backend changes: write the failing test, confirm it fails for the right reason, implement minimally, then confirm it passes. Frontend tests cover stores, utilities, composables, and selected Vue components using Vue Test Utils and `happy-dom`. Type-checking and browser smoke tests complement this coverage. See [`AGENTS.md`](./AGENTS.md#testing-discipline) for route mocking and cleanup conventions.
 
-Backend tests pin `KOBO_HOME` to a temporary directory; never point tests at your production data. Live MCP tests are a separate, explicit command (`npm run test:mcp:live`) requiring `KOBO_LIVE_ENGINE`, `KOBO_LIVE_MODEL`, and real provider credentials. They stay outside normal CI; see the [MCP guide](./src/mcp-server/README.md#live-engine-validation).
+Backend tests pin `KOBO_HOME` to a temporary directory; never point tests at your production data. Live MCP tests are a separate, explicit command (`npm run test:mcp:live`) requiring `KOBO_LIVE_ENGINE`, `KOBO_LIVE_MODEL`, and real provider credentials. They stay outside normal CI; see the [MCP guide](./src/mcp-server/README.md#live-engine-validation). Mistral Vibe also has native ACP fixtures and an offline adapter smoke; see its [compatibility record](./src/__tests__/fixtures/mistral-acp/README.md) for the exact commands, prerequisites and the separate opt-in provider test.
 
 Schema changes must append a migration and update the fresh-install schema, with upgrade tests proving data preservation. See [Database migrations](./AGENTS.md#database-migrations). UI changes must follow [`DESIGN.md`](./DESIGN.md) and update all five translation files for user-visible text.
 

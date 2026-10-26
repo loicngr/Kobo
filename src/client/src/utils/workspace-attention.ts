@@ -1,5 +1,5 @@
 import type { PrSnapshot, Workspace } from 'src/stores/workspace'
-import { isChangesRequestedBlocking, isCiFailed } from './pr-status'
+import { isChangesRequestedBlocking, isCiFailed, isMergeabilityPending } from './pr-status'
 import { isBusyStatus } from './workspace-status'
 
 export type AttentionKind =
@@ -10,6 +10,7 @@ export type AttentionKind =
   | 'ci-failed'
   | 'changes-requested'
   | 'ready-to-merge'
+  | 'mergeability-pending'
 
 /** A single reason a workspace card surfaces in the "Needs Attention" group. */
 export interface AttentionReason {
@@ -53,7 +54,9 @@ export function getAttentionReasons(
   if (snapshot && isChangesRequestedBlocking(snapshot) && !isDismissed(workspace.prChangesDismissedAt, snapshot)) {
     reasons.push({ kind: 'changes-requested', icon: 'rate_review', color: 'red-5' })
   }
-  if (snapshot?.readyToMerge && !isBusyStatus(workspace.status)) {
+  if (isMergeabilityPending(snapshot) && !isBusyStatus(workspace.status)) {
+    reasons.push({ kind: 'mergeability-pending', icon: 'sync', color: 'kobo-2' })
+  } else if (snapshot?.readyToMerge && !isBusyStatus(workspace.status)) {
     reasons.push({ kind: 'ready-to-merge', icon: 'check_circle', color: 'green-5' })
   }
   return reasons

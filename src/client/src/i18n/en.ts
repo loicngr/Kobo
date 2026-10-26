@@ -1739,6 +1739,7 @@ export default {
   'git.pr.labels': 'Labels',
   'git.pr.changesRequestedBadge': 'Changes requested',
   'git.pr.approvedBadge': 'Approved',
+  'git.pr.mergeabilityPending': 'Checking merge readiness',
   'git.pr.ci.passed': 'CI passed',
   'git.pr.ci.failed': 'CI failed',
   'git.pr.ci.pending': 'CI running',

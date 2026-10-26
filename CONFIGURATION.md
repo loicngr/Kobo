@@ -654,11 +654,14 @@ above.
 
 ## Choosing an LLM for code review
 
-The workspace's **Start review** dialog offers engine (Claude Code or Codex),
+The workspace's **Start review** dialog offers engine (Claude Code, Codex or Mistral Vibe),
 model, reasoning effort and permission mode using the same catalogues as workspace
 creation. The current workspace settings are selected initially. Changing any of
 these settings automatically enables and locks **New session**; with unchanged
-settings you can continue the current session or start a fresh one explicitly.
+settings Claude Code/Codex can continue the current session or start a fresh one explicitly.
+Mistral Vibe reviews always use a fresh session and default to native **Interactive**
+permissions. Their prompts forbid modifications, but they cannot guarantee filesystem
+read-only access; Kōbō-managed tools remain restricted. See [Mistral Vibe](#mistral-vibe).
 
 Enable **Return to the current session after the review** to resume the original
 conversation with its original LLM settings and the reviewer's final summary.
@@ -1347,7 +1350,7 @@ retrieved once — see [Token / login flow](#token--login-flow).
 
 | Mount | RO/RW | Purpose |
 |---|---|---|
-| `kobo-home:/root` (`vps.yml`, named volume) | RW | Independent Kōbō, Claude/Codex, Git and forge state. Authenticate inside the container; no PC credential files are required. |
+| `kobo-home:/root` (`vps.yml`, named volume) | RW | Independent Kōbō, Claude/Codex, optional Vibe native state, Git and forge state. Authenticate inside the container; no PC credential files are required. |
 | `<name>-data:/root/.config/kobo` (named volume) | RW | Kōbō's own state — SQLite DB, `settings.json`, etc. Named (not bind-mounted) so it survives `docker compose down` without `-v`, and so it can be deliberately **shared** across compose files by reusing the same volume name (see the two local files, both `kobo-test-data`). |
 | `${KOBO_PROJECTS_DIR:-./kobo-projects}:/projects` | RW | Your project repositories. Ensure the configured worktree directory is also persistent. For project Docker bind mounts, use the VPS example’s identical host/container paths; see the [path setup](./docs/deployment-vps.md#optional-project-docker-environments). |
 | `${HOME}/.ssh:/root/.ssh` | RO | Git SSH auth — needed to push/pull over SSH remotes. |
@@ -2611,7 +2614,7 @@ the complete backend environment is not serialized into the agent configuration.
 Saving settings does not replace connections in an already-running engine. Stop
 that engine and resume, or start a fresh session, to apply changes. Disabling an
 integration removes its Kōbō-managed connection from subsequent launches; it does
-not remove independent MCP servers configured in Claude or Codex. Integration
+not remove independent MCP servers configured in Claude Code, Codex or Mistral Vibe. Integration
 credentials do not authorize the agent to modify remote data.
 
 

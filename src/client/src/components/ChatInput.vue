@@ -361,9 +361,14 @@ function focus(): void {
 
 defineExpose({ focus })
 
+// Avoid opening the mobile keyboard just because the user changed workspace.
+function focusOnDesktop(): void {
+  if (!isMobile.value && !$q.platform?.is.mobile) focus()
+}
+
 // Route changes reuse this component; focus only after the new input state renders.
-onMounted(focus)
-watch(() => props.workspaceId, focus, { flush: 'post' })
+onMounted(focusOnDesktop)
+watch(() => props.workspaceId, focusOnDesktop, { flush: 'post' })
 
 // Slash autocomplete — state + computed lists handled by the composable.
 // Selection logic (template expansion, kobo auto-send, …) stays here because

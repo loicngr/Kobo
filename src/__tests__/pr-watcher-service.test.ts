@@ -354,7 +354,7 @@ describe('checkPrStatuses — active-agent guard', () => {
     })
 
     try {
-      getPrStatusMock.mockResolvedValueOnce(makePrSnapshot({ state: 'OPEN', base: 'main' }))
+      getPrStatusMock.mockResolvedValueOnce(makePrSnapshot({ state: 'OPEN', base: 'main', number: 42 }))
       await checkPrStatuses()
       getPrStatusMock.mockResolvedValueOnce(makePrSnapshot({ state: 'MERGED', base: 'main', number: 42 }))
       const tick = checkPrStatuses()
@@ -697,6 +697,134 @@ describe('refreshPrSnapshot', () => {
   })
 })
 
+describe('PR refresh and transition ownership', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    _resetForTest()
+    vi.mocked(wsService.listWorkspaces).mockReturnValue([makeWorkspace({ sourceBranch: 'main' })] as never)
+  })
+
+  it.each(['watcher', 'refresh'])('preserves a merge after OPEN was first observed by %s', async (source) => {
+    const hooks = await import('../server/services/lifecycle-hook-service.js')
+    getPrStatusMock.mockResolvedValue(makePrSnapshot({ base: 'main' }))
+    if (source === 'watcher') await checkPrStatuses()
+    else await refreshPrSnapshot('ws-1')
+
+    getPrStatusMock.mockResolvedValue(makePrSnapshot({ base: 'main', state: 'MERGED' }))
+    await refreshPrSnapshot('ws-1')
+    expect(getAllPrSnapshots()['ws-1']?.state).toBe('MERGED')
+    expect(hooks.onPrMerged).not.toHaveBeenCalled()
+
+    await checkPrStatuses()
+    expect(hooks.onPrMerged).toHaveBeenCalledExactlyOnceWith('ws-1', {
+      prNumber: 1,
+      prUrl: 'https://github.com/x/y/pull/1',
+    })
+    expect(wsService.archiveWorkspace).toHaveBeenCalledExactlyOnceWith('ws-1')
+    vi.mocked(wsService.listWorkspaces).mockReturnValue([])
+    await checkPrStatuses()
+    expect(hooks.onPrMerged).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not archive a previously merged PR first discovered through a refresh', async () => {
+    getPrStatusMock.mockResolvedValue(makePrSnapshot({ base: 'main', state: 'MERGED' }))
+    await refreshPrSnapshot('ws-1')
+    await checkPrStatuses()
+    expect(wsService.archiveWorkspace).not.toHaveBeenCalled()
+  })
+
+  it('does not publish an older OPEN snapshot over a refresh completed during Git work', async () => {
+    getPrStatusMock.mockResolvedValue(makePrSnapshot({ base: 'main' }))
+    await checkPrStatuses()
+    let signalStarted!: () => void
+    let release!: () => void
+    const started = new Promise<void>((resolve) => {
+      signalStarted = resolve
+    })
+    const pending = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    vi.mocked(computeGitStats).mockImplementationOnce(async () => {
+      signalStarted()
+      await pending
+      return {} as never
+    })
+    const tick = checkPrStatuses()
+    await started
+    try {
+      getPrStatusMock.mockResolvedValue(makePrSnapshot({ base: 'main', state: 'MERGED' }))
+      await refreshPrSnapshot('ws-1')
+    } finally {
+      release()
+      await tick
+    }
+    expect(getAllPrSnapshots()['ws-1']?.state).toBe('MERGED')
+    await checkPrStatuses()
+    expect(wsService.archiveWorkspace).toHaveBeenCalledExactlyOnceWith('ws-1')
+  })
+
+  it('does not treat a different PR on the same branch as a merge transition', async () => {
+    getPrStatusMock.mockResolvedValue(makePrSnapshot({ base: 'main' }))
+    await checkPrStatuses()
+    getPrStatusMock.mockResolvedValue(
+      makePrSnapshot({
+        base: 'main',
+        state: 'MERGED',
+        number: 2,
+        url: 'https://github.com/x/y/pull/2',
+      }),
+    )
+    await checkPrStatuses()
+    expect(wsService.archiveWorkspace).not.toHaveBeenCalled()
+  })
+
+  it('tracks a new PR observed open through the UI before the next watcher tick', async () => {
+    const hooks = await import('../server/services/lifecycle-hook-service.js')
+    getPrStatusMock.mockResolvedValue(makePrSnapshot({ base: 'main', state: 'MERGED' }))
+    await checkPrStatuses()
+    const nextPr = makePrSnapshot({ base: 'main', number: 2, url: 'https://github.com/x/y/pull/2' })
+    getPrStatusMock.mockResolvedValue(nextPr)
+    await refreshPrSnapshot('ws-1')
+    getPrStatusMock.mockResolvedValue({ ...nextPr, state: 'MERGED' })
+    await refreshPrSnapshot('ws-1')
+    await checkPrStatuses()
+    expect(hooks.onPrMerged).toHaveBeenCalledExactlyOnceWith('ws-1', {
+      prNumber: 2,
+      prUrl: nextPr.url,
+    })
+    expect(wsService.archiveWorkspace).toHaveBeenCalledExactlyOnceWith('ws-1')
+  })
+
+  it('keeps UNKNOWN non-mergeable without repeating the ready notification after recalculation', async () => {
+    const ready = makePrSnapshot({ base: 'main', mergeable: 'MERGEABLE', readyToMerge: true })
+    getPrStatusMock.mockResolvedValue(ready)
+    await checkPrStatuses()
+    getPrStatusMock.mockResolvedValue({ ...ready, mergeable: 'UNKNOWN', readyToMerge: false })
+    await checkPrStatuses()
+    expect(getAllPrSnapshots()['ws-1']).toMatchObject({ mergeable: 'UNKNOWN', readyToMerge: false })
+    await checkPrStatuses()
+    getPrStatusMock.mockResolvedValue(ready)
+    await checkPrStatuses()
+    expect(wsSvc.emitEphemeral).not.toHaveBeenCalledWith('ws-1', 'pr:ready-to-merge', expect.anything())
+  })
+
+  it('still notifies readiness after a real CI failure during recalculation', async () => {
+    const ready = makePrSnapshot({ base: 'main', mergeable: 'MERGEABLE', readyToMerge: true })
+    getPrStatusMock.mockResolvedValue(ready)
+    await checkPrStatuses()
+    getPrStatusMock.mockResolvedValue({
+      ...ready,
+      mergeable: 'UNKNOWN',
+      readyToMerge: false,
+      ci: { rollup: 'FAILURE', checks: [] },
+    })
+    await checkPrStatuses()
+    getPrStatusMock.mockResolvedValue(ready)
+    await checkPrStatuses()
+    expect(wsSvc.emitEphemeral).toHaveBeenCalledWith('ws-1', 'pr:ready-to-merge', expect.anything())
+  })
+})
+
 describe('checkPrStatuses — git stats caching', () => {
   beforeEach(() => {
     _resetForTest()
@@ -740,6 +868,67 @@ describe('checkPrStatuses — PR-watch opt-out', () => {
   beforeEach(() => {
     _resetForTest()
     vi.clearAllMocks()
+  })
+
+  it.each([false, true])(
+    'does not replay merges from disabled refreshes (enable before response: %s)',
+    async (enableBeforeResponse) => {
+      const hooks = await import('../server/services/lifecycle-hook-service.js')
+      const purge = await import('../server/services/worktree-purge-service.js')
+      const settings = await import('../server/services/settings-service.js')
+      const disabled = makeWorkspace({ prWatchDisabledAt: '2026-01-01T00:00:00.000Z' })
+      const enabled = makeWorkspace()
+      vi.mocked(wsService.listWorkspaces).mockReturnValue([disabled] as never)
+      vi.mocked(settings.getGlobalSettings).mockReturnValue({ autoPurgeOnPrMerged: true } as never)
+      let release!: (snapshot: ReturnType<typeof makePrSnapshot>) => void
+      getPrStatusMock.mockReturnValueOnce(
+        new Promise((resolve) => {
+          release = resolve
+        }),
+      )
+
+      try {
+        const refresh = refreshPrSnapshot('ws-1')
+        if (enableBeforeResponse) vi.mocked(wsService.listWorkspaces).mockReturnValue([enabled] as never)
+        release(makePrSnapshot())
+        await refresh
+        expect(getAllPrSnapshots()['ws-1']?.state).toBe('OPEN')
+
+        vi.mocked(wsService.listWorkspaces).mockReturnValue([enabled] as never)
+        getPrStatusMock.mockResolvedValue(makePrSnapshot({ state: 'MERGED' }))
+        await refreshPrSnapshot('ws-1')
+        await checkPrStatuses()
+
+        expect(getAllPrSnapshots()['ws-1']?.state).toBe('MERGED')
+        expect(hooks.onPrMerged).not.toHaveBeenCalled()
+        expect(wsService.archiveWorkspace).not.toHaveBeenCalled()
+        expect(purge.purgeWorktree).not.toHaveBeenCalled()
+        expect(wsSvc.emitEphemeral).not.toHaveBeenCalledWith('ws-1', 'pr:merged', expect.anything())
+      } finally {
+        vi.mocked(settings.getGlobalSettings).mockReturnValue({ autoPurgeOnPrMerged: false } as never)
+      }
+    },
+  )
+
+  it('tracks a merge after an OPEN refresh with PR-watch re-enabled', async () => {
+    const hooks = await import('../server/services/lifecycle-hook-service.js')
+    vi.mocked(wsService.listWorkspaces).mockReturnValue([
+      makeWorkspace({ prWatchDisabledAt: '2026-01-01T00:00:00.000Z' }),
+    ] as never)
+    getPrStatusMock.mockResolvedValue(makePrSnapshot())
+    await refreshPrSnapshot('ws-1')
+
+    vi.mocked(wsService.listWorkspaces).mockReturnValue([makeWorkspace()] as never)
+    await refreshPrSnapshot('ws-1')
+    getPrStatusMock.mockResolvedValue(makePrSnapshot({ state: 'MERGED' }))
+    await refreshPrSnapshot('ws-1')
+    await checkPrStatuses()
+
+    expect(hooks.onPrMerged).toHaveBeenCalledExactlyOnceWith('ws-1', {
+      prNumber: 1,
+      prUrl: 'https://github.com/x/y/pull/1',
+    })
+    expect(wsService.archiveWorkspace).toHaveBeenCalledExactlyOnceWith('ws-1')
   })
 
   it('skips the forge call for a disabled workspace, but still computes git stats', async () => {

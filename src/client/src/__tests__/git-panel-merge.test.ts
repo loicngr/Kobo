@@ -1,15 +1,21 @@
-import { flushPromises, shallowMount, type VueWrapper } from '@vue/test-utils'
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createApp, h } from 'vue'
 import { createI18n } from 'vue-i18n'
+import { createMemoryHistory, createRouter } from 'vue-router'
 import GitPanel from '../components/GitPanel.vue'
 import en from '../i18n/en'
 import { type GitStats, useWorkspaceStore, type Workspace } from '../stores/workspace'
 
-const mocks = vi.hoisted(() => ({ dialog: vi.fn(), notify: vi.fn(), api: vi.fn() }))
+const mocks = vi.hoisted(() => ({ dialog: vi.fn(), notify: vi.fn(), api: vi.fn(), deleteApi: vi.fn() }))
 vi.mock('quasar', () => ({ useQuasar: () => ({ dialog: mocks.dialog, notify: mocks.notify }) }))
 vi.mock('src/composables/use-tours', () => ({ useTours: () => ({ scheduleAutoRun: vi.fn() }) }))
-vi.mock('src/utils/api', async (original) => ({ ...(await original<object>()), apiFetchResponse: mocks.api }))
+vi.mock('src/utils/api', async (original) => ({
+  ...(await original<object>()),
+  apiFetchResponse: mocks.api,
+  apiFetchResponseForStatus: mocks.deleteApi,
+}))
 
 const workspace = {
   id: 'ws-a',
@@ -45,17 +51,25 @@ let wrapper: VueWrapper
 let confirm: (method?: unknown) => Promise<void>
 let store: ReturnType<typeof useWorkspaceStore>
 
-async function openDialog(methods = true) {
+async function openDialog(methods = true, shallow = true) {
   if (!methods)
     vi.mocked(store.fetchGitStats).mockResolvedValue({
       ...stats,
       forge: { ...stats.forge!, capabilities: { ...stats.forge!.capabilities, mergeMethods: undefined } },
     })
-  wrapper = shallowMount(GitPanel, {
+  wrapper = mount(GitPanel, {
+    shallow,
     props: { workspace },
     global: {
       plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })],
-      stubs: { QBtn: { props: ['label', 'icon'], template: '<button :data-icon="icon">{{ label }}</button>' } },
+      stubs: {
+        QBtn: { props: ['label', 'icon'], template: '<button :data-icon="icon">{{ label }}</button>' },
+        ActionAvailability: true,
+        BranchDivergenceDialog: true,
+        CompareCommitsDialog: true,
+        DiffViewer: true,
+        PrPanel: true,
+      },
     },
   })
   await flushPromises()
@@ -76,6 +90,7 @@ beforeEach(() => {
     },
   }))
   mocks.api.mockResolvedValue({ ok: true, json: async () => ({ merged: false, branch: 'feature/a' }) })
+  mocks.deleteApi.mockResolvedValue({ ok: true })
 })
 afterEach(() => wrapper?.unmount())
 
@@ -157,6 +172,81 @@ describe('GitPanel PR merge confirmation', () => {
     await confirm()
     expect(mocks.notify).toHaveBeenCalledWith(expect.objectContaining({ type: 'positive', message: 'PR merged' }))
     expect(mocks.dialog).toHaveBeenCalledTimes(3)
+  })
+
+  it('offers branch deletion immediately while refreshed Git stats are still pending', async () => {
+    await openDialog()
+    let release!: (value: GitStats) => void
+    vi.mocked(store.fetchGitStats).mockReturnValueOnce(
+      new Promise((resolve) => {
+        release = resolve
+      }),
+    )
+    mocks.api.mockResolvedValueOnce({ ok: true, json: async () => ({ merged: true, branch: 'feature/a' }) })
+    const merging = confirm('merge')
+    try {
+      await flushPromises()
+      expect(mocks.dialog).toHaveBeenCalledTimes(2)
+      expect(store.refreshPrSnapshot).toHaveBeenCalledWith('ws-a')
+    } finally {
+      release(stats)
+      await merging
+    }
+  })
+
+  it('keeps the real deletion dialog and its workspace through the archive redirect', async () => {
+    const { Quasar, Dialog } = await vi.importActual<typeof import('quasar')>('quasar/dist/quasar.client.js')
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/workspace/ws-a', component: { render: () => null } },
+        { path: '/', component: { render: () => null } },
+      ],
+    })
+    const app = createApp({ render: () => h('main') })
+    app.use(router)
+    app.use(Quasar, { plugins: { Dialog } })
+    const root = document.createElement('div')
+    document.body.append(root)
+    app.mount(root)
+    await router.push('/workspace/ws-a')
+    await router.isReady()
+    mocks.dialog.mockImplementation(Dialog.create)
+    vi.useFakeTimers()
+    const settle = async () => {
+      await flushPromises()
+      await vi.advanceTimersByTimeAsync(400)
+      await flushPromises()
+    }
+    const button = (label: string) =>
+      [...document.querySelectorAll<HTMLButtonElement>('.q-dialog button')].find((el) => el.textContent === label)
+    try {
+      await openDialog(true, false)
+      await settle()
+      mocks.api.mockResolvedValueOnce({ ok: true, json: async () => ({ merged: true, branch: 'feature/a' }) })
+      button('Merge PR')!.click()
+      await settle()
+      expect(button('Delete remote branch')).toBeDefined()
+      store.selectedWorkspaceId = null
+      await router.push('/')
+      wrapper.unmount()
+      store.selectedWorkspaceId = 'ws-b'
+      await settle()
+      expect(button('Delete remote branch')).toBeDefined()
+      expect(mocks.deleteApi).not.toHaveBeenCalled()
+      button('Delete remote branch')!.click()
+      await settle()
+      expect(mocks.deleteApi).toHaveBeenCalledExactlyOnceWith('/api/workspaces/ws-a/delete-remote-branch', {
+        method: 'POST',
+      })
+      expect(document.querySelector('.q-dialog')).toBeNull()
+    } finally {
+      button('Cancel')?.click()
+      await settle()
+      app.unmount()
+      root.remove()
+      vi.useRealTimers()
+    }
   })
 
   it('does not offer another admin retry when GitHub still refuses', async () => {

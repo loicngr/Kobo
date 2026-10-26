@@ -2,7 +2,17 @@
 
 All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
-section — the in-app "What's new" dialog reads this file.
+section — the in-app "What's new" dialog reads released version sections.
+
+## Unreleased
+
+- Add Mistral Vibe through the official ACP SDK alongside Claude Code and Codex,
+  with native model/thinking discovery, permissions, resume, managed MCP and reviews.
+  Vibe is installed separately and does not support Plan mode.
+- Expose automatic-agent concurrency in Settings and group agent defaults by provider.
+- Preserve PR merge hooks and archiving across UI refreshes, show mergeability
+  recalculation explicitly, and keep branch deletion usable after worktree cleanup.
+- Avoid automatically opening the phone keyboard when switching workspaces.
 
 ## 2.1.29
 

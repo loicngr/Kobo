@@ -7471,6 +7471,7 @@ describe('POST /api/workspaces/:id/merge-pr', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mergeRequestMock.mockReset()
+    vi.mocked(prWatcher.refreshPrSnapshot).mockImplementation(async () => getPrStatusMock())
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace as never)
   })
 
@@ -7481,6 +7482,7 @@ describe('POST /api/workspaces/:id/merge-pr', () => {
     const res = await app.request('/api/workspaces/ws-1/merge-pr', { method: 'POST' })
 
     expect(res.status).toBe(200)
+    expect(prWatcher.refreshPrSnapshot).toHaveBeenCalledWith('ws-1')
     expect(mergeRequestMock).toHaveBeenCalledWith(expect.any(String), 42)
   })
 
@@ -7603,6 +7605,36 @@ describe('POST /api/workspaces/:id/merge-pr', () => {
     expect(res.status).toBe(409)
     expect(((await res.json()) as { code: string }).code).toBe('pr_not_ready')
     expect(mergeRequestMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /api/workspaces/:id/delete-remote-branch after merge cleanup', () => {
+  it.each(['MERGED', 'OPEN'])('uses the surviving project repository and checks PR state %s', async (state) => {
+    const deleteRemoteBranch = vi.fn(async () => {})
+    const getPrStatus = vi.fn(async () => ({ state }))
+    const provider = getForgeProvider('github')
+    vi.mocked(getForgeProvider).mockReturnValueOnce({
+      ...provider,
+      capabilities: { ...provider.capabilities, canDeleteRemoteBranch: true },
+      getPrStatus,
+      deleteRemoteBranch,
+    } as never)
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      projectPath: '/repo',
+      worktreePath: '/removed-worktree',
+      archivedAt: '2026-10-26T00:00:00Z',
+      worktreePurgedAt: '2026-10-26T00:00:01Z',
+    } as never)
+    const res = await app.request('/api/workspaces/ws-1/delete-remote-branch', { method: 'POST' })
+    expect(getPrStatus).toHaveBeenCalledWith('/repo', fakeWorkspace.workingBranch)
+    if (state === 'MERGED') {
+      expect(res.status).toBe(200)
+      expect(deleteRemoteBranch).toHaveBeenCalledWith('/repo', fakeWorkspace.workingBranch)
+    } else {
+      expect(res.status).toBe(409)
+      expect(deleteRemoteBranch).not.toHaveBeenCalled()
+    }
   })
 })
 

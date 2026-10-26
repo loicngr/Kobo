@@ -2277,6 +2277,26 @@ describe('workspace store', () => {
       }
     }
 
+    it('keeps ready PR cards in attention through a mergeability recalculation', () => {
+      const store = useWorkspaceStore()
+      store.workspaces = [makeWorkspace({ id: 'w1', status: 'idle' })]
+      const ready: PrSnapshot = {
+        ...failingCiSnapshot(),
+        ci: { rollup: 'SUCCESS', checks: [] },
+        mergeable: 'MERGEABLE',
+        readyToMerge: true,
+      }
+      for (const snapshot of [ready, { ...ready, mergeable: 'UNKNOWN' as const, readyToMerge: false }, ready]) {
+        store.prSnapshots = { w1: snapshot }
+        expect(store.needsAttention.map((w) => w.id)).toEqual(['w1'])
+        expect(store.idle).toEqual([])
+      }
+      store.prSnapshots = { w1: { ...ready, mergeable: 'UNKNOWN', readyToMerge: false } }
+      store.workspaces[0]!.status = 'executing'
+      expect(store.needsAttention).toEqual([])
+      expect(store.running.map((w) => w.id)).toEqual(['w1'])
+    })
+
     it('moves an executing workspace with failing CI into needsAttention, not running', () => {
       const store = useWorkspaceStore()
       store.workspaces = [makeWorkspace({ id: 'w1', status: 'executing' })]

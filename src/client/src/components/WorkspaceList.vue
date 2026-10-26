@@ -759,6 +759,7 @@ function attentionBorderColor(ws: Workspace): string {
   // Purely positive state (ready to merge, nothing else pending) → green, so the
   // border matches the green badge instead of falsely warning with amber.
   if (reasons.length > 0 && reasons.every((r) => r.kind === 'ready-to-merge')) return 'var(--kobo-success)'
+  if (reasons.length > 0 && reasons.every((r) => r.kind === 'mergeability-pending')) return 'var(--kobo-border-strong)'
   return 'var(--kobo-warning)' // awaiting-user / other intermediate states → amber
 }
 

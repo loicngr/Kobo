@@ -10,7 +10,7 @@ Open the first-run setup from Help and run the check again after changing the se
 | Git / Bash | Install the missing executable and make it available on the server's `PATH`. |
 | Project | Select a writable Git repository containing at least one commit. |
 | Storage / worktrees | Check permissions on `KOBO_HOME`, the project and configured worktree root. |
-| Engine executable | Reinstall the package dependencies and check the chosen runtime installation. |
+| Engine executable | Check the chosen runtime installation. Claude Code/Codex runtimes come from package dependencies; Mistral Vibe must be installed separately, with `vibe-acp` on the server user’s PATH (inside the container for Docker). See [Vibe setup](../CONFIGURATION.md#mistral-vibe). |
 | Authentication / model: unknown | Authenticate with the selected provider, select a model available to that account, then run a small mission. The diagnostic deliberately makes no provider request. |
 
 ## Native dependency installation fails
