@@ -27,8 +27,8 @@
         <q-btn v-if="canStart" :disable="!!lifecycleBlocker" :aria-label="$t('tooltip.startDevServer')" flat round dense icon="play_arrow" size="xs" color="green-5" @click="start" :loading="starting">
           <q-tooltip>{{ $t('tooltip.startDevServer') }}</q-tooltip>
         </q-btn>
-        <q-btn v-if="canStop" :disable="!!lifecycleBlocker" :aria-label="$t('tooltip.stopDevServer')" flat round dense icon="stop" size="xs" color="red-5" @click="stop" :loading="stopping">
-          <q-tooltip>{{ $t('tooltip.stopDevServer') }}</q-tooltip>
+        <q-btn v-if="canStop" :disable="!!lifecycleBlocker" :aria-label="stopLabel" flat round dense icon="stop" size="xs" color="red-5" @click="stop" :loading="stopping">
+          <q-tooltip>{{ stopLabel }}</q-tooltip>
         </q-btn>
         <q-btn flat round dense icon="article" size="xs" color="kobo-2" @click="showLogs = true">
           <q-tooltip>{{ $t('devServer.logs') }}</q-tooltip>
@@ -96,6 +96,7 @@ const statusColor = computed(() => {
   switch (status.value?.status) {
     case 'running':
       return 'green-9'
+    case 'queued':
     case 'starting':
     case 'stopping':
       return 'orange-9'
@@ -110,6 +111,8 @@ const statusLabel = computed(() => {
   switch (status.value?.status) {
     case 'running':
       return t('devServer.running')
+    case 'queued':
+      return t('devServer.queued')
     case 'starting':
       return t('devServer.starting')
     case 'stopping':
@@ -138,8 +141,12 @@ const canStart = computed(() => {
 
 const canStop = computed(() => {
   const s = status.value?.status
-  return s === 'running' || s === 'starting'
+  return s === 'queued' || s === 'running' || s === 'starting'
 })
+
+const stopLabel = computed(() =>
+  t(status.value?.status === 'queued' ? 'devServer.cancelQueued' : 'tooltip.stopDevServer'),
+)
 
 async function start() {
   if (!workspaceId.value || lifecycleBlocker.value) return

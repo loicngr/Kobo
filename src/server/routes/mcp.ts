@@ -80,7 +80,8 @@ async function dispatchWorkspaceRequest(pathname: string, init: RequestInit): Pr
     (init.method === 'POST' &&
       (pathname === '/api/workspaces' ||
         /^\/api\/workspaces\/[^/]+\/(unarchive|archive|purge-worktree|restore-worktree)$/.test(pathname))) ||
-    ((init.method === 'GET' || init.method === 'DELETE') && /^\/api\/workspaces\/[^/]+$/.test(pathname))
+    ((init.method === 'GET' || init.method === 'DELETE' || init.method === 'PATCH') &&
+      /^\/api\/workspaces\/[^/]+$/.test(pathname))
   if (isWorkspaceOperation) {
     const { default: routes } = await import('./workspaces.js')
     return routes.request(`http://kobo.internal${pathname.slice('/api/workspaces'.length) || '/'}`, init)

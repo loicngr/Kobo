@@ -420,6 +420,7 @@ it(
         'mark_task_done',
         'set_auto_loop',
         'create_workspace',
+        'set_workspace_status',
         'archive_workspace',
         'purge_workspace_worktree',
         'delete_workspace',

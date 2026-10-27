@@ -58,8 +58,8 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 55', () => {
-    expect(SCHEMA_VERSION).toBe(55)
+  it('exporte SCHEMA_VERSION = 56', () => {
+    expect(SCHEMA_VERSION).toBe(56)
   })
 
   it('migration v33 records and backfills the engine on agent sessions', () => {
@@ -2438,7 +2438,8 @@ it('upgrades v46 with session activation order without rewriting history', () =>
   const old = new Database(':memory:')
   const fresh = new Database(':memory:')
   runMigrations(old)
-  old.exec(`ALTER TABLE agent_sessions DROP COLUMN activation_order;
+  old.exec(`ALTER TABLE agent_sessions DROP COLUMN role;
+    ALTER TABLE agent_sessions DROP COLUMN activation_order;
     DELETE FROM schema_migrations WHERE version > 46;
     INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
       VALUES ('mission', 'Keep me', '/tmp', 'main', 'work', 'now', 'now');
@@ -2628,7 +2629,7 @@ describe('persistent memory schema migration v51', () => {
     const beforeUpgrade = memoryObjects(old)
     expect(beforeUpgrade.objects).toEqual([])
     expect(getMigrationHistory(old).at(-1)?.version).toBe(50)
-    expect(getPendingMigrations(old)).toEqual([51, 52, 53, 54, 55])
+    expect(getPendingMigrations(old)).toEqual([51, 52, 53, 54, 55, 56])
 
     runMigrations(old)
     migrations.find((entry) => entry.version === 51)!.migrate(old)
@@ -2768,7 +2769,7 @@ describe('durable final reviews v52', () => {
       INSERT INTO pending_review_returns VALUES('w','review','original','{"engine":"codex"}','{"engine":"claude-code"}','c');`)
     for (const migration of migrations.filter((m) => m.version <= 51))
       old.prepare('INSERT INTO schema_migrations VALUES(?,?,?)').run(migration.version, migration.name, 'v51')
-    expect(getPendingMigrations(old)).toEqual([52, 53, 54, 55])
+    expect(getPendingMigrations(old)).toEqual([52, 53, 54, 55, 56])
     runMigrations(old)
     migrations.find((m) => m.version === 52)!.migrate(old)
     expect(old.prepare('SELECT * FROM pending_review_returns').get()).toEqual({
@@ -2922,15 +2923,24 @@ describe('Mistral memory engine migration v55', () => {
       const column = table === 'memory_contexts' || table === 'memory_budget_contexts' ? 'engine' : 'source_engine'
       expect(() => db.exec(`UPDATE ${table} SET ${column} = 'mistral-vibe'`)).toThrow(/CHECK/)
     }
-    expect(getPendingMigrations(db)).toEqual([55])
+    expect(getPendingMigrations(db)).toEqual([55, 56])
     runMigrations(db)
-    expect({ ...rows(db), schema_migrations: before.schema_migrations }).toEqual(before)
+    expect({ ...rows(db), schema_migrations: before.schema_migrations }).toEqual({
+      ...before,
+      agent_sessions: before.agent_sessions.map((row: unknown) => ({ ...(row as object), role: 'primary' })),
+    })
     expect(db.pragma('foreign_keys', { simple: true })).toBe(1)
     expect(db.pragma('foreign_key_check')).toEqual([])
-    expect(db.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name").all()).toEqual(indexes)
+    expect(
+      db
+        .prepare(
+          "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name != 'parallel_reviews' ORDER BY name",
+        )
+        .all(),
+    ).toEqual(indexes)
     expect(getMigrationHistory(db).at(-1)).toMatchObject({
       version: SCHEMA_VERSION,
-      name: 'mistral-vibe-memory-engine',
+      name: 'parallel-workspace-reviews',
     })
     const fresh = new Database(':memory:')
     initSchema(fresh)
@@ -2972,11 +2982,49 @@ describe('Mistral memory engine migration v55', () => {
     spy.mockRestore()
     expect(rows(db)).toEqual(before)
     expect(db.prepare('SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY name').all()).toEqual(schema)
-    expect(getPendingMigrations(db)).toEqual([55])
+    expect(getPendingMigrations(db)).toEqual([55, 56])
     expect(db.pragma('foreign_key_check')).toEqual([])
     runMigrations(db)
     expect(getPendingMigrations(db)).toEqual([])
     expect(db.pragma('foreign_key_check')).toEqual([])
     db.close()
+  })
+})
+
+describe('parallel review migration v56', () => {
+  it('preserves v55 sessions and converges with fresh installs', () => {
+    const old = new Database(':memory:')
+    runMigrations(old)
+    old.exec(
+      'DROP TABLE parallel_reviews; ALTER TABLE agent_sessions DROP COLUMN role; DELETE FROM schema_migrations WHERE version=56',
+    )
+    old.exec(
+      "INSERT INTO workspaces(id,name,project_path,source_branch,working_branch,worktree_path,created_at,updated_at) VALUES('w','Existing','/tmp','main','work','/tmp','now','now')",
+    )
+    old.exec(
+      "INSERT INTO agent_sessions(id,workspace_id,engine,status,engine_session_id,started_at) VALUES('s','w','codex','completed','native-conversation','now')",
+    )
+    expect(getPendingMigrations(old)).toEqual([56])
+    runMigrations(old)
+    expect(old.prepare('SELECT id, engine_session_id, role FROM agent_sessions').get()).toEqual({
+      id: 's',
+      engine_session_id: 'native-conversation',
+      role: 'primary',
+    })
+    expect(getMigrationHistory(old).at(-1)?.version).toBe(SCHEMA_VERSION)
+    const fresh = new Database(':memory:')
+    runMigrations(fresh)
+    for (const table of ['agent_sessions', 'parallel_reviews']) {
+      expect(old.prepare(`PRAGMA table_info(${table})`).all()).toEqual(
+        fresh.prepare(`PRAGMA table_info(${table})`).all(),
+      )
+      expect(old.prepare(`PRAGMA foreign_key_list(${table})`).all()).toEqual(
+        fresh.prepare(`PRAGMA foreign_key_list(${table})`).all(),
+      )
+    }
+    migrations.find((m) => m.version === 56)!.migrate(old)
+    expect(old.prepare('SELECT count(*) AS count FROM agent_sessions').get()).toEqual({ count: 1 })
+    old.close()
+    fresh.close()
   })
 })

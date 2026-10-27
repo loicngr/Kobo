@@ -1,4 +1,5 @@
 interface SessionCandidate {
+  role?: string
   status: string
   startedAt: string
   endedAt: string | null
@@ -12,7 +13,7 @@ export function getCurrentSession<T extends SessionCandidate>(sessions: readonly
     Math.max(Date.parse(session.startedAt), Date.parse(session.endedAt ?? session.startedAt))
   return sessions.reduce<T | undefined>((current, candidate) => {
     // Rolled-back handoff targets remain readable, but are not the current conversation.
-    if ((candidate.activationOrder ?? 0) < 0) return current
+    if (candidate.role === 'parallel-review' || (candidate.activationOrder ?? 0) < 0) return current
     if (!current) return candidate
     if ((candidate.status === 'running') !== (current.status === 'running')) {
       return candidate.status === 'running' ? candidate : current

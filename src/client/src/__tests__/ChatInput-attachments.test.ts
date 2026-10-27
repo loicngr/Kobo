@@ -409,3 +409,106 @@ it('retains a busy Vibe draft on refused immediate delivery without queueing or 
   expect(queue).toHaveBeenCalledTimes(1)
   expect(send).toHaveBeenCalledTimes(1)
 })
+
+it('sends reviewer messages to the exact session without auto-loop queueing or resuming the principal', async () => {
+  const { useParallelReviewStore } = await import('../stores/parallel-review')
+  const { store, wrapper } = await setup('compacting')
+  store.sessions[0]!.role = 'parallel-review'
+  store.sessions[0]!.status = 'running'
+  store.workspaces[0]!.autoLoop = true
+  useParallelReviewStore().setStatus('a', {
+    reviewSessionId: 'session',
+    originalSessionId: 'main',
+    phase: 'reviewing',
+    compacting: false,
+    returnToSession: false,
+    error: null,
+  })
+  vi.spyOn(useWebSocketStore(), 'isConnected').mockReturnValue(true)
+  const send = vi.spyOn(useWebSocketStore(), 'sendChatMessageConfirmed').mockResolvedValue()
+  const queue = vi.spyOn(store, 'queueAutoLoopMessage')
+  await wrapper.get('textarea').setValue('Check the migration')
+  await wrapper.get('button[data-icon="send"]').trigger('click')
+  await flushPromises()
+  expect(send).toHaveBeenCalledWith('a', 'Check the migration', 'session', true)
+  expect(queue).not.toHaveBeenCalled()
+  expect(store.startWorkspace).not.toHaveBeenCalled()
+  expect(store.queuedMessages).toEqual({})
+  expect(store.workspaces[0]!.status).toBe('compacting')
+})
+
+it('keeps a closed reviewer read-only without any fallback start or auto-loop instruction', async () => {
+  const { useParallelReviewStore } = await import('../stores/parallel-review')
+  const { store, wrapper } = await setup('executing')
+  store.sessions[0]!.role = 'parallel-review'
+  store.sessions[0]!.status = 'completed'
+  useParallelReviewStore().setStatus('a', {
+    reviewSessionId: 'session',
+    originalSessionId: 'main',
+    phase: 'completed',
+    compacting: false,
+    returnToSession: false,
+    error: null,
+  })
+  await flushPromises()
+  expect(wrapper.get('textarea').attributes('disabled')).toBeDefined()
+  expect(wrapper.text()).toContain('This review is closed')
+  expect(store.startWorkspace).not.toHaveBeenCalled()
+})
+
+it('stops only the selected reviewer and preserves its draft on a rejected native send', async () => {
+  const { useParallelReviewStore } = await import('../stores/parallel-review')
+  const { store, wrapper } = await setup('executing')
+  store.sessions[0]!.role = 'parallel-review'
+  store.sessions[0]!.status = 'running'
+  store.sessions[0]!.engine = 'mistral-vibe'
+  useParallelReviewStore().setStatus('a', {
+    reviewSessionId: 'session',
+    originalSessionId: 'main',
+    phase: 'reviewing',
+    compacting: false,
+    returnToSession: false,
+    error: null,
+  })
+  vi.spyOn(useWebSocketStore(), 'isConnected').mockReturnValue(true)
+  vi.spyOn(useWebSocketStore(), 'sendChatMessageConfirmed').mockRejectedValue(new Error('Native session busy'))
+  const stop = vi.spyOn(useParallelReviewStore(), 'act').mockResolvedValue()
+  const interrupt = vi.spyOn(store, 'interruptAgent')
+  await wrapper.get('textarea').setValue('Check again')
+  await wrapper.get('button[data-icon="send"]').trigger('click')
+  await flushPromises()
+  expect(wrapper.get('textarea').element.value).toBe('Check again')
+  expect(store.queuedMessages).toEqual({})
+  await wrapper.get('.chat-hint__interrupt').trigger('click')
+  expect(stop).toHaveBeenCalledWith('a', 'session', 'stop')
+  expect(interrupt).not.toHaveBeenCalled()
+  expect(store.startWorkspace).not.toHaveBeenCalled()
+})
+
+it('preserves the reviewer draft and targeted stop while native closure is pending', async () => {
+  const { useParallelReviewStore } = await import('../stores/parallel-review')
+  const { store, wrapper } = await setup('executing')
+  store.sessions[0]!.role = 'parallel-review'
+  store.sessions[0]!.status = 'running'
+  const reviews = useParallelReviewStore()
+  const status = {
+    reviewSessionId: 'session',
+    originalSessionId: 'main',
+    phase: 'reviewing' as const,
+    compacting: false,
+    returnToSession: true,
+    error: null,
+  }
+  reviews.setStatus('a', status)
+  await wrapper.get('textarea').setValue('Preserve this draft')
+  reviews.setStatus('a', { ...status, phase: 'closing' })
+  await flushPromises()
+  expect(wrapper.get('textarea').attributes('disabled')).toBeDefined()
+  expect(wrapper.get('textarea').element.value).toBe('Preserve this draft')
+  const stop = vi.spyOn(reviews, 'act').mockResolvedValue()
+  const interrupt = vi.spyOn(store, 'interruptAgent')
+  await wrapper.get('.chat-hint__interrupt').trigger('click')
+  expect(stop).toHaveBeenCalledWith('a', 'session', 'stop')
+  expect(interrupt).not.toHaveBeenCalled()
+  expect(store.startWorkspace).not.toHaveBeenCalled()
+})

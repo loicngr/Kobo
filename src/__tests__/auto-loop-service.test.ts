@@ -1261,7 +1261,7 @@ describe('auto-loop-service', () => {
       vi.mocked(review.startWorkspaceReview).mockImplementation(async () => {
         const session = workspace.createIdleSession(wsId)
         finalReview.bindReviewSession(wsId, session.id, source)
-        return { ok: true, messageSent: true, newSession: true }
+        return { ok: true, messageSent: true, newSession: true, parallel: false, sessionId: session.id }
       })
       vi.mocked(orch.getActiveSessionId).mockImplementation(
         () => finalReview.getFinalReviewStatus(wsId).reviewSessionId ?? undefined,

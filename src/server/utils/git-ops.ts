@@ -63,6 +63,7 @@ function git(repoPath: string, args: string[]): string {
   return execFileSync('git', args, {
     cwd: repoPath,
     encoding: 'utf-8',
+    stdio: 'pipe',
     timeout: SYNC_GIT_TIMEOUT_MS,
     maxBuffer: GIT_MAX_BUFFER_BYTES,
     env: NON_INTERACTIVE_GIT_ENV,
@@ -1453,6 +1454,7 @@ export function getWorkingTreeDiffStats(repoPath: string): string {
     return execFileSync('git', ['diff', '--stat', 'HEAD'], {
       cwd: repoPath,
       encoding: 'utf-8',
+      stdio: 'pipe',
     })
   } catch {
     return ''

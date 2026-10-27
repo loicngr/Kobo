@@ -10,6 +10,7 @@ import { executeWorkspaceDialogueTool } from '../server/services/workspace-dialo
 
 vi.mock('../server/services/agent/orchestrator.js', () => ({
   assertImmediateMessageSupported: vi.fn(),
+  isParallelReviewSession: vi.fn(() => false),
   sendMessage: vi.fn(async () => {}),
   startAgent: vi.fn(),
   isShuttingDown: vi.fn(() => false),

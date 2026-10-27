@@ -16,7 +16,9 @@ export interface RateLimitInfo {
 
 export type AgentEventOrigin = { kind: 'subagent'; toolCallId?: string; threadId?: string }
 
-export type AgentEvent =
+export type AgentEvent = { sessionRole?: 'parallel-review' } & AgentEventPayload
+
+type AgentEventPayload =
   // Lifecycle
   | { kind: 'session:started'; engineSessionId: string; model?: string }
   | {

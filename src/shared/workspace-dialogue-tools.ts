@@ -84,6 +84,7 @@ export const WORKSPACE_DIALOGUE_TOOLS: Tool[] = [
     'Answer the current pending question using its exact tool_call_id. Answer keys are question IDs for Codex/Mistral Vibe, question text for Claude. Native multiple-choice arrays use selections; never split comma-joined display answers. Tool permission requests require human approval in Kōbō.',
     {
       workspace_id: workspace,
+      session_id: session,
       tool_call_id: { type: 'string', minLength: 1, maxLength: 200 },
       answers: { type: 'object', additionalProperties: { type: 'string' } },
       selections: {

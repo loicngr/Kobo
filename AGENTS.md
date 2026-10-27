@@ -118,9 +118,10 @@ src/
 |---|---|
 | `workspaces` | the unit of work: id, name, project_path, source_branch, working_branch, status, notion_url, model, `brainstorm_model`, dev_server_status, `archived_at`, `worktree_purged_at`, `worktree_purge_restore_data` (JSON), `auto_loop`, `auto_loop_ready`, `auto_loop_session_mode`, `no_progress_streak`, timestamps, `comparison_id` |
 | `tasks` | workspace sub-items: title, status, `is_acceptance_criterion`, sort_order; CASCADE DELETE on workspace |
-| `agent_sessions` | agent-engine sessions: pid where applicable, engine session id, status, timestamps, model, and name |
+| `agent_sessions` | agent-engine sessions: pid where applicable, engine session id, status, timestamps, model, name and `role` (`primary` or `parallel-review`) |
 | `ws_events` | persisted WebSocket events for replay on reconnect: type, payload, session_id, created_at |
 | `pending_review_returns` | durable review-to-source return, original LLM configuration and dispatch phase (v44, extended v52) |
+| `parallel_reviews` | concurrent manual reviewer, exact source session, optional report return and durable delivery phase |
 | `auto_loop_final_reviews` | configured final reviewer, review/correction cycle, scoped verdict and progress tracking (v52) |
 | `pending_wakeups` | one-row-per-workspace scheduler for the `schedule_wakeup` MCP tool: target_at (ISO UTC), prompt, reason; CASCADE DELETE on workspace |
 | `pending_quota_backoffs` | persisted quota retries and their attempt counts |
@@ -188,7 +189,7 @@ Context injection and every memory-tool response are bounded independently of pr
 
 `auto_loop_messages` durably queues next-iteration instructions, independently of engine session ids. A dispatch interrupted before confirmed completion becomes `unknown`, requiring explicit acknowledgement or retry. Unknown or in-flight instructions prevent completion. Actual engine closure (`EngineProcess.closed`), not a logical end event alone, releases controller ownership and permits the next writer.
 
-`brainstorm_model` (nullable, set only at creation) lets a workspace created with `auto_loop=1` run its initial brainstorming session on a different model than the auto-loop iterations that follow, while staying on the same engine. `POST /api/workspaces` uses it for the very first `startAgent` call only; every subsequent auto-loop iteration (`auto-loop-service.ts`'s `spawnNextIteration`) always reads `model`, unchanged. The switch to `model` takes effect once that first live session ends naturally — not at the `[BRAINSTORM_COMPLETE]` marker, since the same session keeps running under `brainstorm_model` until it stops on its own.
+`brainstorm_model` (nullable, set only at creation) lets a workspace created with `auto_loop=1` run its initial brainstorming session on a different model than the auto-loop iterations that follow, while staying on the same engine. `POST /api/workspaces` uses it for the very first `startAgent` call only; every subsequent auto-loop iteration (`auto-loop-service.ts`'s `spawnNextIteration`) always reads `model`, unchanged. Writable bootstrap prompts call `set_workspace_status({status: "executing"})` after planning (after successful `mark_auto_loop_ready` in auto-loop). Plan launches request no MCP mutation. The switch to `model` takes effect only when the first live session ends naturally, after its native process closes; changing status does not start implementation or replace that session. `[BRAINSTORM_COMPLETE]` remains supported for historical conversations, but new prompts do not request it. Exact shipped template hashes migrate to the MCP instruction; customized content and deletions are preserved.
 
 ## Database migrations
 
@@ -275,9 +276,24 @@ UUID list bound. Keep the opt-in inactivity watchdog for genuinely unanswered wo
 
 Claude SDK `task_*` messages cover agents **and** background jobs. Preserve `task_type` by task/tool identity across progress and terminal messages, which often omit it. The existing `subagent:progress` envelope also carries this lifecycle metadata for compatibility; `local_bash`, `local_workflow` and `mcp_task` must be excluded from agent cards, busy-agent counts, chat agent-name resolution and the selective stop-subagents action. Keep tracking these jobs for engine liveness and whole-session interruption. Legacy/unknown classifications and Codex agents remain supported; never classify from a description or from the agent's last tool (`Bash` can be a real agent's current action).
 
+Parallel reviews persist `closing` after saving a successful report and before
+native controller closure. Keep targeted stop available and chat disabled in this
+phase; publish `ready` only after closure. Startup recovers saved closing reports
+as ready/completed without restarting the reviewer. Live and GET parallel-review
+status use the same compaction snapshot.
+
 ### External MCP dialogue and update checks
 
 Workspace-bound stdio, global stdio and HTTP expose shared `create_workspace` / `diagnose_workspace_pr` definitions in `src/shared/workspace-creation-tools.ts`. Stdio forwards them to the backend. `workspace-creation-mcp-service.ts` validates inputs and dispatches through the existing workspace and PR routes in process; preserve UI validation, checkout fingerprints, lifecycle guards and rollback. Inputs use snake_case except the existing camelCase PR checkout decisions. Attachments are inline base64, bounded to the shared 10-file/50 MiB decoded limit before checkout mutations. Keep SDK HTTP/stdio limits aligned with the shared creation envelope budget. Creation and send_workspace_message envelopes with attachments get the larger base64 HTTP body budget; ordinary MCP requests remain 1 MiB. After a known PR creation failure, rollback only a checkout proven newly created, unchanged, clean (including ignored files) and unowned, under the Git repository lock; retain other checkouts and expose recovery details. Do not retry uncertain creation automatically or treat `creation_id` as an idempotency key. Restricted review/handoff launches cannot create workspaces or invoke lifecycle mutations. Shared lifecycle tools (`workspace-lifecycle-tools.ts` / `workspace-lifecycle-mcp-service.ts`) also expose archive, purge, delete, unarchive and restore through the same transports. Reject reserved/bulk/path-like IDs, require explicit purge/delete flags, and preserve warnings. Single-workspace DELETE accepts optional `confirmationBranch`, rechecked under its lifecycle guard before stopping processes; MCP always supplies it. Branch rename/resync share this guard so the confirmed branch and checkout path cannot change during teardown. Recovery uses `restore-worktree` before unarchive and never starts an agent.
+
+`set_workspace_status` uses the shared lifecycle schema and the existing workspace
+PATCH route across internal stdio, global stdio and external HTTP. Managed calls
+remain bound to their launch workspace and may omit `workspace_id`; external
+calls require it and the corresponding grants. Only business statuses are exposed
+(`brainstorming`, `executing`, `awaiting-user`, `completed`, `idle`, `error`).
+Preserve transition validation, compaction/lifecycle guards and refusal to mark
+an agent-owned workspace idle. Broadcast successful changes immediately. This
+tool never changes permissions, stops agents, completes tasks or enables a loop.
 
 MCP creation and single-workspace messages share `shared/mcp-attachments.ts`
 validation and inline `{name, mime_type, data_base64}` schemas. Validate before
@@ -330,6 +346,17 @@ Two emit flavors in `websocket-service.ts`:
 ## External integrations
 
 ### Graceful shutdown and development services
+
+`serializeDevServerStarts` defaults to `true`; `maxRunningDevServers` defaults to
+`0` (unlimited), added in JSON settings migration v69. The development-server
+service owns FIFO admission for all UI/MCP callers. `queued` is a runtime/dev
+status, not a workspace lifecycle status. Starting and running workspaces reserve
+total capacity; only starting ones reserve startup capacity. Direct readiness or
+completed Docker startup releases the startup slot. Confirmed stop/exit releases
+total capacity; failed inspection or shutdown must not overbook it. Preserve
+queue cancellation during teardown/shutdown, recovered Docker accounting and
+generation checks on asynchronous callbacks. Settings changes reconsider the
+queue without stopping existing servers.
 
 `stopDevServersOnShutdown` is a global boolean, default `true` (JSON settings
 migration v66). Shutdown first rejects new dev-server starts and stops tracked
@@ -628,17 +655,37 @@ deadline, and never rebind a wakeup belonging to another conversation.
 
 ### Review LLM and return to the original session
 
-The current conversation is the running session, or the last activated session,
+The current primary conversation is the running primary session, or the last activated primary session,
 falling back to `max(startedAt, endedAt)` for legacy rows. Keep the session list in creation order,
-but do not use its first entry to identify the current conversation: a temporary
+and exclude `parallel-review` roles from implicit selection. Do not use the first entry to identify the current conversation: a temporary
 review can return to an older session. The stale-session banner and the next
 review's return target must recognize that original session, including on reload.
 
 `StartReviewDialog.vue` uses the shared model/effort/permission catalogues. Changed
 settings force a new session on both client and server. `review-service.ts`
-validates before side effects, waits for confirmed shutdown, then applies the
+validates before side effects. With no running primary, it waits for confirmed shutdown, then applies the
 selected configuration and launches the review. Without a return request, these
 settings remain the workspace defaults. Legacy requests retain their behavior.
+
+With a running primary, manual review starts a separate `parallel-review` session
+without stopping the primary or changing workspace defaults. Claude/Codex are
+forced to Plan; Vibe uses native permissions with read-only Kōbō MCP grants, so
+filesystem read-only access is not guaranteed. The reviewer reads the live worktree,
+not a snapshot; the report must mention concurrent changes. Events, questions,
+permissions, chat and subagents retain their session identity; primary selection,
+auto-loop and workspace status exclude the reviewer. The optional return targets
+the exact captured primary session, without applying fixes automatically.
+`parallel_reviews` tracks `reviewing`, `ready`, `dispatching`, `unknown`, `blocked`,
+`completed` and `interrupted`. Its GET status is under
+`/api/workspaces/:id/parallel-review`; POST `stop`, `retry-return` and `cancel-return`
+under that path require `{sessionId: reviewSessionId}`. Never retry an uncertain
+return automatically. Restart interrupts a running reviewer and marks an in-flight
+return unknown. The terminal banner's **Close** action persists locally per
+workspace/review session without deleting the durable state or report. Selective
+subagent stop remains primary-only and is hidden in the reviewer view; stopping
+the complete reviewer is session-targeted.
+
+For sequential reviews, the return behavior remains:
 
 The optional `returnToSession` flag captures the exact resumable original session.
 `pending_review_returns` persists its configuration and the review session id

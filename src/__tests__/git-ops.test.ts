@@ -219,7 +219,7 @@ describe('pushBranchAsync', () => {
       writeFileSync(path.join(repo, 'f.txt'), 'hello')
       execFileSync('git', ['add', '.'], { cwd: repo })
       execFileSync('git', ['commit', '-m', 'init'], { cwd: repo })
-      execFileSync('git', ['init', '--bare'], { cwd: bare })
+      execFileSync('git', ['init', '--bare', '-b', 'main'], { cwd: bare })
       execFileSync('git', ['remote', 'add', 'origin', bare], { cwd: repo })
 
       await expect(pushBranchAsync(repo, 'main')).resolves.toEqual({ upToDate: false })
@@ -248,7 +248,7 @@ describe('pushBranch', () => {
     execFileSync('git', ['commit', '-m', 'init'], { cwd: repo })
 
     const bare = mkdtempSync(path.join(tmpdir(), 'at-remote-'))
-    execFileSync('git', ['init', '--bare'], { cwd: bare })
+    execFileSync('git', ['init', '--bare', '-b', 'main'], { cwd: bare })
     execFileSync('git', ['remote', 'add', 'origin', bare], { cwd: repo })
 
     expect(() => pushBranch(repo, 'main')).not.toThrow()
@@ -264,7 +264,7 @@ describe('pushBranch', () => {
     const repo = mkdtempSync(path.join(tmpdir(), 'at-git-'))
     execFileSync('git', ['init', '-b', 'main'], { cwd: repo })
     // No remote configured — push must fail
-    expect(() => pushBranch(repo, 'main')).toThrow()
+    expect(() => pushBranch(repo, 'main')).toThrow(/src refspec main does not match any/)
     rmSync(repo, { recursive: true, force: true })
   })
 })
@@ -272,7 +272,7 @@ describe('pushBranch', () => {
 describe('pullBranch', () => {
   it('pulls fast-forward changes from origin successfully', () => {
     const bare = mkdtempSync(path.join(tmpdir(), 'at-pull-bare-'))
-    execFileSync('git', ['init', '--bare'], { cwd: bare })
+    execFileSync('git', ['init', '--bare', '-b', 'main'], { cwd: bare })
 
     // First clone: produce an initial commit and push it
     const repoA = mkdtempSync(path.join(tmpdir(), 'at-pull-a-'))
@@ -536,7 +536,8 @@ describe('listBranchCommits — stale local base regression', () => {
     execFileSync('git', ['init', '--bare', '-b', 'main'], { cwd: remote })
 
     const local = mkdtempSync(path.join(tmpdir(), 'at-stale-local-'))
-    execFileSync('git', ['clone', remote, local])
+    execFileSync('git', ['init', '-b', 'main'], { cwd: local })
+    execFileSync('git', ['remote', 'add', 'origin', remote], { cwd: local })
     execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: local })
     execFileSync('git', ['config', 'user.name', 'test'], { cwd: local })
     writeFileSync(path.join(local, 'a.txt'), 'a')
@@ -1140,7 +1141,7 @@ describe('rebaseBranch dirty-worktree handling', () => {
     execFileSync('git', ['add', '.'], { cwd: repo })
     execFileSync('git', ['commit', '-m', 'init'], { cwd: repo })
     const bare = mkdtempSync(path.join(tmpdir(), 'at-dirty-rebase-bare-'))
-    execFileSync('git', ['init', '--bare'], { cwd: bare })
+    execFileSync('git', ['init', '--bare', '-b', 'main'], { cwd: bare })
     execFileSync('git', ['remote', 'add', 'origin', bare], { cwd: repo })
     execFileSync('git', ['push', '-u', 'origin', 'main'], { cwd: repo })
     return { repo, bare }
@@ -1189,7 +1190,7 @@ describe('mergeBranch dirty-worktree handling', () => {
     writeFileSync(path.join(repo, 'file.txt'), 'v2\n')
     execFileSync('git', ['commit', '-am', 'C2'], { cwd: repo })
     const bare = mkdtempSync(path.join(tmpdir(), 'at-dirty-merge-bare-'))
-    execFileSync('git', ['init', '--bare'], { cwd: bare })
+    execFileSync('git', ['init', '--bare', '-b', 'main'], { cwd: bare })
     execFileSync('git', ['remote', 'add', 'origin', bare], { cwd: repo })
     execFileSync('git', ['push', '-u', 'origin', 'main'], { cwd: repo }) // origin/main = C2
     execFileSync('git', ['reset', '--hard', c1], { cwd: repo }) // local main = C1, file = v1
@@ -1226,7 +1227,7 @@ describe('pullBranch dirty-worktree handling', () => {
     execFileSync('git', ['add', '.'], { cwd: repo })
     execFileSync('git', ['commit', '-m', 'init'], { cwd: repo })
     const bare = mkdtempSync(path.join(tmpdir(), 'at-dirty-pull-bare-'))
-    execFileSync('git', ['init', '--bare'], { cwd: bare })
+    execFileSync('git', ['init', '--bare', '-b', 'main'], { cwd: bare })
     execFileSync('git', ['remote', 'add', 'origin', bare], { cwd: repo })
     execFileSync('git', ['push', '-u', 'origin', 'main'], { cwd: repo })
     return { repo, bare }

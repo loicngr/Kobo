@@ -6,7 +6,7 @@ import * as path from 'node:path'
 import { runBoundedProcess } from '../utils/bounded-process.js'
 import * as gitOps from '../utils/git-ops.js'
 import { withGitRepoLock } from '../utils/git-repo-lock.js'
-import { getAgentStatus } from './agent/orchestrator.js'
+import { getAgentStatus, hasParallelReviewController } from './agent/orchestrator.js'
 import { getForgeProvider } from './forge/registry.js'
 import { resolveForge } from './forge/resolve.js'
 import { getEffectiveSettings } from './settings-service.js'
@@ -73,7 +73,7 @@ async function changeSourceBranchGuarded(workspaceId: string, newBase: string): 
   const workspace = getWorkspace(workspaceId)
   if (!workspace) throw new Error(`Workspace '${workspaceId}' not found`)
 
-  if (getAgentStatus(workspaceId) !== null) {
+  if (getAgentStatus(workspaceId) !== null || hasParallelReviewController(workspaceId)) {
     throw new Error('Cannot change the source branch while the agent is running — stop it first')
   }
 
@@ -151,7 +151,7 @@ async function runBuiltInStrategy(
   }
   assertWorkspaceUnchanged(workspaceId, worktreePath, workingBranch, oldBase)
   gitOps.assertCurrentBranch(worktreePath, workingBranch)
-  if (getAgentStatus(workspaceId) !== null)
+  if (getAgentStatus(workspaceId) !== null || hasParallelReviewController(workspaceId))
     throw new Error('Cannot change the source branch while the agent is running')
   if (!gitOps.branchExists(worktreePath, trimmedNew, 'origin')) {
     throw new Error(`Source branch 'origin/${trimmedNew}' does not exist`)
@@ -287,7 +287,7 @@ async function runCustomScript(
   gitOps.assertCurrentBranch(workspace.worktreePath, workspace.workingBranch)
   if (gitOps.worktreeHasChangesStrict(workspace.worktreePath))
     return { status: 'dirty', forcePushNeeded: false, commitCount: 0 }
-  if (getAgentStatus(workspace.id) !== null)
+  if (getAgentStatus(workspace.id) !== null || hasParallelReviewController(workspace.id))
     throw new Error('Cannot change the source branch while the agent is running')
   try {
     await runBoundedProcess('bash', ['-c', script], {

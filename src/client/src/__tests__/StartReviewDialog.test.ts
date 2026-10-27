@@ -1,10 +1,18 @@
-import { shallowMount } from '@vue/test-utils'
+import { flushPromises, shallowMount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import { beforeEach, expect, it } from 'vitest'
+import { beforeEach, expect, it, vi } from 'vitest'
 import { createI18n } from 'vue-i18n'
 import StartReviewDialog from '../components/StartReviewDialog.vue'
 import en from '../i18n/en'
 import { useSettingsStore } from '../stores/settings'
+import { apiFetch } from '../utils/api'
+
+vi.mock('../utils/api', () => ({
+  apiFetch: vi.fn().mockResolvedValue({
+    model: { currentValue: 'auto', options: [] },
+    thinking: { currentValue: 'auto', options: [] },
+  }),
+}))
 
 const workspace = {
   id: 'ws-1',
@@ -208,5 +216,40 @@ it('locks a returning review to read-only plan mode and restores the choice when
   returnToggle().vm.$emit('update:modelValue', false)
   await view.vm.$nextTick()
   expect(permission().props()).toMatchObject({ modelValue: 'bypass', disable: false })
+  view.unmount()
+})
+
+it('forces a fresh Plan review during activity while preserving both return choices', async () => {
+  const view = mountDialog({ workspace: { ...workspace, agentPermissionMode: 'plan' } })
+  expect(view.findAllComponents({ name: 'QToggle' })[0]!.props('modelValue')).toBe(false)
+  await view.setProps({ parallel: true })
+  const toggles = view.findAllComponents({ name: 'QToggle' })
+  expect(toggles[0]!.props()).toMatchObject({ modelValue: true, disable: true })
+  expect(toggles[1]!.props('disable')).toBe(false)
+  expect(view.findAllComponents({ name: 'QSelect' })[3]!.props()).toMatchObject({ modelValue: 'plan', disable: true })
+  await view.findAllComponents({ name: 'QBtn' }).at(-1)!.trigger('click')
+  expect(view.emitted('submit')?.[0]?.[0]).toMatchObject({
+    newSession: true,
+    returnToSession: false,
+    agentPermissionMode: 'plan',
+  })
+  toggles[1]!.vm.$emit('update:modelValue', true)
+  await view.vm.$nextTick()
+  await view.findAllComponents({ name: 'QBtn' }).at(-1)!.trigger('click')
+  expect(view.emitted('submit')?.[1]?.[0]).toMatchObject({ newSession: true, returnToSession: true })
+  view.unmount()
+})
+
+it('keeps native Vibe permissions selectable for parallel review', async () => {
+  const view = mountDialog({ parallel: true, workspace: { ...workspace, engine: 'mistral-vibe', model: 'auto' } })
+  await flushPromises()
+  expect(apiFetch).toHaveBeenCalledWith(
+    expect.stringContaining('/api/engines/mistral-vibe/options?'),
+    expect.objectContaining({ signal: expect.any(AbortSignal) }),
+  )
+  expect(view.findAllComponents({ name: 'QSelect' })[3]!.props()).toMatchObject({
+    modelValue: 'interactive',
+    disable: false,
+  })
   view.unmount()
 })

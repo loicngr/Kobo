@@ -25,6 +25,7 @@ export function createTempRepo(): TempRepo {
     execFileSync('git', args, {
       cwd,
       encoding: 'utf-8',
+      stdio: 'pipe',
       env: {
         ...process.env,
         LC_ALL: 'C',
@@ -38,7 +39,9 @@ export function createTempRepo(): TempRepo {
 
   fs.mkdirSync(originPath, { recursive: true })
   run(['init', '--bare', '--initial-branch=main', '.'], originPath)
-  run(['clone', originPath, repoPath], root)
+  fs.mkdirSync(repoPath)
+  run(['init', '--initial-branch=main', '.'], repoPath)
+  run(['remote', 'add', 'origin', originPath], repoPath)
 
   // The GIT_AUTHOR_*/GIT_COMMITTER_* env vars above only cover git commands
   // run through this file's own `run()` wrapper. The service under test

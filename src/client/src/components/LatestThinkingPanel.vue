@@ -7,6 +7,7 @@
 <script setup lang="ts">
 import { createFoldCache, foldEventsCached } from 'src/services/agent-event-view'
 import { useAgentStreamStore } from 'src/stores/agent-stream'
+import { useParallelReviewStore } from 'src/stores/parallel-review'
 import { useSettingsStore } from 'src/stores/settings'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import type { AgentEvent } from 'src/types/agent-event'
@@ -65,7 +66,10 @@ const latestThinking = computed(() => {
 const isVisible = computed(
   () =>
     settings.global.showThinkingBlocks &&
-    isBusyStatus(workspaceStore.selectedWorkspace?.status) &&
+    (workspaceStore.isParallelReviewSession(props.workspaceId, selectedSessionId.value)
+      ? useParallelReviewStore().statuses[props.workspaceId]?.reviewSessionId === selectedSessionId.value &&
+        useParallelReviewStore().statuses[props.workspaceId]?.phase === 'reviewing'
+      : isBusyStatus(workspaceStore.selectedWorkspace?.status)) &&
     latestThinking.value !== null,
 )
 

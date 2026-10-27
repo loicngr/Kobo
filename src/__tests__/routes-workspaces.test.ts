@@ -1,5 +1,10 @@
 import { preflightMistralConfiguration } from '../server/services/mistral-options-service.js'
 
+vi.mock('../server/services/parallel-review-service.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../server/services/parallel-review-service.js')>()),
+  getParallelReviewSourceConfiguration: vi.fn(() => null),
+}))
+
 vi.mock('../server/services/mistral-options-service.js', () => ({
   preflightMistralConfiguration: vi.fn(async (engine, _context, selection) => {
     if (
@@ -84,7 +89,7 @@ vi.mock('../server/services/workspace-service.js', () => ({
   updateTaskStatus: vi.fn(),
   updateTaskTitle: vi.fn(),
   deleteTask: vi.fn(),
-  listSessions: vi.fn(),
+  listSessions: vi.fn(() => []),
   getLatestSession: vi.fn(),
   getActiveSession: vi.fn(),
   createIdleSession: vi.fn(),
@@ -126,6 +131,7 @@ vi.mock('../server/services/agent/orchestrator.js', () => ({
   sendMessage: vi.fn(),
   sendMessageForFallback: vi.fn().mockResolvedValue({ status: 'sent', sessionId: 'delivered-session-id' }),
   hasController: vi.fn(() => false),
+  hasParallelReviewController: vi.fn(() => false),
   getAgentStatus: vi.fn().mockReturnValue(null),
   getActiveSessionId: vi.fn().mockReturnValue('active-session-id'),
   getAgentLiveness: vi.fn().mockReturnValue(null),
@@ -2416,6 +2422,7 @@ describe('POST /api/workspaces — Notion/Sentry initial prompt injection', () =
     expect(prompt).toContain('explicitly changes the launch permissions')
     expect(prompt).not.toContain('[BRAINSTORM_COMPLETE]')
     expect(prompt).not.toContain('mark_auto_loop_ready')
+    expect(prompt).not.toContain('set_workspace_status')
     expect(prompt).not.toContain('gstack-brain-sync')
     expect(prompt).not.toContain('Then proceed with implementation')
     expect(vi.mocked(agentManager.startAgent).mock.calls[0]?.[9]).toEqual({ persistInitialPrompt: true })
@@ -2459,9 +2466,16 @@ describe('POST /api/workspaces — Notion/Sentry initial prompt injection', () =
       expect(prompt).not.toContain('[BRAINSTORM_COMPLETE]')
     } else if (autoLoop) {
       expect(prompt).toContain('After the plan is ready, DO NOT implement anything')
+      expect(prompt).toContain('Call `list_tasks` FIRST')
+      expect(prompt).toContain('DO NOT delete or recreate them from scratch')
       expect(prompt).toContain('mark_auto_loop_ready')
-      expect(prompt).toContain('[BRAINSTORM_COMPLETE]')
+      expect(prompt).toContain('After `mark_auto_loop_ready` succeeds, call `set_workspace_status`')
+      expect(prompt).toContain('status: "executing"')
+      expect(prompt).toContain('let this session end naturally')
+      expect(prompt).not.toContain('[BRAINSTORM_COMPLETE]')
     } else {
+      expect(prompt).toContain('call `set_workspace_status` with `status: "executing"` BEFORE starting implementation')
+      expect(prompt).not.toContain('[BRAINSTORM_COMPLETE]')
       expect(prompt).toContain('Then proceed with implementation under the current permissions')
     }
   })
@@ -3210,6 +3224,42 @@ describe('PATCH /api/workspaces/:id', () => {
     expect(res.status).toBe(200)
     const data = await res.json()
     expect(data.status).toBe('executing')
+  })
+
+  it('broadcasts the accepted status immediately', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ ...fakeWorkspace, status: 'brainstorming' })
+    vi.mocked(workspaceService.updateWorkspaceFields).mockReturnValue({ ...fakeWorkspace, status: 'executing' })
+    const res = await app.request('/api/workspaces/ws-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'executing' }),
+    })
+    expect(res.status).toBe(200)
+    expect(wsService.emitEphemeral).toHaveBeenCalledWith('ws-1', 'workspace:status', { status: 'executing' })
+  })
+
+  it('refuses to overwrite server-owned compaction', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ ...fakeWorkspace, status: 'compacting' })
+    const res = await app.request('/api/workspaces/ws-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'executing' }),
+    })
+    expect(res.status).toBe(409)
+    expect(workspaceService.updateWorkspaceFields).not.toHaveBeenCalled()
+  })
+
+  it('refuses status changes while lifecycle teardown owns the workspace', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    await withWorkspaceLifecycleGuard('ws-1', async () => {
+      const res = await app.request('/api/workspaces/ws-1', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'completed' }),
+      })
+      expect(res.status).toBe(409)
+      expect(workspaceService.updateWorkspaceFields).not.toHaveBeenCalled()
+    })
   })
 
   it('returns 400 when status is missing', async () => {

@@ -17,8 +17,8 @@ const frontendTypes = readFileSync(resolve(here, '../client/src/types/agent-even
  * that is followed by a new top-level declaration. Variant lines start with
  * `  |` and continuation lines are indented further.
  */
-function extractAgentEventBlock(source: string): string {
-  const start = source.indexOf('export type AgentEvent =')
+function extractAgentEventBlock(source: string, name = 'AgentEvent'): string {
+  const start = source.indexOf(`type ${name} =`)
   if (start < 0) throw new Error('AgentEvent type not found')
   const after = source.slice(start)
   const lines = after.split('\n')
@@ -49,5 +49,8 @@ describe('AgentEvent backend/frontend sync', () => {
     const backendBlock = extractAgentEventBlock(backendTypes)
     const frontendBlock = extractAgentEventBlock(frontendTypes)
     expect(frontendBlock).toBe(backendBlock)
+    expect(extractAgentEventBlock(frontendTypes, 'AgentEventPayload')).toBe(
+      extractAgentEventBlock(backendTypes, 'AgentEventPayload'),
+    )
   })
 })

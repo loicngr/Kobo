@@ -150,11 +150,13 @@ class HelperTest(unittest.TestCase):
 
     def test_never_returns_expired_cache_after_refresh_failure(self):
         self.token()
-        self.mock_opener.open.side_effect = HTTPError('secret-url', 401, 'secret-body', {}, None)
+        response = io.BytesIO(b'secret-response')
+        self.mock_opener.open.side_effect = HTTPError('secret-url', 401, 'secret-body', {}, response)
         with patch.object(m.time, 'time', return_value=self.now + 4000):
             with self.assertRaises(m.TokenError) as caught:
                 self.token()
         self.assertNotIn('secret', str(caught.exception))
+        self.assertTrue(response.closed)
 
     def test_rejects_invalid_token_response(self):
         for response in [{'token': 'secret\nheader', 'expires_at': self.expires},

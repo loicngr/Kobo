@@ -23,6 +23,16 @@ export default defineConfig((ctx) => {
         node: 'node26',
       },
       vueRouterMode: 'hash',
+      extendViteConf(config) {
+        config.build ??= {}
+        config.build.rolldownOptions ??= {}
+        config.build.rolldownOptions.output = {
+          strictExecutionOrder: true,
+          codeSplitting: {
+            groups: [{ name: 'monaco', test: /node_modules\/monaco-editor\//, maxSize: 400_000 }],
+          },
+        }
+      },
     },
 
     pwa: {

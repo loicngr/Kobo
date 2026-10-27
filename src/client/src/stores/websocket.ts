@@ -6,6 +6,7 @@ import { disposeTerminalEntry } from 'src/services/terminal-registry'
 import { getWorkspaceQueueHost } from 'src/services/workspace-queue-bridge'
 import { useAgentStreamStore } from 'src/stores/agent-stream'
 import { useAutoLoopReviewStore } from 'src/stores/auto-loop-review'
+import { useParallelReviewStore } from 'src/stores/parallel-review'
 import { useProgressBarsStore } from 'src/stores/progress-bars'
 import { useSessionHandoffStore } from 'src/stores/session-handoff'
 import { type GlobalSettings, useSettingsStore } from 'src/stores/settings'
@@ -19,6 +20,7 @@ import { DEFAULT_TOAST_TIMEOUT_MS } from 'src/utils/notification-timeout'
 import { notify } from 'src/utils/notifications'
 import type { AutoLoopFinalReviewStatus } from '../../../shared/auto-loop-review'
 import type { ProgressBar } from '../../../shared/progress-bars'
+import type { ParallelReviewStatus } from '../../../shared/review'
 import type { ReviewReturnStatus } from '../../../shared/review-return'
 import type { SessionHandoff } from '../../../shared/session-handoff'
 import { parseMessageSource } from '../utils/message-source'
@@ -157,9 +159,9 @@ function _handleSessionStarted(workspaceId: string, event: AgentEvent, sessionId
   // agentSessionId). Siblings owned by other sessions are kept.
   if (sessionId) {
     workspaceStore.setActiveAgentSession(workspaceId, sessionId)
-    const head = workspaceStore.peekPending(workspaceId)
+    const head = workspaceStore.peekPending(workspaceId, sessionId)
     if (head && head.agentSessionId === sessionId) {
-      workspaceStore.dequeuePending(workspaceId)
+      workspaceStore.dequeuePending(workspaceId, head.toolCallId, sessionId)
     }
   }
 
@@ -176,6 +178,7 @@ function _handleSessionStarted(workspaceId: string, event: AgentEvent, sessionId
   if (workspaceStore.selectedWorkspaceId !== workspaceId) return
   if (workspaceStore.selectedSessionId === sessionId) return
 
+  if (workspaceStore.isParallelReviewSession(workspaceId, workspaceStore.selectedSessionId)) return
   void workspaceStore.fetchSessions(workspaceId, sessionId).catch((err) => {
     console.error('[websocket] fetchSessions on session:started failed:', err)
   })
@@ -261,11 +264,20 @@ export function dispatchAgentEvent(
   sessionId?: string | null,
 ): void {
   const agentStream = useAgentStreamStore()
+  const reviews = useParallelReviewStore()
+  if (event.sessionRole === 'parallel-review' && sessionId) reviews.remember(workspaceId, sessionId)
+  const reviewer = useWorkspaceStore().isParallelReviewSession(workspaceId, sessionId)
   const activeOwner = useWorkspaceStore().activeAgentSessionIds[workspaceId]
   const isCurrentSession = !sessionId || !activeOwner || sessionId === activeOwner
 
   // Transient compaction indicator — ephemeral, never enters the persisted feed.
   if (event.kind === 'session:compacting') {
+    if (reviewer) {
+      const status = reviews.statuses[workspaceId]
+      if (status && status.reviewSessionId === sessionId)
+        reviews.setStatus(workspaceId, { ...status, compacting: event.active })
+      return
+    }
     if (!_replayingNotifications && isCurrentSession) agentStream.setCompacting(workspaceId, event.active)
     return
   }
@@ -276,15 +288,20 @@ export function dispatchAgentEvent(
   // resumes producing output (text / tool calls) — clear the live banner.
   if (
     !_replayingNotifications &&
+    !reviewer &&
     isCurrentSession &&
     (event.kind === 'session:compacted' || event.kind === 'message:text' || event.kind === 'tool:call')
   ) {
     agentStream.setCompacting(workspaceId, false)
   }
 
-  _handleSessionStarted(workspaceId, event, sessionId ?? undefined)
-
   const workspaceStore = useWorkspaceStore()
+  if (!reviewer) _handleSessionStarted(workspaceId, event, sessionId ?? undefined)
+  else if (event.kind === 'session:started' && sessionId) {
+    reviews.settled[sessionId] = false
+    if (workspaceStore.selectedWorkspaceId === workspaceId && !workspaceStore.loadingSessions[workspaceId])
+      void workspaceStore.fetchSessions(workspaceId)
+  }
 
   if (event.kind === 'session:user-input-requested') {
     if (event.requestKind === 'question') {
@@ -307,7 +324,7 @@ export function dispatchAgentEvent(
     // A pending question or approval may arrive from a sub-agent while the
     // parent compacts. Keep compaction authoritative until its status event
     // restores awaiting-user; the request is still queued and notified below.
-    if (!useWebSocketStore().isCompacting(workspaceId)) {
+    if (!reviewer && !useWebSocketStore().isCompacting(workspaceId)) {
       workspaceStore.updateWorkspaceFromEvent(workspaceId, { status: 'awaiting-user' })
     }
     if (!_replayingNotifications) {
@@ -342,6 +359,24 @@ export function dispatchAgentEvent(
       toolUses: event.toolUses,
       durationMs: event.durationMs,
     })
+    return
+  }
+
+  if (reviewer) {
+    if (sessionId && ['message:text', 'message:thinking', 'tool:call'].includes(event.kind))
+      reviews.settled[sessionId] = false
+    if (sessionId && (event.kind === 'turn:completed' || event.kind === 'session:ended'))
+      reviews.settled[sessionId] = true
+    if (event.kind === 'session:ended' && sessionId) {
+      workspaceStore.clearPendingForSession(workspaceId, sessionId)
+      workspaceStore.finalizeRunningSubagents(workspaceId, sessionId)
+      workspaceStore.cancelQueuedMessage(workspaceId, sessionId)
+      if (!_replayingNotifications) {
+        void reviews.fetchStatus(workspaceId).catch(() => {})
+        if (workspaceStore.selectedWorkspaceId === workspaceId && !workspaceStore.loadingSessions[workspaceId])
+          void workspaceStore.fetchSessions(workspaceId)
+      }
+    }
     return
   }
 
@@ -638,6 +673,7 @@ export const useWebSocketStore = defineStore('websocket', {
         workspaceStore.fetchAutoLoopStates(),
         useProgressBarsStore().refresh(),
         useAutoLoopReviewStore().refreshKnown(),
+        useParallelReviewStore().refreshKnown(),
         ...[...handoffWorkspaces].map((id) => handoffs.refresh(id)),
         ...[...queuedWorkspaces].map((id) => workspaceStore.fetchAutoLoopMessages(id)),
         ...[...tracked].map((id) => devServers.fetchStatus(id)),
@@ -703,7 +739,11 @@ export const useWebSocketStore = defineStore('websocket', {
       })
     },
 
-    isCompacting(workspaceId: string): boolean {
+    isCompacting(workspaceId: string, sessionId?: string | null): boolean {
+      if (useWorkspaceStore().isParallelReviewSession(workspaceId, sessionId)) {
+        const review = useParallelReviewStore().statuses[workspaceId]
+        return !!review && review.reviewSessionId === sessionId && review.compacting
+      }
       const store = useWorkspaceStore()
       const workspace =
         store.workspaces.find((item) => item.id === workspaceId) ??
@@ -719,7 +759,7 @@ export const useWebSocketStore = defineStore('websocket', {
       force = false,
       clientMessageId?: string,
     ): boolean {
-      if (this.isCompacting(workspaceId)) return false
+      if (this.isCompacting(workspaceId, sessionId)) return false
       const sent = this._send({
         type: 'chat:message',
         payload: { workspaceId, content, sessionId, agentPermissionModeOverride, force, clientMessageId },
@@ -736,6 +776,7 @@ export const useWebSocketStore = defineStore('websocket', {
       const ws = useWorkspaceStore()
       const cur = ws.workspaces.find((w) => w.id === workspaceId)
       if (
+        !ws.isParallelReviewSession(workspaceId, sessionId) &&
         cur &&
         (cur.status === 'completed' || cur.status === 'idle' || cur.status === 'error' || cur.status === 'quota')
       ) {
@@ -917,6 +958,8 @@ export const useWebSocketStore = defineStore('websocket', {
         }
         case 'workspace:status': {
           if (!wid || this._replaying || typeof payload.status !== 'string') break
+          if (workspaceStore.isParallelReviewSession(wid, msg.sessionId ?? (payload.sessionId as string | undefined)))
+            break
           const owner = workspaceStore.activeAgentSessionIds[wid]
           if (owner && typeof payload.sessionId === 'string' && owner !== payload.sessionId) break
           workspaceStore.updateWorkspaceFromEvent(wid, { status: payload.status })
@@ -996,9 +1039,23 @@ export const useWebSocketStore = defineStore('websocket', {
             const alreadyExists =
               !source &&
               sender === 'user' &&
-              items.some((i) => i.meta?.sender === 'user' && i.content === content && i.meta?.pending)
+              items.some(
+                (i) =>
+                  i.meta?.sender === 'user' &&
+                  i.content === content &&
+                  i.meta?.pending &&
+                  (i.sessionId === sessionId ||
+                    (!i.sessionId && !workspaceStore.isParallelReviewSession(wid, sessionId))),
+              )
             if (alreadyExists) {
-              const idx = items.findIndex((i) => i.meta?.sender === 'user' && i.content === content && i.meta?.pending)
+              const idx = items.findIndex(
+                (i) =>
+                  i.meta?.sender === 'user' &&
+                  i.content === content &&
+                  i.meta?.pending &&
+                  (i.sessionId === sessionId ||
+                    (!i.sessionId && !workspaceStore.isParallelReviewSession(wid, sessionId))),
+              )
               if (idx >= 0) {
                 // Reconcile the optimistic entry (timestamped by the browser
                 // clock at send time) with the server's persisted timestamp so
@@ -1105,7 +1162,15 @@ export const useWebSocketStore = defineStore('websocket', {
                 // The "Agent todos" panel is rebuilt from the replayed tool
                 // calls below — clear it first so deletions/state replay onto a
                 // clean slate (mirrors the stream reset above).
-                if (syncMode === 'snapshot') useWorkspaceStore().updateAgentTodos(workspaceId, [])
+                if (
+                  syncMode === 'snapshot' &&
+                  list.some(
+                    (event, index) =>
+                      event.sessionRole !== 'parallel-review' &&
+                      !workspaceStore.isParallelReviewSession(workspaceId, sList[index]),
+                  )
+                )
+                  workspaceStore.updateAgentTodos(workspaceId, [])
                 // Replay side-effects (usage/rate_limit/subagent/pending) in
                 // order, mirroring live-event semantics. Append was already
                 // handled by reset().
@@ -1113,6 +1178,9 @@ export const useWebSocketStore = defineStore('websocket', {
                   const ev = list[i]
                   if (!ev) continue
                   const evSessionId = sList[i] ?? null
+                  if (ev.sessionRole === 'parallel-review' && evSessionId)
+                    useParallelReviewStore().remember(workspaceId, evSessionId)
+                  const reviewer = workspaceStore.isParallelReviewSession(workspaceId, evSessionId)
                   if (ev.kind === 'session:user-input-requested') {
                     if (ev.requestKind === 'question') {
                       useWorkspaceStore().enqueuePending(workspaceId, {
@@ -1134,12 +1202,13 @@ export const useWebSocketStore = defineStore('websocket', {
                     continue
                   }
                   if (ev.kind === 'session:started') {
+                    if (reviewer) continue
                     if (evSessionId) {
                       const store = useWorkspaceStore()
                       store.setActiveAgentSession(workspaceId, evSessionId)
-                      const head = store.peekPending(workspaceId)
+                      const head = store.peekPending(workspaceId, evSessionId)
                       if (head && head.agentSessionId === evSessionId) {
-                        store.dequeuePending(workspaceId)
+                        store.dequeuePending(workspaceId, head.toolCallId, evSessionId)
                       }
                     }
                     continue
@@ -1187,7 +1256,7 @@ export const useWebSocketStore = defineStore('websocket', {
                   // Rebuild the "Agent todos" panel from the replayed tool calls
                   // (TodoWrite / Task*), matching live semantics — agentTodos was
                   // cleared above so the rebuild starts from a clean slate.
-                  applyTodoToolEvent(workspaceId, ev)
+                  if (!reviewer) applyTodoToolEvent(workspaceId, ev)
                 }
               }
             }
@@ -1709,6 +1778,23 @@ export const useWebSocketStore = defineStore('websocket', {
           break
         }
 
+        case 'review:parallel-status': {
+          if (!wid) break
+          const review = payload as unknown as ParallelReviewStatus
+          const previous = useParallelReviewStore().statuses[wid]
+          useParallelReviewStore().setStatus(wid, review)
+          if (
+            !this._replaying &&
+            review.phase === 'completed' &&
+            review.returnToSession &&
+            previous?.phase !== 'completed' &&
+            workspaceStore.selectedWorkspaceId === wid &&
+            workspaceStore.selectedSessionId === review.reviewSessionId
+          ) {
+            workspaceStore.selectSession(review.originalSessionId)
+          }
+          break
+        }
         case 'review:return-status': {
           if (wid)
             useAutoLoopReviewStore().setReturn(wid, (msg.payload ?? null) as unknown as ReviewReturnStatus | null)

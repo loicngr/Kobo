@@ -311,6 +311,7 @@ import { EFFORT_OPTION_DEFS_BY_ENGINE } from 'src/constants/efforts'
 import { MODEL_OPTION_DEFS, MODEL_OPTION_DEFS_BY_ENGINE } from 'src/constants/models'
 import { PERMISSION_MODES_BY_ENGINE } from 'src/constants/permissionModes'
 import { useLayoutStore } from 'src/stores/layout'
+import { useParallelReviewStore } from 'src/stores/parallel-review'
 import type { AgentSession } from 'src/stores/workspace'
 import { useWorkspaceStore, WorkspaceActionError } from 'src/stores/workspace'
 import { copyToClipboard } from 'src/utils/clipboard'
@@ -780,7 +781,12 @@ const selectedWs = computed(() => store.selectedWorkspace)
 const sessions = computed(() => store.sessions)
 const whipRunningSessionId = computed(() => {
   const workspace = selectedWs.value
-  if (!workspace || !isBusyStatus(workspace.status)) return null
+  if (
+    !workspace ||
+    store.isParallelReviewSession(workspace.id, store.selectedSessionId) ||
+    !isBusyStatus(workspace.status)
+  )
+    return null
   return getWhipRunningSessionId(workspace.id, store.sessions)
 })
 const selectedSession = computed(() => store.sessions.find((session) => session.id === store.selectedSessionId) ?? null)
@@ -812,7 +818,7 @@ const selectedSessionId = computed({
 
 const sessionOptions = computed(() => {
   const opts = store.sessions.map((s: AgentSession, idx: number) => ({
-    label: s.name ?? t('workspacePage.session', { n: store.sessions.length - idx }),
+    label: `${s.name ?? t('workspacePage.session', { n: store.sessions.length - idx })}${s.role === 'parallel-review' ? ` · ${t('parallelReview.title')}` : ''}`,
     value: s.id,
     caption: s.engine
       ? `${s.engine === 'codex' ? t('workspacePage.engineCodex') : s.engine === 'mistral-vibe' ? t('workspacePage.engineMistral') : t('workspacePage.engineClaude')} · ${timeAgo(s.startedAt)}`
@@ -845,6 +851,12 @@ function openRenameDialog(sessionId: string, currentLabel: string) {
 }
 
 function sessionCanBeDeleted(sessionId: string): boolean {
+  const review = useParallelReviewStore().statuses[store.selectedWorkspaceId ?? '']
+  if (
+    review?.reviewSessionId === sessionId &&
+    ['reviewing', 'closing', 'ready', 'dispatching', 'unknown', 'blocked'].includes(review.phase)
+  )
+    return false
   return store.sessions.find((session) => session.id === sessionId)?.status !== 'running'
 }
 

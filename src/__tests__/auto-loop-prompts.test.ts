@@ -17,7 +17,7 @@ describe('buildAutoLoopGroomingSteps(e2e, finalization)', () => {
     expect(out).not.toContain('E2E review')
     expect(out).not.toContain('Finalization task')
     // Sentinel: no '5.' numbering — required because the workspace creation
-    // handler appends an unnumbered "[BRAINSTORM_COMPLETE]" directive after
+    // handler appends an unnumbered status-transition directive after
     // this output, and the previous design collided with a hardcoded "5.".
     expect(out).not.toMatch(/^5\./m)
   })

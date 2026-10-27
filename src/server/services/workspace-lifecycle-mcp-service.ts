@@ -46,6 +46,7 @@ export async function executeWorkspaceLifecycleTool(name: string, raw: unknown, 
   }
   const workspaceId = input.workspace_id as string
   const path = `/api/workspaces/${encodeURIComponent(workspaceId)}`
+  if (name === 'set_workspace_status') return request(dispatch, path, 'set-status', 'PATCH', { status: input.status })
   if (name === 'archive_workspace') return request(dispatch, `${path}/archive`, 'archive', 'POST')
   if (name === 'purge_workspace_worktree') return request(dispatch, `${path}/purge-worktree`, 'purge', 'POST')
   if (name === 'unarchive_workspace') return request(dispatch, `${path}/unarchive`, 'unarchive', 'POST')

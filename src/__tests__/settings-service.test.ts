@@ -48,6 +48,52 @@ afterEach(() => {
   }
 })
 
+describe('development server admission settings', () => {
+  it('serializes fresh and upgraded installations without a total limit', () => {
+    expect(getGlobalSettings()).toMatchObject({ serializeDevServerStarts: true, maxRunningDevServers: 0 })
+    const upgraded = runSettingsMigrations({ schemaVersion: 68, global: { editorCommand: 'keep' }, projects: [] })
+    expect(upgraded.global).toMatchObject({
+      serializeDevServerStarts: true,
+      maxRunningDevServers: 0,
+      editorCommand: 'keep',
+    })
+    expect(upgraded.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
+  })
+
+  it('persists explicit choices through reload, migration and config export/import', () => {
+    const choices = { serializeDevServerStarts: false, maxRunningDevServers: 3 }
+    updateGlobalSettings(choices)
+    _setSettingsPath(settingsPath)
+    expect(getGlobalSettings()).toMatchObject(choices)
+    expect(runSettingsMigrations({ schemaVersion: 68, global: { ...choices }, projects: [] }).global).toMatchObject(
+      choices,
+    )
+    const bundle = exportConfigBundle([])
+    updateGlobalSettings({ serializeDevServerStarts: true, maxRunningDevServers: 0 })
+    importConfigBundle(bundle)
+    expect(getGlobalSettings()).toMatchObject(choices)
+  })
+
+  it.each([-1, 0.5, '2', null, Number.MAX_SAFE_INTEGER + 1])(
+    'rejects invalid total limit %j without changing the saved choice',
+    (value) => {
+      updateGlobalSettings({ serializeDevServerStarts: false, maxRunningDevServers: 3 })
+      updateGlobalSettings({
+        maxRunningDevServers: value,
+        serializeDevServerStarts: 'true',
+      } as unknown as Partial<GlobalSettings>)
+      expect(getGlobalSettings()).toMatchObject({ serializeDevServerStarts: false, maxRunningDevServers: 3 })
+      expect(
+        runSettingsMigrations({
+          schemaVersion: SETTINGS_SCHEMA_VERSION,
+          global: { maxRunningDevServers: value },
+          projects: [],
+        }).global.maxRunningDevServers,
+      ).toBe(0)
+    },
+  )
+})
+
 describe('Mistral defaults', () => {
   it('defaults fresh installations to interactive native configuration', () => {
     const global = getGlobalSettings()

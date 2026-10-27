@@ -84,11 +84,14 @@ export async function executeWorkspaceDialogueTool(
     assertWorkspaceLifecycleAvailable(workspaceId)
     if (workspace.archivedAt || workspace.worktreePurgedAt)
       throw new Error('Restore the workspace before answering a question')
-    const head = getPendingInputs(workspaceId)[0]
+    const head = getPendingInputs(workspaceId).filter(
+      (item) => !args.session_id || item.agentSessionId === args.session_id,
+    )[0]
     if (head?.kind !== 'question' || head.toolCallId !== args.tool_call_id)
       throw new Error('The requested question is not the current pending question')
     await answerPendingQuestion(workspaceId, args.answers as Record<string, string>, args.tool_call_id as string, {
       source,
+      ...(args.session_id ? { sessionId: args.session_id as string } : {}),
       ...(args.selections !== undefined ? { selections: parseQuestionSelections(args.selections) } : {}),
     })
     return { accepted: true }

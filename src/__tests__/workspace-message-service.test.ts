@@ -1,11 +1,15 @@
 import { beforeEach, expect, it, vi } from 'vitest'
 import { preflightMistralConfiguration } from '../server/services/mistral-options-service.js'
 
+vi.mock('../server/services/parallel-review-service.js', () => ({
+  getParallelReviewSourceConfiguration: vi.fn(() => null),
+}))
 vi.mock('../server/services/mistral-options-service.js', () => ({
   preflightMistralConfiguration: vi.fn().mockResolvedValue(undefined),
 }))
 vi.mock('../server/services/agent/orchestrator.js', () => ({
   assertImmediateMessageSupported: vi.fn(),
+  isParallelReviewSession: vi.fn(() => false),
   sendMessage: vi.fn(),
   startAgent: vi.fn(),
   isShuttingDown: vi.fn(() => false),
@@ -71,6 +75,8 @@ it('resumes an unavailable agent using the workspace permission mode', async () 
     'strict',
     undefined,
     'high',
+    undefined,
+    undefined,
   )
 })
 
@@ -220,5 +226,7 @@ it('preflights Auto with explicit thinking as a native resume before chat fallba
     'interactive',
     'saved-b',
     'max',
+    undefined,
+    undefined,
   )
 })

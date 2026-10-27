@@ -45,10 +45,10 @@
         :disable="submitting"
         @click="decide('allow', 'once')"
       />
-      <q-btn flat dense :label="t('permissionRequest.allowTurn')" :disable="submitting" @click="decide('allow', 'turn')" />
-      <q-btn flat dense :label="t('permissionRequest.allowOperation')" :disable="submitting || !operationApprovalAvailable" @click="decide('allow', 'operation')" />
-      <span v-if="!operationApprovalAvailable" class="text-caption text-kobo-3">{{ t('permissionRequest.operationUnavailable') }}</span>
-      <q-btn flat dense :label="t('permissionRequest.allowTool')" :disable="submitting" @click="decide('allow', 'tool')" />
+      <q-btn v-if="!reviewer" flat dense :label="t('permissionRequest.allowTurn')" :disable="submitting" @click="decide('allow', 'turn')" />
+      <q-btn v-if="!reviewer" flat dense :label="t('permissionRequest.allowOperation')" :disable="submitting || !operationApprovalAvailable" @click="decide('allow', 'operation')" />
+      <span v-if="!reviewer && !operationApprovalAvailable" class="text-caption text-kobo-3">{{ t('permissionRequest.operationUnavailable') }}</span>
+      <q-btn v-if="!reviewer" flat dense :label="t('permissionRequest.allowTool')" :disable="submitting" @click="decide('allow', 'tool')" />
       <q-btn
         :label="t('permissionRequest.deny')"
         flat
@@ -73,10 +73,12 @@ const { t } = useI18n()
 const store = useWorkspaceStore()
 
 const pending = computed(() => {
-  const head = store.peekPending(props.workspaceId)
+  const head = store.peekPending(props.workspaceId, store.selectedSessionId)
   if (head?.kind !== 'permission') return undefined
   return head
 })
+
+const reviewer = computed(() => store.isParallelReviewSession(props.workspaceId, pending.value?.agentSessionId))
 
 const operationApprovalAvailable = computed(() => {
   const input = pending.value?.toolInput
@@ -120,7 +122,7 @@ const error = ref<string | null>(null)
 const collapsed = ref(false)
 
 watch(
-  () => pending.value?.toolCallId ?? null,
+  () => `${pending.value?.agentSessionId}:${pending.value?.toolCallId}`,
   () => {
     submitting.value = false
     error.value = null
@@ -133,8 +135,10 @@ async function decide(
   scope: 'once' | 'turn' | 'operation' | 'tool' = 'once',
 ): Promise<void> {
   if (!pending.value) return
+  if (reviewer.value && scope !== 'once') return
   if (scope === 'operation' && !operationApprovalAvailable.value) return
   if (submitting.value) return
+  const target = pending.value
   submitting.value = true
   error.value = null
   try {
@@ -144,11 +148,12 @@ async function decide(
       decision,
       decision === 'deny' ? t('permissionRequest.denied') : undefined,
       scope,
+      pending.value.agentSessionId,
     )
   } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e)
+    if (pending.value === target) error.value = e instanceof Error ? e.message : String(e)
   } finally {
-    submitting.value = false
+    if (pending.value === target) submitting.value = false
   }
 }
 </script>

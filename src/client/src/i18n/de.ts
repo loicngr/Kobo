@@ -1,4 +1,23 @@
 export default {
+  'parallelReview.planHint':
+    'Für diese parallele Prüfung ist der Plan-Modus erforderlich. Die Berechtigungen des Hauptagenten bleiben unverändert.',
+  'parallelReview.returnHint':
+    'Wenn aktiviert, wird der Bericht an die Ursprungssitzung gesendet, sobald eine sichere Zustellung möglich ist. Andernfalls bleibt er in der Prüfung.',
+  'parallelReview.title': 'Parallele Prüfung',
+  'parallelReview.newSessionHint':
+    'Eine neue Sitzung ist erforderlich: Die Prüfung liest die aktuellen Dateien, während der Hauptagent weiterarbeitet.',
+  'parallelReview.reviewing': 'Prüfung läuft.',
+  'parallelReview.closing': 'Bericht gespeichert. Warten auf das Schließen der Prüfung.',
+  'parallelReview.ready': 'Bericht bereit: Warten auf sichere Zustellung an die Ursprungssitzung.',
+  'parallelReview.dispatching': 'Bericht wird zurückgesendet.',
+  'parallelReview.unknown': 'Zustellung ungewiss: Der Bericht wurde möglicherweise bereits empfangen.',
+  'parallelReview.blocked': 'Rückgabe blockiert. Der Bericht bleibt erhalten.',
+  'parallelReview.completed': 'Prüfung abgeschlossen.',
+  'parallelReview.interrupted': 'Prüfung unterbrochen.',
+  'parallelReview.open': 'Prüfung öffnen',
+  'parallelReview.stop': 'Prüfung stoppen',
+  'parallelReview.closed': 'Diese Prüfung ist geschlossen. Starten Sie eine neue Prüfung, um fortzufahren.',
+  'parallelReview.awaitingInput': 'Eine Antwort in der Prüfungssitzung ist erforderlich.',
   'review.mistralAutomaticHint':
     'Automatische Abschlussprüfungen verwenden immer Interaktiv und können auf eine menschliche Genehmigung warten.',
   'review.mistralNativeHint':
@@ -1179,6 +1198,15 @@ export default {
   'settings.archiveScriptHint':
     'Shell-Skript, das serverseitig im Worktree ausgeführt wird, wenn ein Workspace archiviert wird. Leer lassen zum Deaktivieren.',
   'settings.archiveScriptPlaceholder': 'z. B. Container aufräumen, Speicherplatz freigeben…',
+  'settings.serializeDevServerStarts': 'Nur einen Entwicklungsserver gleichzeitig starten',
+  'settings.serializeDevServerStartsHint':
+    'Starts warten, bis der vorherige Server bereit ist. Laufende Server können gleichzeitig aktiv bleiben.',
+  'settings.maxRunningDevServers': 'Maximale Anzahl aktiver Entwicklungsserver',
+  'settings.maxRunningDevServersHint':
+    'Zählt laufende und startende Server. 0 = unbegrenzt. Eine niedrigere Grenze stoppt bestehende Server nicht.',
+  'settings.maxRunningDevServersInvalid': 'Geben Sie eine ganze Zahl größer oder gleich 0 ein.',
+  'devServer.queued': 'In Warteschlange',
+  'devServer.cancelQueued': 'Wartenden Start abbrechen',
   'settings.stopDevServersOnShutdown': 'Entwicklungsserver beim Beenden von Kōbō stoppen',
   'settings.stopDevServersOnShutdownHint':
     'Standardmäßig aktiviert. Deaktivieren, um Docker-Container bei Updates weiterlaufen zu lassen. Lokale Prozesse werden immer beendet. Shutdown-Skripte werden weiterhin ausgeführt.',

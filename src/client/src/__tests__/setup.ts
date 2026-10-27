@@ -6,25 +6,14 @@ import { beforeEach } from 'vitest'
 // test that needs Quasar components should pass `global.plugins` to mount(),
 // or use simple stubs. For most of our component tests we just need Pinia.
 
-// Stub localStorage for tests that read/write it at module init time
-if (typeof localStorage === 'undefined') {
-  const store: Record<string, string> = {}
-  globalThis.localStorage = {
-    getItem: (k: string) => store[k] ?? null,
-    setItem: (k: string, v: string) => {
-      store[k] = v
-    },
-    removeItem: (k: string) => {
-      delete store[k]
-    },
-    clear: () => {
-      for (const k of Object.keys(store)) delete store[k]
-    },
-    length: 0,
-    key: () => null,
-  }
+// Use happy-dom storage without invoking Node's experimental localStorage getter.
+if (typeof window !== 'undefined') {
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: window.localStorage,
+  })
 }
 
 beforeEach(() => {
-  localStorage.clear()
+  if (typeof window !== 'undefined') window.localStorage.clear()
 })

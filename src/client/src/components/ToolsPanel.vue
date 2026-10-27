@@ -98,7 +98,7 @@
         class="full-width q-mb-xs"
         @click="reviewDialogOpen = true"
       >
-        <q-tooltip>{{ isAgentBusy ? $t('tools.reviewBusy') : $t('tools.reviewTooltip') }}</q-tooltip>
+        <q-tooltip>{{ $t('tools.reviewTooltip') }}</q-tooltip>
       </q-btn>
       </ActionAvailability>
 
@@ -154,6 +154,7 @@
       :loading="startingReview"
       :workspace="workspace"
       :current-session="currentSession"
+      :parallel="parallel"
       :can-return-to-session="canReturnToSession"
       @submit="startReview"
     />
@@ -168,6 +169,7 @@ import DevServerPanel from 'src/components/DevServerPanel.vue'
 import EngineSwitchButton from 'src/components/EngineSwitchButton.vue'
 import SessionHandoffStatus from 'src/components/SessionHandoffStatus.vue'
 import StartReviewDialog from 'src/components/StartReviewDialog.vue'
+import { useParallelReviewStore } from 'src/stores/parallel-review'
 import { useSessionHandoffStore } from 'src/stores/session-handoff'
 import { useSettingsStore } from 'src/stores/settings'
 import { useWorkspaceStore, type Workspace } from 'src/stores/workspace'
@@ -219,6 +221,21 @@ const openingFileManager = ref(false)
 const openingTerminal = ref(false)
 const reviewDialogOpen = ref(false)
 const startingReview = ref(false)
+const parallelReviews = useParallelReviewStore()
+const parallel = computed(
+  () =>
+    !!workspaceStore.activeAgentSessionIds[workspaceId.value] ||
+    !!workspaceStore.agentLiveness[workspaceId.value] ||
+    currentSession.value?.status === 'running' ||
+    isAgentBusy.value,
+)
+watch(
+  () => props.workspace?.id,
+  (id) => {
+    reviewDialogOpen.value = false
+    if (id) void parallelReviews.fetchStatus(id).catch(() => {})
+  },
+)
 const fixingCi = ref(false)
 const currentSession = computed(() => {
   return getCurrentSession(
@@ -269,8 +286,13 @@ const setupBlocker = computed(() =>
 const reviewBlocker = computed(() =>
   getActionBlocker({
     ...baseBlockerContext.value,
-    operation: startingReview.value || handoffs.isBlocking(workspaceId.value),
-    agentBusy: isAgentBusy.value,
+    operation:
+      startingReview.value ||
+      running.value ||
+      handoffs.isBlocking(workspaceId.value) ||
+      ['reviewing', 'closing', 'ready', 'dispatching', 'unknown', 'blocked'].includes(
+        parallelReviews.statuses[workspaceId.value]?.phase ?? '',
+      ),
   }),
 )
 const ciBlocker = computed(() =>
@@ -407,9 +429,11 @@ async function startCiFix() {
 
 async function startReview(payload: StartReviewRequest) {
   if (startingReview.value || reviewBlocker.value || !workspaceId.value) return
+  const id = workspaceId.value
+  const selected = workspaceStore.selectedSessionId
   startingReview.value = true
   try {
-    const res = await apiFetchResponse(`/api/workspaces/${workspaceId.value}/start-review`, {
+    const res = await apiFetchResponse(`/api/workspaces/${id}/start-review`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -425,7 +449,21 @@ async function startReview(payload: StartReviewRequest) {
       return
     }
     $q.notify({ type: 'positive', message: t('review.launched'), position: 'top', timeout: 3000 })
-    reviewDialogOpen.value = false
+    if (data.parallel && data.sessionId) parallelReviews.remember(id, data.sessionId)
+    await parallelReviews.fetchStatus(id).catch(() => {})
+    if (
+      workspaceId.value === id &&
+      workspaceStore.selectedWorkspaceId === id &&
+      workspaceStore.selectedSessionId === selected
+    ) {
+      reviewDialogOpen.value = false
+      const status = parallelReviews.statuses[id]
+      const target =
+        status && status.reviewSessionId === data.sessionId && status.phase === 'completed' && status.returnToSession
+          ? status.originalSessionId
+          : data.sessionId
+      await workspaceStore.fetchSessions(id, target)
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : t('review.failed')
     $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 0 })

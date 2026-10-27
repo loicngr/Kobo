@@ -1666,12 +1666,33 @@ where ffmpeg</pre>
               <ScriptVariablesHelp />
             </div>
 
-            <!-- Lifecycle hook: shutdown -->
-            <div v-if="activeTab === 'scripts'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md" data-tour="settings-shutdown">
-              <div class="q-mb-md">
+            <!-- Dev server -->
+            <q-card v-if="activeTab === 'scripts'" dark flat class="settings-subcard q-pa-md" data-test="dev-server-settings">
+              <div class="text-subtitle2 q-mb-md">{{ $t('settings.devServer') }}</div>
+              <div class="q-mb-md" data-test="dev-server-admission">
+                <q-toggle v-model="globalSerializeDevServerStarts" :label="$t('settings.serializeDevServerStarts')" color="primary" />
+                <div class="text-caption text-kobo-3 q-mt-xs q-mb-md">{{ $t('settings.serializeDevServerStartsHint') }}</div>
+                <q-input
+                  v-model.number="globalMaxRunningDevServers"
+                  type="number"
+                  min="0"
+                  step="1"
+                  :label="$t('settings.maxRunningDevServers')"
+                  :hint="$t('settings.maxRunningDevServersHint')"
+                  :rules="[() => maxRunningDevServersValid || $t('settings.maxRunningDevServersInvalid')]"
+                  dense
+                  dark
+                  outlined
+                />
+              </div>
+              <div>
                 <q-toggle v-model="globalStopDevServersOnShutdown" :label="$t('settings.stopDevServersOnShutdown')" color="primary" />
                 <div class="text-caption text-kobo-3 q-mt-xs">{{ $t('settings.stopDevServersOnShutdownHint') }}</div>
               </div>
+            </q-card>
+
+            <!-- Lifecycle hook: shutdown -->
+            <div v-if="activeTab === 'scripts'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md" data-tour="settings-shutdown">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.hook.shutdownTitle') }}</div>
               <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.hook.shutdownHint') }}</div>
               <q-input
@@ -2995,6 +3016,14 @@ const globalAutoLoopMaxRetries = ref(5)
 const globalAgentWatchdogEnabled = ref(false)
 const globalForceImmediateMessages = ref(false)
 const globalShowProgressBars = ref(true)
+const globalSerializeDevServerStarts = ref(true)
+const globalMaxRunningDevServers = ref<number | string | null>(0)
+const maxRunningDevServersValid = computed(
+  () =>
+    typeof globalMaxRunningDevServers.value === 'number' &&
+    Number.isSafeInteger(globalMaxRunningDevServers.value) &&
+    globalMaxRunningDevServers.value >= 0,
+)
 const globalStopDevServersOnShutdown = ref(true)
 const globalAwaitingUserReminderMinutes = ref(0)
 const globalActivityDigestEnabled = ref(true)
@@ -4095,6 +4124,8 @@ function readGlobalForm(): Record<string, unknown> {
     agentWatchdogEnabled: globalAgentWatchdogEnabled.value,
     forceImmediateMessages: globalForceImmediateMessages.value,
     showProgressBars: globalShowProgressBars.value,
+    serializeDevServerStarts: globalSerializeDevServerStarts.value,
+    maxRunningDevServers: globalMaxRunningDevServers.value,
     stopDevServersOnShutdown: globalStopDevServersOnShutdown.value,
     awaitingUserReminderMinutes: globalAwaitingUserReminderMinutes.value,
     activityDigestEnabled: globalActivityDigestEnabled.value,
@@ -4237,6 +4268,8 @@ function syncGlobalForm() {
   globalAgentWatchdogEnabled.value = store.global.agentWatchdogEnabled === true
   globalForceImmediateMessages.value = store.global.forceImmediateMessages === true
   globalShowProgressBars.value = store.global.showProgressBars !== false
+  globalSerializeDevServerStarts.value = store.global.serializeDevServerStarts !== false
+  globalMaxRunningDevServers.value = store.global.maxRunningDevServers ?? 0
   globalStopDevServersOnShutdown.value = store.global.stopDevServersOnShutdown !== false
   globalAwaitingUserReminderMinutes.value = store.global.awaitingUserReminderMinutes ?? 0
   globalActivityDigestEnabled.value = store.global.activityDigestEnabled ?? true
@@ -4600,6 +4633,10 @@ async function confirmRetentionReduction(): Promise<boolean> {
 }
 
 async function saveGlobal() {
+  if (!maxRunningDevServersValid.value) {
+    $q.notify({ type: 'negative', message: t('settings.maxRunningDevServersInvalid') })
+    return
+  }
   if (!maxConcurrentAgentsValid.value) {
     $q.notify({ type: 'negative', message: t('settings.maxConcurrentAgentsInvalid') })
     return
@@ -4632,6 +4669,8 @@ async function saveGlobal() {
       agentWatchdogEnabled: globalAgentWatchdogEnabled.value,
       forceImmediateMessages: globalForceImmediateMessages.value,
       showProgressBars: globalShowProgressBars.value,
+      serializeDevServerStarts: globalSerializeDevServerStarts.value,
+      maxRunningDevServers: globalMaxRunningDevServers.value as number,
       stopDevServersOnShutdown: globalStopDevServersOnShutdown.value,
       awaitingUserReminderMinutes: globalAwaitingUserReminderMinutes.value,
       activityDigestEnabled: globalActivityDigestEnabled.value,

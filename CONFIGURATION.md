@@ -236,6 +236,8 @@ Projects override a subset of global settings. Anything you set here takes prece
 | `forge` | `'auto' \| 'github' \| 'gitlab' \| 'bitbucket-community' \| 'none'` | Which forge provides PR/MR features. `auto` detects from the git remote URL. See [Forge integration](#forge-integration). |
 | `devServer.startCommand` / `stopCommand` | `string` | Per-workspace dev server commands. Docker, npm, or any shell-startable process. See [Dev server](#dev-server) for the status/URL contract. |
 | `stopDevServersOnShutdown` | `boolean` | Global, default `true`. Disable to leave Docker services running when Kōbō exits or updates. Tracked local processes always stop. Explicit Stop and workspace teardown still stop services. |
+| `serializeDevServerStarts` | `boolean` | Global, default `true`. Only one workspace starts its development server at a time; already running servers can coexist. |
+| `maxRunningDevServers` | `number` | Global, default `0` (unlimited). Caps the number of workspaces with running or starting development servers. Additional starts wait in the queue. |
 | `shutdownScript` | `string` | Optional global/per-project shutdown hook, run in each existing workspace worktree before automatic Docker teardown. Empty project value inherits; whitespace disables. See [Kōbō shutdown](#kōbō-shutdown). |
 | `e2e.framework` | `'cypress' \| 'playwright' \| 'jest' \| 'vitest' \| 'other' \| ''` | E2E framework auto-loop grooming should target. |
 | `e2e.skill` | `string` | Optional skill name injected into the E2E grooming prompt. |
@@ -656,7 +658,37 @@ above.
 
 The workspace's **Start review** dialog offers engine (Claude Code, Codex or Mistral Vibe),
 model, reasoning effort and permission mode using the same catalogues as workspace
-creation. The current workspace settings are selected initially. Changing any of
+creation. The current workspace settings are selected initially.
+
+When the main agent is running, the review starts alongside it in a separate
+session. **New session** is forced, and Claude Code/Codex use locked **Plan**
+permissions. Vibe keeps native permissions (Interactive by default), with
+read-only Kōbō tools; this does not guarantee filesystem read-only access.
+The main agent keeps running with its existing settings. The reviewer reads the
+live worktree: files can change during the review, so its report describes that
+uncertainty. The session picker distinguishes the reviewer from the main agent;
+its chat, questions, permissions and subagents stay in that conversation.
+
+The return toggle is available in parallel mode too. With it enabled, the final
+report goes to the exact main session captured when review started; the receiving
+agent summarizes and waits for instructions before fixes. With it disabled, the
+report stays in the review conversation and the main session remains unchanged.
+The report is saved before native shutdown. During `closing`, targeted **Stop**
+remains available, chat is disabled and no return is dispatched. Once the native
+reviewer closes, the report becomes ready for delivery (or completed without return).
+After a restart, an already saved closing report remains eligible for that return.
+Explicitly resuming the captured source preserves its saved engine configuration
+when the workspace default engine has changed; new sessions keep the workspace defaults.
+The review panel shows progress and any return error. A ready, blocked or uncertain
+return offers explicit retry/cancel controls; inspect the source conversation
+before retrying an uncertain delivery. Restarting Kōbō interrupts a running
+parallel review and preserves its history; a return in flight becomes uncertain.
+**Close** on a completed/interrupted banner remembers that choice locally across
+reloads for that review, without deleting its report. The reviewer view hides
+selective subagent stop; **Stop** still stops the whole reviewer without stopping
+the main agent.
+
+When the main agent is idle, reviews use the sequential behavior below. Changing any of
 these settings automatically enables and locks **New session**; with unchanged
 settings Claude Code/Codex can continue the current session or start a fresh one explicitly.
 Mistral Vibe reviews always use a fresh session and default to native **Interactive**
@@ -1791,6 +1823,12 @@ rules survive restarts and can be removed from the workspace's permission UI.
 
 Each workspace can run its own dev server. The **Tools** panel shows its status, a clickable URL, the live container count, and a logs button. That works only when your project follows a small contract. This section documents the contract so the panel lights up for *your* project, not just Docker-instance projects.
 
+The **Dev server** card stays visible even while the agent is running or a review
+session is selected. Start/stop and logs belong to the workspace, independently
+of the conversation being viewed. Stop cancels a queued start; starting, queued
+and stopping states are shown explicitly. Archived or purged workspaces disable
+start/stop, and a missing start command links to Settings.
+
 For remote installations, `localhost` in that link is the browser's computer.
 See [VPS dev-server access](./docs/vps-projects-and-skills.md#reach-a-development-server-from-your-pc)
 for SSH forwarding, separate proxy routes and scoped stop/cleanup commands.
@@ -1816,6 +1854,24 @@ status instead. Without a start command, the route returns `not_configured`.
 
 ### 1. Configure start / stop commands
 
+In **Settings → Scripts**, development-server admission has two independent
+settings. **Start development servers one at a time** is enabled by default.
+**Maximum running development servers** defaults to **0 (unlimited)** and counts
+both running and starting workspaces, not individual Docker containers.
+
+Waiting starts appear as **Queued** in the Tools panel and start in request order
+when capacity becomes available. The Stop button cancels a queued start. Stopping
+a server releases its capacity after shutdown is confirmed. Lowering the limit
+does not stop existing servers; raising it or disabling sequential startup
+reconsiders the queue immediately. Pending starts are cancelled when Kōbō exits.
+
+For direct processes, the existing recognized readiness announcement releases
+the startup slot. For Docker scripts, the start process and its process group
+must finish before matching running containers release that slot. A script that
+keeps following logs can therefore keep subsequent starts waiting; use
+`DEV_DOCKER_NO_FOLLOW` as described below. This scheduling state does not replace
+application health checks.
+
 In **Settings → (project) → Dev server**, set:
 
 | Field | Purpose |
@@ -1828,7 +1884,7 @@ How Kōbō runs them:
 - `startCommand` runs as `bash -c "<command>"`, detached, with the working directory set to the workspace **worktree** (falling back to the project root).
 - It runs with two extra environment variables injected:
   - `INSTANCE`: the workspace branch name, sanitized: lowercased, with `/` and `_` replaced by `-`. Example: branch `feature/My_Thing` → `INSTANCE=feature-my-thing`.
-  - `DEV_DOCKER_NO_FOLLOW=1`: a hint that a Docker setup script should exit after starting its containers instead of following logs. A tracked start process reports `starting` when an instance file exists but no matching container is running yet; once containers appear, Docker status takes precedence.
+  - `DEV_DOCKER_NO_FOLLOW=1`: a hint that a Docker setup script should exit after starting its containers instead of following logs. While startup is tracked, the workspace remains `starting` even if some containers are already visible. After startup finishes, matching containers report `running`.
 - `stopCommand` runs with `INSTANCE` and `PROJECT_NAME` in the environment. After it, Kōbō also unconditionally runs `docker compose -p <PROJECT_NAME> down` if a `PROJECT_NAME` was resolved, so a Docker project does not strictly need a `stopCommand` at all.
 
 ### 2. Docker status — the `.container/instances` contract
@@ -2586,7 +2642,7 @@ as failures, with safe diagnostics; authentication/permission errors never justi
 modifying credentials or Kōbō storage to bypass the tools. Ambiguous mutation
 outcomes require checking available status/receipts before retrying.
 
-Plan launches remain conversation-only. Writable auto-loop launches prepare the plan and task list before returning control to the loop; writable manual launches implement after plan approval, under the configured Git policy. Custom brainstorming, Notion and Sentry templates are preserved; they cannot expand launch permissions or authorize commits automatically. Returning Claude Code/Codex reviewers and handoff reports remain in read-only Plan mode. Vibe reviewers use native permissions (Interactive by default, fixed Interactive for automatic final reviews), which may require human approval and do not guarantee filesystem read-only access. These restricted review/report launches restrict Kōbō grants to reads, scoped reports and operational progress; review instructions forbid modifications. Plan approval does not change permissions; explicitly select an execution mode in Kōbō and start a new launch to implement.
+Plan launches remain conversation-only and request no status/task mutation. Writable manual launches call `set_workspace_status({status: "executing"})` after planning and before implementation, under the configured Git policy. Writable auto-loop launches prepare the plan and task list, successfully call `mark_auto_loop_ready`, then request the same status transition and end naturally without implementation. The loop starts its next iteration only after the native session closes; the status change itself does not switch models. The old `[BRAINSTORM_COMPLETE]` marker remains supported for historical conversations. Custom brainstorming, Notion and Sentry templates are preserved; they cannot expand launch permissions or authorize commits automatically. Returning and parallel Claude Code/Codex reviewers and handoff reports remain in read-only Plan mode. Vibe reviewers use native permissions (Interactive by default, fixed Interactive for automatic final reviews), which may require human approval and do not guarantee filesystem read-only access. These restricted review/report launches restrict Kōbō grants to reads, scoped reports and operational progress; review instructions forbid modifications. Plan approval does not change permissions; explicitly select an execution mode in Kōbō and start a new launch to implement.
 
 The expandable **Kōbō instructions** chat entry records the application-owned text prepared by the engine builder for the initial launch or a pending initial-prompt retry, including progress guidance, continuation rules, workflow policy and managed integration notices. The pending initial mission is retained until this entry is durably recorded, so a failure during asynchronous launch preparation remains retryable. A later replacement mission is never cleared by an earlier launch. Preparation is not proof of provider delivery. The provider's own system preset is not included. Retrieved memory bodies and capability tokens are not copied to chat; memory usage remains visible separately in the Memory panel. Existing historical prompt entries retain their original content. Ordinary resumes receive current instructions without creating another initial-prompt entry.
 

@@ -15,6 +15,22 @@ const branch = {
     'Current exact working branch name, from get_workspace. Required for every deletion, like the UI confirmation.',
 }
 
+export const SET_WORKSPACE_STATUS_TOOL: Tool = {
+  name: 'set_workspace_status',
+  description:
+    'Update a workspace business status using the same transitions and lifecycle guards as the UI. Does not change agent permissions, start/stop an agent or enable auto-loop. Cannot clear ongoing compaction or mark a live agent idle.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      workspace_id: workspaceId,
+      status: { type: 'string', enum: ['brainstorming', 'executing', 'awaiting-user', 'completed', 'idle', 'error'] },
+    },
+    required: ['workspace_id', 'status'],
+    additionalProperties: false,
+  },
+  annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+}
+
 export const WORKSPACE_LIFECYCLE_TOOLS: Tool[] = [
   {
     name: 'archive_workspace',
@@ -82,6 +98,7 @@ export const WORKSPACE_LIFECYCLE_TOOLS: Tool[] = [
     },
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
   },
+  SET_WORKSPACE_STATUS_TOOL,
 ]
 
 export function isWorkspaceLifecycleTool(name: string): boolean {
@@ -96,7 +113,7 @@ export function validateWorkspaceLifecycleArguments(name: string, raw: unknown):
   const input = raw as Record<string, unknown>
   const properties = tool.inputSchema.properties as Record<
     string,
-    { type: string; const?: boolean; maxLength?: number }
+    { type: string; const?: boolean; maxLength?: number; enum?: string[] }
   >
   for (const required of tool.inputSchema.required ?? [])
     if (!Object.hasOwn(input, required)) throw new Error(`${required} is required`)
@@ -109,7 +126,8 @@ export function validateWorkspaceLifecycleArguments(name: string, raw: unknown):
     } else if (
       typeof value !== 'string' ||
       !value.trim() ||
-      value.length > definition.maxLength! ||
+      (definition.maxLength !== undefined && value.length > definition.maxLength) ||
+      (definition.enum !== undefined && !definition.enum.includes(value)) ||
       /[\0\r\n]/.test(value)
     )
       throw new Error(`Invalid ${key}`)

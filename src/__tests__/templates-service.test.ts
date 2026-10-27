@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -453,6 +454,42 @@ describe('templates-service', () => {
 })
 
 describe('public release template migration', () => {
+  it('preserves a custom constructor template across reads and later mutations', async () => {
+    const { createTemplate, listTemplates } = await import('../server/services/templates-service.js')
+    const custom = createTemplate({ slug: 'constructor', description: 'My template', content: 'My instructions' })
+    expect(listTemplates().find((template) => template.slug === custom.slug)).toEqual(custom)
+    createTemplate({ slug: 'another-template', description: 'Another template', content: 'Other instructions' })
+    expect(listTemplates().find((template) => template.slug === custom.slug)).toEqual(custom)
+  })
+
+  it('upgrades only the unchanged marker-based context seed and keeps Plan read-only', async () => {
+    const { listTemplates, DEFAULT_TEMPLATES } = await import('../server/services/templates-service.js')
+    const current = DEFAULT_TEMPLATES.find((entry) => entry.slug === 'kobo-context')!
+    const content = current.content.replace(
+      '1. **Brainstorming** — scope and plan; if execution is authorized, call `kobo__set_workspace_status` with `status: "executing"`; Plan stays read-only',
+      '1. **Brainstorming** — you scope the work, output a plan, end with the literal marker `[BRAINSTORM_COMPLETE]`',
+    )
+    expect(createHash('sha256').update(content).digest('hex')).toBe(
+      '0dba74406f1090025004cdd77d9e9c793c542eebde8c2b87b73697c18c739dcb',
+    )
+    const row = { ...current, content, description: 'My context', createdAt: '2020-01-01', updatedAt: '2020-01-01' }
+    const write = (value: typeof row) =>
+      fs.writeFileSync(tmpFile, JSON.stringify({ version: 2, templates: [value], seededDefaultSlugs: [row.slug] }))
+    write(row)
+    const upgraded = listTemplates()[0]!
+    expect(upgraded.content).toContain('kobo__set_workspace_status')
+    expect(upgraded.content).toContain('if execution is authorized')
+    expect(upgraded.content).toContain('Plan stays read-only')
+    expect(upgraded.content).not.toContain('[BRAINSTORM_COMPLETE]')
+    expect(upgraded.content.length).toBeLessThanOrEqual(4096)
+    expect(upgraded.description).toBe(row.description)
+    expect(upgraded.createdAt).toBe(row.createdAt)
+    expect(listTemplates()[0]).toEqual(upgraded)
+    const custom = { ...row, content: `${content}\nMy instructions` }
+    write(custom)
+    expect(listTemplates()).toEqual([custom])
+  })
+
   it('upgrades shipped text once while preserving custom text, descriptions and deletions', async () => {
     const { listTemplates, DEFAULT_TEMPLATES } = await import('../server/services/templates-service.js')
     const legacy = {

@@ -197,7 +197,7 @@ const store = useWorkspaceStore()
 // Render only when the head is a question — permission heads are handled by
 // the sibling PermissionRequestPanel.
 const pending = computed(() => {
-  const head = store.peekPending(props.workspaceId)
+  const head = store.peekPending(props.workspaceId, store.selectedSessionId)
   if (head?.kind !== 'question') return undefined
   return head
 })
@@ -310,6 +310,7 @@ function goPrev(): void {
 
 async function submit(): Promise<void> {
   if (submitting.value || !allFilled.value) return
+  const target = pending.value
   submitting.value = true
   error.value = null
   try {
@@ -344,16 +345,18 @@ async function submit(): Promise<void> {
       false,
       undefined,
       Object.keys(selections).length ? selections : undefined,
+      pending.value?.agentSessionId,
     )
   } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e)
+    if (pending.value === target) error.value = e instanceof Error ? e.message : String(e)
   } finally {
-    submitting.value = false
+    if (pending.value === target) submitting.value = false
   }
 }
 
 async function cancel(): Promise<void> {
   if (submitting.value) return
+  const target = pending.value
   submitting.value = true
   error.value = null
   try {
@@ -361,11 +364,12 @@ async function cancel(): Promise<void> {
       props.workspaceId,
       'User cancelled the question via the UI',
       pending.value?.toolCallId,
+      pending.value?.agentSessionId,
     )
   } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e)
+    if (pending.value === target) error.value = e instanceof Error ? e.message : String(e)
   } finally {
-    submitting.value = false
+    if (pending.value === target) submitting.value = false
   }
 }
 </script>

@@ -100,7 +100,15 @@ const store = useWorkspaceStore()
 
 const subagents = computed(() => [...store.currentSubagents].reverse())
 
-const canStop = computed(() => supportsSubagentStop(store.selectedWorkspace?.engine))
+const canStop = computed(
+  () =>
+    !store.isParallelReviewSession(store.selectedWorkspaceId ?? '', store.selectedSessionId) &&
+    supportsSubagentStop(
+      store.sessions.find(
+        (session) => session.id === store.selectedSessionId && session.workspaceId === store.selectedWorkspaceId,
+      )?.engine ?? store.selectedWorkspace?.engine,
+    ),
+)
 // Ambient watchers included: Stop all also stops them.
 const hasRunning = computed(() => subagents.value.some((sa) => sa.status === 'running'))
 

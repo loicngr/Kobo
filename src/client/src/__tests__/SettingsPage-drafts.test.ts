@@ -234,7 +234,9 @@ describe('settings drafts', () => {
     const { wrapper, store, tab, vm } = await setup()
     await tab('scripts')
     const controls = () => [
-      wrapper.getComponent<typeof Field>('[data-tour="settings-shutdown"] .q-mb-md input'),
+      wrapper.getComponent<typeof Field>(
+        '[data-test="dev-server-settings"] input[aria-label="Stop development servers when Kōbō exits"]',
+      ),
       wrapper.getComponent<typeof Field>('[data-tour="settings-shutdown"] > input'),
     ]
     expect(controls()[0]!.props('modelValue')).toBe(true)
@@ -256,6 +258,48 @@ describe('settings drafts', () => {
     await flushPromises()
     expect(controls()[0]!.props('modelValue')).toBe(false)
     expect(controls()[1]!.props('modelValue')).toBe('echo stopping')
+  })
+
+  it('saves development-server admission and restores the persisted draft', async () => {
+    const { wrapper, store, tab, vm } = await setup()
+    await tab('scripts')
+    const controls = () => wrapper.findAllComponents<typeof Field>('[data-test="dev-server-admission"] input')
+    expect(controls()[0]!.props('modelValue')).toBe(true)
+    expect(controls()[1]!.props('modelValue')).toBe(0)
+    controls()[0]!.vm.$emit('update:modelValue', false)
+    controls()[1]!.vm.$emit('update:modelValue', 3)
+    await flushPromises()
+    expect(hasUnsavedWork()).toBe(true)
+    await vm.savebarSave()
+    await flushPromises()
+    expect(api).toHaveBeenCalledWith(
+      '/api/settings/global',
+      expect.objectContaining({
+        body: expect.objectContaining({ serializeDevServerStarts: false, maxRunningDevServers: 3 }),
+      }),
+    )
+    expect(store.global.serializeDevServerStarts).toBe(false)
+    expect(store.global.maxRunningDevServers).toBe(3)
+    vm.syncGlobalForm()
+    await flushPromises()
+    expect(controls()[0]!.props('modelValue')).toBe(false)
+    expect(controls()[1]!.props('modelValue')).toBe(3)
+  })
+
+  it.each([-1, 1.5, '', null])('rejects invalid development-server capacity %s', async (value) => {
+    const { wrapper, tab, vm } = await setup()
+    await tab('scripts')
+    wrapper
+      .findAllComponents<typeof Field>('[data-test="dev-server-admission"] input')[1]!
+      .vm.$emit('update:modelValue', value)
+    await flushPromises()
+    api.mockClear()
+    await vm.savebarSave()
+    await flushPromises()
+    expect(api).not.toHaveBeenCalledWith('/api/settings/global', expect.anything())
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'negative', message: en['settings.maxRunningDevServersInvalid'] }),
+    )
   })
 
   it('saves immediate chat delivery and restores the persisted preference', async () => {

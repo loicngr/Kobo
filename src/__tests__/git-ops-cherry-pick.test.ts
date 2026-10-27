@@ -76,11 +76,7 @@ describe('cherry-pick conflict infrastructure', () => {
     g(repo, ['checkout', '-q', 'main'])
     writeFileSync(join(repo, 'f.txt'), 'main\n')
     g(repo, ['commit', '-q', '-am', 'main change'])
-    try {
-      execFileSync('git', ['cherry-pick', featureSha], { cwd: repo })
-    } catch {
-      // expected to conflict
-    }
+    expect(() => execFileSync('git', ['cherry-pick', featureSha], { cwd: repo, stdio: 'pipe' })).toThrow()
     expect(getOngoingGitOperation(repo)).toBe('cherry-pick')
   })
 
@@ -92,11 +88,7 @@ describe('cherry-pick conflict infrastructure', () => {
     g(repo, ['checkout', '-q', 'main'])
     writeFileSync(join(repo, 'f.txt'), 'main\n')
     g(repo, ['commit', '-q', '-am', 'main change'])
-    try {
-      execFileSync('git', ['cherry-pick', featureSha], { cwd: repo })
-    } catch {
-      // expected
-    }
+    expect(() => execFileSync('git', ['cherry-pick', featureSha], { cwd: repo, stdio: 'pipe' })).toThrow()
     expect(abortOngoingGitOperation(repo)).toBe('cherry-pick')
     expect(getOngoingGitOperation(repo)).toBeNull()
   })
@@ -109,11 +101,7 @@ describe('cherry-pick conflict infrastructure', () => {
     g(repo, ['checkout', '-q', 'main'])
     writeFileSync(join(repo, 'f.txt'), 'main\n')
     g(repo, ['commit', '-q', '-am', 'main change'])
-    try {
-      execFileSync('git', ['cherry-pick', featureSha], { cwd: repo })
-    } catch {
-      // expected to conflict
-    }
+    expect(() => execFileSync('git', ['cherry-pick', featureSha], { cwd: repo, stdio: 'pipe' })).toThrow()
 
     writeFileSync(join(repo, 'f.txt'), 'resolved\n')
     g(repo, ['add', 'f.txt'])

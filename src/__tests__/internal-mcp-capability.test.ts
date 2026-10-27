@@ -9,6 +9,9 @@ describe('managed MCP launch authorization', () => {
   it('rejects explicit mutations in ordinary Plan sessions', () => {
     const capability = createInternalMcpCapability({ workspaceId: 'own', sessionId: 'session', readOnly: true })
     expect(() => authorizeInternalMcpTool(capability.token, 'create_task', {})).toThrow(/read-only/)
+    expect(() => authorizeInternalMcpTool(capability.token, 'set_workspace_status', { status: 'executing' })).toThrow(
+      /read-only/,
+    )
     expect(() => authorizeInternalMcpTool(capability.token, 'delete_workspace', { workspace_id: 'other' })).toThrow(
       /read-only/,
     )
@@ -45,5 +48,8 @@ describe('managed MCP launch authorization', () => {
     expect(() => authorizeInternalMcpTool(cap.token, 'submit_final_review', {})).not.toThrow()
     expect(() => authorizeInternalMcpTool(cap.token, 'submit_session_handoff', {})).toThrow()
     expect(() => authorizeInternalMcpTool(cap.token, 'remember', {})).toThrow(/read-only/)
+    expect(() => authorizeInternalMcpTool(cap.token, 'set_workspace_status', { status: 'completed' })).toThrow(
+      /read-only/,
+    )
   })
 })

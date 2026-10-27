@@ -19,6 +19,7 @@
 </template>
 
 <script setup lang="ts">
+import { useParallelReviewStore } from 'src/stores/parallel-review'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { isBusyStatus, shouldWarnAgentNotRunning } from 'src/utils/workspace-status'
 import { computed, inject } from 'vue'
@@ -50,6 +51,15 @@ const runningSubagentCount = computed(() => store.currentBusySubagentCount)
 const isVisible = computed(() => {
   const ws = store.selectedWorkspace
   if (!ws) return false
+  if (store.isParallelReviewSession(ws.id, store.selectedSessionId)) {
+    const reviews = useParallelReviewStore()
+    const review = reviews.statuses[ws.id]
+    return (
+      review?.reviewSessionId === store.selectedSessionId &&
+      review.phase === 'reviewing' &&
+      !reviews.settled[review.reviewSessionId]
+    )
+  }
   if (!isBusyStatus(ws.status)) return false
   if (shouldWarnAgentNotRunning(ws.status, store.agentLivenessLoaded[ws.id] === true, ws.id in store.agentLiveness))
     return false

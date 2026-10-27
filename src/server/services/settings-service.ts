@@ -328,6 +328,9 @@ export interface GlobalSettings {
   forceImmediateMessages: boolean
   showProgressBars: boolean
   stopDevServersOnShutdown: boolean
+  serializeDevServerStarts: boolean
+  /** Running and starting development servers; 0 means unlimited. */
+  maxRunningDevServers: number
   /**
    * Minutes a workspace may sit in `awaiting-user` before Kōbō reminds you,
    * then again at every further interval. `0` disables the reminder entirely
@@ -1369,6 +1372,15 @@ const settingsMigrations: SettingsMigration[] = [
       }
     },
   },
+  {
+    version: 69,
+    name: 'development-server-admission',
+    migrate: ({ global }) => {
+      if (typeof global.serializeDevServerStarts !== 'boolean') global.serializeDevServerStarts = true
+      if (!Number.isSafeInteger(global.maxRunningDevServers) || (global.maxRunningDevServers as number) < 0)
+        global.maxRunningDevServers = 0
+    },
+  },
 ]
 
 /** Current settings schema version — always equals the highest migration version. */
@@ -1463,6 +1475,8 @@ function defaultSettings(): Settings {
       forceImmediateMessages: false,
       showProgressBars: true,
       stopDevServersOnShutdown: true,
+      serializeDevServerStarts: true,
+      maxRunningDevServers: 0,
       awaitingUserReminderMinutes: 0,
       activityDigestEnabled: true,
       maxConcurrentAgents: 2,
@@ -1623,6 +1637,9 @@ export function runSettingsMigrations(raw: Record<string, unknown>): Settings {
   if (typeof current.global.forceImmediateMessages !== 'boolean') current.global.forceImmediateMessages = false
   if (typeof current.global.showProgressBars !== 'boolean') current.global.showProgressBars = true
   if (typeof current.global.stopDevServersOnShutdown !== 'boolean') current.global.stopDevServersOnShutdown = true
+  if (typeof current.global.serializeDevServerStarts !== 'boolean') current.global.serializeDevServerStarts = true
+  if (!Number.isSafeInteger(current.global.maxRunningDevServers) || (current.global.maxRunningDevServers as number) < 0)
+    current.global.maxRunningDevServers = 0
   if (typeof current.global.shutdownScript !== 'string') current.global.shutdownScript = ''
   if (typeof current.global.agentWatchdogEnabled !== 'boolean') current.global.agentWatchdogEnabled = false
   for (const project of current.projects as Array<Record<string, unknown>>) {
@@ -2033,6 +2050,15 @@ export function updateGlobalSettings(input: Partial<GlobalSettings>): GlobalSett
   if ('stopDevServersOnShutdown' in data && typeof data.stopDevServersOnShutdown !== 'boolean') {
     delete (data as Record<string, unknown>).stopDevServersOnShutdown
   }
+  if ('serializeDevServerStarts' in data && typeof data.serializeDevServerStarts !== 'boolean') {
+    delete (data as Record<string, unknown>).serializeDevServerStarts
+  }
+  if (
+    'maxRunningDevServers' in data &&
+    (!Number.isSafeInteger(data.maxRunningDevServers) || data.maxRunningDevServers! < 0)
+  ) {
+    delete (data as Record<string, unknown>).maxRunningDevServers
+  }
   if ('forceImmediateMessages' in data && typeof data.forceImmediateMessages !== 'boolean') {
     delete (data as Record<string, unknown>).forceImmediateMessages
   }
@@ -2107,6 +2133,8 @@ export function updateGlobalSettings(input: Partial<GlobalSettings>): GlobalSett
     'forceImmediateMessages',
     'showProgressBars',
     'stopDevServersOnShutdown',
+    'serializeDevServerStarts',
+    'maxRunningDevServers',
     'awaitingUserReminderMinutes',
     'activityDigestEnabled',
     'maxConcurrentAgents',

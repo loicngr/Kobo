@@ -32,6 +32,8 @@ vi.mock('../server/services/agent/orchestrator.js', () => ({
   notifyCapacityAvailable: vi.fn(),
 }))
 
+vi.mock('../server/services/dev-server-service.js', () => ({ resumeQueuedDevServers: vi.fn() }))
+
 vi.mock('../server/db/index.js', () => ({
   getDb: vi.fn(() => ({
     name: '/tmp/kobo-custom-db/kobo.db',
@@ -47,6 +49,7 @@ vi.mock('../server/services/ws-events-retention-worker-service.js', () => ({
 
 import router from '../server/routes/settings.js'
 import { notifyCapacityAvailable } from '../server/services/agent/orchestrator.js'
+import { resumeQueuedDevServers } from '../server/services/dev-server-service.js'
 import * as settingsService from '../server/services/settings-service.js'
 import { previewWsEventsRetention } from '../server/services/ws-events-retention-worker-service.js'
 import { MASKED_SECRET } from '../shared/consts.js'
@@ -593,4 +596,43 @@ describe('GET /api/settings/mcp', () => {
     expect(JSON.stringify(info)).not.toContain('never-in-metadata')
     expect(JSON.stringify(info)).not.toContain('untrusted.example')
   })
+})
+
+describe('development server admission settings', () => {
+  it.each([
+    { serializeDevServerStarts: 'true' },
+    { serializeDevServerStarts: null },
+    { maxRunningDevServers: -1 },
+    { maxRunningDevServers: 1.5 },
+    { maxRunningDevServers: '2' },
+    { maxRunningDevServers: null },
+    { maxRunningDevServers: Number.MAX_SAFE_INTEGER + 1 },
+  ])('rejects invalid admission settings before writing: %j', async (patch) => {
+    const res = await app.request('/api/settings/global', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    })
+    expect(res.status).toBe(400)
+    expect(settingsService.updateGlobalSettings).not.toHaveBeenCalled()
+    expect(resumeQueuedDevServers).not.toHaveBeenCalled()
+  })
+
+  it.each([{ serializeDevServerStarts: false }, { maxRunningDevServers: 0 }, { maxRunningDevServers: 4 }])(
+    'rechecks queued starts after persisting limits: %j',
+    async (patch) => {
+      vi.mocked(settingsService.updateGlobalSettings).mockReturnValue(makeGlobalSettings(patch))
+      const res = await app.request('/api/settings/global', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      })
+      expect(res.status).toBe(200)
+      expect(settingsService.updateGlobalSettings).toHaveBeenCalledWith(patch)
+      expect(resumeQueuedDevServers).toHaveBeenCalledOnce()
+      expect(vi.mocked(settingsService.updateGlobalSettings).mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(resumeQueuedDevServers).mock.invocationCallOrder[0],
+      )
+    },
+  )
 })

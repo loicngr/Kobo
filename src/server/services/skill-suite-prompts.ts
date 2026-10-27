@@ -27,7 +27,7 @@ export interface SuitePrompts {
    *  {{branch_name}}, {{staging_url}}. Not auto-invoked anywhere. */
   qaPromptTemplate: string
   /** Instruction injected into the workspace bootstrap prompt — tells the
-   *  agent HOW to brainstorm + plan before announcing `[BRAINSTORM_COMPLETE]`.
+   *  agent HOW to brainstorm + plan before an authorized MCP status transition.
    *  Kept distinct from `reviewTemplate` because the brainstorming-phase
    *  workflow is suite-specific (e.g. superpowers:brainstorming →
    *  superpowers:writing-plans for one suite, /office-hours → /autoplan

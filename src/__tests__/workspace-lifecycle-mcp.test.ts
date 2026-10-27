@@ -7,6 +7,40 @@ const deletion = { workspace_id: workspaceId, confirm_delete: true, confirmation
 const response = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status })
 
 describe('MCP workspace lifecycle', () => {
+  it.each(['brainstorming', 'executing', 'awaiting-user', 'completed', 'idle', 'error'])(
+    'sets business status %s through PATCH with only the status field',
+    async (status) => {
+      const dispatch = vi.fn().mockResolvedValue(response({ id: workspaceId, status }))
+      expect(
+        await executeWorkspaceLifecycleTool('set_workspace_status', { workspace_id: workspaceId, status }, dispatch),
+      ).toEqual({ id: workspaceId, status })
+      expect(dispatch).toHaveBeenCalledExactlyOnceWith(`/api/workspaces/${workspaceId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
+      })
+    },
+  )
+  it.each(['created', 'extracting', 'compacting', 'quota', 'unknown', '', null])(
+    'rejects unavailable status %j before dispatch',
+    async (status) => {
+      const dispatch = vi.fn()
+      await expect(
+        executeWorkspaceLifecycleTool('set_workspace_status', { workspace_id: workspaceId, status }, dispatch),
+      ).rejects.toMatchObject({ status: 400, stage: 'validate' })
+      expect(dispatch).not.toHaveBeenCalled()
+    },
+  )
+  it.each([400, 404, 409])('preserves status update refusal %s', async (status) => {
+    const dispatch = vi.fn().mockResolvedValue(response({ error: 'Refused' }, status))
+    await expect(
+      executeWorkspaceLifecycleTool(
+        'set_workspace_status',
+        { workspace_id: workspaceId, status: 'executing' },
+        dispatch,
+      ),
+    ).rejects.toMatchObject({ status, stage: 'set-status' })
+  })
   it('unarchives through the existing route without starting an agent', async () => {
     const payload = { id: workspaceId, archivedAt: null }
     const dispatch = vi.fn().mockResolvedValue(response(payload))
@@ -222,6 +256,7 @@ describe('MCP workspace lifecycle', () => {
       'delete_workspace',
       'unarchive_workspace',
       'restore_workspace',
+      'set_workspace_status',
     ])
     expect(WORKSPACE_LIFECYCLE_TOOLS.every((tool) => tool.inputSchema.additionalProperties === false)).toBe(true)
     expect(() => validateWorkspaceLifecycleArguments('delete_all_workspaces', {})).toThrow('Unknown')

@@ -56,7 +56,7 @@ Leave `KOBO_WORKSPACE_ID` unset or empty for an external client. Set `KOBO_MCP_T
 | Tool | Arguments | Result |
 |---|---|---|
 | `get_workspace` | `workspace_id` | Workspace metadata, tasks and active/latest session. |
-| `list_workspace_sessions` | `workspace_id` | Workspace sessions with their IDs and status. |
+| `list_workspace_sessions` | `workspace_id` | Workspace sessions with their IDs, status and role (`primary` or `parallel-review`). |
 | `read_workspace_messages` | `workspace_id`, optional `session_id`, `after_cursor`, `limit` | Chronological conversation fragments, `nextCursor`, `hasMore`, `workspaceStatus`, `activeSessionId`. |
 | `send_workspace_message` | `workspace_id`, `content` and/or `attachments`, optional `session_id`, `idempotency_key` | `{ accepted: true, sessionId }`; keyed sends also return `requestId`, `eventId`, and `replayed` on a successful retry. |
 | `get_workspace_questions` | `workspace_id` | Pending `questions` and `requiresHumanApproval` for a permission request at the head of the queue. |
@@ -314,12 +314,37 @@ Get all metadata about the current workspace in a single call: name, project pat
 ---
 
 #### `set_workspace_status`
-Update the current workspace status. Transitions are validated by the backend against the state machine.
+Update a workspace status through the same HTTP route and state machine as the
+UI. Available through managed workspace stdio, global stdio and external HTTP.
 
 **Input:**
-- `status` (string, required) — e.g. `idle`, `completed`, `error`
+- `workspace_id` (string, required externally) — exact target workspace ID. Managed
+  workspace sessions may omit it; if provided, it must match their own workspace.
+- `status` (string, required) — `brainstorming`, `executing`, `awaiting-user`,
+  `completed`, `idle` or `error`.
 
 **Output:** updated `Workspace`
+
+Invalid transitions are rejected. Ongoing compaction and workspace lifecycle
+operations block changes; an agent-owned workspace cannot be marked `idle`.
+Restricted Plan/review/handoff capabilities cannot use this mutation. External
+credentials require the tool and target workspace grants. Success immediately
+broadcasts the status change to the UI. Changing status does not start or stop an
+agent, change its permissions, mark tasks done or enable auto-loop. The existing
+`[BRAINSTORM_COMPLETE]` marker remains supported for historical conversations.
+New writable planning prompts call `set_workspace_status({status: "executing"})`
+before implementation. Auto-loop preparation must first complete its task grooming
+and successfully call `mark_auto_loop_ready`, then change status and let the session
+end naturally without implementing; the next iteration waits for native closure.
+Plan prompts request neither mutation.
+
+Manual reviews can run in a separate `parallel-review` session while the primary
+continues. Claude/Codex use Plan; Vibe uses native permissions with read-only MCP
+grants, without a filesystem read-only guarantee. These reviewers read the live
+worktree and must report concurrent-change uncertainty. Their optional report
+return targets the exact original primary session; they cannot change workspace
+status or tasks. Review state and explicit stop/retry/cancel controls are managed
+by Kōbō, not by mutating tools in the reviewer. See [review configuration](../../CONFIGURATION.md#choosing-an-llm-for-code-review).
 
 ---
 
@@ -349,6 +374,10 @@ service probe with a timeout and bounded retries; inspect logs on failure.
 
 #### `start_dev_server`
 Start the dev server configured for the current workspace (via backend).
+Global admission settings apply equally to MCP and UI starts: startup is
+serialized by default, and an optional total limit counts starting and running
+workspaces. A `queued` result means the request is waiting, not that the process
+has started. `stop_dev_server` cancels a queued request.
 Use it when an authorized task needs workspace services for backend, frontend,
 integration or E2E tests and `get_dev_server_status` reports `stopped`. Reuse an
 existing instance. Do not invoke the configured startup script or Docker Compose

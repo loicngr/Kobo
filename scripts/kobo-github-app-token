@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
 import urllib.request
 
 RENEW_MARGIN = 120
@@ -143,7 +144,9 @@ def mint(config):
         if not usable_token(data):
             raise ValueError()
         return {'token': data['token'], 'expires_at': data['expires_at']}
-    except (OSError, ValueError, TypeError):
+    except (OSError, ValueError, TypeError) as error:
+        if isinstance(error, urllib.error.HTTPError):
+            error.close()
         raise TokenError('GitHub App token renewal failed: check network, App installation, IDs and key.') from None
 
 

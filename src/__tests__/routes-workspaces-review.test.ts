@@ -261,6 +261,8 @@ const TEMPLATE_WITH_PROJECT = 'PROJECT TEMPLATE — branch {{branch_name}} base 
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.mocked(agentManager.getAgentStatus).mockReturnValue(null)
+  vi.mocked(workspaceService.createIdleSession).mockReturnValue({ ...fakeSession, id: 'review-session' } as never)
   vi.mocked(reviewReturns.getReviewReturn).mockReturnValue(null)
   vi.mocked(agentManager.startAgent).mockReturnValue({ agentSessionId: 'mock-agent-session-id' } as never)
   vi.mocked(workspaceService.updateWorkspaceEngineConfiguration).mockImplementation(
@@ -366,7 +368,13 @@ describe('POST /api/workspaces/:id/start-review', () => {
 
     expect(res.status).toBe(200)
     const data = await res.json()
-    expect(data).toEqual({ ok: true, messageSent: true, newSession: false })
+    expect(data).toEqual({
+      ok: true,
+      messageSent: true,
+      newSession: false,
+      parallel: false,
+      sessionId: 'recipient-session',
+    })
 
     expect(agentManager.sendMessageForFallback).toHaveBeenCalledTimes(1)
     const [wsId, prompt] = vi.mocked(agentManager.sendMessageForFallback).mock.calls[0]
@@ -438,7 +446,7 @@ describe('POST /api/workspaces/:id/start-review', () => {
     expect(data.error).toContain('boom: cannot start')
   })
 
-  it('newSession=true with running agent stops then starts a fresh session', async () => {
+  it('newSession=true without a controller stops residual work then starts a fresh session', async () => {
     const callOrder: string[] = []
     vi.mocked(agentManager.stopAgentAndWait).mockImplementation(async () => {
       callOrder.push('stopAgent')
@@ -457,7 +465,7 @@ describe('POST /api/workspaces/:id/start-review', () => {
 
     expect(res.status).toBe(200)
     const data = await res.json()
-    expect(data).toEqual({ ok: true, messageSent: true, newSession: true })
+    expect(data).toEqual({ ok: true, messageSent: true, newSession: true, parallel: false, sessionId: 'fresh' })
 
     expect(callOrder).toEqual(['stopAgent', 'startAgent'])
     expect(agentManager.sendMessageForFallback).not.toHaveBeenCalled()
@@ -1192,4 +1200,53 @@ it('rejects explicit native Plan and removed models before stopping the source',
   expect((await request({ model: 'removed' })).status).toBe(400)
   expect(agentManager.stopAgentAndWait).not.toHaveBeenCalled()
   expect(workspaceService.updateWorkspaceEngineConfiguration).not.toHaveBeenCalled()
+})
+
+it.each([false, true])(
+  'forces a parallel session without stopping/reconfiguring the primary, newSession=%s',
+  async (newSession) => {
+    vi.mocked(agentManager.getAgentStatus).mockReturnValue('running')
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ ...fakeWorkspace, status: 'executing' })
+    const res = await app.request('/api/workspaces/ws-1/start-review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ newSession }),
+    })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ parallel: true, newSession: true, sessionId: 'mock-agent-session-id' })
+    expect(agentManager.stopAgentAndWait).not.toHaveBeenCalled()
+    expect(workspaceService.updateWorkspaceEngineConfiguration).not.toHaveBeenCalled()
+    expect(workspaceService.updateWorkspaceStatus).not.toHaveBeenCalled()
+    expect(vi.mocked(agentManager.startAgent).mock.calls[0]?.[9]).toMatchObject({
+      parallelReview: { engine: 'claude-code' },
+      mcpEnv: { KOBO_REVIEW_ONLY: '1' },
+    })
+  },
+)
+
+it('revalidates parallel admission when a primary starts during Git preparation', async () => {
+  vi.mocked(gitOps.getWorkingTreeDiffStatsAsync).mockImplementationOnce(async () => {
+    vi.mocked(agentManager.getAgentStatus).mockReturnValue('running')
+    return ''
+  })
+  const res = await app.request('/api/workspaces/ws-1/start-review', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ newSession: false }),
+  })
+  expect(res.status).toBe(200)
+  expect(await res.json()).toMatchObject({ parallel: true, newSession: true })
+  expect(agentManager.stopAgentAndWait).not.toHaveBeenCalled()
+})
+
+it('allows a parallel review while the primary compacts', async () => {
+  vi.mocked(agentManager.getAgentStatus).mockReturnValue('running')
+  vi.mocked(workspaceService.getWorkspace).mockReturnValue({ ...fakeWorkspace, status: 'compacting' })
+  const res = await app.request('/api/workspaces/ws-1/start-review', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+  })
+  expect(res.status).toBe(200)
+  expect(await res.json()).toMatchObject({ parallel: true })
 })

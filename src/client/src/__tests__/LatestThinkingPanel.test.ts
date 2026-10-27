@@ -8,6 +8,7 @@ import { createI18n } from 'vue-i18n'
 import LatestThinkingPanel from '../components/LatestThinkingPanel.vue'
 import en from '../i18n/en'
 import { useAgentStreamStore } from '../stores/agent-stream'
+import { useParallelReviewStore } from '../stores/parallel-review'
 import { useSettingsStore } from '../stores/settings'
 import { useWorkspaceStore } from '../stores/workspace'
 import type { AgentEvent } from '../types/agent-event'
@@ -68,6 +69,41 @@ describe('LatestThinkingPanel', () => {
       },
     })
   }
+
+  it('keeps reviewer thinking visible after the main agent ends', async () => {
+    const view = panel()
+    const workspace = useWorkspaceStore()
+    workspace.workspaces[0]!.status = 'completed'
+    useParallelReviewStore().setStatus('w', {
+      reviewSessionId: 'current',
+      originalSessionId: 'main',
+      phase: 'reviewing',
+      compacting: false,
+      returnToSession: false,
+      error: null,
+    })
+    useAgentStreamStore().append(
+      'w',
+      { kind: 'message:thinking', messageId: 'review-thought', text: 'Checking migrations', streaming: true },
+      '',
+      'event',
+      'current',
+    )
+    await nextTick()
+    expect(view.text()).toContain('Checking migrations')
+    useParallelReviewStore().setStatus('w', {
+      reviewSessionId: 'current',
+      originalSessionId: 'main',
+      phase: 'completed',
+      compacting: false,
+      returnToSession: false,
+      error: null,
+    })
+    workspace.workspaces[0]!.status = 'executing'
+    await nextTick()
+    expect(view.text()).toBe('')
+    view.unmount()
+  })
 
   it('renders the whole streamed thought, deduplicates reconnects and isolates selected sessions', async () => {
     const view = panel()

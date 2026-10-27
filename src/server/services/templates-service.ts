@@ -19,10 +19,13 @@ interface TemplatesFile {
   seededDefaultSlugs?: string[]
 }
 
-const LEGACY_DEFAULT_CONTENT_HASHES: Record<string, string> = {
-  'kobo-context': 'ee29ebb56186ce9537e682c25d9d7737ff8d824ab6f29c095c925b27eed70552',
-  'pr-review-comments': '67dfc29fb0c566349a72d9375e314269f061fd184d3a73c9a6bf00451a0f4d9e',
-  'ci-status': 'a96fc75efa7c1f11b58163d8a0d2912f9b22d980087ed224341979c08c250bc8',
+const LEGACY_DEFAULT_CONTENT_HASHES: Record<string, string[]> = {
+  'kobo-context': [
+    'ee29ebb56186ce9537e682c25d9d7737ff8d824ab6f29c095c925b27eed70552',
+    '0dba74406f1090025004cdd77d9e9c793c542eebde8c2b87b73697c18c739dcb',
+  ],
+  'pr-review-comments': ['67dfc29fb0c566349a72d9375e314269f061fd184d3a73c9a6bf00451a0f4d9e'],
+  'ci-status': ['a96fc75efa7c1f11b58163d8a0d2912f9b22d980087ed224341979c08c250bc8'],
 }
 
 const CURRENT_FILE_VERSION = 2
@@ -48,9 +51,9 @@ export function listTemplates(): Template[] {
   const templates = parsed.templates
   let changed = false
   for (const template of templates) {
-    const previousHash = LEGACY_DEFAULT_CONTENT_HASHES[template.slug]
-    if (!previousHash) continue
-    if (createHash('sha256').update(template.content).digest('hex') !== previousHash) continue
+    if (!Object.hasOwn(LEGACY_DEFAULT_CONTENT_HASHES, template.slug)) continue
+    const previousHashes = LEGACY_DEFAULT_CONTENT_HASHES[template.slug]
+    if (!previousHashes?.includes(createHash('sha256').update(template.content).digest('hex'))) continue
     const next = DEFAULT_TEMPLATES.find((value) => value.slug === template.slug)
     if (!next || next.content === template.content) continue
     template.content = next.content
@@ -281,7 +284,7 @@ export const DEFAULT_TEMPLATES: readonly DefaultTemplate[] = [
       `- Its own session history and task list, persisted in Kōbō's SQLite DB\n` +
       `- A dedicated MCP server (\`kobo-tasks\`) exposing tools to read/write workspace state\n\n` +
       `# Lifecycle\n` +
-      `1. **Brainstorming** — you scope the work, output a plan, end with the literal marker \`[BRAINSTORM_COMPLETE]\`\n` +
+      `1. **Brainstorming** — scope and plan; if execution is authorized, call \`kobo__set_workspace_status\` with \`status: "executing"\`; Plan stays read-only\n` +
       `2. **Executing** — you implement and verify the plan locally; commit, push and publication require explicit authorization\n` +
       `3. **Auto-loop (opt-in)** — Kōbō runs iterations using the configured session mode, with durable tasks and instructions\n` +
       `4. **Completed / Archived** — completion records lifecycle state; archiving hides the workspace without making its worktree read-only\n\n` +

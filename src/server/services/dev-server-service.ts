@@ -5,7 +5,7 @@ import { stripVTControlCharacters } from 'node:util'
 import { resolveInstance, sanitizeBranchName } from '../utils/dev-server-instance.js'
 
 import { assertWorkspaceLifecycleAvailable } from '../utils/workspace-lifecycle-guard.js'
-import { getProjectSettings } from './settings-service.js'
+import { getGlobalSettings, getProjectSettings } from './settings-service.js'
 import { emitEphemeral } from './websocket-service.js'
 import { getWorkspace, listWorkspaces, updateDevServerStatus } from './workspace-service.js'
 
@@ -36,7 +36,7 @@ function runCommand(
 
 /** Runtime status of a dev-server instance (Docker-based or direct process). */
 export interface DevServerStatus {
-  status: 'unknown' | 'stopped' | 'starting' | 'running' | 'stopping' | 'error'
+  status: 'queued' | 'unknown' | 'stopped' | 'starting' | 'running' | 'stopping' | 'error'
   instanceName: string
   projectName: string
   httpPort: string
@@ -52,14 +52,131 @@ const trackedProcesses = new Map<string, ChildProcess>()
 const directServerStatuses = new Map<string, DevServerStatus>()
 const stoppingProcesses = new Map<string, Promise<DevServerStatus>>()
 const generations = new Map<string, number>()
+const queuedStarts = new Map<string, DevServerStatus>()
+// A running reservation survives CLI exit and failed Docker/process inspection.
+const reservations = new Map<string, 'starting' | 'running'>()
+let draining = false
+let drainRequested = false
+let admissionEpoch = 0
 let shuttingDown = false
+
+function queuedStatus(workspaceId: string): DevServerStatus {
+  return {
+    status: 'queued',
+    instanceName: sanitizeBranchName(getWorkspace(workspaceId)!.workingBranch),
+    projectName: '',
+    httpPort: '',
+    url: '',
+    containers: [],
+  }
+}
+
+function hasAdmissionCapacity(): boolean {
+  const { serializeDevServerStarts, maxRunningDevServers } = getGlobalSettings()
+  return (
+    !(serializeDevServerStarts && [...reservations.values()].includes('starting')) &&
+    !(maxRunningDevServers > 0 && reservations.size >= maxRunningDevServers)
+  )
+}
+
+function dockerWorkspaces() {
+  return (listWorkspaces(true) ?? []).filter((workspace) =>
+    resolveInstance(workspace.projectPath, workspace.workingBranch),
+  )
+}
+
+/** Reconsider FIFO starts after confirmed capacity release or a settings change. */
+export function resumeQueuedDevServers(): void {
+  if (shuttingDown || !queuedStarts.size) return
+  if (draining) {
+    drainRequested = true
+    return
+  }
+  draining = true
+  drainRequested = false
+  const epoch = admissionEpoch
+  void (async () => {
+    // Recover preserved Docker services before reserving new capacity. A failed
+    // query cannot prove an existing service stopped.
+    for (const workspace of dockerWorkspaces()) {
+      if (trackedProcesses.has(workspace.id) || stoppingProcesses.has(workspace.id)) continue
+      const generation = generations.get(workspace.id)
+      const config = resolveInstance(workspace.projectPath, workspace.workingBranch)!
+      try {
+        const containers = await inspectRunningContainers(config.projectName)
+        if (shuttingDown || epoch !== admissionEpoch) return
+        if (
+          generations.get(workspace.id) !== generation ||
+          trackedProcesses.has(workspace.id) ||
+          stoppingProcesses.has(workspace.id)
+        )
+          continue
+        if (containers.length) {
+          reservations.set(workspace.id, 'running')
+          if (queuedStarts.delete(workspace.id))
+            publishStatus(workspace.id, {
+              status: 'running',
+              instanceName: config.instanceName,
+              projectName: config.projectName,
+              httpPort: config.httpPort,
+              url: `http://localhost:${config.httpPort}`,
+              containers,
+            })
+        } else reservations.delete(workspace.id)
+      } catch {
+        if (epoch !== admissionEpoch || shuttingDown) return
+        if (generations.get(workspace.id) === generation && !reservations.has(workspace.id))
+          reservations.set(workspace.id, 'starting')
+      }
+    }
+    for (const [workspaceId] of queuedStarts) {
+      if (shuttingDown || epoch !== admissionEpoch) return
+      const workspace = getWorkspace(workspaceId)
+      if (!workspace || workspace.archivedAt || workspace.worktreePurgedAt) {
+        queuedStarts.delete(workspaceId)
+        if (workspace) publishStatus(workspaceId, { ...queuedStatus(workspaceId), status: 'stopped' })
+        continue
+      }
+      if (reservations.has(workspaceId)) break
+      if (!hasAdmissionCapacity()) break
+      queuedStarts.delete(workspaceId)
+      try {
+        launchDevServer(workspaceId)
+      } catch (err) {
+        publishStatus(workspaceId, {
+          ...queuedStatus(workspaceId),
+          status: 'error',
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+    }
+  })()
+    .finally(() => {
+      if (epoch !== admissionEpoch) return
+      draining = false
+      if (drainRequested) resumeQueuedDevServers()
+    })
+    .catch((err) => console.error('[dev-server] Failed to resume queued starts:', err))
+}
+
+function publishStatus(workspaceId: string, status: DevServerStatus): void {
+  updateDevServerStatus(workspaceId, status.status)
+  emitEphemeral(workspaceId, 'devserver:status', status)
+}
 
 export function beginDevServerShutdown(): void {
   shuttingDown = true
+  for (const [workspaceId, status] of queuedStarts) publishStatus(workspaceId, { ...status, status: 'stopped' })
+  queuedStarts.clear()
 }
 
 /** Test-only: clear the tracked-processes map between tests. */
 export function _resetTrackedProcessesForTests(): void {
+  admissionEpoch++
+  drainRequested = false
+  draining = false
+  queuedStarts.clear()
+  reservations.clear()
   trackedProcesses.clear()
   directServerStatuses.clear()
   stoppingProcesses.clear()
@@ -73,24 +190,28 @@ export function _resetTrackedProcessesForTests(): void {
  * List all running Docker container names.
  * Uses execFile so Docker inspection cannot block the Node event loop.
  */
+async function inspectRunningContainers(projectName?: string): Promise<string[]> {
+  const args = projectName
+    ? [
+        'ps',
+        '--filter',
+        `label=com.docker.compose.project=${projectName}`,
+        '--format',
+        '{{.Names}}\t{{.Label "com.docker.compose.project"}}',
+      ]
+    : ['ps', '--format', '{{.Names}}']
+  const output = await runCommand('docker', args, { timeout: 10_000 })
+  return output
+    .split('\n')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .filter((line) => !projectName || line.split('\t')[1] === projectName)
+    .map((line) => (projectName ? line.split('\t')[0]! : line))
+}
+
 export async function listRunningContainers(projectName?: string): Promise<string[]> {
   try {
-    const args = projectName
-      ? [
-          'ps',
-          '--filter',
-          `label=com.docker.compose.project=${projectName}`,
-          '--format',
-          '{{.Names}}\t{{.Label "com.docker.compose.project"}}',
-        ]
-      : ['ps', '--format', '{{.Names}}']
-    const output = await runCommand('docker', args, { timeout: 10_000 })
-    return output
-      .split('\n')
-      .map((s) => s.trim())
-      .filter(Boolean)
-      .filter((line) => !projectName || line.split('\t')[1] === projectName)
-      .map((line) => (projectName ? line.split('\t')[0]! : line))
+    return await inspectRunningContainers(projectName)
   } catch {
     return []
   }
@@ -113,6 +234,11 @@ export async function getStatus(
   workingBranch: string,
   workspaceId?: string,
 ): Promise<DevServerStatus> {
+  const queued = workspaceId ? queuedStarts.get(workspaceId) : undefined
+  if (queued) {
+    resumeQueuedDevServers()
+    return { ...queued }
+  }
   const config = resolveInstance(projectPath, workingBranch)
   const directStatus = workspaceId ? directServerStatuses.get(workspaceId) : undefined
   if (workspaceId && directStatus && trackedProcesses.has(workspaceId)) return { ...directStatus }
@@ -128,7 +254,46 @@ export async function getStatus(
     }
   }
 
-  const matching = await listRunningContainers(config.projectName)
+  let matching: string[]
+  const generation = workspaceId ? generations.get(workspaceId) : undefined
+  try {
+    matching = await inspectRunningContainers(config.projectName)
+    if (
+      workspaceId &&
+      generations.get(workspaceId) === generation &&
+      !trackedProcesses.has(workspaceId) &&
+      !stoppingProcesses.has(workspaceId)
+    ) {
+      if (matching.length) {
+        const wasStarting = reservations.get(workspaceId) === 'starting'
+        reservations.set(workspaceId, 'running')
+        if (wasStarting) resumeQueuedDevServers()
+      } else {
+        reservations.delete(workspaceId)
+        resumeQueuedDevServers()
+      }
+    }
+  } catch {
+    return {
+      status: workspaceId && reservations.has(workspaceId) ? reservations.get(workspaceId)! : 'unknown',
+      instanceName: config.instanceName,
+      projectName: config.projectName,
+      httpPort: config.httpPort,
+      url: '',
+      containers: [],
+    }
+  }
+
+  if (workspaceId && trackedProcesses.has(workspaceId) && reservations.get(workspaceId) === 'starting') {
+    return {
+      status: 'starting',
+      instanceName: config.instanceName,
+      projectName: config.projectName,
+      httpPort: config.httpPort,
+      url: '',
+      containers: matching,
+    }
+  }
 
   if (matching.length > 0) {
     return {
@@ -174,6 +339,36 @@ export function startDevServer(workspaceId: string): DevServerStatus {
   if (shuttingDown) throw new Error('Kōbō is shutting down')
   assertWorkspaceLifecycleAvailable(workspaceId)
   const workspace = getWorkspace(workspaceId)
+  if (!workspace) throw new Error(`Workspace '${workspaceId}' not found`)
+  if (!getProjectSettings(workspace.projectPath)?.devServer.startCommand)
+    throw new Error('No dev-server start command configured')
+  if (stoppingProcesses.has(workspaceId)) throw new Error(`Dev server for workspace '${workspaceId}' is stopping`)
+  const queued = queuedStarts.get(workspaceId)
+  if (queued) {
+    resumeQueuedDevServers()
+    return { ...queued }
+  }
+  if (trackedProcesses.has(workspaceId) || reservations.has(workspaceId))
+    throw new Error(`Dev server for workspace '${workspaceId}' is already starting or running`)
+  if (
+    queuedStarts.size ||
+    draining ||
+    !hasAdmissionCapacity() ||
+    dockerWorkspaces().some((item) => !reservations.has(item.id))
+  ) {
+    const status = queuedStatus(workspaceId)
+    queuedStarts.set(workspaceId, status)
+    publishStatus(workspaceId, status)
+    resumeQueuedDevServers()
+    return status
+  }
+  return launchDevServer(workspaceId)
+}
+
+function launchDevServer(workspaceId: string): DevServerStatus {
+  if (shuttingDown) throw new Error('Kōbō is shutting down')
+  assertWorkspaceLifecycleAvailable(workspaceId)
+  const workspace = getWorkspace(workspaceId)
   if (!workspace) {
     throw new Error(`Workspace '${workspaceId}' not found`)
   }
@@ -211,6 +406,7 @@ export function startDevServer(workspaceId: string): DevServerStatus {
   const generation = (generations.get(workspaceId) ?? 0) + 1
   generations.set(workspaceId, generation)
   trackedProcesses.set(workspaceId, proc)
+  reservations.set(workspaceId, 'starting')
 
   // Parse complete lines separately per stream: CLI output and ANSI sequences
   // can span arbitrary pipe chunks. Bound the unfinished line retained in memory.
@@ -235,7 +431,8 @@ export function startDevServer(workspaceId: string): DevServerStatus {
         const match = stripVTControlCharacters(line).match(
           /^\s*(?:[»➜-]\s*)?(?:App URL[.\s]*|Local:\s*)(https?:\/\/\S+)\s*$/i,
         )
-        if (!match) continue
+        // The startup script may create its Docker instance configuration before announcing a URL.
+        if (!match || resolveInstance(workspace.projectPath, workspace.workingBranch)) continue
         let url: URL
         try {
           url = new URL(match[1]!)
@@ -258,6 +455,8 @@ export function startDevServer(workspaceId: string): DevServerStatus {
           containers: [],
         }
         directServerStatuses.set(workspaceId, status)
+        reservations.set(workspaceId, 'running')
+        resumeQueuedDevServers()
         updateDevServerStatus(workspaceId, 'running')
         emitEphemeral(workspaceId, 'devserver:status', status)
         break
@@ -288,6 +487,10 @@ export function startDevServer(workspaceId: string): DevServerStatus {
         directServerStatuses.delete(workspaceId)
         const currentStatus = await getStatus(workspace.projectPath, workspace.workingBranch)
         if (shuttingDown || generations.get(workspaceId) !== generation || stoppingProcesses.has(workspaceId)) return
+        if (currentStatus.status === 'running') reservations.set(workspaceId, 'running')
+        else if (currentStatus.status !== 'unknown' || !resolveInstance(workspace.projectPath, workspace.workingBranch))
+          reservations.delete(workspaceId)
+        resumeQueuedDevServers()
         updateDevServerStatus(workspaceId, currentStatus.status)
         emitEphemeral(workspaceId, 'devserver:status', currentStatus)
         return
@@ -302,7 +505,11 @@ export function startDevServer(workspaceId: string): DevServerStatus {
     if (shuttingDown || trackedProcesses.get(workspaceId) !== proc || generations.get(workspaceId) !== generation)
       return
     // A signal failure is also an 'error' event; it does not prove process exit.
-    if (!proc.pid) trackedProcesses.delete(workspaceId)
+    if (!proc.pid) {
+      trackedProcesses.delete(workspaceId)
+      reservations.delete(workspaceId)
+      resumeQueuedDevServers()
+    }
     directServerStatuses.delete(workspaceId)
     updateDevServerStatus(workspaceId, 'error')
     console.error(`[dev-server] Process error for workspace ${workspaceId}:`, err)
@@ -339,14 +546,38 @@ export function startDevServer(workspaceId: string): DevServerStatus {
 export async function stopDevServer(workspaceId: string): Promise<DevServerStatus> {
   const pending = stoppingProcesses.get(workspaceId)
   if (pending) return pending
+  const workspace = getWorkspace(workspaceId)
   generations.set(workspaceId, (generations.get(workspaceId) ?? 0) + 1)
+  const queued = queuedStarts.get(workspaceId)
+  if (queued) {
+    queuedStarts.delete(workspaceId)
+    // A queued request may be recovering Docker services preserved across restart.
+    if (
+      !trackedProcesses.has(workspaceId) &&
+      !reservations.has(workspaceId) &&
+      workspace &&
+      !resolveInstance(workspace.projectPath, workspace.workingBranch)
+    ) {
+      const status: DevServerStatus = { ...queued, status: 'stopped' }
+      publishStatus(workspaceId, status)
+      resumeQueuedDevServers()
+      return status
+    }
+    reservations.set(workspaceId, reservations.get(workspaceId) ?? 'starting')
+  }
+  // Preserved Docker services may be stopped before any start or status read recovers them.
+  if (workspace && resolveInstance(workspace.projectPath, workspace.workingBranch))
+    reservations.set(workspaceId, reservations.get(workspaceId) ?? 'running')
   directServerStatuses.delete(workspaceId)
   const stopping = stopDevServerOwned(workspaceId)
   stoppingProcesses.set(workspaceId, stopping)
   try {
-    return await stopping
+    const status = await stopping
+    reservations.delete(workspaceId)
+    return status
   } finally {
     if (stoppingProcesses.get(workspaceId) === stopping) stoppingProcesses.delete(workspaceId)
+    resumeQueuedDevServers()
   }
 }
 

@@ -31,6 +31,7 @@ const currentSession = computed(() =>
 // A temporary review may return to an older conversation. Compare with the
 // last used session rather than the last created one, including after reload.
 const visible = computed<boolean>(() => {
+  if (store.isParallelReviewSession(props.workspaceId, store.selectedSessionId)) return false
   if (!store.selectedSessionId || store.sessions.length < 2) return false
   return !!currentSession.value && currentSession.value.id !== store.selectedSessionId
 })

@@ -246,9 +246,17 @@ it('renders native text and sends comma-bearing choices as typed selections', as
     .find((x) => x.props('label') === en['askUserQuestion.submit'])!
     .trigger('click')
   await flushPromises()
-  expect(submit).toHaveBeenCalledWith('w', { text: '', choices: 'One, Two, Three' }, 't', false, undefined, {
-    choices: ['One, Two', 'Three'],
-  })
+  expect(submit).toHaveBeenCalledWith(
+    'w',
+    { text: '', choices: 'One, Two, Three' },
+    't',
+    false,
+    undefined,
+    {
+      choices: ['One, Two', 'Three'],
+    },
+    undefined,
+  )
   view.unmount()
 })
 
@@ -344,12 +352,12 @@ it('omits untouched optional native fields and accepts explicit empty arrays', a
   expect(button().props('disable')).toBe(false)
   await button().trigger('click')
   await flushPromises()
-  expect(submit).toHaveBeenLastCalledWith('w', {}, 't', false, undefined, undefined)
+  expect(submit).toHaveBeenLastCalledWith('w', {}, 't', false, undefined, undefined, undefined)
   view.findComponent({ name: 'QCheckbox' }).vm.$emit('update:modelValue', [])
   await view.vm.$nextTick()
   await button().trigger('click')
   await flushPromises()
-  expect(submit).toHaveBeenLastCalledWith('w', { choices: '' }, 't', false, undefined, { choices: [] })
+  expect(submit).toHaveBeenLastCalledWith('w', { choices: '' }, 't', false, undefined, { choices: [] }, undefined)
   view.unmount()
 })
 
@@ -394,7 +402,15 @@ it('validates native text bounds and never treats a native value as synthetic Ot
     .find((x) => x.props('label') === en['askUserQuestion.submit'])!
     .trigger('click')
   await flushPromises()
-  expect(submit).toHaveBeenCalledWith('w', { text: 'abc', enum: '__KOBO_OTHER__' }, 't', false, undefined, undefined)
+  expect(submit).toHaveBeenCalledWith(
+    'w',
+    { text: 'abc', enum: '__KOBO_OTHER__' },
+    't',
+    false,
+    undefined,
+    undefined,
+    undefined,
+  )
   view.unmount()
 })
 
@@ -473,7 +489,15 @@ it('accepts an explicitly selected empty native enum value', async () => {
   expect(button().props('disable')).toBe(false)
   await button().trigger('click')
   await flushPromises()
-  expect(submit).toHaveBeenCalledWith('w', Object.fromEntries([['__proto__', '']]), 't', false, undefined, undefined)
+  expect(submit).toHaveBeenCalledWith(
+    'w',
+    Object.fromEntries([['__proto__', '']]),
+    't',
+    false,
+    undefined,
+    undefined,
+    undefined,
+  )
   view.unmount()
 })
 

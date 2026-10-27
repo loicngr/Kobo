@@ -4,6 +4,7 @@ import { isValidSkillSuite } from '../../shared/skill-suite-prompts.js'
 import { isWorkflowPolicy } from '../../shared/workflow-policy.js'
 import { getDb } from '../db/index.js'
 import { getBackendPort, notifyCapacityAvailable } from '../services/agent/orchestrator.js'
+import { resumeQueuedDevServers } from '../services/dev-server-service.js'
 import {
   DEFAULT_NOTION_INITIAL_PROMPT,
   DEFAULT_SENTRY_INITIAL_PROMPT,
@@ -185,6 +186,13 @@ app.put('/global', async (c) => {
       return c.json({ error: 'Invalid workflowPolicy' }, 400)
     if (body.memoryMode !== undefined && !isMemoryMode(body.memoryMode))
       return c.json({ error: 'Invalid memoryMode' }, 400)
+    if ('serializeDevServerStarts' in body && typeof body.serializeDevServerStarts !== 'boolean')
+      return c.json({ error: 'serializeDevServerStarts must be a boolean' }, 400)
+    if (
+      'maxRunningDevServers' in body &&
+      (!Number.isSafeInteger(body.maxRunningDevServers) || (body.maxRunningDevServers as number) < 0)
+    )
+      return c.json({ error: 'maxRunningDevServers must be a non-negative safe integer' }, 400)
     if (
       'maxConcurrentAgents' in body &&
       (!Number.isSafeInteger(body.maxConcurrentAgents) || (body.maxConcurrentAgents as number) < 0)
@@ -195,6 +203,7 @@ app.put('/global', async (c) => {
     const updated = settingsService.updateGlobalSettings(body)
     if (previousLimit && (updated.maxConcurrentAgents === 0 || updated.maxConcurrentAgents > previousLimit))
       notifyCapacityAvailable()
+    if ('serializeDevServerStarts' in body || 'maxRunningDevServers' in body) resumeQueuedDevServers()
     // The client assigns this response straight into its store, so echoing the
     // real credentials back would undo the masking on GET the first time
     // anyone saves anything.
@@ -294,6 +303,7 @@ app.post('/import', async (c) => {
     // Settings validates its section before writing. Each file is replaced
     // atomically; this is not a transaction spanning the two files.
     settingsService.importConfigBundle(body)
+    resumeQueuedDevServers()
     if (validatedTemplates !== undefined) {
       // Accept missing templates for backward-compatible bundles.
       replaceAllTemplates(validatedTemplates)

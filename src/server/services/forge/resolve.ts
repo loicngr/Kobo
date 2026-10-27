@@ -18,6 +18,7 @@ function readRemoteUrl(projectPath: string): string {
     return execFileSync('git', ['remote', 'get-url', 'origin'], {
       cwd: projectPath,
       encoding: 'utf-8',
+      stdio: 'pipe',
       // Without a bound, a git hanging on a network filesystem blocks the whole
       // event loop: this runs synchronously, and the pr-watcher calls it for
       // every workspace on every tick.

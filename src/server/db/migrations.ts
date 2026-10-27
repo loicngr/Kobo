@@ -4,6 +4,7 @@ import { initAutoLoopSchema } from './auto-loop-schema.js'
 import { initMcpMessageSchema } from './mcp-message-schema.js'
 import { migrateMemorySchema } from './memory-schema.js'
 import { migrateMistralMemoryEngine } from './mistral-memory-migration.js'
+import { migrateParallelReviews } from './parallel-review-schema.js'
 import { initProgressBarSchema } from './progress-bar-schema.js'
 import { initReviewReturnSchema, migrateDurableReviewReturns } from './review-return-schema.js'
 import { initSchema } from './schema.js'
@@ -840,6 +841,7 @@ export const migrations: Migration[] = [
   { version: 53, name: 'workspace-group-message-receipts', migrate: initWorkspaceMessageBatchSchema },
   { version: 54, name: 'session-progress-bars', migrate: initProgressBarSchema },
   { version: 55, name: 'mistral-vibe-memory-engine', migrate: migrateMistralMemoryEngine },
+  { version: 56, name: 'parallel-workspace-reviews', migrate: migrateParallelReviews },
 ]
 
 /** Current schema version — always equals the highest migration version. */

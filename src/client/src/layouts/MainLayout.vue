@@ -373,11 +373,13 @@ watch(
   { immediate: true },
 )
 
-// The SUB-AGENTS tab is hidden when the selected workspace's engine cannot
-// surface sub-agent activity (e.g. Codex SDK — see `engineFeatures.ts`).
-// When the user has no workspace selected we keep the tab visible (default
-// experience matches the Claude case).
-const subagentsTabVisible = computed(() => supportsSubagents(store.selectedWorkspace?.engine))
+const subagentsTabVisible = computed(() =>
+  supportsSubagents(
+    store.sessions.find(
+      (session) => session.id === store.selectedSessionId && session.workspaceId === store.selectedWorkspaceId,
+    )?.engine ?? store.selectedWorkspace?.engine,
+  ),
+)
 
 // If the user was viewing the SUB-AGENTS tab and switches to a workspace where
 // it's hidden, fall back to `tasks` so the right drawer doesn't render blank.

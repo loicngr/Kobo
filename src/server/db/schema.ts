@@ -3,6 +3,7 @@ import { initAutoLoopFinalReviewSchema } from './auto-loop-final-review-schema.j
 import { initAutoLoopSchema } from './auto-loop-schema.js'
 import { initMcpMessageSchema } from './mcp-message-schema.js'
 import { initMemorySchema } from './memory-schema.js'
+import { initParallelReviewSchema } from './parallel-review-schema.js'
 import { initProgressBarSchema } from './progress-bar-schema.js'
 import { initReviewReturnSchema } from './review-return-schema.js'
 import { initSearchSchema } from './search-schema.js'
@@ -79,7 +80,8 @@ export function initSchema(db: Database.Database): void {
       name TEXT,
       task_progress_baseline TEXT,
       end_reason TEXT,
-      activation_order INTEGER NOT NULL DEFAULT 0
+      activation_order INTEGER NOT NULL DEFAULT 0,
+      role TEXT NOT NULL DEFAULT 'primary'
     );
 
     CREATE TABLE IF NOT EXISTS ws_events (
@@ -246,4 +248,5 @@ export function initSchema(db: Database.Database): void {
   initMemorySchema(db)
   initWorkspaceMessageBatchSchema(db)
   initProgressBarSchema(db)
+  initParallelReviewSchema(db)
 }

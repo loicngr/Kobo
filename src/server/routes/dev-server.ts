@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { migrationGuard } from '../middleware/migration-guard.js'
 import { getDevServerLogs, getStatus, startDevServer, stopDevServer } from '../services/dev-server-service.js'
 import { getProjectSettings } from '../services/settings-service.js'
-import { getWorkspace } from '../services/workspace-service.js'
+import { getWorkspace, updateDevServerStatus } from '../services/workspace-service.js'
 import { WorkspaceLifecycleBusyError } from '../utils/workspace-lifecycle-guard.js'
 
 /** Hono sub-router for per-workspace dev server lifecycle (start, stop, status, logs). */
@@ -33,8 +33,16 @@ app.get('/:workspaceId/status', async (c) => {
     }
 
     const status = await getStatus(workspace.projectPath, workspace.workingBranch, workspaceId)
-    // If runtime detection returns unknown, use persisted status from DB
-    if (status.status === 'unknown' && workspace.devServerStatus && workspace.devServerStatus !== 'stopped') {
+    // Admission queues are in memory and cannot be recovered from a stored label.
+    if (workspace.devServerStatus === 'queued' && status.status !== 'queued') {
+      updateDevServerStatus(workspaceId, status.status)
+    }
+    // If runtime detection returns unknown, use persisted status from DB.
+    if (
+      status.status === 'unknown' &&
+      workspace.devServerStatus &&
+      !['stopped', 'queued'].includes(workspace.devServerStatus)
+    ) {
       status.status = workspace.devServerStatus as typeof status.status
     }
     return c.json(status)

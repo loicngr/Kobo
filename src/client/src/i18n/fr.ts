@@ -1,4 +1,23 @@
 export default {
+  'parallelReview.planHint':
+    'Le mode Plan est imposé pour cette revue parallèle. Les permissions de l’agent principal restent inchangées.',
+  'parallelReview.returnHint':
+    'Si activé, le rapport revient à la session source dès qu’une livraison sûre est possible. Sinon, il reste dans la revue.',
+  'parallelReview.title': 'Revue parallèle',
+  'parallelReview.newSessionHint':
+    'Une nouvelle session est imposée : la revue lit les fichiers actuels pendant que l’agent principal continue.',
+  'parallelReview.reviewing': 'Revue en cours.',
+  'parallelReview.closing': 'Rapport sauvegardé. Fermeture de la revue en cours.',
+  'parallelReview.ready': 'Rapport prêt : en attente d’un retour sûr à la session source.',
+  'parallelReview.dispatching': 'Retour du rapport en cours.',
+  'parallelReview.unknown': 'Livraison incertaine : le rapport a peut-être déjà été reçu.',
+  'parallelReview.blocked': 'Retour bloqué. Le rapport est conservé.',
+  'parallelReview.completed': 'Revue terminée.',
+  'parallelReview.interrupted': 'Revue interrompue.',
+  'parallelReview.open': 'Ouvrir la revue',
+  'parallelReview.stop': 'Arrêter la revue',
+  'parallelReview.closed': 'Cette revue est fermée. Lancez une nouvelle revue pour poursuivre.',
+  'parallelReview.awaitingInput': 'Réponse attendue dans la session de revue.',
   'review.mistralAutomaticHint':
     'Les revues finales automatiques utilisent toujours Interactif et peuvent attendre une approbation humaine.',
   'review.mistralNativeHint':
@@ -1176,6 +1195,15 @@ export default {
   'settings.archiveScriptHint':
     'Script shell exécuté côté serveur dans le worktree quand un workspace est archivé. Laisser vide pour désactiver.',
   'settings.archiveScriptPlaceholder': "ex. nettoyer des conteneurs, libérer de l'espace disque…",
+  'settings.serializeDevServerStarts': 'Démarrer un seul serveur de dev à la fois',
+  'settings.serializeDevServerStartsHint':
+    'Mettre les démarrages en attente jusqu’à ce que le serveur précédent soit prêt. Les serveurs démarrés peuvent rester actifs ensemble.',
+  'settings.maxRunningDevServers': 'Nombre maximal de serveurs de dev actifs',
+  'settings.maxRunningDevServersHint':
+    'Compte les serveurs lancés et en démarrage. 0 = illimité. Réduire la limite laisse les serveurs existants actifs.',
+  'settings.maxRunningDevServersInvalid': 'Saisissez un entier supérieur ou égal à 0.',
+  'devServer.queued': 'En attente',
+  'devServer.cancelQueued': 'Annuler le démarrage en attente',
   'settings.stopDevServersOnShutdown': 'Arrêter les serveurs de dev à la fermeture de Kōbō',
   'settings.stopDevServersOnShutdownHint':
     'Activé par défaut. Désactivez pour conserver les conteneurs Docker pendant une mise à jour. Les processus locaux sont toujours arrêtés. Les scripts d’arrêt restent exécutés.',

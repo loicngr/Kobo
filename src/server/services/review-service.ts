@@ -10,6 +10,7 @@ import * as agentManager from './agent/orchestrator.js'
 import { bindReviewSession, getFinalReviewSourceSession } from './auto-loop-final-review-service.js'
 import { canStartAutomatically } from './auto-loop-service.js'
 import { preflightMistralConfiguration } from './mistral-options-service.js'
+import { getParallelReview, registerParallelReview, setParallelReviewPhase } from './parallel-review-service.js'
 import { beginReviewLaunch, finishReviewLaunch } from './review-launch-runtime.js'
 import { getReviewReturn, registerReviewReturn, restoreReviewConfiguration } from './review-return-service.js'
 import { getActiveReviewTemplate, renderReviewTemplate } from './review-template-service.js'
@@ -135,7 +136,7 @@ export async function startWorkspaceReview(
     if (getReviewReturn(id))
       throw new ReviewRequestError('A review with an automatic return is already in progress', 409)
     const sourceSessionId = internal?.autoLoopFinalReview ? getFinalReviewSourceSession(id) : null
-    const originalSession = internal?.autoLoopFinalReview
+    let originalSession = internal?.autoLoopFinalReview
       ? workspaceService.listSessions(id).find((session) => session.id === sourceSessionId)
       : workspaceService.getActiveSession(id)
     const changed = reviewConfigurationChanged(workspace, configuration)
@@ -143,11 +144,18 @@ export async function startWorkspaceReview(
       !!originalSession &&
       ((!!originalSession.engine && originalSession.engine !== configuration.engine) ||
         (configuration.model !== 'auto' && !!originalSession.model && originalSession.model !== configuration.model))
-    const newSession =
-      nativeReview || body.newSession === true || changed || differsFromSession || body.returnToSession === true
+    let newSession =
+      nativeReview ||
+      (!internal?.autoLoopFinalReview && agentManager.getAgentStatus(id) === 'running') ||
+      body.newSession === true ||
+      changed ||
+      differsFromSession ||
+      body.returnToSession === true
     if (
       body.returnToSession &&
-      (!originalSession?.engineSessionId || (originalSession.engine && originalSession.engine !== workspace.engine))
+      (!originalSession ||
+        (!originalSession.engineSessionId && !agentManager.getAgentStatus(id)) ||
+        (originalSession.engine && originalSession.engine !== workspace.engine))
     )
       throw new ReviewRequestError(
         'The current session cannot be resumed; start it before requesting an automatic return',
@@ -201,7 +209,7 @@ export async function startWorkspaceReview(
     assertWorkspaceLifecycleAvailable(id)
     if (launch.cancelled) throw new ReviewRequestError('Review launch was cancelled', 409)
     const current = workspaceService.getWorkspace(id)
-    if (!current || current.archivedAt || current.worktreePurgedAt || current.status === 'compacting')
+    if (!current || current.archivedAt || current.worktreePurgedAt)
       throw new ReviewRequestError('The workspace is no longer available for a review', 409)
     if (reviewConfigurationChanged(current, workspace))
       throw new ReviewRequestError('The workspace configuration changed; reopen the review dialog', 409)
@@ -213,8 +221,56 @@ export async function startWorkspaceReview(
       throw new ReviewRequestError('The current session changed; reopen the review dialog', 409)
     if (internal?.autoLoopFinalReview && (!current.autoLoop || internal.shouldLaunch?.() === false))
       throw new ReviewRequestError('Final review was cancelled before launch', 409)
+    const primaryStatus = agentManager.getAgentStatus(id)
+    if (primaryStatus === 'stopping') throw new ReviewRequestError('The primary agent is still stopping', 409)
+    const parallel = !internal?.autoLoopFinalReview && primaryStatus === 'running'
+    if (!parallel && current.status === 'compacting') throw new ReviewRequestError('The workspace is compacting', 409)
+    const pendingParallel = getParallelReview(id)
+    if (pendingParallel && !['completed', 'interrupted'].includes(pendingParallel.phase)) {
+      if (internal?.autoLoopFinalReview) throw new ReviewAdmissionDeferred()
+      throw new ReviewRequestError('A parallel review or its return is already in progress', 409)
+    }
     let emitSessionId: string
-    if (newSession) {
+    if (parallel) {
+      if (!nativeReview) configuration.agentPermissionMode = 'plan'
+      newSession = true
+      originalSession = workspaceService.getActiveSession(id)
+      if (!originalSession) throw new ReviewRequestError('The primary session is unavailable', 409)
+      rendered +=
+        '\n\nThis report-only review reads the live worktree concurrently with the primary agent. Files may change while you review them; explicitly mention this uncertainty in your final report. Do not modify, create or delete files, commit, push, or mutate tasks, workspace state or memory. Finish with a standalone findings report.'
+      const reviewer = workspaceService.createIdleSession(id)
+      registerParallelReview(id, {
+        reviewSessionId: reviewer.id,
+        originalSessionId: originalSession.id,
+        returnToSession: body.returnToSession === true,
+        original: {
+          engine: originalSession.engine ?? workspace.engine,
+          model:
+            workspace.engine === 'mistral-vibe' && workspace.model === 'auto'
+              ? 'auto'
+              : (originalSession.model ?? workspace.model),
+          reasoningEffort: workspace.reasoningEffort,
+          agentPermissionMode: workspace.agentPermissionMode,
+        },
+      })
+      try {
+        emitSessionId = agentManager.startAgent(
+          id,
+          worktreePath,
+          rendered,
+          configuration.model,
+          false,
+          configuration.agentPermissionMode,
+          reviewer.id,
+          configuration.reasoningEffort,
+          undefined,
+          { parallelReview: { engine: configuration.engine }, mcpEnv: { KOBO_REVIEW_ONLY: '1' } },
+        ).agentSessionId
+      } catch (error) {
+        setParallelReviewPhase(id, 'interrupted', error instanceof Error ? error.message : String(error))
+        throw error
+      }
+    } else if (newSession) {
       assertAgentStopped(await agentManager.stopAgentAndWait(id, undefined, 'replacement'))
       assertWorkspaceLifecycleAvailable(id)
       if (launch.cancelled) throw new ReviewRequestError('Review launch was cancelled', 409)
@@ -302,7 +358,7 @@ export async function startWorkspaceReview(
       }
     }
     wsService.emit(id, 'user:message', { content: rendered, sender: 'user' }, emitSessionId)
-    return { ok: true, messageSent: true, newSession }
+    return { ok: true, messageSent: true, newSession, parallel, sessionId: emitSessionId }
   } finally {
     finishReviewLaunch(id)
   }

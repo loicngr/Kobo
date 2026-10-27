@@ -5,7 +5,12 @@ import { INTERNAL_PROGRESS_BAR_TOOLS, isProgressBarTool, PROGRESS_BAR_TOOLS } fr
 import { isWorkspaceCreationTool, WORKSPACE_CREATION_TOOLS } from '../shared/workspace-creation-tools.js'
 import { WORKSPACE_DIALOGUE_TOOLS } from '../shared/workspace-dialogue-tools.js'
 import { isWorkspaceGroupMessageTool, WORKSPACE_GROUP_MESSAGE_TOOLS } from '../shared/workspace-group-message-tools.js'
-import { isWorkspaceLifecycleTool, WORKSPACE_LIFECYCLE_TOOLS } from '../shared/workspace-lifecycle-tools.js'
+import {
+  isWorkspaceLifecycleTool,
+  SET_WORKSPACE_STATUS_TOOL,
+  validateWorkspaceLifecycleArguments,
+  WORKSPACE_LIFECYCLE_TOOLS,
+} from '../shared/workspace-lifecycle-tools.js'
 import {
   createTaskHandler,
   cronListHandler,
@@ -385,21 +390,8 @@ export function createManagedMcpDispatcher(context: ManagedMcpContext) {
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     {
-      name: 'set_workspace_status',
-      description:
-        'CALL WHEN you believe the mission is done (`completed`) or blocked beyond recovery (`error`). Do NOT set `idle` while this agent session is active: ask the user with AskUserQuestion or end the turn instead. Transitions are validated by the backend — invalid or unsafe ones are rejected.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          status: {
-            type: 'string',
-            enum: ['idle', 'completed', 'error'],
-            description: 'Target status.',
-          },
-        },
-        required: ['status'],
-      },
-      annotations: { destructiveHint: false, openWorldHint: false },
+      ...SET_WORKSPACE_STATUS_TOOL,
+      inputSchema: { ...SET_WORKSPACE_STATUS_TOOL.inputSchema, required: ['status'] },
     },
     {
       name: 'get_ticket',
@@ -645,7 +637,10 @@ export function createManagedMcpDispatcher(context: ManagedMcpContext) {
     const tools = workspaceId
       ? [
           ...WORKSPACE_SCOPED_TOOLS,
-          ...GLOBAL_TOOLS.filter((tool) => !isMemoryToolName(tool.name) && !isProgressBarTool(tool.name)),
+          ...GLOBAL_TOOLS.filter(
+            (tool) =>
+              !isMemoryToolName(tool.name) && !isProgressBarTool(tool.name) && tool.name !== 'set_workspace_status',
+          ),
         ]
       : GLOBAL_TOOLS
     return tools.filter((tool) =>
@@ -756,7 +751,7 @@ export function createManagedMcpDispatcher(context: ManagedMcpContext) {
       }
       if (
         isWorkspaceCreationTool(name) ||
-        isWorkspaceLifecycleTool(name) ||
+        (isWorkspaceLifecycleTool(name) && !(workspaceId && name === 'set_workspace_status')) ||
         isWorkspaceGroupMessageTool(name) ||
         WORKSPACE_DIALOGUE_TOOLS.some((tool) => tool.name === name)
       ) {
@@ -955,9 +950,10 @@ export function createManagedMcpDispatcher(context: ManagedMcpContext) {
       }
 
       if (name === 'set_workspace_status') {
-        const status = a.status as string | undefined
-        if (!status) return fail('status parameter is required')
-        const result = await backendRequest('PATCH', `/api/workspaces/${workspaceId}`, { status })
+        if (a.workspace_id !== undefined && a.workspace_id !== workspaceId)
+          return fail('Tool is bound to its launch workspace')
+        const input = validateWorkspaceLifecycleArguments(name, { ...a, workspace_id: workspaceId })
+        const result = await backendRequest('PATCH', `/api/workspaces/${workspaceId}`, { status: input.status })
         return ok(result)
       }
 

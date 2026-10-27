@@ -10,10 +10,12 @@ import type { MergeMethod } from '../../../shared/forge-merge'
 import { isSubagentTask } from '../../../shared/subagent-classification'
 import type { WorkflowPolicy } from '../../../shared/workflow-policy'
 import type { ProviderId, UsageSnapshot } from '../types/usage'
+import { getCurrentSession } from '../utils/current-session'
 import { hasPrAttention, isMergeabilityPending } from '../utils/pr-status'
 import { isBusyStatus } from '../utils/workspace-status'
 import { useAgentStreamStore } from './agent-stream'
 import { useAutoLoopReviewStore } from './auto-loop-review'
+import { useParallelReviewStore } from './parallel-review'
 import { useWebSocketStore } from './websocket'
 
 export interface Workspace {
@@ -91,6 +93,7 @@ export interface Task {
 }
 
 export interface AgentSession {
+  role?: 'primary' | 'parallel-review'
   id: string
   workspaceId: string
   pid: number | null
@@ -587,6 +590,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       const map = state.subagents[state.selectedWorkspaceId] ?? {}
       return Object.values(map)
         .filter(isSubagentTask)
+        .filter((sub) => !state.selectedSessionId || !sub.sessionId || sub.sessionId === state.selectedSessionId)
         .sort((a, b) => a.startedAt.localeCompare(b.startedAt))
     },
 
@@ -649,6 +653,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       delete this.agentTodos[id]
       delete this.hasMoreEvents[id]
       delete this.gitStatsCache[id]
+      useParallelReviewStore().forget(id)
       delete this.pendingWakeups[id]
       delete this.pendingQuotaBackoffs[id]
       delete this.pendingDeferred[id]
@@ -1525,6 +1530,9 @@ export const useWorkspaceStore = defineStore('workspace', {
       // Mark as read before fetching details so the API response already reflects the read state
       this.markRead(id)
       this.fetchWorkspaceDetails(id)
+      void useParallelReviewStore()
+        .fetchStatus(id)
+        .catch(() => {})
       this.fetchSessions(id)
       void this.fetchPendingQuotaBackoff(id)
       // Pre-fetch git stats so template expansion has them available immediately
@@ -1542,6 +1550,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
 
     async fetchSessions(workspaceId: string, forceSelectId?: string | null) {
+      const selectionAtStart = this.selectedSessionId
       const reads = sessionReads(this)
       reads.get(workspaceId)?.abort()
       const controller = new AbortController()
@@ -1557,6 +1566,9 @@ export const useWorkspaceStore = defineStore('workspace', {
         // Guard against stale response: user may have switched workspace while
         // this request was in flight.
         const sessions = (await res.json()) as AgentSession[]
+        for (const session of sessions) {
+          if (session.role === 'parallel-review') useParallelReviewStore().remember(workspaceId, session.id)
+        }
         if (this.selectedWorkspaceId !== workspaceId || _sessionsRequestVersions.get(workspaceId) !== requestVersion)
           return
 
@@ -1569,7 +1581,11 @@ export const useWorkspaceStore = defineStore('workspace', {
         }
 
         // When auto-loop starts a new session, force-switch to it.
-        if (forceSelectId && this.sessions.some((s) => s.id === forceSelectId)) {
+        if (
+          forceSelectId &&
+          this.selectedSessionId === selectionAtStart &&
+          this.sessions.some((s) => s.id === forceSelectId)
+        ) {
           this.selectSession(forceSelectId)
           return
         }
@@ -1580,7 +1596,7 @@ export const useWorkspaceStore = defineStore('workspace', {
           const persisted = localStorage.getItem(`kobo:session:${workspaceId}`)
           const selectable = this.sessions.filter((session) => (session.activationOrder ?? 0) >= 0)
           const found = persisted ? selectable.find((s) => s.id === persisted) : null
-          this.selectSession(found?.id ?? selectable[0]?.id ?? null)
+          this.selectSession(found?.id ?? getCurrentSession(selectable)?.id ?? null)
         }
       } catch (err) {
         if (isAbortError(err) || controller.signal.aborted) return
@@ -1715,7 +1731,8 @@ export const useWorkspaceStore = defineStore('workspace', {
         if (idx >= 0) this.workspaces[idx] = updated
       }
       await this.fetchSessions(workspaceId)
-      if (wasSelected && this.selectedWorkspaceId === workspaceId) this.selectSession(this.sessions[0]?.id ?? null)
+      if (wasSelected && this.selectedWorkspaceId === workspaceId)
+        this.selectSession(getCurrentSession(this.sessions)?.id ?? null)
     },
 
     addActivityItem(workspaceId: string, item: ActivityItem) {
@@ -1731,7 +1748,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       // When agent responds, resolve pending user messages
       if (item.meta?.sender !== 'user' && item.meta?.sender !== 'system-prompt') {
         for (const existing of this.activityFeeds[workspaceId]) {
-          if (existing.meta?.pending) {
+          if (existing.meta?.pending && (!item.sessionId || existing.sessionId === item.sessionId)) {
             existing.meta.pending = false
           }
         }
@@ -1874,11 +1891,11 @@ export const useWorkspaceStore = defineStore('workspace', {
           for (const workspace of data.workspaces) {
             if ((_pendingInputVersions.get(workspace.id) ?? 0) !== (pendingAtStart.get(workspace.id) ?? 0)) continue
             const current = this.pendingQueue[workspace.id] ?? []
-            const byId = new Map(current.map((item) => [item.toolCallId, item]))
+            const byId = new Map(current.map((item) => [`${item.agentSessionId}:${item.toolCallId}`, item]))
             // Question forms reset when their input changes. Reuse unchanged
             // items so polling does not erase an answer still being written.
             const incoming = (data.pendingInputs[workspace.id] ?? []).map((item) => {
-              const previous = byId.get(item.toolCallId)
+              const previous = byId.get(`${item.agentSessionId}:${item.toolCallId}`)
               return previous && is.deepEqual(previous, item) ? previous : item
             })
             if (incoming.length === current.length && incoming.every((item, index) => item === current[index])) continue
@@ -2207,7 +2224,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       // engine session via `resume: true` instead of silently discarding its
       // context for a brand new one with a generic "continue" prompt.
       await this.fetchSessions(workspaceId)
-      const mostRecent = this.sessions[0]
+      const mostRecent = getCurrentSession(this.sessions)
       if (mostRecent && (mostRecent.status === 'completed' || mostRecent.status === 'error')) {
         await this.startWorkspace(workspaceId, undefined, mostRecent.id, true)
       } else {
@@ -2219,10 +2236,15 @@ export const useWorkspaceStore = defineStore('workspace', {
     enqueuePending(workspaceId: string, item: PendingItem): void {
       _pendingInputVersions.set(workspaceId, (_pendingInputVersions.get(workspaceId) ?? 0) + 1)
       const arr = this.pendingQueue[workspaceId] ?? []
-      // Dedup by toolCallId — a `session:user-input-requested` event can land
+      // Dedup within the producing session — a `session:user-input-requested` event can land
       // twice (live arrival + replay before purge succeeded); without this
       // guard the panel would surface back-to-back for the same callback.
-      if (arr.some((existing) => existing.toolCallId === item.toolCallId)) return
+      if (
+        arr.some(
+          (existing) => existing.toolCallId === item.toolCallId && existing.agentSessionId === item.agentSessionId,
+        )
+      )
+        return
       arr.push(item)
       this.pendingQueue[workspaceId] = arr
       if (item.kind === 'question') {
@@ -2235,17 +2257,26 @@ export const useWorkspaceStore = defineStore('workspace', {
       }
     },
 
-    /** Peek the head of the queue without removing it. */
-    peekPending(workspaceId: string): PendingItem | undefined {
-      return this.pendingQueue[workspaceId]?.[0]
+    /** Peek a session request; implicit callers retain the primary queue. */
+    peekPending(workspaceId: string, sessionId?: string | null): PendingItem | undefined {
+      return this.pendingQueue[workspaceId]?.find(
+        (item) =>
+          (!sessionId && !this.isParallelReviewSession(workspaceId, item.agentSessionId)) ||
+          item.agentSessionId === sessionId ||
+          (!item.agentSessionId && !this.isParallelReviewSession(workspaceId, sessionId)),
+      )
     },
 
     /** Remove and return the head of the queue. */
-    dequeuePending(workspaceId: string): PendingItem | undefined {
+    dequeuePending(workspaceId: string, toolCallId?: string, sessionId?: string | null): PendingItem | undefined {
       _pendingInputVersions.set(workspaceId, (_pendingInputVersions.get(workspaceId) ?? 0) + 1)
       const arr = this.pendingQueue[workspaceId]
       if (!arr || arr.length === 0) return undefined
-      const head = arr.shift()
+      const index = toolCallId
+        ? arr.findIndex((item) => item.toolCallId === toolCallId && item.agentSessionId === (sessionId ?? null))
+        : 0
+      if (index < 0) return undefined
+      const [head] = arr.splice(index, 1)
       if (arr.length === 0) delete this.pendingQueue[workspaceId]
       // Mirror the legacy single-entry map for any caller still reading it.
       const newHead = this.pendingQueue[workspaceId]?.[0]
@@ -2329,11 +2360,26 @@ export const useWorkspaceStore = defineStore('workspace', {
       awaitingFreeForm?: boolean,
       response?: string,
       selections?: Record<string, string[]>,
+      sessionId?: string | null,
     ): Promise<void> {
+      if (sessionId === undefined)
+        sessionId = this.pendingQueue[workspaceId]?.find(
+          (item) =>
+            (!toolCallId || item.toolCallId === toolCallId) &&
+            !this.isParallelReviewSession(workspaceId, item.agentSessionId),
+        )?.agentSessionId
+      toolCallId ??= this.peekPending(workspaceId, sessionId)?.toolCallId
       const res = await apiFetchResponseForStatus(`/api/workspaces/${workspaceId}/deferred-tool-use/answer`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ answers, toolCallId, awaitingFreeForm, response, selections }),
+        body: JSON.stringify({
+          answers,
+          toolCallId,
+          awaitingFreeForm,
+          response,
+          selections,
+          sessionId: sessionId ?? undefined,
+        }),
       })
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string }
@@ -2346,7 +2392,7 @@ export const useWorkspaceStore = defineStore('workspace', {
           /no deferred tool use pending|no agent running|no active engine process|no pending callback/i.test(message)
         ) {
           console.warn('[workspace] submitDeferredAnswer: deferred callback expired — clearing zombie panel locally')
-          this.dequeuePending(workspaceId)
+          this.dequeuePending(workspaceId, toolCallId, sessionId)
           void this.fetchWorkspaces()
           return
         }
@@ -2354,7 +2400,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       }
       // Optimistic dequeue + status refresh: the backend resolved the SDK
       // callback synchronously but `session:started` lags the SDK warm-up.
-      this.dequeuePending(workspaceId)
+      this.dequeuePending(workspaceId, toolCallId, sessionId)
       void this.fetchWorkspaces()
     },
 
@@ -2364,24 +2410,36 @@ export const useWorkspaceStore = defineStore('workspace', {
      * proceeds with sensible defaults or skips the question altogether.
      * Does NOT stop the agent.
      */
-    async cancelDeferredAnswer(workspaceId: string, reason?: string, toolCallId?: string): Promise<void> {
+    async cancelDeferredAnswer(
+      workspaceId: string,
+      reason?: string,
+      toolCallId?: string,
+      sessionId?: string | null,
+    ): Promise<void> {
+      if (sessionId === undefined)
+        sessionId = this.pendingQueue[workspaceId]?.find(
+          (item) =>
+            (!toolCallId || item.toolCallId === toolCallId) &&
+            !this.isParallelReviewSession(workspaceId, item.agentSessionId),
+        )?.agentSessionId
+      toolCallId ??= this.peekPending(workspaceId, sessionId)?.toolCallId
       const res = await apiFetchResponseForStatus(`/api/workspaces/${workspaceId}/deferred-tool-use/cancel`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ reason, toolCallId }),
+        body: JSON.stringify({ reason, toolCallId, sessionId: sessionId ?? undefined }),
       })
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string }
         const message = body.error ?? `HTTP ${res.status}`
         if (/no deferred tool use pending/i.test(message)) {
           console.warn('[workspace] cancelDeferredAnswer: backend has no pending — clearing zombie panel locally')
-          this.dequeuePending(workspaceId)
+          this.dequeuePending(workspaceId, toolCallId, sessionId)
           void this.fetchWorkspaces()
           return
         }
         throw new Error(message)
       }
-      this.dequeuePending(workspaceId)
+      this.dequeuePending(workspaceId, toolCallId, sessionId)
       void this.fetchWorkspaces()
     },
 
@@ -2392,17 +2450,24 @@ export const useWorkspaceStore = defineStore('workspace', {
       decision: 'allow' | 'deny',
       reason?: string,
       scope: 'once' | 'turn' | 'operation' | 'tool' = 'once',
+      sessionId?: string | null,
     ): Promise<void> {
+      if (sessionId === undefined)
+        sessionId = this.pendingQueue[workspaceId]?.find(
+          (item) =>
+            (!toolCallId || item.toolCallId === toolCallId) &&
+            !this.isParallelReviewSession(workspaceId, item.agentSessionId),
+        )?.agentSessionId
       const res = await apiFetchResponseForStatus(`/api/workspaces/${workspaceId}/deferred-permission/decision`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ toolCallId, decision, reason, scope }),
+        body: JSON.stringify({ toolCallId, decision, reason, scope, sessionId: sessionId ?? undefined }),
       })
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
         throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`)
       }
-      this.dequeuePending(workspaceId)
+      this.dequeuePending(workspaceId, toolCallId, sessionId)
       void this.fetchWorkspaces()
     },
 
@@ -2484,6 +2549,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       for (const toolUseId of Object.keys(map)) {
         const sub = map[toolUseId]
         if (sessionId && sub.sessionId && sub.sessionId !== sessionId) continue
+        if (!sessionId && this.isParallelReviewSession(workspaceId, sub.sessionId)) continue
         if (sub.status === 'running') {
           map[toolUseId] = { ...sub, status: 'done', updatedAt: now }
         }
@@ -2508,7 +2574,8 @@ export const useWorkspaceStore = defineStore('workspace', {
       const matches = Object.entries(map)
         .filter(
           ([key, sub]) =>
-            eventIds.has(key) || eventIds.has(sub.toolUseId) || (!!sub.taskId && eventIds.has(sub.taskId)),
+            (!data.sessionId || !sub.sessionId || data.sessionId === sub.sessionId) &&
+            (eventIds.has(key) || eventIds.has(sub.toolUseId) || (!!sub.taskId && eventIds.has(sub.taskId))),
         )
         .sort(([, a], [, b]) => a.startedAt.localeCompare(b.startedAt))
       const existing = matches[0]?.[1]
@@ -2533,7 +2600,11 @@ export const useWorkspaceStore = defineStore('workspace', {
       const threadIds = data.threadIds?.length
         ? [...new Set([...(existing?.threadIds ?? []), ...data.threadIds])]
         : existing?.threadIds
-      map[taskId ?? toolUseId] = {
+      map[
+        this.isParallelReviewSession(workspaceId, data.sessionId)
+          ? `${data.sessionId}:${taskId ?? toolUseId}`
+          : (taskId ?? toolUseId)
+      ] = {
         toolUseId,
         ...(taskId ? { taskId } : {}),
         ...(threadIds?.length ? { threadIds } : {}),
@@ -2664,6 +2735,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
 
     async flushQueuedMessage(workspaceId: string, sessionId: string) {
+      if (this.isParallelReviewSession(workspaceId, sessionId)) return
       const host = getWorkspaceQueueHost(this)
       if (host) return host.flush(workspaceId, sessionId)
       const queued = this.getQueuedMessage(workspaceId, sessionId)
@@ -2690,6 +2762,16 @@ export const useWorkspaceStore = defineStore('workspace', {
       if (websocket.isCompacting(workspaceId)) return
       this.cancelQueuedMessage(workspaceId, sessionId)
       websocket.sendChatMessage(workspaceId, queued.content, sessionId)
+    },
+
+    isParallelReviewSession(workspaceId: string, sessionId?: string | null): boolean {
+      return (
+        useParallelReviewStore().isReviewer(workspaceId, sessionId) ||
+        this.sessions.some(
+          (session) =>
+            session.workspaceId === workspaceId && session.id === sessionId && session.role === 'parallel-review',
+        )
+      )
     },
 
     setActiveAgentSession(workspaceId: string, sessionId: string) {
@@ -2755,7 +2837,7 @@ export const useWorkspaceStore = defineStore('workspace', {
         const feed = this.activityFeeds[workspaceId]
         if (feed) {
           for (const item of feed) {
-            if (item.meta?.pending) {
+            if (item.meta?.pending && !this.isParallelReviewSession(workspaceId, item.sessionId)) {
               item.meta.pending = false
             }
           }
@@ -2763,7 +2845,7 @@ export const useWorkspaceStore = defineStore('workspace', {
         const subs = this.subagents[workspaceId]
         if (subs) {
           for (const [id, sub] of Object.entries(subs) as [string, Subagent][]) {
-            if (sub.status === 'running') {
+            if (sub.status === 'running' && !this.isParallelReviewSession(workspaceId, sub.sessionId)) {
               subs[id] = { ...sub, status: 'done' }
             }
           }

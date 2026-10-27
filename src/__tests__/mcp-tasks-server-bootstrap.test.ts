@@ -5,7 +5,10 @@
 // ne doit jamais migrer — le backend l'a déjà fait à son démarrage.
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import Database from 'better-sqlite3'
 import { describe, expect, it } from 'vitest'
+import { createManagedMcpDispatcher } from '../mcp-server/managed-mcp-dispatcher.js'
+import { EXTERNAL_MEMORY_TOOL_DEFINITIONS, isMemoryToolName, MEMORY_TOOL_DEFINITIONS } from '../shared/memory-tools.js'
 
 describe('mcp tasks server bootstrap', () => {
   const source = readFileSync(join(process.cwd(), 'src/mcp-server/kobo-tasks-server.ts'), 'utf-8')
@@ -30,13 +33,20 @@ describe('mcp tasks server bootstrap', () => {
   })
 
   it('exposes external memory only in global stdio, not the workspace-bound catalogue', () => {
-    const source = readFileSync(join(process.cwd(), 'src/mcp-server/managed-mcp-dispatcher.ts'), 'utf-8')
-    const globalToolsStart = source.indexOf('const GLOBAL_TOOLS')
-    const globalToolsEnd = source.indexOf('/**\n * Tool names callable', globalToolsStart)
-    expect(source.slice(globalToolsStart, globalToolsEnd)).toContain('EXTERNAL_MEMORY_TOOL_DEFINITIONS')
-    expect(source).toContain('...MEMORY_TOOL_DEFINITIONS')
-    expect(source).toContain(
-      'GLOBAL_TOOLS.filter((tool) => !isMemoryToolName(tool.name) && !isProgressBarTool(tool.name))',
-    )
+    const db = new Database(':memory:')
+    try {
+      const context = {
+        db,
+        backendUrl: 'http://kobo.internal',
+        env: {},
+        backendRequest: async () => null,
+      }
+      const globalTools = createManagedMcpDispatcher(context).availableTools()
+      const managedTools = createManagedMcpDispatcher({ ...context, workspaceId: 'own' }).availableTools()
+      expect(globalTools.filter((tool) => isMemoryToolName(tool.name))).toEqual(EXTERNAL_MEMORY_TOOL_DEFINITIONS)
+      expect(managedTools.filter((tool) => isMemoryToolName(tool.name))).toEqual(MEMORY_TOOL_DEFINITIONS)
+    } finally {
+      db.close()
+    }
   })
 })

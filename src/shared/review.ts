@@ -20,3 +20,12 @@ export function reviewConfigurationChanged(a: ReviewConfiguration, b: ReviewConf
     a.agentPermissionMode !== b.agentPermissionMode
   )
 }
+
+export interface ParallelReviewStatus {
+  compacting: boolean
+  reviewSessionId: string
+  originalSessionId: string
+  phase: 'reviewing' | 'closing' | 'ready' | 'dispatching' | 'unknown' | 'blocked' | 'completed' | 'interrupted'
+  error: string | null
+  returnToSession: boolean
+}

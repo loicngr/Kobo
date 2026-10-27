@@ -9,7 +9,7 @@ export function routeEvent(workspaceId: string, agentSessionId: string, event: A
     return
   }
   if (event.kind === 'mcp:status' && event.status !== 'error') {
-    emitEphemeral(workspaceId, 'agent:event', event)
+    emitEphemeral(workspaceId, 'agent:event', event, agentSessionId)
     return
   }
   emit(workspaceId, 'agent:event', event, agentSessionId)

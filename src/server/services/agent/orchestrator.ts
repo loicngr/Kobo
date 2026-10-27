@@ -41,6 +41,13 @@ import {
   markMemoryContextSubmitted,
 } from '../memory-context-service.js'
 import {
+  getParallelReview,
+  getParallelReviewStatus,
+  reconcileParallelReviews,
+  setParallelReviewPhase,
+  settleParallelReviewReturn,
+} from '../parallel-review-service.js'
+import {
   closeProgressCapability,
   createProgressCapability,
   type ProgressCapability,
@@ -140,6 +147,10 @@ export function getBackendPort(): number {
 
 /** workspaceId -> SessionController */
 const controllers = new Map<string, SessionController>()
+const parallelReviewControllers = new Map<string, SessionController>()
+const parallelReviewDispatchAttempts = new Map<string, symbol>()
+const parallelPending = new Map<string, PendingItem[]>()
+const parallelCompacting = new WeakSet<SessionController>()
 const pendingTerminalControllers = new WeakSet<SessionController>()
 const finalizedControllers = new WeakSet<SessionController>()
 /** Replacements waiting for the previous controller to release its worktree. */
@@ -277,6 +288,7 @@ function finishCompaction(workspaceId: string, controller: SessionController): v
       ? consumePreAwaitStatus(workspaceId)
       : (previous ?? 'executing')
   updateWorkspaceStatus(workspaceId, restored)
+  void dispatchParallelReviewReturn(workspaceId)
 }
 
 export function assertWorkspaceNotCompacting(workspaceId: string): void {
@@ -308,7 +320,7 @@ function dequeuePending(workspaceId: string): PendingItem | undefined {
  * toolCallId from `ws_events`, so a future F5 / WS reconnect doesn't
  * resurrect a question the user has already answered or cancelled.
  */
-function purgePersistedUserInputRequest(workspaceId: string, toolCallId: string): void {
+function purgePersistedUserInputRequest(workspaceId: string, toolCallId: string, sessionId: string): void {
   try {
     const db = getDb()
     db.prepare(
@@ -316,8 +328,8 @@ function purgePersistedUserInputRequest(workspaceId: string, toolCallId: string)
        WHERE workspace_id = ?
          AND type = 'agent:event'
          AND json_extract(payload, '$.kind') = 'session:user-input-requested'
-         AND json_extract(payload, '$.toolCallId') = ?`,
-    ).run(workspaceId, toolCallId)
+         AND json_extract(payload, '$.toolCallId') = ? AND session_id = ?`,
+    ).run(workspaceId, toolCallId, sessionId)
   } catch (err) {
     console.error('[orchestrator] Failed to purge persisted user-input-requested:', err)
   }
@@ -421,6 +433,21 @@ let watchdogTimer: ReturnType<typeof setInterval> | null = null
 const CONTROLLER_STARTUP_GRACE_MS = 60_000
 
 function runWatchdog(): void {
+  for (const [workspaceId, controller] of parallelReviewControllers) {
+    if (controller.status === 'stopping' || pendingTerminalControllers.has(controller)) continue
+    const process = controller.engineProcess
+    if (
+      (!process && Date.now() - controller.startedAt >= CONTROLLER_STARTUP_GRACE_MS) ||
+      process?.isAlive?.() === false
+    ) {
+      handleParallelReviewEvent(workspaceId, controller, {
+        kind: 'error',
+        category: 'other',
+        message: 'Review runtime stopped responding',
+      })
+      void stopParallelReview(workspaceId, controller.agentSessionId)
+    }
+  }
   for (const [workspaceId, ctrl] of controllers) {
     // D1 — a controller already in `stopping` state is being torn down by
     // `stopController`/`stopAgentAndWait`, which has its own bounded deadline
@@ -496,6 +523,7 @@ function runWatchdog(): void {
  * Called once at boot, BEFORE `startWatchdog`.
  */
 export function reconcileOrphanSessions(): void {
+  reconcileParallelReviews()
   const now = new Date().toISOString()
 
   try {
@@ -714,7 +742,7 @@ function resolveSessionForResume(
   } else {
     lastSession = db
       .prepare(
-        `SELECT id, engine_session_id, engine FROM agent_sessions WHERE workspace_id = ? AND COALESCE(engine, 'claude-code') = ? AND activation_order >= 0 ORDER BY ${SESSION_RECENCY_ORDER} LIMIT 1`,
+        `SELECT id, engine_session_id, engine FROM agent_sessions WHERE workspace_id = ? AND role = 'primary' AND COALESCE(engine, 'claude-code') = ? AND activation_order >= 0 ORDER BY ${SESSION_RECENCY_ORDER} LIMIT 1`,
       )
       .get(workspaceId, engineId) as AgentSessionRow | undefined
   }
@@ -971,7 +999,7 @@ export function forgetResumeFailed(workspaceId: string): void {
 
 /** Public reconnect snapshot: select DTO fields and detach nested JSON inputs. */
 export function getPendingInputs(workspaceId: string): PendingItem[] {
-  return (pendingQueue.get(workspaceId) ?? []).map((item) => {
+  return [...(pendingQueue.get(workspaceId) ?? []), ...(parallelPending.get(workspaceId) ?? [])].map((item) => {
     const identity = {
       agentSessionId: item.agentSessionId,
       toolCallId: item.toolCallId,
@@ -1640,6 +1668,9 @@ function onSessionEnded(
 }
 
 export interface AgentLaunchOptions {
+  parallelReview?: { engine: string }
+  /** Resume an exact source without rewriting the workspace configuration. */
+  engineOverride?: string
   lifecycleOwner?: symbol
   mcpEnv?: Record<string, string>
   /** Generation turns must not settle instructions or advance loop progress. */
@@ -1684,6 +1715,7 @@ const reviewReturnDispatchOwners = new Map<string, symbol>()
 /** Resume durable review work only after the previous runtime has closed and admission allows it. */
 export function resumePendingReviewReturns(onlyWorkspaceId?: string): void {
   if (isShuttingDown()) return
+  resumePendingParallelReviewReturns()
   for (const pending of listReviewReturns()) {
     const id = pending.workspaceId
     if (onlyWorkspaceId && onlyWorkspaceId !== id) continue
@@ -1827,13 +1859,17 @@ export function startAgent(
   assertWorkspaceLifecycleAvailable(workspaceId, launch?.lifecycleOwner)
   const workspace = getWs(workspaceId)
   if (!workspace) throw new Error(`Workspace '${workspaceId}' not found`)
-  assertWorkspaceNotCompacting(workspaceId)
+  if (!launch?.parallelReview) assertWorkspaceNotCompacting(workspaceId)
   if (workspace.archivedAt) throw new Error(`Workspace '${workspaceId}' is archived`)
   if (workspace.worktreePurgedAt) throw new Error(`Workspace '${workspaceId}' worktree is purged`)
 
-  const engineId = readWorkspaceEngineId(workspaceId)
+  const registry = launch?.parallelReview ? parallelReviewControllers : controllers
+  const engineId = launch?.parallelReview?.engine ?? launch?.engineOverride ?? readWorkspaceEngineId(workspaceId)
+  if (!launch?.parallelReview && existingSessionId && isParallelReviewSession(workspaceId, existingSessionId))
+    throw new Error('Parallel review sessions cannot be resumed as the primary agent')
   const engine = resolveEngine(engineId)
   const restricted =
+    !!launch?.parallelReview ||
     !!launch?.handoffGeneration ||
     launch?.mcpEnv?.KOBO_REVIEW_ONLY === '1' ||
     !!launch?.mcpEnv?.KOBO_FINAL_REVIEW_TOKEN ||
@@ -1849,7 +1885,7 @@ export function startAgent(
   })
 
   // "For this turn" never survives a new agent session.
-  permissionPolicyService.clearTurnPermissions(workspaceId)
+  if (!launch?.parallelReview) permissionPolicyService.clearTurnPermissions(workspaceId)
   // Zombie detection: an SDK iterator hung on a never-resolved canUseTool
   // callback can leave its controller in the map after the workspace is
   // logically idle. Evict it instead of refusing the new session.
@@ -1857,8 +1893,9 @@ export function startAgent(
   // A controller already stopping keeps ownership until its stop completes;
   // callers replacing it must await stopAgentAndWait before starting again.
   let zombieEviction: Promise<void> = Promise.resolve()
-  const existingCtrl = controllers.get(workspaceId)
+  const existingCtrl = registry.get(workspaceId)
   if (existingCtrl) {
+    if (launch?.parallelReview) throw new Error('A parallel review is already running')
     if (existingCtrl.status === 'stopping') throw new Error('Agent is still stopping; retry after its stop completes')
     const wsForCheck = getWs(workspaceId)
     const status = wsForCheck?.status
@@ -1902,7 +1939,6 @@ export function startAgent(
     const r = resolveSessionForResume(workspaceId, existingSessionId, model, engineId)
     agentSessionId = r.agentSessionId
     resumeFromEngineSessionId = r.engineSessionId
-    // A native resume is only used by the currently selected workspace engine.
     // Keep older DB rows attributable even when they were created pre-migration.
     getDb().prepare('UPDATE agent_sessions SET engine = ? WHERE id = ?').run(engineId, agentSessionId)
   } else {
@@ -1911,8 +1947,12 @@ export function startAgent(
 
   // Persist before the asynchronous engine can emit its first event. This
   // survives a Kōbō restart and does not depend on SDK system:init delivery.
-  activateSession(workspaceId, agentSessionId)
-  captureTaskProgressBaseline(workspaceId, agentSessionId)
+  if (launch?.parallelReview)
+    getDb().prepare("UPDATE agent_sessions SET role='parallel-review' WHERE id=?").run(agentSessionId)
+  else {
+    activateSession(workspaceId, agentSessionId)
+    captureTaskProgressBaseline(workspaceId, agentSessionId)
+  }
 
   const settings = ws ? readEffectiveSettingsSafe(ws.projectPath) : readEffectiveSettingsSafe(workingDir)
 
@@ -1965,7 +2005,7 @@ export function startAgent(
     // Cascade: explicit caller override → workspace setting → 'bypass'.
     agentPermissionMode: effectivePermissionMode,
     readOnly,
-    autoLoop: ws?.autoLoop === true,
+    autoLoop: !launch?.parallelReview && ws?.autoLoop === true,
     resumeFromEngineSessionId,
     backendUrl: `http://127.0.0.1:${backendPort}`,
     koboHome: (() => {
@@ -1994,7 +2034,7 @@ export function startAgent(
         shuttingDown ||
         controller.isClosed ||
         controller.status === 'stopping' ||
-        controllers.get(workspaceId) !== controller
+        registry.get(workspaceId) !== controller
       )
         return
       emit(
@@ -2032,10 +2072,12 @@ export function startAgent(
     revokeProgressCapability(progressCapability.token)
     throw error
   }
+  const dispatchEvent = (ev: AgentEvent) =>
+    launch?.parallelReview
+      ? handleParallelReviewEvent(workspaceId, controller, ev)
+      : handleEvent(workspaceId, agentSessionId, controller, ev)
   let controller: SessionController
-  controller = new SessionController(workspaceId, agentSessionId, engine, (ev) =>
-    handleEvent(workspaceId, agentSessionId, controller, ev),
-  )
+  controller = new SessionController(workspaceId, agentSessionId, engine, (ev) => dispatchEvent(ev))
   controllerInternalMcpCapabilities.set(controller, internalMcpCapability.token)
   controllerProgressCapabilities.set(controller, progressCapability)
   controllerMemoryCapabilities.set(controller, memoryCapability.token)
@@ -2047,11 +2089,25 @@ export function startAgent(
       revokeControllerCapabilities(controller)
       closeProgressCapability(progressCapability)
       controllerProgressCapabilities.delete(controller)
+      if (launch?.parallelReview) {
+        setImmediate(() => {
+          if (
+            !shuttingDown &&
+            parallelReviewControllers.get(workspaceId) === controller &&
+            !pendingTerminalControllers.has(controller)
+          )
+            handleParallelReviewEvent(workspaceId, controller, {
+              kind: 'session:ended',
+              reason: 'error',
+              exitCode: null,
+            })
+        })
+      }
     })
     .catch((error) => console.error('[progress-bars] Failed to finalize closed launch', error))
   if (launch) launchOptions.set(controller, launch)
-  registerSessionLifecycleOwner(workspaceId, agentSessionId, controller)
-  if (!existingCtrl) controllers.set(workspaceId, controller)
+  if (!launch?.parallelReview) registerSessionLifecycleOwner(workspaceId, agentSessionId, controller)
+  if (!existingCtrl) registry.set(workspaceId, controller)
   else pendingStarts.set(workspaceId, controller)
 
   // Kick off engine.start asynchronously, BEHIND the zombie eviction so the
@@ -2067,9 +2123,9 @@ export function startAgent(
       const current = getWs(workspaceId)
       if (!current || current.archivedAt || current.worktreePurgedAt)
         throw new Error('Workspace is no longer available')
-      const registered = controllers.get(workspaceId)
+      const registered = registry.get(workspaceId)
       if (registered && registered !== controller) throw new Error('Agent is still stopping')
-      controllers.set(workspaceId, controller)
+      registry.set(workspaceId, controller)
       const memoryContext = launch?.handoffGeneration
         ? undefined
         : buildMemoryContext({
@@ -2095,17 +2151,17 @@ export function startAgent(
       if (ready && contextId) {
         void ready.then(
           () => {
-            if (!shuttingDown && !controller.isClosed && controllers.get(workspaceId) === controller)
+            if (!shuttingDown && !controller.isClosed && registry.get(workspaceId) === controller)
               markMemoryContextInitialized(contextId)
           },
           () => {
-            if (!shuttingDown && !controller.isClosed && controllers.get(workspaceId) === controller)
+            if (!shuttingDown && !controller.isClosed && registry.get(workspaceId) === controller)
               markMemoryContextFailed(contextId)
           },
         )
       }
       const pid = controller.pid
-      if (pid !== undefined && !shuttingDown && !controller.isClosed && controllers.get(workspaceId) === controller) {
+      if (pid !== undefined && !shuttingDown && !controller.isClosed && registry.get(workspaceId) === controller) {
         try {
           const db = getDb()
           db.prepare('UPDATE agent_sessions SET pid = ? WHERE id = ?').run(pid, agentSessionId)
@@ -2126,22 +2182,19 @@ export function startAgent(
     })
     .catch((err) => {
       revokeControllerCapabilities(controller)
-      if (
-        shuttingDown ||
-        (controllers.get(workspaceId) !== controller && pendingStarts.get(workspaceId) !== controller)
-      )
+      if (shuttingDown || (registry.get(workspaceId) !== controller && pendingStarts.get(workspaceId) !== controller))
         return
       const contextId = controllerMemoryContextIds.get(controller)
       if (contextId) markMemoryContextFailed(contextId)
       if (existingCtrl && controller.status === 'stopping') return
       console.error('[orchestrator] engine.start failed:', err)
       const message = err instanceof Error ? err.message : String(err)
-      handleEvent(workspaceId, agentSessionId, controller, {
+      dispatchEvent({
         kind: 'error',
         category: 'spawn_failed',
         message,
       })
-      handleEvent(workspaceId, agentSessionId, controller, {
+      dispatchEvent({
         kind: 'session:ended',
         reason: 'error',
         exitCode: null,
@@ -2160,6 +2213,13 @@ export function startAgent(
  * user message.
  */
 export function interruptAgent(workspaceId: string, options: InterruptAgentOptions = {}): void {
+  if (options.expectedSessionId && isParallelReviewSession(workspaceId, options.expectedSessionId)) {
+    const reviewer = parallelReviewControllers.get(workspaceId)
+    if (!reviewer || reviewer.agentSessionId !== options.expectedSessionId || reviewer.status !== 'running')
+      throw new InterruptAgentError('Review session is no longer active', 'session_not_active')
+    reviewer.interrupt()
+    return
+  }
   const ctrl = controllers.get(workspaceId)
   if (!ctrl) {
     throw new InterruptAgentError(`No agent running for workspace '${workspaceId}'`, 'no_agent_running')
@@ -2304,6 +2364,10 @@ export async function stopAgentAndWait(
   /** Only `user` disables auto-loop; technical stops preserve its persisted intent. */
   cause: StopCause = 'user',
 ): Promise<StopAgentOutcome> {
+  const stopReviewer = ['user', 'delete', 'purge', 'archive', 'setup', 'shutdown'].includes(cause)
+  const reviewer = stopReviewer ? parallelReviewControllers.get(workspaceId) : undefined
+  const reviewStop = reviewer ? stopParallelReviewController(workspaceId, reviewer, cause) : Promise.resolve()
+  if (stopReviewer && cause !== 'shutdown' && getParallelReview(workspaceId)) cancelParallelReviewReturn(workspaceId)
   if (['user', 'delete', 'purge', 'archive'].includes(cause)) cancelReviewReturn(workspaceId)
   const finishHandoffStop = ['user', 'delete', 'purge', 'archive'].includes(cause)
     ? requestHandoffStop(workspaceId)
@@ -2342,8 +2406,8 @@ export async function stopAgentAndWait(
       : Promise.resolve()
 
   const outcome = await raceWithTimeout<StopAgentOutcome>(
-    Promise.all([pendingStop, controllerStop, cancelSchedules, disableLoop]).then(
-      () => (ctrl || pending ? ('stopped' as const) : ('not-running' as const)),
+    Promise.all([pendingStop, controllerStop, reviewStop, cancelSchedules, disableLoop]).then(
+      () => (ctrl || pending || reviewer ? ('stopped' as const) : ('not-running' as const)),
       (err) => {
         console.error(`[orchestrator] controller.stop failed for '${workspaceId}':`, err)
         return 'failed' as const
@@ -2367,7 +2431,7 @@ export async function stopAgentAndWait(
  */
 export function stopAgent(workspaceId: string): void {
   const ctrl = controllers.get(workspaceId)
-  if (!ctrl) {
+  if (!ctrl && !parallelReviewControllers.has(workspaceId)) {
     throw new Error(`No agent running for workspace '${workspaceId}'`)
   }
   void stopAgentAndWait(workspaceId).catch((err) => {
@@ -2391,7 +2455,7 @@ export async function stopAllAgents(timeoutMs = 3_000): Promise<void> {
   // into a logged, returned `StopAgentOutcome`
   // instead of a thrown error. A wrapping catch here would be unreachable
   // dead code pretending to guard against a failure mode that can't occur.
-  const workspaceIds = new Set([...controllers.keys(), ...pendingStarts.keys()])
+  const workspaceIds = new Set([...controllers.keys(), ...pendingStarts.keys(), ...parallelReviewControllers.keys()])
   await Promise.all([...workspaceIds].map((workspaceId) => stopAgentAndWait(workspaceId, timeoutMs, 'shutdown')))
 }
 
@@ -2402,7 +2466,7 @@ export function isShuttingDown(): boolean {
 
 /** Used synchronously by update reservation; include runtimes still closing and pending replacements. */
 export function isIdleForUpdate(): boolean {
-  if (shuttingDown || controllers.size || pendingStarts.size) return false
+  if (shuttingDown || controllers.size || pendingStarts.size || parallelReviewControllers.size) return false
   const db = getDb()
   return (
     !db.prepare("SELECT 1 FROM agent_sessions WHERE status = 'running' LIMIT 1").get() &&
@@ -2446,6 +2510,10 @@ export async function sendMessage(
   beforeDispatch?: () => void,
 ): Promise<void> {
   assertWorkspaceLifecycleAvailable(workspaceId)
+  if (expectedSessionId && isParallelReviewSession(workspaceId, expectedSessionId)) {
+    await sendParallelReviewMessage(workspaceId, expectedSessionId, content, beforeDispatch)
+    return
+  }
   assertWorkspaceNotCompacting(workspaceId)
   const ctrl = controllers.get(workspaceId)
   if (!ctrl) {
@@ -2529,6 +2597,342 @@ const AGENT_UNAVAILABLE_PATTERNS = [
   new RegExp(AGENT_NO_LONGER_RUNNING_TEXT, 'i'),
 ] as const
 
+export function isParallelReviewSession(workspaceId: string, sessionId: string): boolean {
+  return !!getDb()
+    .prepare("SELECT 1 FROM agent_sessions WHERE workspace_id=? AND id=? AND role='parallel-review'")
+    .get(workspaceId, sessionId)
+}
+
+export function isParallelReviewCompacting(workspaceId: string): boolean {
+  const controller = parallelReviewControllers.get(workspaceId)
+  return !!controller && parallelCompacting.has(controller)
+}
+
+export function hasParallelReviewController(workspaceId: string): boolean {
+  return parallelReviewControllers.has(workspaceId)
+}
+
+function handleParallelReviewEvent(workspaceId: string, controller: SessionController, event: AgentEvent): void {
+  if (shuttingDown || parallelReviewControllers.get(workspaceId) !== controller || finalizedControllers.has(controller))
+    return
+  const sessionId = controller.agentSessionId
+  if (event.kind === 'session:ended') {
+    if (pendingTerminalControllers.has(controller)) return
+    pendingTerminalControllers.add(controller)
+    const report = getParallelReview(workspaceId)
+    if (
+      report?.reviewSessionId === sessionId &&
+      report.phase === 'reviewing' &&
+      event.reason === 'completed' &&
+      !controller.stopCause &&
+      (event.exitCode === 0 || event.exitCode === null)
+    )
+      setParallelReviewPhase(workspaceId, 'closing', null, buildReviewReturnPrompt(workspaceId, sessionId))
+    // A result is not a process exit: retain ownership and all lifecycle guards until closure.
+    void controller.closed
+      .then(() => {
+        if (parallelReviewControllers.get(workspaceId) !== controller) return
+        finalizedControllers.add(controller)
+        parallelReviewControllers.delete(workspaceId)
+        parallelPending.delete(workspaceId)
+        if (shuttingDown) return
+        purgeAllPersistedUserInputRequests(workspaceId, sessionId)
+        routeEvent(workspaceId, sessionId, { ...event, sessionRole: 'parallel-review' })
+        getDb()
+          .prepare('UPDATE agent_sessions SET status=?, ended_at=?, end_reason=? WHERE id=?')
+          .run(event.reason === 'completed' ? 'completed' : 'error', new Date().toISOString(), event.reason, sessionId)
+        const pending = getParallelReview(workspaceId)
+        if (pending?.reviewSessionId === sessionId && ['reviewing', 'closing', 'ready'].includes(pending.phase)) {
+          if (
+            event.reason === 'completed' &&
+            !controller.stopCause &&
+            (event.exitCode === 0 || event.exitCode === null)
+          ) {
+            setParallelReviewPhase(
+              workspaceId,
+              pending.returnToSession ? 'ready' : 'completed',
+              null,
+              buildReviewReturnPrompt(workspaceId, sessionId),
+            )
+            void dispatchParallelReviewReturn(workspaceId)
+          } else setParallelReviewPhase(workspaceId, 'interrupted', 'Review did not complete')
+        }
+        notifyCapacityAvailable()
+      })
+      .catch((error) => console.error('[parallel-review] Closure failed', error))
+    return
+  }
+  if (pendingTerminalControllers.has(controller)) return
+  routeEvent(workspaceId, sessionId, { ...event, sessionRole: 'parallel-review' })
+  if (event.kind === 'session:started') {
+    getDb()
+      .prepare('UPDATE agent_sessions SET engine_session_id=?, model=COALESCE(?, model) WHERE id=?')
+      .run(event.engineSessionId, event.model ?? null, sessionId)
+    const key = controllerMemoryConversationKeys.get(controller)
+    if (key) bindMemoryNativeConversation(key, event.engineSessionId)
+  }
+  if (controller.status === 'stopping') return
+  if (event.kind === 'session:compacting') {
+    if (event.active) {
+      parallelCompacting.add(controller)
+      const state = memoryCompactionStates.get(controller) ?? { active: false, compactedWithoutId: false }
+      state.active = true
+      memoryCompactionStates.set(controller, state)
+    } else parallelCompacting.delete(controller)
+  }
+  if (event.kind === 'session:compacted') {
+    parallelCompacting.delete(controller)
+    const key = controllerMemoryConversationKeys.get(controller)
+    const state = memoryCompactionStates.get(controller)
+    if (
+      key &&
+      (event.compactionId ? event.compactionId !== state?.lastId : !state || state.active || !state.compactedWithoutId)
+    ) {
+      advanceMemoryConversationEpoch(key)
+      memoryCompactionStates.set(controller, { active: false, compactedWithoutId: true, lastId: event.compactionId })
+    }
+  }
+  if (event.kind === 'session:compacting' || event.kind === 'session:compacted') {
+    const status = getParallelReviewStatus(workspaceId)
+    if (status) emitEphemeral(workspaceId, 'review:parallel-status', status)
+  }
+  if (event.kind === 'session:user-input-requested') {
+    const items = parallelPending.get(workspaceId) ?? []
+    if (!items.some((item) => item.toolCallId === event.toolCallId)) {
+      items.push(
+        event.requestKind === 'question'
+          ? {
+              kind: 'question',
+              agentSessionId: sessionId,
+              toolCallId: event.toolCallId,
+              toolName: event.toolName,
+              input: event.payload,
+            }
+          : {
+              kind: 'permission',
+              agentSessionId: sessionId,
+              toolCallId: event.toolCallId,
+              toolName: event.toolName,
+              toolInput: event.payload,
+            },
+      )
+      parallelPending.set(workspaceId, items)
+    }
+  }
+}
+
+function resolveParallelInput(
+  workspaceId: string,
+  sessionId: string,
+  toolCallId: string | undefined,
+  kind: 'question' | 'permission',
+  response: import('./engines/types.js').PendingUserInputResponse,
+): void {
+  const controller = parallelReviewControllers.get(workspaceId)
+  if (!controller || controller.agentSessionId !== sessionId || controller.status !== 'running')
+    throw new Error('Review session is no longer active')
+  const items = parallelPending.get(workspaceId) ?? []
+  const index = items.findIndex(
+    (item) => item.agentSessionId === sessionId && item.kind === kind && item.toolCallId === toolCallId,
+  )
+  if (index < 0 || !toolCallId) throw new Error('No matching review input request')
+  if (!controller.engineProcess?.resolvePendingUserInput(toolCallId, response))
+    throw new Error('No pending review callback')
+  items.splice(index, 1)
+  getDb()
+    .prepare(
+      "DELETE FROM ws_events WHERE workspace_id=? AND session_id=? AND type='agent:event' AND json_extract(payload, '$.kind')='session:user-input-requested' AND json_extract(payload, '$.toolCallId')=?",
+    )
+    .run(workspaceId, sessionId, toolCallId)
+}
+
+async function sendParallelReviewMessage(
+  workspaceId: string,
+  sessionId: string,
+  content: string,
+  beforeDispatch?: () => void,
+): Promise<void> {
+  const controller = parallelReviewControllers.get(workspaceId)
+  const check = () => {
+    assertWorkspaceLifecycleAvailable(workspaceId)
+    if (
+      !controller ||
+      parallelReviewControllers.get(workspaceId) !== controller ||
+      controller.agentSessionId !== sessionId ||
+      controller.status !== 'running' ||
+      pendingTerminalControllers.has(controller) ||
+      controller.isClosed
+    )
+      throw new Error('Review session is no longer active; no message was sent')
+    if (parallelCompacting.has(controller) || parallelPending.get(workspaceId)?.length)
+      throw new Error('Review is waiting for input or compacting')
+  }
+  check()
+  await controller!.sendMessage(content, () => {
+    check()
+    beforeDispatch?.()
+  })
+}
+
+async function stopParallelReviewController(
+  workspaceId: string,
+  controller: SessionController,
+  cause: StopCause,
+): Promise<void> {
+  revokeControllerCapabilities(controller)
+  controller.stopCause = cause
+  await controller.stop()
+  if (parallelReviewControllers.get(workspaceId) === controller) {
+    // Engines are allowed to close without a final event.
+    handleParallelReviewEvent(workspaceId, controller, { kind: 'session:ended', reason: 'killed', exitCode: null })
+    await controller.closed
+    parallelReviewControllers.delete(workspaceId)
+  }
+}
+
+export async function stopParallelReview(
+  workspaceId: string,
+  sessionId: string,
+  timeoutMs = STOP_AGENT_TIMEOUT_MS,
+): Promise<StopAgentOutcome> {
+  const controller = parallelReviewControllers.get(workspaceId)
+  if (!controller || controller.agentSessionId !== sessionId) throw new Error('Review session is no longer active')
+  return raceWithTimeout(
+    stopParallelReviewController(workspaceId, controller, 'user').then(
+      () => 'stopped' as const,
+      () => 'failed' as const,
+    ),
+    timeoutMs,
+    () => 'timeout' as const,
+  )
+}
+
+export async function dispatchParallelReviewReturn(workspaceId: string): Promise<void> {
+  if (isShuttingDown()) return
+  const pending = getParallelReview(workspaceId)
+  if (!pending?.returnToSession || pending.phase !== 'ready' || !pending.returnPrompt) return
+  const workspace = getWs(workspaceId)
+  if (!workspace || workspace.archivedAt || workspace.worktreePurgedAt || workspaceLifecycleReason(workspaceId)) return
+  if (parallelReviewControllers.has(workspaceId)) return
+  const controller = controllers.get(workspaceId)
+  if (
+    controller &&
+    (controller.agentSessionId !== pending.originalSessionId ||
+      controller.status !== 'running' ||
+      pendingTerminalControllers.has(controller) ||
+      controller.isClosed)
+  )
+    return
+  if (controller && (workspace.status === 'compacting' || workspace.status === 'awaiting-user')) return
+  if (controller && !resolveEngine(pending.original.engine).capabilities.supportsLiveSteering) return
+  if (!controller && !autoLoopService.canStartAutomatically(workspaceId)) return
+  const source = getDb()
+    .prepare("SELECT engine_session_id, engine FROM agent_sessions WHERE workspace_id=? AND id=? AND role='primary'")
+    .get(workspaceId, pending.originalSessionId) as
+    | { engine_session_id: string | null; engine: string | null }
+    | undefined
+  if (
+    !source ||
+    (!controller && !source.engine_session_id) ||
+    (source.engine && source.engine !== pending.original.engine)
+  ) {
+    setParallelReviewPhase(workspaceId, 'blocked', 'The original session no longer exists or cannot be resumed')
+    return
+  }
+  const attempt = Symbol('parallel-review-return')
+  parallelReviewDispatchAttempts.set(workspaceId, attempt)
+  setParallelReviewPhase(workspaceId, 'dispatching')
+  const isCurrentAttempt = () => {
+    if (isShuttingDown() || parallelReviewDispatchAttempts.get(workspaceId) !== attempt) return false
+    const current = getParallelReview(workspaceId)
+    return current?.reviewSessionId === pending.reviewSessionId && current.phase === 'dispatching'
+  }
+  const finishAttempt = (phase: 'completed' | 'unknown' | 'blocked', error: string | null = null) => {
+    if (!isCurrentAttempt()) return false
+    parallelReviewDispatchAttempts.delete(workspaceId)
+    return settleParallelReviewReturn(workspaceId, pending.reviewSessionId, phase, error)
+  }
+  let attempted = false
+  try {
+    if (controller) {
+      await controller.sendMessage(pending.returnPrompt, () => {
+        if (controllers.get(workspaceId) !== controller || controller.isClosed || !isCurrentAttempt())
+          throw new Error('The original session changed before delivery')
+        assertWorkspaceLifecycleAvailable(workspaceId)
+        assertWorkspaceNotCompacting(workspaceId)
+        if (getWs(workspaceId)?.status === 'awaiting-user') throw new Error('The original session is awaiting input')
+        attempted = true
+      })
+      if (!finishAttempt('completed')) return
+      emit(
+        workspaceId,
+        'user:message',
+        { content: pending.returnPrompt, sender: 'system-prompt' },
+        pending.originalSessionId,
+      )
+    } else {
+      startAgent(
+        workspaceId,
+        workspace.worktreePath,
+        pending.returnPrompt,
+        pending.original.model,
+        true,
+        pending.original.agentPermissionMode,
+        pending.originalSessionId,
+        pending.original.engine === 'mistral-vibe' ? 'auto' : pending.original.reasoningEffort,
+        () => {
+          if (!isCurrentAttempt()) throw new Error('Review return attempt is no longer active')
+        },
+        {
+          engineOverride: pending.original.engine,
+          requireInputAcceptance: true,
+          onStarted: () => {
+            finishAttempt('completed')
+          },
+          onError: (message) => {
+            finishAttempt('unknown', message)
+          },
+        },
+      )
+      updateWorkspaceStatus(workspaceId, 'executing')
+      emit(
+        workspaceId,
+        'user:message',
+        { content: pending.returnPrompt, sender: 'system-prompt' },
+        pending.originalSessionId,
+      )
+    }
+  } catch (error) {
+    finishAttempt(attempted ? 'unknown' : 'blocked', error instanceof Error ? error.message : String(error))
+  }
+}
+
+export function resumePendingParallelReviewReturns(): void {
+  for (const row of getDb().prepare("SELECT workspace_id FROM parallel_reviews WHERE phase='ready'").all() as {
+    workspace_id: string
+  }[])
+    void dispatchParallelReviewReturn(row.workspace_id)
+}
+
+export function retryParallelReviewReturn(workspaceId: string, expectedSessionId?: string): void {
+  const pending = getParallelReview(workspaceId)
+  if (expectedSessionId && pending?.reviewSessionId !== expectedSessionId) throw new Error('Review session changed')
+  if (!pending?.returnToSession || !pending.returnPrompt || !['blocked', 'unknown', 'ready'].includes(pending.phase))
+    throw new Error('No retryable review return')
+  parallelReviewDispatchAttempts.delete(workspaceId)
+  setParallelReviewPhase(workspaceId, 'ready')
+  void dispatchParallelReviewReturn(workspaceId)
+}
+
+export function cancelParallelReviewReturn(workspaceId: string, expectedSessionId?: string): void {
+  const pending = getParallelReview(workspaceId)
+  if (expectedSessionId && pending?.reviewSessionId !== expectedSessionId) throw new Error('Review session changed')
+  parallelReviewDispatchAttempts.delete(workspaceId)
+  if (!pending) return
+  getDb().prepare('UPDATE parallel_reviews SET return_to_session=0 WHERE workspace_id=?').run(workspaceId)
+  setParallelReviewPhase(workspaceId, ['reviewing', 'closing'].includes(pending.phase) ? pending.phase : 'completed')
+}
+
 export function isAgentUnavailableError(message: string): boolean {
   return AGENT_UNAVAILABLE_PATTERNS.some((pattern) => pattern.test(message))
 }
@@ -2564,8 +2968,25 @@ export async function answerPendingQuestion(
   workspaceId: string,
   answers: Record<string, string>,
   expectedToolCallId?: string,
-  opts?: { awaitingFreeForm?: boolean; response?: string; source?: MessageSource; selections?: QuestionSelections },
+  opts?: {
+    awaitingFreeForm?: boolean
+    response?: string
+    source?: MessageSource
+    selections?: QuestionSelections
+    sessionId?: string
+  },
 ): Promise<void> {
+  if (opts?.sessionId && isParallelReviewSession(workspaceId, opts.sessionId)) {
+    resolveParallelInput(workspaceId, opts.sessionId, expectedToolCallId, 'question', {
+      kind: 'question',
+      answers,
+      response: opts.response,
+      selections: opts.selections,
+    })
+    return
+  }
+  if (opts?.sessionId && controllers.get(workspaceId)?.agentSessionId !== opts.sessionId)
+    throw new Error('Question session is no longer active')
   const head = peekPending(workspaceId)
   if (!head) {
     // Self-heal an orphan `awaiting-user` (queue empty but status not restored,
@@ -2622,7 +3043,7 @@ export async function answerPendingQuestion(
   }
 
   dequeuePending(workspaceId)
-  purgePersistedUserInputRequest(workspaceId, head.toolCallId)
+  purgePersistedUserInputRequest(workspaceId, head.toolCallId, head.agentSessionId)
   const restoreTo = peekPending(workspaceId) ? 'awaiting-user' : consumePreAwaitStatus(workspaceId)
   try {
     if (getWs(workspaceId)?.status === 'compacting') preCompactionStatus.set(ctrl, restoreTo)
@@ -2630,6 +3051,8 @@ export async function answerPendingQuestion(
   } catch (err) {
     console.warn(`[orchestrator] Failed to transition awaiting-user → ${restoreTo}:`, err)
   }
+
+  void dispatchParallelReviewReturn(workspaceId)
 
   // "Other" means the user owes a free-form clarification in their next chat
   // message. If auto-loop is active, the agent finishing its turn would
@@ -2670,8 +3093,25 @@ export async function answerPendingPermission(
     decision: 'allow' | 'deny'
     reason?: string
     scope?: 'once' | 'turn' | 'operation' | 'tool'
+    sessionId?: string
   },
 ): Promise<void> {
+  if (decision.sessionId && isParallelReviewSession(workspaceId, decision.sessionId)) {
+    if (decision.scope && decision.scope !== 'once')
+      throw new Error('Parallel review approvals are scoped to this invocation only')
+    resolveParallelInput(
+      workspaceId,
+      decision.sessionId,
+      decision.toolCallId,
+      'permission',
+      decision.decision === 'allow'
+        ? { kind: 'permission-allow' }
+        : { kind: 'permission-deny', reason: decision.reason },
+    )
+    return
+  }
+  if (decision.sessionId && controllers.get(workspaceId)?.agentSessionId !== decision.sessionId)
+    throw new Error('Permission session is no longer active')
   const head = peekPending(workspaceId)
   if (!head) {
     // Self-heal an orphan `awaiting-user` (see answerPendingQuestion).
@@ -2714,7 +3154,7 @@ export async function answerPendingPermission(
     throw new Error(`Pending permission session '${head.agentSessionId}' is no longer active`)
   }
   const request = {
-    engine: (ws as { engine?: string }).engine ?? 'claude-code',
+    engine: ctrl.engineId,
     toolName: head.toolName,
     payload: head.toolInput,
   }
@@ -2748,7 +3188,7 @@ export async function answerPendingPermission(
   }
 
   dequeuePending(workspaceId)
-  purgePersistedUserInputRequest(workspaceId, head.toolCallId)
+  purgePersistedUserInputRequest(workspaceId, head.toolCallId, head.agentSessionId)
   const restoreTo = peekPending(workspaceId) ? 'awaiting-user' : consumePreAwaitStatus(workspaceId)
   try {
     if (getWs(workspaceId)?.status === 'compacting') preCompactionStatus.set(ctrl, restoreTo)
@@ -2756,6 +3196,7 @@ export async function answerPendingPermission(
   } catch (err) {
     console.warn(`[orchestrator] Failed to transition awaiting-user → ${restoreTo}:`, err)
   }
+  void dispatchParallelReviewReturn(workspaceId)
 }
 
 /**
@@ -2768,7 +3209,14 @@ export async function cancelPendingQuestion(
   workspaceId: string,
   reason?: string,
   expectedToolCallId?: string,
+  sessionId?: string,
 ): Promise<void> {
+  if (sessionId && isParallelReviewSession(workspaceId, sessionId)) {
+    resolveParallelInput(workspaceId, sessionId, expectedToolCallId, 'question', { kind: 'question-cancel', reason })
+    return
+  }
+  if (sessionId && controllers.get(workspaceId)?.agentSessionId !== sessionId)
+    throw new Error('Question session is no longer active')
   const head = peekPending(workspaceId)
   if (!head) {
     // Self-heal an orphan `awaiting-user` (see answerPendingQuestion).
@@ -2814,7 +3262,7 @@ export async function cancelPendingQuestion(
   }
 
   dequeuePending(workspaceId)
-  purgePersistedUserInputRequest(workspaceId, head.toolCallId)
+  purgePersistedUserInputRequest(workspaceId, head.toolCallId, head.agentSessionId)
   const restoreTo = peekPending(workspaceId) ? 'awaiting-user' : consumePreAwaitStatus(workspaceId)
   try {
     if (getWs(workspaceId)?.status === 'compacting') preCompactionStatus.set(ctrl, restoreTo)
@@ -2822,6 +3270,7 @@ export async function cancelPendingQuestion(
   } catch (err) {
     console.warn(`[orchestrator] Failed to transition awaiting-user → ${restoreTo}:`, err)
   }
+  void dispatchParallelReviewReturn(workspaceId)
 }
 
 /** @deprecated use `answerPendingQuestion` instead. Kept for legacy callers/tests. */
@@ -2883,7 +3332,7 @@ export function hasController(workspaceId: string): boolean {
 
 /** How many agent sessions are live right now, across every workspace. */
 export function runningAgentCount(): number {
-  return controllers.size
+  return controllers.size + parallelReviewControllers.size
 }
 
 /** The agent_session_id of the active controller for the workspace, if any. */
@@ -2893,7 +3342,7 @@ export function getActiveSessionId(workspaceId: string): string | undefined {
 
 /** Number of currently running controllers. */
 export function getRunningCount(): number {
-  return controllers.size
+  return controllers.size + parallelReviewControllers.size
 }
 
 /**

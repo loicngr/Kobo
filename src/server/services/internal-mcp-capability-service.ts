@@ -66,7 +66,7 @@ const writeTools = new Set([
 const externalTools = new Set([
   ...EXTERNAL_MCP_TOOLS.map((t) => t.name),
   ...WORKSPACE_CREATION_TOOLS.map((t) => t.name),
-  ...WORKSPACE_LIFECYCLE_TOOLS.map((t) => t.name),
+  ...WORKSPACE_LIFECYCLE_TOOLS.filter((t) => t.name !== 'set_workspace_status').map((t) => t.name),
   ...WORKSPACE_GROUP_MESSAGE_TOOLS.map((t) => t.name),
   'stop_workspace',
 ])

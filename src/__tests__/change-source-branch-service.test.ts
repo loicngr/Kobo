@@ -12,8 +12,10 @@ vi.mock('../server/services/workspace-service.js', () => ({
   updateWorkspaceSourceBranch: (id: string, b: string) => updateSourceMock(id, b),
 }))
 const agentStatusMock = vi.fn((_workspaceId: string): string | null => null)
+const parallelReviewMock = vi.fn(() => false)
 vi.mock('../server/services/agent/orchestrator.js', () => ({
   getAgentStatus: (id: string) => agentStatusMock(id),
+  hasParallelReviewController: () => parallelReviewMock(),
 }))
 vi.mock('../server/services/forge/resolve.js', () => ({ resolveForge: vi.fn(() => 'none') }))
 // Configurable per-test (mirror of the agentStatusMock pattern).
@@ -88,7 +90,7 @@ import { changeSourceBranch } from '../server/services/change-source-branch-serv
 import { withGitRepoLock } from '../server/utils/git-repo-lock.js'
 
 function g(repo: string, args: string[]): string {
-  return execFileSync('git', args, { cwd: repo, encoding: 'utf-8' }).trimEnd()
+  return execFileSync('git', args, { cwd: repo, encoding: 'utf-8', stdio: 'pipe' }).trimEnd()
 }
 
 let bare: string
@@ -97,6 +99,7 @@ let repo: string
 beforeEach(() => {
   vi.clearAllMocks()
   agentStatusMock.mockReturnValue(null)
+  parallelReviewMock.mockReturnValue(false)
   spawnMock.mockReset()
   getPrStatusMock.mockReset()
   getPrStatusMock.mockResolvedValue(null)
@@ -105,7 +108,8 @@ beforeEach(() => {
   bare = mkdtempSync(join(tmpdir(), 'kobo-csb-bare-'))
   execFileSync('git', ['init', '-q', '--bare', '-b', 'main', bare])
   repo = mkdtempSync(join(tmpdir(), 'kobo-csb-'))
-  g(repo, ['clone', '-q', bare, '.'])
+  g(repo, ['init', '-q', '-b', 'main'])
+  g(repo, ['remote', 'add', 'origin', bare])
   g(repo, ['config', 'user.email', 't@t.t'])
   g(repo, ['config', 'user.name', 'T'])
   writeFileSync(join(repo, 'base.txt'), 'base\n')
@@ -202,6 +206,19 @@ describe('changeSourceBranch', () => {
     expect(res.status).toBe('aligned')
     expect(g(repo, ['log', '--format=%s', 'feature'])).toContain('D1')
     expect(updateSourceMock).toHaveBeenCalledWith('w1', 'develop')
+  })
+
+  it('refuses while only a parallel reviewer owns the checkout', async () => {
+    parallelReviewMock.mockReturnValue(true)
+    getWorkspaceMock.mockReturnValue({
+      id: 'w1',
+      sourceBranch: 'main',
+      workingBranch: 'feature',
+      worktreePath: repo,
+      projectPath: repo,
+    })
+    await expect(changeSourceBranch('w1', 'develop')).rejects.toThrow(/agent/i)
+    expect(updateSourceMock).not.toHaveBeenCalled()
   })
 
   it('refuses when the agent is running', async () => {

@@ -5,6 +5,7 @@ import { createI18n } from 'vue-i18n'
 import AgentBusyBanner from '../components/AgentBusyBanner.vue'
 import en from '../i18n/en'
 import fr from '../i18n/fr'
+import { useParallelReviewStore } from '../stores/parallel-review'
 import { useWorkspaceStore, type Workspace } from '../stores/workspace'
 
 function mountBanner(locale = 'en') {
@@ -23,6 +24,30 @@ describe('AgentBusyBanner.vue', () => {
     const store = useWorkspaceStore()
     store.workspaces = [{ id: 'ws-1', status: 'executing' } as unknown as Workspace]
     store.selectedWorkspaceId = 'ws-1'
+  })
+
+  it('uses reviewer activity and its own subagents independently of the primary', async () => {
+    const store = useWorkspaceStore()
+    store.selectedSessionId = 'review'
+    store.workspaces[0]!.status = 'completed'
+    const reviews = useParallelReviewStore()
+    reviews.setStatus('ws-1', {
+      reviewSessionId: 'review',
+      originalSessionId: 'main',
+      phase: 'reviewing',
+      compacting: false,
+      error: null,
+      returnToSession: false,
+    })
+    store.upsertSubagent('ws-1', { toolUseId: 'primary', sessionId: 'main', status: 'running' })
+    store.upsertSubagent('ws-1', { toolUseId: 'reviewer', sessionId: 'review', status: 'running' })
+    const wrapper = mountBanner()
+    expect(wrapper.text()).toContain('Agent is busy - 1 sub-agent running')
+    reviews.setStatus('ws-1', { ...reviews.statuses['ws-1']!, phase: 'completed' })
+    store.workspaces[0]!.status = 'executing'
+    await wrapper.vm.$nextTick()
+    expect(wrapper.text()).toBe('')
+    wrapper.unmount()
   })
 
   it('does not count an ambient task (Monitor) as a running sub-agent', () => {

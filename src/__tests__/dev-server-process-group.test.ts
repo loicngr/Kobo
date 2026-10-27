@@ -10,7 +10,10 @@ vi.mock('../server/services/workspace-service.js', () => ({
   listWorkspaces: vi.fn(),
   updateDevServerStatus: vi.fn(),
 }))
-vi.mock('../server/services/settings-service.js', () => ({ getProjectSettings: vi.fn() }))
+vi.mock('../server/services/settings-service.js', () => ({
+  getProjectSettings: vi.fn(),
+  getGlobalSettings: vi.fn(() => ({ serializeDevServerStarts: true, maxRunningDevServers: 0 })),
+}))
 vi.mock('../server/services/websocket-service.js', () => ({ emitEphemeral: vi.fn() }))
 
 import { getProjectSettings } from '../server/services/settings-service.js'

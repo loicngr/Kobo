@@ -1,4 +1,23 @@
 export default {
+  'parallelReview.planHint':
+    'Esta revisión paralela requiere el modo Plan. Los permisos del agente principal no cambian.',
+  'parallelReview.returnHint':
+    'Si se activa, el informe vuelve a la sesión de origen cuando sea posible una entrega segura. De lo contrario, permanece en la revisión.',
+  'parallelReview.title': 'Revisión paralela',
+  'parallelReview.newSessionHint':
+    'Se requiere una sesión nueva: la revisión lee los archivos actuales mientras el agente principal continúa.',
+  'parallelReview.reviewing': 'Revisión en curso.',
+  'parallelReview.closing': 'Informe guardado. Esperando el cierre de la revisión.',
+  'parallelReview.ready': 'Informe listo: esperando una entrega segura a la sesión de origen.',
+  'parallelReview.dispatching': 'Enviando el informe.',
+  'parallelReview.unknown': 'Entrega incierta: puede que el informe ya se haya recibido.',
+  'parallelReview.blocked': 'Retorno bloqueado. El informe se conserva.',
+  'parallelReview.completed': 'Revisión terminada.',
+  'parallelReview.interrupted': 'Revisión interrumpida.',
+  'parallelReview.open': 'Abrir revisión',
+  'parallelReview.stop': 'Detener revisión',
+  'parallelReview.closed': 'Esta revisión está cerrada. Inicia una nueva revisión para continuar.',
+  'parallelReview.awaitingInput': 'Se requiere una respuesta en la sesión de revisión.',
   'review.mistralAutomaticHint':
     'Las revisiones finales automáticas siempre usan Interactivo y pueden esperar aprobación humana.',
   'review.mistralNativeHint':
@@ -1171,6 +1190,15 @@ export default {
   'settings.archiveScriptHint':
     'Script de shell ejecutado en el servidor en el worktree cuando se archiva un workspace. Dejar vacío para desactivar.',
   'settings.archiveScriptPlaceholder': 'p. ej. limpiar contenedores, liberar espacio en disco…',
+  'settings.serializeDevServerStarts': 'Iniciar un solo servidor de desarrollo a la vez',
+  'settings.serializeDevServerStartsHint':
+    'Los inicios esperan hasta que el servidor anterior esté listo. Los servidores iniciados pueden seguir activos juntos.',
+  'settings.maxRunningDevServers': 'Número máximo de servidores de desarrollo activos',
+  'settings.maxRunningDevServersHint':
+    'Cuenta los servidores iniciados y en proceso de inicio. 0 = sin límite. Reducir el límite mantiene activos los servidores existentes.',
+  'settings.maxRunningDevServersInvalid': 'Introduce un número entero mayor o igual que 0.',
+  'devServer.queued': 'En espera',
+  'devServer.cancelQueued': 'Cancelar el inicio en espera',
   'settings.stopDevServersOnShutdown': 'Detener servidores de desarrollo al cerrar Kōbō',
   'settings.stopDevServersOnShutdownHint':
     'Activado por defecto. Desactívalo para mantener los contenedores Docker durante las actualizaciones. Los procesos locales siempre se detienen. Los scripts de cierre siguen ejecutándose.',

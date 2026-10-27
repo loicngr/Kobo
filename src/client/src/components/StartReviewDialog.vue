@@ -24,7 +24,7 @@
               :model-value="effectivePermissionMode"
               :options="permissionOptions"
               :label="$t('agentPermissionMode.label')"
-              :disable="loading || scheduled || (returnToSession && !nativeReview)"
+              :disable="loading || scheduled || ((returnToSession || parallel) && !nativeReview)"
               emit-value
               map-options
               outlined
@@ -32,7 +32,7 @@
               dense
               @update:model-value="agentPermissionMode = $event"
             />
-            <div v-if="returnToSession && !nativeReview" class="text-caption text-kobo-3 q-mt-xs">{{ $t('review.readOnlyForced') }}</div>
+            <div v-if="(returnToSession || parallel) && !nativeReview" class="text-caption text-kobo-3 q-mt-xs">{{ $t(parallel ? 'parallelReview.planHint' : 'review.readOnlyForced') }}</div>
           </div>
         </div>
         <div v-if="nativeReview" class="text-caption text-kobo-3 q-mb-sm">
@@ -55,10 +55,10 @@
 
       <q-card-section v-if="!scheduled" class="q-pt-none">
         <q-toggle v-model="newSession" :disable="loading || forceNewSession" :label="$t('review.newSession')" color="primary" dark />
-        <div class="text-caption text-kobo-3 q-mt-xs">{{ $t(forceNewSession ? 'review.newSessionRequired' : 'review.newSessionHint') }}</div>
+        <div class="text-caption text-kobo-3 q-mt-xs">{{ $t(parallel ? 'parallelReview.newSessionHint' : forceNewSession ? 'review.newSessionRequired' : 'review.newSessionHint') }}</div>
         <template v-if="newSession">
           <q-toggle v-model="returnToSession" :disable="loading || !canReturnToSession" :label="$t('review.returnToSession')" color="primary" dark class="q-mt-md" />
-          <div class="text-caption text-kobo-3 q-mt-xs">{{ $t(canReturnToSession ? 'review.returnToSessionHint' : 'review.returnUnavailable') }}</div>
+          <div class="text-caption text-kobo-3 q-mt-xs">{{ $t(canReturnToSession ? parallel ? 'parallelReview.returnHint' : 'review.returnToSessionHint' : 'review.returnUnavailable') }}</div>
         </template>
       </q-card-section>
 
@@ -95,6 +95,7 @@ const props = defineProps<{
   canReturnToSession: boolean
   projectPath?: string
   currentSession?: { engine?: string | null; model?: string | null } | null
+  parallel?: boolean
   mode?: 'immediate' | 'auto-loop'
   scheduledConfiguration?: AutoLoopReviewConfiguration | null
 }>()
@@ -118,7 +119,7 @@ const effectivePermissionMode = computed<ReviewConfiguration['agentPermissionMod
     ? scheduled.value
       ? 'interactive'
       : agentPermissionMode.value
-    : scheduled.value || returnToSession.value
+    : scheduled.value || returnToSession.value || props.parallel
       ? 'plan'
       : agentPermissionMode.value,
 )
@@ -140,6 +141,7 @@ const configuration = computed<ReviewConfiguration>(() => ({
 const forceNewSession = computed(() => {
   const current = props.currentSession
   return (
+    props.parallel ||
     nativeReview.value ||
     scheduled.value ||
     returnToSession.value ||

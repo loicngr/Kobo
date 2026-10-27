@@ -64,6 +64,30 @@ it.each([true, false])(
         }),
       )
       const names = (await client.listTools()).tools.map((tool) => tool.name)
+      expect(names.filter((name) => name === 'set_workspace_status')).toHaveLength(readOnly ? 0 : 1)
+      const changed = await client.callTool({ name: 'set_workspace_status', arguments: { status: 'brainstorming' } })
+      expect(changed.isError === true).toBe(readOnly)
+      if (!readOnly) {
+        expect(getDb().prepare("SELECT status FROM workspaces WHERE id='own'").get()).toEqual({
+          status: 'brainstorming',
+        })
+        expect(
+          (
+            await client.callTool({
+              name: 'set_workspace_status',
+              arguments: { workspace_id: 'other', status: 'error' },
+            })
+          ).isError,
+        ).toBe(true)
+        expect(
+          (
+            await client.callTool({
+              name: 'set_workspace_status',
+              arguments: { status: 'compacting' },
+            })
+          ).isError,
+        ).toBe(true)
+      }
       expect(names.includes('create_task')).toBe(!readOnly)
       expect(names).toContain('list_tasks')
       const created = await client.callTool({

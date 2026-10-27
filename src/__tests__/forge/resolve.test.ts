@@ -89,6 +89,11 @@ describe('resolveForge', () => {
       throw new Error('no remote')
     })
     expect(resolveForge('/p')).toBe('none')
+    expect(execFileSyncMock).toHaveBeenCalledWith(
+      'git',
+      ['remote', 'get-url', 'origin'],
+      expect.objectContaining({ stdio: 'pipe' }),
+    )
   })
 
   it('defaults to auto-detection when project settings are null', () => {

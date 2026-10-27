@@ -19,6 +19,7 @@ vi.mock('../server/services/workspace-service.js', () => ({
 
 vi.mock('../server/services/settings-service.js', () => ({
   getProjectSettings: vi.fn(),
+  getGlobalSettings: vi.fn(() => ({ serializeDevServerStarts: true, maxRunningDevServers: 0 })),
 }))
 
 vi.mock('../server/services/websocket-service.js', () => ({
@@ -33,12 +34,13 @@ import {
   listRunningContainers,
   parseEnvFile,
   resolveInstance,
+  resumeQueuedDevServers,
   sanitizeBranchName,
   startDevServer,
   stopAllDevServers,
   stopDevServer,
 } from '../server/services/dev-server-service.js'
-import { getProjectSettings } from '../server/services/settings-service.js'
+import { getGlobalSettings, getProjectSettings } from '../server/services/settings-service.js'
 import { emitEphemeral } from '../server/services/websocket-service.js'
 import { getWorkspace, listWorkspaces, updateDevServerStatus } from '../server/services/workspace-service.js'
 import { makeProjectSettings, makeWorkspace } from './helpers/fixtures.js'
@@ -46,6 +48,8 @@ import { makeProjectSettings, makeWorkspace } from './helpers/fixtures.js'
 beforeEach(() => {
   vi.clearAllMocks()
   _resetTrackedProcessesForTests()
+  vi.mocked(listWorkspaces).mockReturnValue([])
+  vi.mocked(getGlobalSettings).mockReturnValue({ serializeDevServerStarts: true, maxRunningDevServers: 0 } as never)
 })
 
 function mockCommandOutput(output: string): void {
@@ -350,7 +354,7 @@ describe('getStatus', () => {
     expect(status.status).toBe('stopped')
   })
 
-  it('prefers running over starting when containers are visible even if a process is tracked', async () => {
+  it('retains starting while the Docker boot command is still in flight', async () => {
     const instancesDir = path.join(tmpDir, '.container', 'instances')
     fs.mkdirSync(instancesDir, { recursive: true })
     fs.writeFileSync(
@@ -390,7 +394,7 @@ describe('getStatus', () => {
     mockCommandOutput('myapp-web-1\tmyapp\n')
 
     const status = await getStatus(tmpDir, 'feature/test', 'ws-running')
-    expect(status.status).toBe('running')
+    expect(status.status).toBe('starting')
   })
 })
 
@@ -864,4 +868,359 @@ it('still terminates tracked local processes without stop scripts when preservin
   proc.emit('exit', 1)
   await Promise.resolve()
   expect(emitEphemeral).not.toHaveBeenCalled()
+})
+
+describe('dev-server admission', () => {
+  function setup() {
+    const processes: Array<EventEmitter & { stdout: EventEmitter; stderr: EventEmitter }> = []
+    vi.mocked(listWorkspaces).mockReturnValue([])
+    vi.mocked(getGlobalSettings).mockReturnValue({ serializeDevServerStarts: true, maxRunningDevServers: 0 } as never)
+    vi.mocked(getWorkspace).mockImplementation((id) =>
+      makeWorkspace({ id, projectPath: '/tmp/no-admission-config', workingBranch: id }),
+    )
+    vi.mocked(getProjectSettings).mockReturnValue(
+      makeProjectSettings({ devServer: { startCommand: 'npm run dev', stopCommand: '' } }),
+    )
+    vi.mocked(spawn).mockImplementation(() => {
+      const proc = Object.assign(new EventEmitter(), {
+        stdout: new EventEmitter(),
+        stderr: new EventEmitter(),
+        exitCode: null,
+        signalCode: null,
+        kill: vi.fn(),
+      })
+      processes.push(proc)
+      return proc as never
+    })
+    return processes
+  }
+
+  it('serializes boots FIFO, deduplicates queued requests, and releases boot on readiness', async () => {
+    const processes = setup()
+    expect(startDevServer('a').status).toBe('starting')
+    expect(startDevServer('b').status).toBe('queued')
+    expect(startDevServer('c').status).toBe('queued')
+    expect(startDevServer('b').status).toBe('queued')
+    expect((await getStatus('/tmp/no-admission-config', 'b', 'b')).status).toBe('queued')
+    expect(spawn).toHaveBeenCalledTimes(1)
+    processes[0]!.stdout.emit('data', Buffer.from('Local: http://localhost:5173/\n'))
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(2))
+    expect(updateDevServerStatus).toHaveBeenCalledWith('b', 'starting')
+    processes[1]!.stdout.emit('data', Buffer.from('Local: http://localhost:5174/\n'))
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(3))
+  })
+
+  it('counts running servers, retries settings changes, and cancels queued stops', async () => {
+    const processes = setup()
+    vi.mocked(getGlobalSettings).mockReturnValue({ serializeDevServerStarts: true, maxRunningDevServers: 1 } as never)
+    startDevServer('a')
+    startDevServer('b')
+    startDevServer('c')
+    processes[0]!.stdout.emit('data', Buffer.from('Local: http://localhost:5173/\n'))
+    await Promise.resolve()
+    expect(spawn).toHaveBeenCalledTimes(1)
+    await stopDevServer('b')
+    vi.mocked(getGlobalSettings).mockReturnValue({ serializeDevServerStarts: true, maxRunningDevServers: 2 } as never)
+    resumeQueuedDevServers()
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(2))
+    expect(updateDevServerStatus).toHaveBeenCalledWith('c', 'starting')
+    expect(updateDevServerStatus).not.toHaveBeenCalledWith('b', 'starting')
+  })
+
+  it('releases capacity after confirmed process exit and never restarts on shutdown', async () => {
+    const processes = setup()
+    startDevServer('a')
+    startDevServer('b')
+    processes[0]!.emit('exit', 0)
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(2))
+    startDevServer('c')
+    const { beginDevServerShutdown } = await import('../server/services/dev-server-service.js')
+    beginDevServerShutdown()
+    processes[1]!.emit('exit', 0)
+    resumeQueuedDevServers()
+    await Promise.resolve()
+    expect(spawn).toHaveBeenCalledTimes(2)
+  })
+
+  it('disabling serialization admits simultaneous boots and failed spawn releases capacity', async () => {
+    const processes = setup()
+    startDevServer('a')
+    startDevServer('b')
+    startDevServer('c')
+    vi.mocked(getGlobalSettings).mockReturnValue({ serializeDevServerStarts: false, maxRunningDevServers: 0 } as never)
+    resumeQueuedDevServers()
+    await vi.waitFor(() => expect(processes).toHaveLength(3))
+    vi.mocked(getGlobalSettings).mockReturnValue({ serializeDevServerStarts: true, maxRunningDevServers: 1 } as never)
+    startDevServer('d')
+    for (const proc of processes) proc.emit('error', new Error('spawn failed'))
+    await vi.waitFor(() => expect(processes).toHaveLength(4))
+  })
+
+  it('cancels a queued launch when lifecycle ownership is acquired before admission', async () => {
+    const processes = setup()
+    startDevServer('a')
+    startDevServer('b')
+    const { withWorkspaceLifecycleGuard } = await import('../server/utils/workspace-lifecycle-guard.js')
+    await withWorkspaceLifecycleGuard('b', async () => {
+      processes[0]!.stdout.emit('data', Buffer.from('Local: http://localhost:5173/\n'))
+      await vi.waitFor(() => expect(updateDevServerStatus).toHaveBeenCalledWith('b', 'error'))
+    })
+    resumeQueuedDevServers()
+    expect(spawn).toHaveBeenCalledTimes(1)
+  })
+
+  it('recovers Docker capacity before admission and releases boot only after the command exits', async () => {
+    const processes = setup()
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kobo-admission-docker-'))
+    try {
+      fs.mkdirSync(path.join(dir, '.container/instances'), { recursive: true })
+      fs.writeFileSync(
+        path.join(dir, '.container/instances/foo.env'),
+        'INSTANCE_NAME=foo\nPROJECT_NAME=foo\nHTTP_PORT=8710\n',
+      )
+      const dockerWorkspace = makeWorkspace({ id: 'docker', projectPath: dir, workingBranch: 'foo' })
+      vi.mocked(listWorkspaces).mockReturnValue([dockerWorkspace])
+      vi.mocked(getWorkspace).mockImplementation((id) =>
+        id === 'docker'
+          ? dockerWorkspace
+          : makeWorkspace({ id, projectPath: '/tmp/no-admission-config', workingBranch: id }),
+      )
+      vi.mocked(getGlobalSettings).mockReturnValue({ serializeDevServerStarts: true, maxRunningDevServers: 1 } as never)
+      mockCommandOutput('foo-web\tfoo\n')
+      expect(startDevServer('a').status).toBe('queued')
+      await vi.waitFor(() => expect(execFile).toHaveBeenCalled())
+      await Promise.resolve()
+      expect(spawn).not.toHaveBeenCalled()
+      mockCommandFailure(new Error('daemon unavailable'))
+      resumeQueuedDevServers()
+      await Promise.resolve()
+      expect(spawn).not.toHaveBeenCalled()
+      mockCommandOutput('')
+      resumeQueuedDevServers()
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(1))
+      processes[0]!.emit('exit', 0)
+      await vi.waitFor(() => expect(updateDevServerStatus).toHaveBeenCalledWith('a', 'unknown'))
+      startDevServer('docker')
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(2))
+      startDevServer('b')
+      mockCommandOutput('foo-web\tfoo\n')
+      expect((await getStatus(dir, 'foo', 'docker')).status).toBe('starting')
+      expect(spawn).toHaveBeenCalledTimes(2)
+      processes[1]!.emit('exit', 0)
+      await vi.waitFor(() => expect(updateDevServerStatus).toHaveBeenCalledWith('docker', 'running'))
+      expect(spawn).toHaveBeenCalledTimes(2)
+      vi.mocked(getGlobalSettings).mockReturnValue({ serializeDevServerStarts: true, maxRunningDevServers: 0 } as never)
+      resumeQueuedDevServers()
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(3))
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('retains capacity after a failed stop and releases it only when retry succeeds', async () => {
+    const processes = setup()
+    vi.mocked(getGlobalSettings).mockReturnValue({ serializeDevServerStarts: true, maxRunningDevServers: 1 } as never)
+    vi.mocked(getProjectSettings).mockReturnValue(
+      makeProjectSettings({ devServer: { startCommand: 'run', stopCommand: 'stop' } }),
+    )
+    startDevServer('a')
+    startDevServer('b')
+    mockCommandFailure(new Error('stop failed'))
+    const stopping = stopDevServer('a')
+    processes[0]!.emit('exit', 0)
+    await expect(stopping).rejects.toThrow('stop failed')
+    resumeQueuedDevServers()
+    await Promise.resolve()
+    expect(spawn).toHaveBeenCalledTimes(1)
+    mockCommandOutput('')
+    await stopDevServer('a')
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(2))
+  })
+
+  it.each([false, true])(
+    'confirms queued Docker shutdown during suspended recovery (stop fails: %s)',
+    async (fails) => {
+      setup()
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kobo-queued-stop-'))
+      try {
+        fs.mkdirSync(path.join(dir, '.container/instances'), { recursive: true })
+        fs.writeFileSync(path.join(dir, '.container/instances/foo.env'), 'INSTANCE_NAME=foo\nPROJECT_NAME=foo\n')
+        const workspace = makeWorkspace({ id: 'docker', projectPath: dir, workingBranch: 'foo' })
+        vi.mocked(listWorkspaces).mockReturnValue([workspace])
+        vi.mocked(getWorkspace).mockReturnValue(workspace)
+        let finishInspection!: (err: Error | null, stdout: string) => void
+        let finishStop!: (err: Error | null, stdout: string) => void
+        vi.mocked(execFile).mockImplementation(((command: string, args: string[], ...rest: unknown[]) => {
+          const callback = rest.at(-1) as (err: Error | null, stdout: string) => void
+          if (command === 'docker' && args[0] === 'ps') finishInspection = callback
+          else if (command === 'docker' && args[0] === 'compose') finishStop = callback
+          return {}
+        }) as never)
+        expect(startDevServer('docker').status).toBe('queued')
+        let settled = false
+        const stopping = stopDevServer('docker')
+        void stopping.then(
+          () => {
+            settled = true
+          },
+          () => {
+            settled = true
+          },
+        )
+        await Promise.resolve()
+        expect(settled).toBe(false)
+        expect(finishStop).toBeTypeOf('function')
+        finishInspection(null, 'foo-web\tfoo\n')
+        await Promise.resolve()
+        expect(updateDevServerStatus).not.toHaveBeenCalledWith('docker', 'running')
+        expect(updateDevServerStatus).not.toHaveBeenCalledWith('docker', 'stopped')
+        finishStop(fails ? new Error('daemon unavailable') : null, '')
+        if (fails) await expect(stopping).rejects.toThrow('daemon unavailable')
+        else await expect(stopping).resolves.toMatchObject({ status: 'stopped' })
+        expect(spawn).not.toHaveBeenCalled()
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true })
+      }
+    },
+  )
+
+  it('resumes waiting boots when a Docker status read confirms recovered readiness', async () => {
+    const processes = setup()
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kobo-readiness-recovery-'))
+    try {
+      const workspace = makeWorkspace({ id: 'docker', projectPath: dir, workingBranch: 'foo' })
+      vi.mocked(getWorkspace).mockImplementation((id) =>
+        id === 'docker' ? workspace : makeWorkspace({ id, projectPath: '/tmp/no-admission-config', workingBranch: id }),
+      )
+      startDevServer('docker')
+      // The script creates its instance configuration during startup.
+      fs.mkdirSync(path.join(dir, '.container/instances'), { recursive: true })
+      fs.writeFileSync(path.join(dir, '.container/instances/foo.env'), 'INSTANCE_NAME=foo\nPROJECT_NAME=foo\n')
+      mockCommandFailure(new Error('daemon unavailable'))
+      startDevServer('b')
+      processes[0]!.emit('exit', 0)
+      await vi.waitFor(() => expect(updateDevServerStatus).toHaveBeenCalledWith('docker', 'unknown'))
+      expect(spawn).toHaveBeenCalledTimes(1)
+      mockCommandOutput('foo-web\tfoo\n')
+      expect((await getStatus(dir, 'foo', 'docker')).status).toBe('running')
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(2))
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it.each([
+    [false, 1],
+    [true, 1],
+    [false, 0],
+    [true, 0],
+  ] as const)(
+    'keeps recovered Docker capacity until its first stop is confirmed (fails: %s, limit: %s)',
+    async (fails, limit) => {
+      setup()
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kobo-recovered-stop-'))
+      try {
+        fs.mkdirSync(path.join(dir, '.container/instances'), { recursive: true })
+        fs.writeFileSync(path.join(dir, '.container/instances/foo.env'), 'INSTANCE_NAME=foo\nPROJECT_NAME=foo\n')
+        const workspace = makeWorkspace({
+          id: 'docker',
+          projectPath: dir,
+          workingBranch: 'foo',
+          devServerStatus: 'running',
+        })
+        vi.mocked(listWorkspaces).mockReturnValue([workspace])
+        vi.mocked(getWorkspace).mockImplementation((id) =>
+          id === 'docker'
+            ? workspace
+            : makeWorkspace({ id, projectPath: '/tmp/no-admission-config', workingBranch: id }),
+        )
+        vi.mocked(getGlobalSettings).mockReturnValue({
+          serializeDevServerStarts: true,
+          maxRunningDevServers: limit,
+        } as never)
+        let finishStop!: (err: Error | null, stdout: string) => void
+        let running = true
+        vi.mocked(execFile).mockImplementation(((command: string, args: string[], ...rest: unknown[]) => {
+          const callback = rest.at(-1) as (err: Error | null, stdout: string) => void
+          if (command === 'docker' && args[0] === 'compose') finishStop = callback
+          else callback(null, running ? 'foo-web\tfoo\n' : '')
+          return {}
+        }) as never)
+        const stopping = stopDevServer('docker')
+        await Promise.resolve()
+        expect(finishStop).toBeTypeOf('function')
+        expect(startDevServer('other').status).toBe(limit ? 'queued' : 'starting')
+        await new Promise((resolve) => setImmediate(resolve))
+        expect(spawn).toHaveBeenCalledTimes(limit ? 0 : 1)
+        running = fails
+        finishStop(fails ? new Error('daemon unavailable') : null, '')
+        if (fails) {
+          await expect(stopping).rejects.toThrow('daemon unavailable')
+          await new Promise((resolve) => setImmediate(resolve))
+          expect(spawn).toHaveBeenCalledTimes(limit ? 0 : 1)
+          const retry = stopDevServer('docker')
+          await Promise.resolve()
+          running = false
+          finishStop(null, '')
+          await retry
+        } else await expect(stopping).resolves.toMatchObject({ status: 'stopped' })
+        await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(1))
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true })
+      }
+    },
+  )
+
+  it.each([false, true])(
+    'ignores direct readiness during Docker boot (instance created by script: %s)',
+    async (createdByScript) => {
+      const processes = setup()
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kobo-docker-readiness-'))
+      try {
+        const workspace = makeWorkspace({ id: 'docker', projectPath: dir, workingBranch: 'foo' })
+        vi.mocked(listWorkspaces).mockReturnValue([workspace])
+        vi.mocked(getWorkspace).mockImplementation((id) =>
+          id === 'docker'
+            ? workspace
+            : makeWorkspace({ id, projectPath: '/tmp/no-admission-config', workingBranch: id }),
+        )
+        const createInstance = () => {
+          fs.mkdirSync(path.join(dir, '.container/instances'), { recursive: true })
+          fs.writeFileSync(
+            path.join(dir, '.container/instances/foo.env'),
+            'INSTANCE_NAME=foo\nPROJECT_NAME=foo\nHTTP_PORT=3000\n',
+          )
+        }
+        if (!createdByScript) createInstance()
+        mockCommandOutput('')
+        startDevServer('docker')
+        await vi.waitFor(() => expect(processes).toHaveLength(1))
+        if (createdByScript) createInstance()
+        expect(startDevServer('other').status).toBe('queued')
+        processes[0]!.stdout.emit('data', Buffer.from('Local: http://localhost:3000/\n'))
+        processes[0]!.stderr.emit('data', Buffer.from('App URL..... http://localhost:3000/\n'))
+        let groupAlive = true
+        Object.assign(processes[0]!, { pid: 987654 })
+        vi.spyOn(process, 'kill').mockReturnValue(true)
+        vi.mocked(execFile).mockImplementation(((command: string, _args: string[], ...rest: unknown[]) => {
+          const callback = rest.at(-1) as (err: Error | null, stdout: string) => void
+          callback(null, command === 'ps' ? (groupAlive ? '987654 S\n' : '') : 'foo-web\tfoo\n')
+          return {}
+        }) as never)
+        await new Promise((resolve) => setImmediate(resolve))
+        expect(processes).toHaveLength(1)
+        expect((await getStatus(dir, 'foo', 'docker')).status).toBe('starting')
+        processes[0]!.emit('exit', 0)
+        await new Promise((resolve) => setImmediate(resolve))
+        expect(processes).toHaveLength(1)
+        expect((await getStatus(dir, 'foo', 'docker')).status).toBe('starting')
+        groupAlive = false
+        await vi.waitFor(() => expect(updateDevServerStatus).toHaveBeenCalledWith('docker', 'running'))
+        await vi.waitFor(() => expect(processes).toHaveLength(2))
+      } finally {
+        vi.mocked(process.kill).mockRestore?.()
+        fs.rmSync(dir, { recursive: true, force: true })
+      }
+    },
+  )
 })

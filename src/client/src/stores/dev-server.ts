@@ -4,7 +4,7 @@ import { apiFetch, apiFetchResponse, apiResponseError } from 'src/utils/api'
 const statusRequests = new Map<string, number>()
 
 export interface DevServerStatus {
-  status: 'unknown' | 'stopped' | 'starting' | 'running' | 'stopping' | 'error'
+  status: 'unknown' | 'stopped' | 'queued' | 'starting' | 'running' | 'stopping' | 'error'
   instanceName: string
   projectName: string
   httpPort: string
@@ -41,11 +41,12 @@ export const useDevServerStore = defineStore('devServer', {
     },
 
     async startDevServer(workspaceId: string) {
+      const previous = this.statuses[workspaceId]
       try {
         const res = await apiFetchResponse(`/api/dev-server/${workspaceId}/start`, { method: 'POST' })
         if (!res.ok) throw await apiResponseError(res)
         const data = await res.json()
-        this.statuses[workspaceId] = data
+        if (this.statuses[workspaceId] === previous) this.statuses[workspaceId] = data
       } catch (err) {
         console.error('[dev-server store] startDevServer failed:', err)
         throw err

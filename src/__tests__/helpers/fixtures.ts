@@ -174,6 +174,8 @@ export function makeGlobalSettings(overrides: Partial<GlobalSettings> = {}): Glo
     forceImmediateMessages: false,
     showProgressBars: true,
     stopDevServersOnShutdown: true,
+    serializeDevServerStarts: true,
+    maxRunningDevServers: 0,
     awaitingUserReminderMinutes: 0,
     activityDigestEnabled: true,
     maxConcurrentAgents: 0,

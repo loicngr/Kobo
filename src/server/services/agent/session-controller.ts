@@ -64,6 +64,10 @@ export class SessionController {
     return this._lastEventAt
   }
 
+  get engineId(): string {
+    return this.engine.id
+  }
+
   get engineProcess(): EngineProcess | undefined {
     return this._engineProcess
   }

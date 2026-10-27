@@ -272,14 +272,17 @@ describe('Orchestrator — pending permission queue (canUseTool)', () => {
       workingBranch: 'feature/incomplete',
     })
     updateWorkspaceStatus(ws.id, 'brainstorming')
+    const { getDb } = await import('../server/db/index.js')
+    const { _registerEngineForTest, resolveEngine } = await import('../server/services/agent/engines/registry.js')
+    _registerEngineForTest({ ...resolveEngine('claude-code'), id: 'mistral-vibe' })
+    getDb().prepare("UPDATE workspaces SET engine='mistral-vibe' WHERE id=?").run(ws.id)
     const orch = await import('../server/services/agent/orchestrator.js')
     orch.startAgent(ws.id, '/tmp', 'hi')
     await Promise.resolve()
     await Promise.resolve()
     const cap = captured[0]!
     cap.onEvent({ kind: 'session:started', engineSessionId: 'engine-sess-1' })
-    const { getDb } = await import('../server/db/index.js')
-    getDb().prepare("UPDATE workspaces SET engine='mistral-vibe' WHERE id=?").run(ws.id)
+    getDb().prepare("UPDATE workspaces SET engine='claude-code' WHERE id=?").run(ws.id)
     cap.onEvent({
       kind: 'session:user-input-requested',
       requestKind: 'permission',

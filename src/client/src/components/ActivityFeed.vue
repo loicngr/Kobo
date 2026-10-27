@@ -135,6 +135,7 @@ import {
 } from 'src/services/agent-event-view'
 import { findPreviousUserTurnIndex, groupIntoTurns, type Turn, turnKey } from 'src/services/conversation-turns'
 import { useAgentStreamStore } from 'src/stores/agent-stream'
+import { useParallelReviewStore } from 'src/stores/parallel-review'
 import { useSettingsStore } from 'src/stores/settings'
 import { useWebSocketStore } from 'src/stores/websocket'
 import { useWorkspaceStore } from 'src/stores/workspace'
@@ -157,7 +158,7 @@ const workspaceStore = useWorkspaceStore()
 const websocketStore = useWebSocketStore()
 
 // Persisted status also restores the banner when opening a compacting workspace.
-const isCompacting = computed(() => websocketStore.isCompacting(props.workspaceId))
+const isCompacting = computed(() => websocketStore.isCompacting(props.workspaceId, workspaceStore.selectedSessionId))
 
 // Resolve the engine_session_id of the selected session to also accept legacy
 // events tagged with the engine UUID (before the v6 backfill migration).
@@ -205,6 +206,10 @@ const userMessages = computed<(UserMessage & { sessionId?: string })[]>(() => {
 })
 
 const sessionActive = computed(() => {
+  if (workspaceStore.isParallelReviewSession(props.workspaceId, selectedSessionId.value)) {
+    const review = useParallelReviewStore().statuses[props.workspaceId]
+    return review?.reviewSessionId === selectedSessionId.value && review?.phase === 'reviewing'
+  }
   const ws = workspaceStore.workspaces.find((w) => w.id === props.workspaceId)
   return isBusyStatus(ws?.status)
 })

@@ -46,6 +46,7 @@ import workspacesRouter from './routes/workspaces.js'
 import {
   getActiveSessionId,
   getAvailableSkills,
+  isParallelReviewSession,
   reconcileOrphanSessions,
   restoreRetryCountsFromDb,
   resumePendingReviewReturns,
@@ -405,6 +406,8 @@ setMessageHandler(async (type, payload) => {
 
   if (type === 'workspace:start' && p?.workspaceId) {
     try {
+      if (p.sessionId && isParallelReviewSession(p.workspaceId, p.sessionId))
+        throw new Error('Parallel review sessions cannot be resumed as the primary agent')
       const workspace = getWorkspace(p.workspaceId)
       if (!workspace) {
         console.error(`[ws] workspace:start — workspace '${p.workspaceId}' not found`)

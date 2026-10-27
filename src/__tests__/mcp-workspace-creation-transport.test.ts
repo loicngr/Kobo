@@ -43,6 +43,11 @@ vi.mock('../server/routes/workspaces.js', async () => {
           worktreePurgedAt: captured.worktreePurged ? '2026-10-10' : null,
         }),
       )
+      .patch('/:id', async (c) => {
+        const body = await c.req.json()
+        captured.lifecycleCalls.push({ path: c.req.path, body })
+        return c.json({ id: c.req.param('id'), ...body })
+      })
       .post('/:id/archive', (c) => {
         captured.lifecycleCalls.push({ path: c.req.path })
         return c.json({ id: c.req.param('id'), archivedAt: '2026-10-10' })
@@ -343,7 +348,7 @@ it.each(['', 'internal-workspace'])(
         },
       })
       expect(invalid.isError).toBe(true)
-      await exerciseLifecycleTools(client)
+      await exerciseLifecycleTools(client, workspaceId || 'target')
     } finally {
       await client.close()
       await new Promise<void>((resolve, reject) => listener.close((error) => (error ? reject(error) : resolve())))
@@ -438,8 +443,9 @@ it('preserves the stale PR report in an HTTP MCP error without creating a worksp
   }
 })
 
-async function exerciseLifecycleTools(client: Client) {
+async function exerciseLifecycleTools(client: Client, statusWorkspaceId = 'target') {
   for (const [name, arguments_] of [
+    ['set_workspace_status', { workspace_id: statusWorkspaceId, status: 'executing' }],
     ['archive_workspace', { workspace_id: 'target' }],
     ['purge_workspace_worktree', { workspace_id: 'target', confirm_purge: true }],
     ['unarchive_workspace', { workspace_id: 'target' }],
@@ -462,6 +468,7 @@ async function exerciseLifecycleTools(client: Client) {
     if (name === 'delete_workspace') expect(content(result)).toMatchObject({ ok: true })
   }
   expect(captured.lifecycleCalls.map((call) => call.path)).toEqual([
+    `/${statusWorkspaceId}`,
     '/target/archive',
     '/target/purge-worktree',
     '/target/unarchive',
@@ -482,6 +489,7 @@ it('exposes archive, purge, delete and restoration with their options through HT
     const names = (await client.listTools()).tools.map((tool) => tool.name)
     expect(names).toEqual(
       expect.arrayContaining([
+        'set_workspace_status',
         'archive_workspace',
         'purge_workspace_worktree',
         'delete_workspace',
@@ -515,5 +523,56 @@ it('accepts Mistral creation and rejects invalid native selections through HTTP 
     expect(captured.requests).toHaveLength(1)
   } finally {
     await client.close()
+  }
+})
+
+it('enforces status tool and workspace grants before any status dispatch', async () => {
+  externalToken = createExternalMcpCredential({
+    name: 'Status only',
+    workspaceIds: ['target'],
+    tools: ['set_workspace_status'],
+  }).token
+  const client = await httpClient()
+  try {
+    expect((await client.listTools()).tools.map((tool) => tool.name)).toEqual(['set_workspace_status'])
+    expect(
+      (
+        await client.callTool({
+          name: 'set_workspace_status',
+          arguments: { workspace_id: 'other', status: 'executing' },
+        })
+      ).isError,
+    ).toBe(true)
+    expect(captured.lifecycleCalls).toEqual([])
+    expect(
+      (
+        await client.callTool({
+          name: 'set_workspace_status',
+          arguments: { workspace_id: 'target', status: 'executing' },
+        })
+      ).isError,
+    ).not.toBe(true)
+    expect(captured.lifecycleCalls).toEqual([{ path: '/target', body: { status: 'executing' } }])
+  } finally {
+    await client.close()
+  }
+  externalToken = createExternalMcpCredential({
+    name: 'Read only',
+    workspaceIds: ['target'],
+    tools: ['get_workspace'],
+  }).token
+  const reader = await httpClient()
+  try {
+    expect(
+      (
+        await reader.callTool({
+          name: 'set_workspace_status',
+          arguments: { workspace_id: 'target', status: 'error' },
+        })
+      ).isError,
+    ).toBe(true)
+    expect(captured.lifecycleCalls).toHaveLength(1)
+  } finally {
+    await reader.close()
   }
 })

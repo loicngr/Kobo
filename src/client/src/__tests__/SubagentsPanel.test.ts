@@ -196,6 +196,44 @@ describe('SubagentsPanel.vue', () => {
       expect(wrapper.find('.subagents-stop-all-btn').exists()).toBe(false)
     })
 
+    it('uses the selected source engine after reconfiguration and keeps reviewers read-only', async () => {
+      const store = selectWorkspace('mistral-vibe')
+      store.sessions = [
+        { id: 'source', workspaceId: 'ws-1', engine: 'claude-code', role: 'primary', status: 'running' },
+        { id: 'review', workspaceId: 'ws-1', engine: 'claude-code', role: 'parallel-review', status: 'running' },
+      ] as typeof store.sessions
+      store.selectedSessionId = 'source'
+      store.upsertSubagent('ws-1', {
+        toolUseId: 'source-task',
+        sessionId: 'source',
+        description: 'Source agent',
+        status: 'running',
+      })
+      store.upsertSubagent('ws-1', {
+        toolUseId: 'review-task',
+        sessionId: 'review',
+        description: 'Reviewer agent',
+        status: 'running',
+      })
+      const stop = vi.spyOn(store, 'stopSubagents').mockResolvedValue(1)
+      const wrapper = mountPanel()
+      expect(wrapper.text()).toContain('Source agent')
+      expect(wrapper.text()).not.toContain('Reviewer agent')
+      expect(wrapper.find('.subagents-stop-all-btn').exists()).toBe(true)
+      await wrapper.get('.subagent-stop-btn').trigger('click')
+      expect(stop).toHaveBeenCalledWith('ws-1', 'source-task')
+      store.selectedSessionId = 'review'
+      await wrapper.vm.$nextTick()
+      expect(wrapper.text()).toContain('Reviewer agent')
+      expect(wrapper.text()).not.toContain('Source agent')
+      expect(wrapper.find('.subagent-stop-btn').exists()).toBe(false)
+      expect(wrapper.find('.subagents-stop-all-btn').exists()).toBe(false)
+      store.selectedSessionId = null
+      await wrapper.vm.$nextTick()
+      expect(wrapper.find('.subagent-stop-btn').exists()).toBe(false)
+      wrapper.unmount()
+    })
+
     it('stops one card by its canonical id and disables its button while in flight', async () => {
       const store = selectWorkspace('claude-code')
       store.upsertSubagent('ws-1', { toolUseId: 'run', taskId: 'task-run', description: 'Runs', status: 'running' })

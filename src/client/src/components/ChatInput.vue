@@ -82,8 +82,10 @@
       <span>{{ $t('chatInput.queueBanner') }}</span>
     </div>
 
-    <AutoLoopStatusPanel :workspace-id="workspaceId" />
-    <ReviewReturnStatusPanel :workspace-id="workspaceId" />
+    <AutoLoopStatusPanel v-if="!reviewer" :workspace-id="workspaceId" />
+    <ReviewReturnStatusPanel v-if="!reviewer" :workspace-id="workspaceId" />
+    <ParallelReviewStatusPanel :workspace-id="workspaceId" />
+    <div v-if="reviewer && !reviewRunning" role="status" class="q-pa-sm text-caption text-kobo-2">{{ t(reviewClosing ? 'parallelReview.closing' : 'parallelReview.closed') }}</div>
 
     <div v-if="isHandoffBlocking" class="row items-center q-pa-xs q-px-sm text-caption text-kobo-2" role="status">
       {{ $t(handoffs.isActive(workspaceId) ? 'handoff.progress' : 'handoff.blocked') }}
@@ -236,13 +238,13 @@
         size="sm"
         color="orange-4"
         icon="pause"
-        :label="$t('workspacePage.interrupt')"
+        :label="$t(reviewer ? 'parallelReview.stop' : 'workspacePage.interrupt')"
         :loading="interrupting"
         :disable="interrupting || isHandoffBlocking"
         class="chat-hint__interrupt"
         @click="handleInterrupt"
       >
-        <q-tooltip>{{ $t('workspacePage.interruptTooltip') }}</q-tooltip>
+        <q-tooltip>{{ $t(reviewer ? 'parallelReview.stop' : 'workspacePage.interruptTooltip') }}</q-tooltip>
       </q-btn>
     </div>
   </div>
@@ -252,6 +254,7 @@
 import type { QInput } from 'quasar'
 import { useQuasar } from 'quasar'
 import AutoLoopStatusPanel from 'src/components/AutoLoopStatusPanel.vue'
+import ParallelReviewStatusPanel from 'src/components/ParallelReviewStatusPanel.vue'
 import QuotaFooter from 'src/components/QuotaFooter.vue'
 import ReviewReturnStatusPanel from 'src/components/ReviewReturnStatusPanel.vue'
 import SlashSuggestionsPopup from 'src/components/SlashSuggestionsPopup.vue'
@@ -260,6 +263,7 @@ import { useFileMention } from 'src/composables/use-file-mention'
 import { useIsMobile } from 'src/composables/use-is-mobile'
 import { type SlashDropdownItem, useSlashAutocomplete } from 'src/composables/use-slash-autocomplete'
 import { supportsLiveSteering, supportsQuotaStatus, supportsSkills } from 'src/constants/engineFeatures'
+import { useParallelReviewStore } from 'src/stores/parallel-review'
 import { useSessionHandoffStore } from 'src/stores/session-handoff'
 import { useSettingsStore } from 'src/stores/settings'
 import { useTemplatesStore } from 'src/stores/templates'
@@ -290,7 +294,23 @@ const sendingMessage = ref(false)
 const interrupting = ref(false)
 const forcingQueue = ref(false)
 
-const showInterrupt = computed(() => isBusyStatus(store.selectedWorkspace?.status))
+const currentSession = computed(() => store.sessions.find((s) => s.id === store.selectedSessionId) ?? null)
+const parallelReviews = useParallelReviewStore()
+const reviewer = computed(() => store.isParallelReviewSession(props.workspaceId, store.selectedSessionId))
+const reviewRunning = computed(() => {
+  const review = parallelReviews.statuses[props.workspaceId]
+  return review?.reviewSessionId === store.selectedSessionId
+    ? review.phase === 'reviewing'
+    : currentSession.value?.status === 'running'
+})
+const reviewClosing = computed(
+  () =>
+    parallelReviews.statuses[props.workspaceId]?.reviewSessionId === store.selectedSessionId &&
+    parallelReviews.statuses[props.workspaceId]?.phase === 'closing',
+)
+const showInterrupt = computed(() =>
+  reviewer.value ? reviewRunning.value || reviewClosing.value : isBusyStatus(store.selectedWorkspace?.status),
+)
 
 // The footer discovers optional provider accounts independently of quota snapshots.
 const quotaStatusVisible = computed(() =>
@@ -305,7 +325,9 @@ async function handleInterrupt() {
   if (!props.workspaceId || isHandoffBlocking.value) return
   interrupting.value = true
   try {
-    await store.interruptAgent(props.workspaceId)
+    if (reviewer.value && store.selectedSessionId)
+      await parallelReviews.act(props.workspaceId, store.selectedSessionId, 'stop')
+    else await store.interruptAgent(props.workspaceId, { expectedSessionId: store.selectedSessionId ?? undefined })
     $q.notify({ type: 'info', message: t('workspacePage.interrupted'), position: 'top', timeout: 3000 })
   } catch (e) {
     const msg = e instanceof Error ? e.message : t('workspacePage.interruptFailed')
@@ -315,8 +337,10 @@ async function handleInterrupt() {
   }
 }
 
-const isAgentBusy = computed(() => isBusyStatus(store.selectedWorkspace?.status))
-const isCompacting = computed(() => wsStore.isCompacting(props.workspaceId))
+const isAgentBusy = computed(() =>
+  reviewer.value ? reviewRunning.value : isBusyStatus(store.selectedWorkspace?.status),
+)
+const isCompacting = computed(() => wsStore.isCompacting(props.workspaceId, store.selectedSessionId))
 const handoffs = useSessionHandoffStore()
 const isHandoffBlocking = computed(() => handoffs.isBlocking(props.workspaceId))
 
@@ -335,7 +359,12 @@ const canForceQueuedMessage = computed(() => {
   const workspace =
     store.workspaces.find((item) => item.id === props.workspaceId) ??
     store.archivedWorkspaces.find((item) => item.id === props.workspaceId)
-  return supportsLiveSteering(workspace?.engine) && isAgentBusy.value && !isCompacting.value && !isHandoffBlocking.value
+  return (
+    supportsLiveSteering(currentSession.value?.engine ?? workspace?.engine) &&
+    isAgentBusy.value &&
+    !isCompacting.value &&
+    !isHandoffBlocking.value
+  )
 })
 
 // Chat input element ref (for caret position access)
@@ -384,7 +413,7 @@ const {
   replaceFragmentWith,
   closeDropdown,
 } = useSlashAutocomplete(message, () => getChatInputEl(), {
-  supportsSkills: () => supportsSkills(store.selectedWorkspace?.engine),
+  supportsSkills: () => supportsSkills(currentSession.value?.engine ?? store.selectedWorkspace?.engine),
 })
 
 // `@<file>` mention autocomplete — fuzzy-ranked over the worktree's files.
@@ -476,8 +505,6 @@ function onFileSelected(event: Event) {
   void attachments.addFiles(Array.from(input.files ?? []))
   input.value = ''
 }
-
-const currentSession = computed(() => store.sessions.find((s) => s.id === store.selectedSessionId) ?? null)
 
 // Pre-fetch the skills catalogue so the dropdown opens instantly on the
 // first `/`. Throttling lives inside the composable.
@@ -644,16 +671,26 @@ function selectDropdownItem(item: SlashDropdownItem | undefined) {
 // the agent's clarifying questions.
 const isAutoLoopRunning = computed(() => {
   const id = props.workspaceId
-  if (!id) return false
+  if (!id || reviewer.value) return false
   const state = store.autoLoopStates[id]
   return state?.auto_loop === true && state?.auto_loop_ready === true
 })
 
-const isAwaitingUser = computed(() => store.selectedWorkspace?.status === 'awaiting-user')
+const isAwaitingUser = computed(() =>
+  reviewer.value
+    ? !!store.peekPending(props.workspaceId, store.selectedSessionId)
+    : store.selectedWorkspace?.status === 'awaiting-user',
+)
 const isArchived = computed(() => Boolean(store.selectedWorkspace?.archivedAt))
 
 const isDisabled = computed(() => {
-  return !props.workspaceId || isAwaitingUser.value || isArchived.value || isHandoffBlocking.value
+  return (
+    !props.workspaceId ||
+    (reviewer.value && !reviewRunning.value) ||
+    isAwaitingUser.value ||
+    isArchived.value ||
+    isHandoffBlocking.value
+  )
 })
 
 const voiceEnabled = computed(() => settingsStore.global.voiceEnabled && !isDisabled.value)
@@ -744,7 +781,7 @@ async function sendMessageNow() {
   )
     return
 
-  const immediate = settingsStore.global.forceImmediateMessages === true
+  const immediate = reviewer.value || settingsStore.global.forceImmediateMessages === true
   let session = currentSession.value
 
   const autoLoopEnabled =
@@ -807,7 +844,7 @@ async function sendMessageNow() {
   }
   if (!immediate) store.cancelQueuedMessage(workspaceId, store.selectedSessionId)
 
-  const forceSend = immediate && (isAgentBusy.value || !!autoLoopEnabled)
+  const forceSend = reviewer.value || (immediate && (isAgentBusy.value || !!autoLoopEnabled))
 
   // Ready attachments already have their final references in the draft.
   let composedText = koboCmd?.prompt ?? text

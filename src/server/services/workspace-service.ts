@@ -1135,6 +1135,7 @@ export function setWorkspaceTags(id: string, tags: string[]): Workspace {
 
 /** A persisted record of an agent engine invocation for a workspace. */
 export interface AgentSession {
+  role: 'primary' | 'parallel-review'
   id: string
   workspaceId: string
   pid: number | null
@@ -1150,6 +1151,7 @@ export interface AgentSession {
 }
 
 interface AgentSessionRow {
+  role: 'primary' | 'parallel-review'
   id: string
   workspace_id: string
   pid: number | null
@@ -1165,6 +1167,7 @@ interface AgentSessionRow {
 
 function mapSession(row: AgentSessionRow): AgentSession {
   return {
+    role: row.role,
     id: row.id,
     workspaceId: row.workspace_id,
     pid: row.pid,
@@ -1192,7 +1195,9 @@ export function listSessions(workspaceId: string): AgentSession[] {
 export function getLatestSession(workspaceId: string): AgentSession | null {
   const db = getDb()
   const row = db
-    .prepare('SELECT * FROM agent_sessions WHERE workspace_id = ? ORDER BY started_at DESC LIMIT 1')
+    .prepare(
+      "SELECT * FROM agent_sessions WHERE workspace_id = ? AND role = 'primary' ORDER BY started_at DESC LIMIT 1",
+    )
     .get(workspaceId) as AgentSessionRow | undefined
   return row ? mapSession(row) : null
 }
@@ -1209,14 +1214,14 @@ export function getActiveSession(workspaceId: string): AgentSession | null {
   // Prefer a running session first (the agent the user is actively interacting with)
   const running = db
     .prepare(
-      "SELECT * FROM agent_sessions WHERE workspace_id = ? AND status = 'running' ORDER BY started_at DESC LIMIT 1",
+      "SELECT * FROM agent_sessions WHERE workspace_id = ? AND role = 'primary' AND status = 'running' ORDER BY started_at DESC LIMIT 1",
     )
     .get(workspaceId) as AgentSessionRow | undefined
   if (running) return mapSession(running)
   // Otherwise the last used non-idle session (completed, error, quota, etc.)
   const latestNonIdle = db
     .prepare(
-      `SELECT * FROM agent_sessions WHERE workspace_id = ? AND status != 'idle' AND activation_order >= 0 ORDER BY ${SESSION_RECENCY_ORDER} LIMIT 1`,
+      `SELECT * FROM agent_sessions WHERE workspace_id = ? AND role = 'primary' AND status != 'idle' AND activation_order >= 0 ORDER BY ${SESSION_RECENCY_ORDER} LIMIT 1`,
     )
     .get(workspaceId) as AgentSessionRow | undefined
   return latestNonIdle ? mapSession(latestNonIdle) : null
@@ -1233,6 +1238,7 @@ export function createIdleSession(workspaceId: string): AgentSession {
     'INSERT INTO agent_sessions (id, workspace_id, pid, engine, status, model, started_at) VALUES (?, ?, NULL, ?, ?, ?, ?)',
   ).run(id, workspaceId, workspace.engine, 'idle', workspace.model, now)
   return {
+    role: 'primary',
     id,
     workspaceId,
     pid: null,
@@ -1263,8 +1269,8 @@ export class ReviewSessionInUseError extends Error {}
 export function deleteSession(sessionId: string, workspaceId: string): boolean {
   const db = getDb()
   const session = db
-    .prepare('SELECT status, engine FROM agent_sessions WHERE id = ? AND workspace_id = ?')
-    .get(sessionId, workspaceId) as { status: string; engine: string | null } | undefined
+    .prepare('SELECT status, engine, role FROM agent_sessions WHERE id = ? AND workspace_id = ?')
+    .get(sessionId, workspaceId) as { status: string; engine: string | null; role: string } | undefined
   if (!session) return false
   const pendingReview = db
     .prepare(
@@ -1275,7 +1281,12 @@ export function deleteSession(sessionId: string, workspaceId: string): boolean {
     .prepare(`SELECT 1 FROM auto_loop_final_reviews r JOIN workspaces w ON w.id=r.workspace_id
     WHERE r.workspace_id=? AND w.auto_loop=1 AND r.state IN ('reviewing','fixing','blocked') AND (r.original_session_id=? OR r.review_session_id=?)`)
     .get(workspaceId, sessionId, sessionId)
-  if (pendingReview || pendingFinalReview)
+  const pendingParallelReview = db
+    .prepare(
+      "SELECT 1 FROM parallel_reviews WHERE workspace_id=? AND review_session_id=? AND phase NOT IN ('completed','interrupted')",
+    )
+    .get(workspaceId, sessionId)
+  if (pendingReview || pendingFinalReview || pendingParallelReview)
     throw new ReviewSessionInUseError(
       'This session is required by a pending review. Cancel the review return or stop auto-loop before deleting it.',
     )
@@ -1286,10 +1297,10 @@ export function deleteSession(sessionId: string, workspaceId: string): boolean {
     db.prepare('DELETE FROM ws_events WHERE workspace_id = ? AND session_id = ?').run(workspaceId, sessionId)
     db.prepare('DELETE FROM agent_sessions WHERE id = ? AND workspace_id = ?').run(sessionId, workspaceId)
     const workspace = getWorkspace(workspaceId)
-    if (workspace?.engine === session.engine) {
+    if (session.role !== 'parallel-review' && workspace?.engine === session.engine) {
       const fallback = db
         .prepare(
-          'SELECT engine, model FROM agent_sessions WHERE workspace_id = ? AND engine IS NOT NULL ORDER BY started_at DESC LIMIT 1',
+          "SELECT engine, model FROM agent_sessions WHERE workspace_id = ? AND role = 'primary' AND engine IS NOT NULL ORDER BY started_at DESC LIMIT 1",
         )
         .get(workspaceId) as { engine: string; model: string | null } | undefined
       if (fallback) {

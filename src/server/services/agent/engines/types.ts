@@ -181,7 +181,9 @@ export interface RateLimitInfo {
   status?: 'allowed' | 'allowed_warning' | 'rejected'
 }
 
-export type AgentEvent =
+export type AgentEvent = { sessionRole?: 'parallel-review' } & AgentEventPayload
+
+type AgentEventPayload =
   // Lifecycle
   | { kind: 'session:started'; engineSessionId: string; model?: string }
   | {

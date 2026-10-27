@@ -1,4 +1,23 @@
 export default {
+  'parallelReview.planHint':
+    'Plan mode is required for this parallel review. The main agent’s permissions stay unchanged.',
+  'parallelReview.returnHint':
+    'When enabled, the report returns to the source session as soon as safe delivery is possible. Otherwise, it stays in the review.',
+  'parallelReview.title': 'Parallel review',
+  'parallelReview.newSessionHint':
+    'A new session is required: the review reads the current files while the main agent continues.',
+  'parallelReview.reviewing': 'Review in progress.',
+  'parallelReview.closing': 'Report saved. Waiting for the review to close.',
+  'parallelReview.ready': 'Report ready: waiting for safe delivery to the source session.',
+  'parallelReview.dispatching': 'Returning the report.',
+  'parallelReview.unknown': 'Delivery uncertain: the report may already have been received.',
+  'parallelReview.blocked': 'Return blocked. The report is preserved.',
+  'parallelReview.completed': 'Review completed.',
+  'parallelReview.interrupted': 'Review interrupted.',
+  'parallelReview.open': 'Open review',
+  'parallelReview.stop': 'Stop review',
+  'parallelReview.closed': 'This review is closed. Start a new review to continue.',
+  'parallelReview.awaitingInput': 'A response is required in the review session.',
   'review.mistralAutomaticHint': 'Automatic final reviews always use Interactive and may wait for human approval.',
   'review.mistralNativeHint':
     'Reviews forbid all modifications, but native Vibe permissions do not guarantee filesystem read-only access. Interactive (default) asks for approval; Accept edits permits edits; Bypass approves tools automatically. Native approval requests may pause the review. Explicit model or thinking selections may persist in native Vibe preferences.',
@@ -1164,6 +1183,15 @@ export default {
   'settings.archiveScriptHint':
     'Shell script run server-side in the worktree when a workspace is archived. Leave empty to disable.',
   'settings.archiveScriptPlaceholder': 'e.g. clean up containers, free disk space…',
+  'settings.serializeDevServerStarts': 'Start one development server at a time',
+  'settings.serializeDevServerStartsHint':
+    'Queue starts until the previous server is ready. Running servers can stay active together.',
+  'settings.maxRunningDevServers': 'Maximum active development servers',
+  'settings.maxRunningDevServersHint':
+    'Counts running and starting servers. 0 = unlimited. Lowering the limit keeps existing servers running.',
+  'settings.maxRunningDevServersInvalid': 'Enter a whole number greater than or equal to 0.',
+  'devServer.queued': 'Queued',
+  'devServer.cancelQueued': 'Cancel queued start',
   'settings.stopDevServersOnShutdown': 'Stop development servers when Kōbō exits',
   'settings.stopDevServersOnShutdownHint':
     'Enabled by default. Disable to keep Docker containers running through updates. Local processes always stop. Shutdown scripts still run.',

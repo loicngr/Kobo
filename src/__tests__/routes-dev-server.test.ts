@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../server/services/workspace-service.js', () => ({
   getWorkspace: vi.fn(),
+  updateDevServerStatus: vi.fn(),
 }))
 
 vi.mock('../server/services/dev-server-service.js', () => ({
@@ -23,7 +24,7 @@ vi.mock('../server/services/settings-service.js', () => ({
 import router from '../server/routes/dev-server.js'
 import * as devServerService from '../server/services/dev-server-service.js'
 import { getProjectSettings } from '../server/services/settings-service.js'
-import { getWorkspace } from '../server/services/workspace-service.js'
+import { getWorkspace, updateDevServerStatus } from '../server/services/workspace-service.js'
 import { makeWorkspace } from './helpers/fixtures.js'
 
 // ── App setup ────────────────────────────────────────────────────────────────
@@ -108,6 +109,14 @@ describe('GET /api/dev-server/:workspaceId/status', () => {
     expect(res.status).toBe(200)
     const data = await res.json()
     expect(data.status).toBe('running')
+  })
+
+  it('clears a persisted queued status when the in-memory queue was lost', async () => {
+    vi.mocked(getWorkspace).mockReturnValue({ ...fakeWorkspace, devServerStatus: 'queued' })
+    vi.mocked(devServerService.getStatus).mockResolvedValue({ ...fakeStatus, status: 'unknown' })
+    const response = await app.request('/api/dev-server/ws-1/status')
+    await expect(response.json()).resolves.toMatchObject({ status: 'unknown' })
+    expect(updateDevServerStatus).toHaveBeenCalledWith('ws-1', 'unknown')
   })
 
   it('keeps unknown when persisted status is stopped', async () => {

@@ -971,7 +971,7 @@ it.each(['claude-code', 'codex'] as const)(
     const fetch = vi.spyOn(gitOps, 'fetchSourceBranchOrThrowAsync').mockResolvedValue(undefined)
     try {
       const { startWorkspaceReview } = await import('../server/services/review-service.js')
-      const returns = await import('../server/services/review-return-service.js')
+      const returns = await import('../server/services/parallel-review-service.js')
       await startWorkspaceReview(f.workspace.id, {
         engine,
         model: 'auto',
@@ -981,7 +981,7 @@ it.each(['claude-code', 'codex'] as const)(
       await vi.waitFor(() => expect(f.starts).toHaveLength(2))
       expect(f.starts[1]!.options).toMatchObject({ agentPermissionMode: 'plan', readOnly: true })
       expect(f.starts[1]!.options.prompt).toContain('Do not modify, create or delete files')
-      expect(returns.getReviewReturn(f.workspace.id)).toMatchObject({
+      expect(returns.getParallelReview(f.workspace.id)).toMatchObject({
         originalSessionId: f.request.sourceSessionId,
         original: {
           engine: 'mistral-vibe',
@@ -996,6 +996,13 @@ it.each(['claude-code', 'codex'] as const)(
       expect(f.starts).toHaveLength(2)
       expect(f.orch.hasController(f.workspace.id)).toBe(true)
       f.starts[1]!.close()
+      await new Promise((resolve) => setImmediate(resolve))
+      expect(f.starts).toHaveLength(2)
+      expect(returns.getParallelReview(f.workspace.id)?.phase).toBe('ready')
+      f.starts[0]!.emit({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
+      await new Promise((resolve) => setImmediate(resolve))
+      expect(f.starts).toHaveLength(2)
+      f.starts[0]!.close()
       await vi.waitFor(() => expect(f.starts).toHaveLength(3))
       expect(f.starts[2]!.engine).toBe('mistral-vibe')
       expect(f.starts[2]!.options).toMatchObject({

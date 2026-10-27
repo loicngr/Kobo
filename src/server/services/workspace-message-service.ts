@@ -6,6 +6,7 @@ import { resolveEngine } from './agent/engines/registry.js'
 import {
   assertImmediateMessageSupported,
   isAgentUnavailableError,
+  isParallelReviewSession,
   isShuttingDown,
   sendMessage,
   startAgent,
@@ -15,6 +16,7 @@ import { hasLoopMessage } from './auto-loop-message-service.js'
 import * as autoLoop from './auto-loop-service.js'
 import { createChatReceipt } from './chat-receipt-service.js'
 import { preflightMistralConfiguration } from './mistral-options-service.js'
+import { getParallelReviewSourceConfiguration } from './parallel-review-service.js'
 import { emitEphemeral } from './websocket-service.js'
 import { getActiveSession, getWorkspace, updateWorkspaceStatus } from './workspace-service.js'
 
@@ -41,13 +43,17 @@ export async function deliverWorkspaceMessage(
   let saved: SavedAttachment[] = []
   let attachmentWorktree: string | undefined
   let dispatched = false
+  let reviewTarget = false
   const beforeDispatch = () => {
     if (saved.length) {
       assertWorkspaceLifecycleAvailable(workspaceId)
       const current = getWorkspace(workspaceId)
       if (!current || current.archivedAt || current.worktreePurgedAt || current.worktreePath !== attachmentWorktree)
         throw new Error('Workspace changed before attachment delivery')
-      if (current.status === 'compacting' || current.status === 'awaiting-user' || isShuttingDown())
+      if (
+        (!reviewTarget && (current.status === 'compacting' || current.status === 'awaiting-user')) ||
+        isShuttingDown()
+      )
         throw new Error('Workspace is not ready to receive a message')
     }
     hooks?.beforeDispatch?.()
@@ -63,6 +69,9 @@ export async function deliverWorkspaceMessage(
     if (!workspace) throw new Error(`Workspace '${workspaceId}' not found`)
     if (workspace.archivedAt || workspace.worktreePurgedAt)
       throw new Error('Restore the workspace before sending a message')
+    reviewTarget = !!message.sessionId && isParallelReviewSession(workspaceId, message.sessionId)
+    if (reviewTarget && message.delivery === 'next_iteration')
+      throw new Error('Review messages require immediate delivery')
     if (message.delivery === 'next_iteration') {
       if (attachments.length) throw new Error('Attachments require immediate delivery')
       if (!message.clientMessageId) throw new Error('clientMessageId is required for queued delivery')
@@ -77,30 +86,38 @@ export async function deliverWorkspaceMessage(
       else emitEphemeral(workspaceId, 'chat:accepted', { clientMessageId: message.clientMessageId })
       return {}
     }
-    if (workspace.status === 'compacting') {
+    if (!reviewTarget && workspace.status === 'compacting') {
       reason = 'compacting'
       throw new Error('Workspace is compacting its context; wait until compaction finishes before sending a message')
     }
-    if (workspace.status === 'awaiting-user') {
+    if (!reviewTarget && workspace.status === 'awaiting-user') {
       reason = 'awaiting-user'
       throw new Error('Answer the pending question or permission request before sending a chat message')
     }
-    if (workspace.engine === 'mistral-vibe') {
-      assertEngineConfigurationSupported(resolveEngine(workspace.engine), {
-        model: workspace.model,
-        reasoningEffort: workspace.reasoningEffort,
-        agentPermissionMode: message.agentPermissionModeOverride ?? workspace.agentPermissionMode,
+    const sourceConfiguration = reviewTarget
+      ? null
+      : getParallelReviewSourceConfiguration(
+          workspaceId,
+          message.sessionId ?? getActiveSession(workspaceId)?.id,
+          workspace.engine,
+        )
+    const configuration = sourceConfiguration ?? workspace
+    if (!reviewTarget && configuration.engine === 'mistral-vibe') {
+      assertEngineConfigurationSupported(resolveEngine(configuration.engine), {
+        model: configuration.model,
+        reasoningEffort: configuration.reasoningEffort,
+        agentPermissionMode: message.agentPermissionModeOverride ?? configuration.agentPermissionMode,
       })
     }
-    assertImmediateMessageSupported(workspaceId)
-    if (workspace.engine === 'mistral-vibe') {
+    if (!reviewTarget) assertImmediateMessageSupported(workspaceId)
+    if (!reviewTarget && configuration.engine === 'mistral-vibe') {
       await preflightMistralConfiguration(
-        workspace.engine,
+        configuration.engine,
         { workspaceId },
         {
-          model: workspace.model,
-          reasoningEffort: workspace.reasoningEffort,
-          agentPermissionMode: message.agentPermissionModeOverride ?? workspace.agentPermissionMode,
+          model: configuration.model,
+          reasoningEffort: configuration.reasoningEffort,
+          agentPermissionMode: message.agentPermissionModeOverride ?? configuration.agentPermissionMode,
         },
         true,
       )
@@ -117,11 +134,19 @@ export async function deliverWorkspaceMessage(
       const current = getWorkspace(workspaceId)
       if (!current || current.archivedAt || current.worktreePurgedAt || current.worktreePath !== attachmentWorktree)
         throw new Error('Workspace changed while saving attachments')
-      if (current.status === 'compacting' || current.status === 'awaiting-user' || isShuttingDown())
+      if (
+        (!reviewTarget && (current.status === 'compacting' || current.status === 'awaiting-user')) ||
+        isShuttingDown()
+      )
         throw new Error('Workspace is not ready to receive a message')
       message.content = [message.content.trim(), ...saved.map(attachmentReference)].filter(Boolean).join('\n\n')
       // Binary data never belongs in the chat receipt or agent prompt.
       delete message.attachments
+    }
+    if (reviewTarget) {
+      await sendMessage(workspaceId, message.content, message.sessionId, beforeDispatch)
+      receipt.accept(message.sessionId)
+      return { sessionId: message.sessionId }
     }
     const trackDispatch = !!hooks?.beforeDispatch || saved.length > 0
     const loop = autoLoop.getStatus(workspaceId)
@@ -135,16 +160,19 @@ export async function deliverWorkspaceMessage(
       assertWorkspaceLifecycleAvailable(workspaceId)
       const current = getWorkspace(workspaceId)
       if (!current || current.archivedAt || current.worktreePurgedAt) throw new Error('Workspace is unavailable')
+      const resumedSource = getParallelReviewSourceConfiguration(workspaceId, message.sessionId, current.engine)
+      const resumeConfiguration = resumedSource ?? current
       const started = startAgent(
         workspaceId,
         current.worktreePath,
         message.content,
-        current.model,
+        resumeConfiguration.model,
         true,
-        message.agentPermissionModeOverride ?? current.agentPermissionMode,
+        message.agentPermissionModeOverride ?? resumeConfiguration.agentPermissionMode,
         message.sessionId,
-        current.reasoningEffort,
-        ...(trackDispatch ? [beforeDispatch] : []),
+        resumeConfiguration.reasoningEffort,
+        trackDispatch ? beforeDispatch : undefined,
+        resumedSource ? { engineOverride: resumedSource.engine } : undefined,
       )
       updateWorkspaceStatus(workspaceId, 'executing')
       sessionId = message.sessionId ?? started.agentSessionId

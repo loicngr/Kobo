@@ -120,6 +120,8 @@ interface GlobalSettings {
   agentWatchdogEnabled: boolean
   forceImmediateMessages: boolean
   showProgressBars: boolean
+  serializeDevServerStarts: boolean
+  maxRunningDevServers: number
   stopDevServersOnShutdown: boolean
   /** Minutes before Kōbō reminds you about an unanswered question. 0 = off. */
   awaitingUserReminderMinutes: number
@@ -272,6 +274,8 @@ export const useSettingsStore = defineStore('settings', {
       agentWatchdogEnabled: false,
       forceImmediateMessages: false,
       showProgressBars: true,
+      serializeDevServerStarts: true,
+      maxRunningDevServers: 0,
       stopDevServersOnShutdown: true,
       awaitingUserReminderMinutes: 0,
       activityDigestEnabled: true,

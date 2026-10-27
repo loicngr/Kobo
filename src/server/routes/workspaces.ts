@@ -12,6 +12,7 @@ import {
 } from '../../shared/workflow-policy.js'
 import * as finalReviewService from '../services/auto-loop-final-review-service.js'
 import { preflightMistralConfiguration } from '../services/mistral-options-service.js'
+import { getParallelReviewSourceConfiguration } from '../services/parallel-review-service.js'
 import { getReviewReturnStatus } from '../services/review-return-service.js'
 import { getSearchIndexStatus, searchEvents } from '../services/search-service.js'
 import {
@@ -31,6 +32,7 @@ import {
   workspaceLifecycleReason,
 } from '../utils/workspace-lifecycle-guard.js'
 import autoLoopMessagesRoutes from './auto-loop-messages.js'
+import parallelReviewRoutes from './parallel-reviews.js'
 
 const execFileAsync = promisify(execFileCb)
 
@@ -169,6 +171,11 @@ for (const route of [
   '/:id/resync-branch',
 ]) {
   app.use(route, async (c, next) => {
+    if (
+      ['/:id/cancel-source-change', '/:id/rollback-file', '/:id/rename-branch', '/:id/resync-branch'].includes(route) &&
+      agentManager.hasParallelReviewController(c.req.param('id')!)
+    )
+      return c.json({ error: 'Stop the parallel reviewer before changing the checkout' }, 409)
     try {
       await withWorkspaceLifecycleGuard(c.req.param('id')!, next)
     } catch (err) {
@@ -177,6 +184,8 @@ for (const route of [
     }
   })
 }
+
+app.route('/', parallelReviewRoutes)
 
 // User prompt actions must reject before cancelling timers, stopping engines,
 // creating a PR or persisting input. The orchestrator also checks at delivery.
@@ -190,7 +199,11 @@ for (const route of [
   '/:id/start-ci-fix',
 ]) {
   app.use(route, async (c, next) => {
-    if (c.req.method === 'POST' && workspaceService.getWorkspace(c.req.param('id')!)?.status === 'compacting') {
+    if (
+      c.req.method === 'POST' &&
+      workspaceService.getWorkspace(c.req.param('id')!)?.status === 'compacting' &&
+      !(route === '/:id/start-review' && agentManager.getAgentStatus(c.req.param('id')!) === 'running')
+    ) {
       return c.json(
         {
           code: 'compacting',
@@ -1624,8 +1637,7 @@ app.post('/', workspaceCreationMaintenance, migrationGuard, creationBodyLimit, a
 
       // Resolve the suite-specific brainstorming instruction (citing
       // superpowers:brainstorming / writing-plans, or gstack /office-hours +
-      // /autoplan, etc.). The marker `[BRAINSTORM_COMPLETE]` stays universal —
-      // only the path to it changes per suite.
+      // /autoplan, etc.). The status transition stays shared across suites.
       const globalSettings = settingsService.getGlobalSettings()
       const suitePrompts = getSuitePrompts(globalSettings.skillSuite, {
         brainstormingInstruction: globalSettings.customBrainstormingInstruction,
@@ -1675,7 +1687,7 @@ ${buildAutoLoopGroomingSteps(e2eSettings, finalizationSettings)}
 
 ## Expected result
 
-When the steps above are complete, output [BRAINSTORM_COMPLETE] on its own line and end your turn cleanly.
+After \`mark_auto_loop_ready\` succeeds, call \`set_workspace_status\` with \`status: "executing"\`, then let this session end naturally without implementing anything. Kōbō starts the next iteration only after this session closes.
 
 ${AUTO_LOOP_HARD_RULES}`
       } else {
@@ -1683,7 +1695,7 @@ ${AUTO_LOOP_HARD_RULES}`
 
 ## Expected result
 
-Once the brainstorming + planning steps above are complete and you have a saved plan file, output [BRAINSTORM_COMPLETE] on its own line BEFORE starting implementation. Kōbō uses that marker to transition the workspace from \`brainstorming\` to \`executing\`. Then proceed with implementation under the current permissions and Git workflow policy. Report the actual checks and any remaining blockers; commits, pushes and publication require the configured authorization.`
+Once the brainstorming + planning steps above are complete and you have a saved plan file, call \`set_workspace_status\` with \`status: "executing"\` BEFORE starting implementation. Then proceed with implementation under the current permissions and Git workflow policy. Report the actual checks and any remaining blockers; commits, pushes and publication require the configured authorization.`
       }
 
       // Persist the assembled prompt so a setup-script crash (or any later
@@ -2417,6 +2429,7 @@ app.post('/:id/deferred-tool-use/answer', async (c) => {
     const body = await c.req
       .json<{
         answers?: Record<string, string>
+        sessionId?: string
         toolCallId?: string
         awaitingFreeForm?: boolean
         response?: string
@@ -2426,6 +2439,7 @@ app.post('/:id/deferred-tool-use/answer', async (c) => {
         () =>
           ({}) as {
             answers?: Record<string, string>
+            sessionId?: string
             toolCallId?: string
             awaitingFreeForm?: boolean
             response?: string
@@ -2435,7 +2449,10 @@ app.post('/:id/deferred-tool-use/answer', async (c) => {
     if (!body?.answers || typeof body.answers !== 'object') {
       return c.json({ error: 'answers payload required' }, 400)
     }
+    if (body.sessionId !== undefined && (typeof body.sessionId !== 'string' || !body.sessionId.trim()))
+      return c.json({ error: 'Invalid sessionId' }, 400)
     await agentManager.answerPendingQuestion(id, body.answers, body.toolCallId, {
+      ...(body.sessionId ? { sessionId: body.sessionId } : {}),
       awaitingFreeForm: body.awaitingFreeForm === true,
       ...(typeof body.response === 'string' ? { response: body.response } : {}),
       ...(body.selections !== undefined ? { selections: parseQuestionSelections(body.selections) } : {}),
@@ -2458,9 +2475,16 @@ app.post('/:id/deferred-tool-use/cancel', async (c) => {
   try {
     const id = c.req.param('id')
     const body = await c.req
-      .json<{ reason?: string; toolCallId?: string }>()
-      .catch(() => ({}) as { reason?: string; toolCallId?: string })
-    await agentManager.cancelPendingQuestion(id, body.reason, body.toolCallId)
+      .json<{ reason?: string; toolCallId?: string; sessionId?: string }>()
+      .catch(() => ({}) as { reason?: string; toolCallId?: string; sessionId?: string })
+    if (body.sessionId !== undefined && (typeof body.sessionId !== 'string' || !body.sessionId.trim()))
+      return c.json({ error: 'Invalid sessionId' }, 400)
+    await agentManager.cancelPendingQuestion(
+      id,
+      body.reason,
+      body.toolCallId,
+      ...(body.sessionId ? [body.sessionId] : []),
+    )
     return c.json({ ok: true })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'unknown'
@@ -2476,6 +2500,7 @@ app.post('/:id/deferred-permission/decision', async (c) => {
     const id = c.req.param('id')
     const body = await c.req
       .json<{
+        sessionId?: string
         toolCallId?: string
         decision?: 'allow' | 'deny'
         reason?: string
@@ -2484,6 +2509,7 @@ app.post('/:id/deferred-permission/decision', async (c) => {
       .catch(
         () =>
           ({}) as {
+            sessionId?: string
             toolCallId?: string
             decision?: 'allow' | 'deny'
             reason?: string
@@ -2499,11 +2525,14 @@ app.post('/:id/deferred-permission/decision', async (c) => {
     if (body.scope && !['once', 'turn', 'operation', 'tool'].includes(body.scope)) {
       return c.json({ error: "scope must be 'once', 'turn', 'operation' or 'tool'" }, 400)
     }
+    if (body.sessionId !== undefined && (typeof body.sessionId !== 'string' || !body.sessionId.trim()))
+      return c.json({ error: 'Invalid sessionId' }, 400)
     await agentManager.answerPendingPermission(id, {
       toolCallId: body.toolCallId,
       decision: body.decision,
       reason: typeof body.reason === 'string' ? body.reason : undefined,
       scope: body.scope,
+      ...(body.sessionId ? { sessionId: body.sessionId } : {}),
     })
     return c.json({ ok: true })
   } catch (err) {
@@ -3348,6 +3377,15 @@ app.patch('/:id', migrationGuard, async (c) => {
       if (!isWorkspaceStatus(body.status)) {
         return c.json({ error: `Invalid status. Must be one of: ${VALID_WORKSPACE_STATUSES.join(', ')}` }, 400)
       }
+      if (workspace.status === 'compacting' || isWorkspaceLifecycleBusy(id)) {
+        return c.json(
+          {
+            error: 'Wait for compaction or workspace operations to finish before changing status',
+            code: 'workspace-busy',
+          },
+          409,
+        )
+      }
       if (body.status === 'idle' && agentManager.hasController(id)) {
         return c.json({ error: 'Cannot mark an active agent workspace idle; end or stop the agent session first' }, 409)
       }
@@ -3376,7 +3414,10 @@ app.patch('/:id', migrationGuard, async (c) => {
       )
     }
 
-    return c.json(workspaceService.updateWorkspaceFields(id, body as workspaceService.WorkspaceFieldUpdates))
+    const updated = workspaceService.updateWorkspaceFields(id, body as workspaceService.WorkspaceFieldUpdates)
+    if (body.status !== undefined && updated.status !== workspace.status)
+      wsService.emitEphemeral(id, 'workspace:status', { status: updated.status })
+    return c.json(updated)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     if (message.includes('not found')) {
@@ -3552,9 +3593,7 @@ app.post('/:id/run-setup-script', async (c) => {
       // Stop the running agent before re-running the setup script — the script
       // rewrites the worktree the agent may still be writing to.
       try {
-        if (agentManager.getAgentStatus(id)) {
-          assertAgentStopped(await agentManager.stopAgentAndWait(id, undefined, 'setup'))
-        }
+        assertAgentStopped(await agentManager.stopAgentAndWait(id, undefined, 'setup'))
       } catch (err) {
         console.error(`[workspaces] stopAgentAndWait before setup script failed for '${id}':`, err)
         throw err
@@ -3954,6 +3993,13 @@ app.post('/:id/start', migrationGuard, async (c) => {
       workspace.initialPrompt && workspace.initialPrompt.length > 0 ? workspace.initialPrompt : null
     const prompt = body.prompt ?? pendingInitialPrompt ?? 'Continue the previous task where you left off.'
     const agentSessionId = body.agentSessionId
+    if (
+      agentSessionId &&
+      workspaceService
+        .listSessions(id)
+        .some((session) => session.id === agentSessionId && session.role === 'parallel-review')
+    )
+      return c.json({ error: 'Parallel review sessions cannot be resumed as the primary agent' }, 409)
     const resume = body.resume === true
 
     if (workspaceService.getWorkspace(id)?.status === 'compacting') {
@@ -3966,21 +4012,25 @@ app.post('/:id/start', migrationGuard, async (c) => {
       )
     }
 
-    const selectedEngine = listEngines().find((engine) => engine.id === workspaceEngine)
+    const sourceConfiguration = resume
+      ? getParallelReviewSourceConfiguration(id, agentSessionId, workspace.engine)
+      : null
+    const configuration = sourceConfiguration ?? workspace
+    const selectedEngine = listEngines().find((engine) => engine.id === configuration.engine)
     if (selectedEngine) {
       try {
         assertEngineConfigurationSupported(selectedEngine, {
-          model: workspace.model,
-          reasoningEffort: workspace.reasoningEffort,
-          agentPermissionMode: workspace.agentPermissionMode,
+          model: configuration.model,
+          reasoningEffort: configuration.reasoningEffort,
+          agentPermissionMode: configuration.agentPermissionMode,
         })
         await preflightMistralConfiguration(
           selectedEngine.id,
           { workspaceId: workspace.id },
           {
-            model: workspace.model,
-            reasoningEffort: workspace.reasoningEffort,
-            agentPermissionMode: workspace.agentPermissionMode,
+            model: configuration.model,
+            reasoningEffort: configuration.reasoningEffort,
+            agentPermissionMode: configuration.agentPermissionMode,
           },
           resume,
         )
@@ -4008,13 +4058,16 @@ app.post('/:id/start', migrationGuard, async (c) => {
       id,
       worktreePath,
       prompt,
-      workspace.model,
+      configuration.model,
       resume,
-      workspace.agentPermissionMode,
+      configuration.agentPermissionMode,
       agentSessionId,
-      workspace.reasoningEffort,
+      configuration.reasoningEffort,
       undefined,
-      { persistInitialPrompt: !body.prompt && Boolean(pendingInitialPrompt) },
+      {
+        persistInitialPrompt: !body.prompt && Boolean(pendingInitialPrompt),
+        ...(sourceConfiguration ? { engineOverride: sourceConfiguration.engine } : {}),
+      },
     )
     workspaceService.updateWorkspaceStatus(id, 'executing')
 
