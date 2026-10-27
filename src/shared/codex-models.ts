@@ -24,6 +24,12 @@ export const CODEX_MODELS: readonly AgentModel[] = [
     i18nDescriptionKey: 'model.gpt61solDescription',
   },
   {
+    id: 'gpt-6.1-terra',
+    label: 'GPT-6.1 Terra',
+    i18nLabelKey: 'model.gpt61terra',
+    i18nDescriptionKey: 'model.gpt61terraDescription',
+  },
+  {
     id: 'gpt-6-astra',
     label: 'GPT-6 Astra',
     i18nLabelKey: 'model.gpt6astra',

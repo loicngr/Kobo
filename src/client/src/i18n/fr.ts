@@ -463,6 +463,9 @@ export default {
   'model.sonnet55Description': 'Efficace pour les tâches courantes, contexte 1M',
   'model.gpt61sol': 'GPT-6.1 Sol',
   'model.gpt61solDescription': 'Dernier modèle polyvalent pour le code et le travail quotidien',
+  'model.gpt61terra': 'GPT-6.1 Terra',
+  'model.gpt61terraDescription':
+    'Modèle rapide pour la compréhension visuelle, la rédaction et les tâches sur ordinateur',
   'model.gpt6sol': 'GPT-6 Sol',
   'model.gpt6solDescription': 'Modèle polyvalent de la génération précédente',
   'model.gpt6luna': 'GPT-6 Luna',
