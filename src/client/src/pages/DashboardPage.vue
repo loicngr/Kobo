@@ -6,9 +6,11 @@
       <div class="text-caption text-kobo-3">
         {{ $t('dashboard.count', { n: rows.length }, rows.length) }}
       </div>
+      <q-btn flat dense no-caps icon="push_pin" :label="$t('pins.allTitle')" class="q-ml-sm" @click="pinnedMessagesOpen = true" />
       <TourReplayButton tour-id="dashboard" class="q-ml-xs" />
     </div>
 
+    <PinnedMessagesDialog v-if="pinnedMessagesOpen" v-model="pinnedMessagesOpen" />
     <q-banner v-if="rows.length === 0" dense class="kobo-dashboard-empty" data-tour="dash-overview">
       {{ $t('dashboard.empty') }}
     </q-banner>
@@ -155,6 +157,7 @@
 
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
+import PinnedMessagesDialog from 'src/components/PinnedMessagesDialog.vue'
 import TourReplayButton from 'src/components/TourReplayButton.vue'
 import WorkspaceAttentionLabels from 'src/components/WorkspaceAttentionLabels.vue'
 import { useTours } from 'src/composables/use-tours'
@@ -166,6 +169,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 
+const pinnedMessagesOpen = ref(false)
 const router = useRouter()
 const store = useWorkspaceStore()
 const { workspaces, prSnapshots, gitStatsCache } = storeToRefs(store)

@@ -4,6 +4,9 @@
     <q-spinner-dots size="40px" color="primary" />
   </div>
   <div v-else class="activity-feed-wrap" data-tour="ws-chat">
+    <div v-if="focusingHistory" data-testid="history-focus-loading" role="status" class="row items-center justify-center q-pa-sm text-caption text-kobo-3">
+      <q-spinner size="sm" class="q-mr-sm" /> {{ $t('activity.loading_older') }}
+    </div>
     <div v-if="workspaceStore.sessionsErrors[props.workspaceId]" role="alert" class="q-pa-sm text-negative">
       {{ $t('activity.sessionsError', { message: workspaceStore.sessionsErrors[props.workspaceId] }) }}
       <q-btn flat dense :label="$t('common.retry')" @click="workspaceStore.fetchSessions(props.workspaceId)" />
@@ -41,7 +44,7 @@
       @touchstart.passive="cancelInitialSettle"
       @keydown="cancelInitialSettle"
     >
-      <div v-if="loadingOlder" class="text-center q-py-sm text-caption text-kobo-3">
+      <div v-if="loadingOlder && !focusingHistory" class="text-center q-py-sm text-caption text-kobo-3">
         <q-spinner size="sm" /> {{ $t('activity.loading_older') }}
       </div>
       <q-virtual-scroll
@@ -58,6 +61,8 @@
             :key="turnKey(turn)"
             :turn="turn"
             :workspace-id="props.workspaceId"
+            :session-id="selectedSessionId"
+            :pin-ready="turn.items.every((item) => !unpersistedItemKeys.has(itemKey(item)) && (item.type !== 'thinking' || !unpersistedItemKeys.has(`thinking:${item.messageId}`)))"
             :data-turn-index="index"
             :highlighted="turn.items.some((i) => i.eventIds?.includes(highlightedEventId ?? '') ?? false)"
             @scroll-to="onTurnScrollTo"
@@ -133,14 +138,15 @@ import {
   mergeWithUserMessages,
   type UserMessage,
 } from 'src/services/agent-event-view'
-import { findPreviousUserTurnIndex, groupIntoTurns, type Turn, turnKey } from 'src/services/conversation-turns'
+import { findPreviousUserTurnIndex, groupIntoTurns, itemKey, type Turn, turnKey } from 'src/services/conversation-turns'
 import { useAgentStreamStore } from 'src/stores/agent-stream'
 import { useParallelReviewStore } from 'src/stores/parallel-review'
+import { usePinnedMessagesStore } from 'src/stores/pinned-messages'
 import { useSettingsStore } from 'src/stores/settings'
 import { useWebSocketStore } from 'src/stores/websocket'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import type { AgentEvent } from 'src/types/agent-event'
-import { apiFetchResponse, apiResponseError } from 'src/utils/api'
+import { ApiError, apiFetchResponse, apiResponseError } from 'src/utils/api'
 import { createLatestRequest, isAbortError } from 'src/utils/latest-request'
 import { waitForCondition } from 'src/utils/wait-for'
 import { isBusyStatus } from 'src/utils/workspace-status'
@@ -156,6 +162,14 @@ const stream = useAgentStreamStore()
 const settings = useSettingsStore()
 const workspaceStore = useWorkspaceStore()
 const websocketStore = useWebSocketStore()
+const pinsStore = usePinnedMessagesStore()
+watch(
+  () => props.workspaceId,
+  (id) => {
+    void pinsStore.load(id)
+  },
+  { immediate: true },
+)
 
 // Persisted status also restores the banner when opening a compacting workspace.
 const isCompacting = computed(() => websocketStore.isCompacting(props.workspaceId, workspaceStore.selectedSessionId))
@@ -219,6 +233,22 @@ const sessionActive = computed(() => {
 // the stream is not a pure append.
 let foldCache = createFoldCache()
 let foldCacheKey = ''
+
+// Missing delta IDs must not silently produce a partial saved copy.
+const unpersistedItemKeys = computed(() => {
+  const keys = new Set<string>()
+  const events = stream.eventsFor(props.workspaceId)
+  const ids = stream.eventIdsFor(props.workspaceId)
+  const sessions = stream.sessionIdsFor(props.workspaceId)
+  for (let index = 0; index < events.length; index++) {
+    if (ids[index] || !sessionMatches(sessions[index])) continue
+    const event = events[index]!
+    if (event.kind === 'message:thinking') keys.add(`thinking:${event.messageId}`)
+    if (event.kind === 'message:text') keys.add(`text:${event.messageId}`)
+    if (event.kind === 'tool:call' || event.kind === 'tool:result') keys.add(`tool:${event.toolCallId}`)
+  }
+  return keys
+})
 
 const turns = computed(() => {
   // Filter the stream's parallel arrays (events / timestamps / sessionIds) by
@@ -321,10 +351,12 @@ const FETCH_MORE_THRESHOLD_PX = 200
 // as soon as they scroll up past STICKY_THRESHOLD_PX.
 const stickToBottom = ref(true)
 const loadingOlder = ref(false)
+const focusingHistory = ref(false)
 const historyError = ref('')
 const olderRequest = createLatestRequest()
 const sessionRequest = createLatestRequest()
 const focusRequest = createLatestRequest()
+let releaseFocusedHistory: (() => void) | null = null
 const highlightedEventId = ref<string | null>(null)
 let initialScrollDone = false
 let initialAnchorWanted = true
@@ -346,6 +378,7 @@ const switching = computed(() => {
   )
 })
 const sessionHasMoreOlder = ref<Map<string, boolean>>(new Map())
+const sessionOldestIds = new Map<string, string>()
 const hasRenderedContent = computed(() => turns.value.length > 0 || rawLines.value.length > 0)
 const initialHistoryPending = computed(
   () =>
@@ -402,7 +435,10 @@ function sessionCacheKey(workspaceId: string, sessionId: string): string {
 
 function currentHasMoreOlder(): boolean {
   const sid = selectedSessionId.value
-  if (!sid) return stream.hasMoreOlderFor(props.workspaceId)
+  if (!sid)
+    return (
+      sessionHasMoreOlder.value.get(sessionCacheKey(props.workspaceId, '')) ?? stream.hasMoreOlderFor(props.workspaceId)
+    )
   return sessionHasMoreOlder.value.get(sessionCacheKey(props.workspaceId, sid)) ?? true
 }
 
@@ -411,6 +447,8 @@ function setSessionHasMoreOlder(workspaceId: string, sessionId: string, hasMore:
 }
 
 function oldestVisibleEventId(workspaceId: string): string | undefined {
+  const historyCursor = sessionOldestIds.get(sessionCacheKey(workspaceId, selectedSessionId.value ?? ''))
+  if (historyCursor) return historyCursor
   if (!selectedSessionId.value) return stream.oldestIdFor(workspaceId)
   const allIds = stream.eventIdsFor(workspaceId)
   const allSids = stream.sessionIdsFor(workspaceId)
@@ -440,7 +478,14 @@ function cancelHistoryReads(): void {
   olderRequest.abort()
   sessionRequest.abort()
   focusRequest.abort()
+  if (releaseFocusedHistory) {
+    sessionOldestIds.clear()
+    sessionHasMoreOlder.value.clear()
+  }
+  releaseFocusedHistory?.()
+  releaseFocusedHistory = null
   loadingOlder.value = false
+  focusingHistory.value = false
   inFlightLoadOlder = null
   for (const key of pendingSessionFetches.value) sessionsFetched.delete(key)
   pendingSessionOwners.clear()
@@ -496,8 +541,9 @@ async function loadOlder(): Promise<void> {
     const olderSids = agentEvents.map((e) => e.sessionId ?? null)
     const olderIds = agentEvents.map((e) => e.id)
     const newOldestId = fetched.length > 0 ? fetched[0].id : before
+    sessionOldestIds.set(sessionCacheKey(workspaceId, sessionId ?? ''), newOldestId)
 
-    if (sessionId) setSessionHasMoreOlder(workspaceId, sessionId, body.hasMore)
+    setSessionHasMoreOlder(workspaceId, sessionId ?? '', body.hasMore)
     stream.prepend(workspaceId, olderEvents, olderTs, {
       oldestId: newOldestId,
       hasMoreOlder: sessionId ? stream.hasMoreOlderFor(workspaceId) : body.hasMore,
@@ -614,42 +660,78 @@ interface HistoryFocusDetail {
   workspaceId?: string
   sessionId?: string | null
   eventId?: string
+  onFocused?: () => void
+  onUnavailable?: () => void
+  onError?: (error: unknown) => void
+  onCancelled?: () => void
 }
 
-/** Load a compact event window centered on a search hit, then land on its turn. */
+/** Load continuous history from the latest page to the target, then land on its turn. */
 async function focusHistoryEvent(event: Event): Promise<void> {
   const detail = (event as CustomEvent<HistoryFocusDetail>).detail
   if (detail?.workspaceId !== props.workspaceId || !detail.eventId) return
   cancelInitialSettle()
   stickToBottom.value = false
+  olderRequest.abort()
+  sessionRequest.abort()
+  inFlightLoadOlder = null
+  historyError.value = ''
   const signal = focusRequest.begin()
   const workspaceId = props.workspaceId
+  const sessionId = detail.sessionId ?? selectedSessionId.value
+  loadingOlder.value = true
+  focusingHistory.value = true
 
   try {
-    const params = new URLSearchParams({ around: detail.eventId, limit: '200' })
-    if (detail.sessionId) params.set('session', detail.sessionId)
-    const response = await apiFetchResponse(`/api/workspaces/${workspaceId}/events?${params}`, { signal })
-    if (!response.ok) throw await apiResponseError(response)
-    const body = (await response.json()) as { events: FetchedEvent[]; hasMore?: boolean }
-    if (!focusRequest.isCurrent(signal)) return
-    const fetched = body.events ?? []
+    const pages: FetchedEvent[][] = []
+    let before: string | undefined
+    let hasMore = false
+    let found = false
+    do {
+      const params = new URLSearchParams({ limit: '500' })
+      if (sessionId) params.set('session', sessionId)
+      if (before) params.set('before', before)
+      const response = await apiFetchResponse(`/api/workspaces/${workspaceId}/events?${params}`, { signal })
+      if (!response.ok) throw await apiResponseError(response)
+      const body = (await response.json()) as { events: FetchedEvent[]; hasMore?: boolean }
+      if (!focusRequest.isCurrent(signal)) return
+      const page = body.events ?? []
+      pages.push(page)
+      hasMore = body.hasMore === true
+      found = page.some((item) => item.id === detail.eventId)
+      const nextCursor = page[0]?.id
+      if (!nextCursor || nextCursor === before) break
+      before = nextCursor
+    } while (!found && hasMore)
+    const fetched = pages.reverse().flat()
+    if (!fetched.some((item) => item.id === detail.eventId)) {
+      detail.onUnavailable?.()
+      return
+    }
+    if (!releaseFocusedHistory) {
+      const releaseStream = stream.retainHistory(workspaceId)
+      const releaseActivity = workspaceStore.retainActivityHistory(workspaceId)
+      releaseFocusedHistory = () => {
+        releaseStream()
+        releaseActivity()
+      }
+    }
     const agentEvents = fetched.filter((item) => item.type === 'agent:event' && item.workspaceId === props.workspaceId)
     const userEvents = fetched.filter((item) => item.type === 'user:message' && item.workspaceId === props.workspaceId)
+    const previousCursor = oldestVisibleEventId(workspaceId)
+    if (!previousCursor || fetched.some((item) => item.id === previousCursor))
+      sessionOldestIds.set(sessionCacheKey(workspaceId, sessionId ?? ''), fetched[0].id)
 
-    stream.reset(
-      props.workspaceId,
+    stream.mergeHistory(
+      workspaceId,
       agentEvents.map((item) => item.payload as unknown as AgentEvent),
       agentEvents.map((item) => item.createdAt),
       {
-        oldestId: fetched[0]?.id,
-        // Use the backend's real answer instead of hardcoding false — a
-        // search deep-link into a long history otherwise permanently blocks
-        // further scroll-up with no indication why.
-        hasMoreOlder: body.hasMore ?? false,
         sessionIds: agentEvents.map((item) => item.sessionId),
         eventIds: agentEvents.map((item) => item.id),
       },
     )
+    setSessionHasMoreOlder(workspaceId, sessionId ?? '', hasMore)
     for (const item of userEvents) {
       const payload = item.payload
       if (typeof payload.content !== 'string') continue
@@ -675,7 +757,11 @@ async function focusHistoryEvent(event: Event): Promise<void> {
     const turnIndex = turns.value.findIndex((turn) =>
       turn.items.some((item) => item.eventIds?.includes(detail.eventId!) ?? false),
     )
-    if (turnIndex < 0) return
+    if (turnIndex < 0) {
+      detail.onUnavailable?.()
+      return
+    }
+    detail.onFocused?.()
     highlightedEventId.value = detail.eventId
     // Index-based: the target card may not be in the DOM at all until the
     // virtual list scrolls to it.
@@ -686,8 +772,18 @@ async function focusHistoryEvent(event: Event): Promise<void> {
     }, 1800)
   } catch (err) {
     if (isAbortError(err) || !focusRequest.isCurrent(signal)) return
+    if (err instanceof ApiError && err.status === 404 && detail.onUnavailable) {
+      detail.onUnavailable()
+      return
+    }
     historyError.value = err instanceof Error ? err.message : String(err)
+    detail.onError?.(err)
     console.error('[ActivityFeed] failed to focus history event:', err)
+  } finally {
+    if (focusRequest.isCurrent(signal)) {
+      loadingOlder.value = false
+      focusingHistory.value = false
+    } else detail.onCancelled?.()
   }
 }
 
@@ -1005,6 +1101,7 @@ async function fetchSessionIfMissing(): Promise<void> {
     if (!sessionRequest.isCurrent(signal)) return
     const fetched = body.events ?? []
     if (fetched.length === 0) return
+    sessionOldestIds.set(cacheKey, fetched[0].id)
 
     const agentEvents = fetched.filter((e) => e.type === 'agent:event' && e.workspaceId === workspaceId)
     const userMsgs = fetched.filter((e) => e.type === 'user:message' && e.workspaceId === workspaceId)

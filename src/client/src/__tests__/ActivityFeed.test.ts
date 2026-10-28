@@ -6,6 +6,7 @@ import { createI18n } from 'vue-i18n'
 import ActivityFeed from '../components/ActivityFeed.vue'
 import en from '../i18n/en'
 import { useAgentStreamStore } from '../stores/agent-stream'
+import { usePinnedMessagesStore } from '../stores/pinned-messages'
 import { useWebSocketStore } from '../stores/websocket'
 import { useWorkspaceStore } from '../stores/workspace'
 
@@ -66,6 +67,214 @@ const globalStubs = {
 }
 
 describe('ActivityFeed.vue', () => {
+  it('loads every page between a pin and recent messages while preserving live events', async () => {
+    const stream = useAgentStreamStore()
+    const agent = (id: string) => ({
+      id,
+      workspaceId: 'pins',
+      type: 'agent:event',
+      sessionId: null,
+      createdAt: id,
+      payload: { kind: 'message:text', messageId: id, text: id, streaming: false },
+    })
+    const user = (id: string) => ({
+      id,
+      workspaceId: 'pins',
+      type: 'user:message',
+      sessionId: null,
+      createdAt: id,
+      payload: { content: id, sender: 'user' },
+    })
+    stream.append('pins', { kind: 'message:text', messageId: 'e7', text: 'e7', streaming: false }, 'e7', 'e7')
+    const requests: string[] = []
+    vi.mocked(fetch).mockImplementation(async (url) => {
+      const params = new URL(String(url), 'http://localhost').searchParams
+      requests.push(params.get('before') ?? 'latest')
+      if (!params.has('before'))
+        return new Response(JSON.stringify({ events: [user('e6'), agent('e7')], hasMore: true }))
+      if (params.get('before') === 'e6') {
+        stream.append('pins', { kind: 'message:text', messageId: 'e8', text: 'live', streaming: false }, 'e8', 'e8')
+        return new Response(JSON.stringify({ events: [agent('e3'), user('e4'), agent('e5')], hasMore: true }))
+      }
+      return new Response(JSON.stringify({ events: [agent('e1'), user('e2')], hasMore: false }))
+    })
+    const wrapper = mount(ActivityFeed, {
+      props: { workspaceId: 'pins' },
+      global: { plugins: [i18n], stubs: globalStubs },
+    })
+    const onFocused = vi.fn()
+    window.dispatchEvent(
+      new CustomEvent('kobo:focus-history-event', { detail: { workspaceId: 'pins', eventId: 'e1', onFocused } }),
+    )
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(100)
+    expect(requests).toEqual(['latest', 'e6', 'e3'])
+    expect(stream.eventIdsFor('pins')).toEqual(['e1', 'e3', 'e5', 'e7', 'e8'])
+    expect(useWorkspaceStore().activityFeeds.pins.map((item) => item.id)).toEqual(['e2', 'e4', 'e6'])
+    expect(onFocused).toHaveBeenCalledOnce()
+    expect(wrapper.findComponent(QVirtualScrollStub).vm.$.exposed?.scrollTo).toHaveBeenCalledWith(0, 'center')
+    wrapper.unmount()
+  })
+
+  it('ignores a late pin-history response after changing workspace', async () => {
+    let resolve!: (response: Response) => void
+    vi.mocked(fetch).mockImplementation(
+      () =>
+        new Promise((done) => {
+          resolve = done
+        }),
+    )
+    const wrapper = mount(ActivityFeed, {
+      props: { workspaceId: 'pins' },
+      global: { plugins: [i18n], stubs: globalStubs },
+    })
+    const onFocused = vi.fn()
+    const onCancelled = vi.fn()
+    window.dispatchEvent(
+      new CustomEvent('kobo:focus-history-event', {
+        detail: { workspaceId: 'pins', eventId: 'target', onFocused, onCancelled },
+      }),
+    )
+    await nextTick()
+    expect(wrapper.find('[data-testid="history-focus-loading"]').exists()).toBe(true)
+    const signal = vi.mocked(fetch).mock.calls[0][1]?.signal
+    await wrapper.setProps({ workspaceId: 'other' })
+    expect(wrapper.find('[data-testid="history-focus-loading"]').exists()).toBe(false)
+    expect(signal?.aborted).toBe(true)
+    resolve(
+      new Response(
+        JSON.stringify({
+          events: [
+            {
+              id: 'target',
+              workspaceId: 'pins',
+              type: 'user:message',
+              sessionId: null,
+              createdAt: 'now',
+              payload: { content: 'old workspace', sender: 'user' },
+            },
+          ],
+          hasMore: false,
+        }),
+      ),
+    )
+    await flushPromises()
+    expect(useWorkspaceStore().activityFeeds.pins ?? []).toEqual([])
+    expect(onFocused).not.toHaveBeenCalled()
+    expect(onCancelled).toHaveBeenCalledOnce()
+    wrapper.unmount()
+  })
+
+  it('keeps the existing conversation when an intermediate history page fails', async () => {
+    const stream = useAgentStreamStore()
+    stream.append('pins', { kind: 'message:end', messageId: 'recent' }, '', 'recent')
+    const wrapper = mount(ActivityFeed, {
+      props: { workspaceId: 'pins' },
+      global: { plugins: [i18n], stubs: globalStubs },
+    })
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(new Response(JSON.stringify({ events: [{ id: 'middle' }], hasMore: true })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: 'offline' }), { status: 503 }))
+    const onError = vi.fn()
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    window.dispatchEvent(
+      new CustomEvent('kobo:focus-history-event', { detail: { workspaceId: 'pins', eventId: 'old', onError } }),
+    )
+    await flushPromises()
+    expect(stream.eventIdsFor('pins')).toEqual(['recent'])
+    expect(onError).toHaveBeenCalledOnce()
+    expect(wrapper.find('[data-testid="history-load-error"]').exists()).toBe(true)
+    consoleError.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('continues paginating before a pin in a conversation containing only user messages', async () => {
+    const event = (id: string) => ({
+      id,
+      workspaceId: 'pins',
+      type: 'user:message',
+      sessionId: null,
+      createdAt: id,
+      payload: { content: id, sender: 'user' },
+    })
+    const requests: Array<string | null> = []
+    vi.mocked(fetch).mockImplementation(async (url) => {
+      const before = new URL(String(url), 'http://localhost').searchParams.get('before')
+      requests.push(before)
+      return new Response(
+        JSON.stringify({ events: before ? [event('e0')] : [event('e1'), event('e2')], hasMore: !before }),
+      )
+    })
+    const wrapper = mount(ActivityFeed, {
+      props: { workspaceId: 'pins' },
+      global: { plugins: [i18n], stubs: globalStubs },
+    })
+    window.dispatchEvent(
+      new CustomEvent('kobo:focus-history-event', { detail: { workspaceId: 'pins', eventId: 'e1' } }),
+    )
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(100)
+    wrapper
+      .findComponent(QScrollAreaStub)
+      .vm.$emit('scroll', { verticalPosition: 0, verticalSize: 1000, verticalContainerSize: 400 })
+    await flushPromises()
+    expect(requests).toEqual([null, 'e1'])
+    expect(useWorkspaceStore().activityFeeds.pins.map((item) => item.id)).toEqual(['e1', 'e2', 'e0'])
+    wrapper.unmount()
+  })
+
+  it('blocks partial snapshots when a displayed text delta has no persisted event ID', async () => {
+    const stream = useAgentStreamStore()
+    stream.reset(
+      'pins',
+      [
+        { kind: 'message:text', messageId: 'answer', text: 'saved', streaming: true },
+        { kind: 'message:text', messageId: 'answer', text: 'pending', streaming: true },
+      ],
+      ['2026-01-01T00:00:00Z', '2026-01-01T00:00:01Z'],
+      { eventIds: ['e1', null], sessionIds: [null, null] },
+    )
+    const wrapper = mount(ActivityFeed, {
+      props: { workspaceId: 'pins' },
+      global: { plugins: [i18n], stubs: globalStubs },
+    })
+    await nextTick()
+    expect(wrapper.get('.turn-card-stub').attributes('pin-ready')).toBe('false')
+    stream.reset(
+      'pins',
+      [{ kind: 'message:text', messageId: 'answer', text: 'savedpending', streaming: false }],
+      ['2026-01-01T00:00:00Z'],
+      { eventIds: ['e1'], sessionIds: [null] },
+    )
+    await nextTick()
+    expect(wrapper.get('.turn-card-stub').attributes('pin-ready')).toBe('true')
+    wrapper.unmount()
+  })
+
+  it('falls back to the saved pin without replacing history when its source disappeared', async () => {
+    const stream = useAgentStreamStore()
+    stream.reset(
+      'pins',
+      [{ kind: 'message:text', messageId: 'm', text: 'cached', streaming: false }],
+      ['2026-01-01T00:00:00Z'],
+    )
+    const wrapper = mount(ActivityFeed, {
+      props: { workspaceId: 'pins' },
+      global: { plugins: [i18n], stubs: globalStubs },
+    })
+    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({ error: 'Event not found' }), { status: 404 }))
+    const onUnavailable = vi.fn()
+    window.dispatchEvent(
+      new CustomEvent('kobo:focus-history-event', {
+        detail: { workspaceId: 'pins', eventId: 'expired', onUnavailable },
+      }),
+    )
+    await flushPromises()
+    expect(onUnavailable).toHaveBeenCalledOnce()
+    expect(stream.eventsFor('pins')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
   it('opens cached user-only conversations at the measured bottom, including after reselection', async () => {
     const store = useWorkspaceStore()
     for (const workspaceId of ['first-user', 'second-user']) {
@@ -315,6 +524,7 @@ describe('ActivityFeed.vue', () => {
     vi.useFakeTimers()
     vi.stubGlobal('fetch', vi.fn())
     setActivePinia(createPinia())
+    vi.spyOn(usePinnedMessagesStore(), 'load').mockResolvedValue(undefined)
   })
 
   afterEach(() => {

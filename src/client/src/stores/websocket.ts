@@ -7,6 +7,7 @@ import { getWorkspaceQueueHost } from 'src/services/workspace-queue-bridge'
 import { useAgentStreamStore } from 'src/stores/agent-stream'
 import { useAutoLoopReviewStore } from 'src/stores/auto-loop-review'
 import { useParallelReviewStore } from 'src/stores/parallel-review'
+import { usePinnedMessagesStore } from 'src/stores/pinned-messages'
 import { useProgressBarsStore } from 'src/stores/progress-bars'
 import { useSessionHandoffStore } from 'src/stores/session-handoff'
 import { type GlobalSettings, useSettingsStore } from 'src/stores/settings'
@@ -672,6 +673,7 @@ export const useWebSocketStore = defineStore('websocket', {
       await Promise.allSettled([
         workspaceStore.fetchAutoLoopStates(),
         useProgressBarsStore().refresh(),
+        usePinnedMessagesStore().refresh(),
         useAutoLoopReviewStore().refreshKnown(),
         useParallelReviewStore().refreshKnown(),
         ...[...handoffWorkspaces].map((id) => handoffs.refresh(id)),
@@ -914,6 +916,11 @@ export const useWebSocketStore = defineStore('websocket', {
               ...(payload.journalOnly === true ? { journalOnly: true } : {}),
             })
           }
+          break
+        }
+        case 'pins:changed': {
+          if (typeof payload.workspaceId === 'string' && payload.workspaceId && !this._replaying)
+            void usePinnedMessagesStore().refresh(payload.workspaceId)
           break
         }
         case 'progress:changed': {
@@ -1574,6 +1581,7 @@ export const useWebSocketStore = defineStore('websocket', {
         case 'workspace:unarchived':
         case 'workspace:worktree-restored':
         case 'workspace:worktree-purged': {
+          if (wid && !this._replaying) void usePinnedMessagesStore().refresh(wid)
           const restored = (payload as { workspace?: Workspace }).workspace
           if (msg.type === 'workspace:worktree-restored' && restored && restored.id === wid) {
             workspaceStore.applyRestoredWorkspace(restored)
@@ -1597,6 +1605,7 @@ export const useWebSocketStore = defineStore('websocket', {
         }
 
         case 'workspace:deleted': {
+          if (wid && !this._replaying) void usePinnedMessagesStore().refresh(wid)
           if (wid) useAutoLoopReviewStore().forget(wid)
           workspaceStore.invalidateWorkspaceLifecycleReads(wid)
           // Deletion is permanent — unlike archive/worktree-purge (both

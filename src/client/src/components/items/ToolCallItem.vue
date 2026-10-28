@@ -5,7 +5,7 @@
       <q-icon :name="toolIcon" size="14px" class="tool-icon" />
       <span class="tool-name">{{ fileChange.toolName === 'Bash:rm' ? 'Bash' : fileChange.toolName }}</span>
       <span class="tool-path" :title="fileChange.filePath">{{ displayFilePath }}</span>
-      <q-btn flat dense round size="xs" icon="open_in_new" class="tool-open-diff" @click.stop="openInDiff">
+      <q-btn v-if="!staticContent" flat dense round size="xs" icon="open_in_new" class="tool-open-diff" @click.stop="openInDiff">
         <q-tooltip>{{ t('chat.openInGitDiff') }}</q-tooltip>
       </q-btn>
       <span v-if="fileChange.additions > 0" class="tool-stat-add">+{{ fileChange.additions }}</span>
@@ -79,7 +79,7 @@ import { requestDiffOpen } from 'src/utils/pending-diff-open'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
-const props = defineProps<{ item: Extract<ConversationItem, { type: 'tool' }> }>()
+const props = defineProps<{ item: Extract<ConversationItem, { type: 'tool' }>; staticContent?: boolean }>()
 
 const expanded = ref(false)
 const workspaceStore = useWorkspaceStore()
@@ -87,7 +87,9 @@ const { t } = useI18n()
 
 const fileChange = computed(() => getFileChangeInfo(props.item.name, props.item.input))
 const displayFilePath = computed(() =>
-  fileChange.value ? compactPath(fileChange.value.filePath, workspaceStore.selectedWorkspace) : '',
+  fileChange.value
+    ? compactPath(fileChange.value.filePath, props.staticContent ? null : workspaceStore.selectedWorkspace)
+    : '',
 )
 
 // Material Icons per tool — restores the visual identity users were used
@@ -126,7 +128,7 @@ const fallbackLabel = computed(() => {
   if (fileChange.value) return ''
   const input = props.item.input
   const raw = extractRawLabel(input)
-  return raw ? compactPath(raw, workspaceStore.selectedWorkspace) : ''
+  return raw ? compactPath(raw, props.staticContent ? null : workspaceStore.selectedWorkspace) : ''
 })
 
 function extractRawLabel(input: unknown): string {
@@ -188,6 +190,7 @@ function toggleExpand() {
 }
 
 function openInDiff() {
+  if (props.staticContent) return
   const rawPath = fileChange.value?.filePath
   const workspace = workspaceStore.selectedWorkspace
   const workspaceId = workspace?.id

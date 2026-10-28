@@ -382,6 +382,7 @@ vi.mock('../server/services/forge/registry.js', () => ({
 vi.mock('../server/services/websocket-service.js', () => ({
   emit: vi.fn(),
   emitEphemeral: vi.fn(),
+  broadcastAll: vi.fn(),
 }))
 
 vi.mock('../server/services/dev-server-service.js', () => ({
@@ -3822,6 +3823,7 @@ describe('DELETE /api/workspaces/:id', () => {
     expect(gitOps.deleteRemoteBranchAsync).toHaveBeenCalledWith('/tmp/project', 'feature/test')
     expect(workspaceService.deleteWorkspace).toHaveBeenCalledWith('ws-1')
     expect(wsService.emitEphemeral).toHaveBeenCalledWith('ws-1', 'workspace:deleted', { workspaceId: 'ws-1' })
+    expect(wsService.broadcastAll).toHaveBeenCalledWith('pins:changed', { workspaceId: 'ws-1' })
   })
 
   it('waits for the agent to actually stop before removing the worktree', async () => {
@@ -4746,6 +4748,29 @@ describe('POST /api/workspaces/:id/archive', () => {
 })
 
 describe('POST /api/workspaces/:id/unarchive', () => {
+  it('invalidates pinned metadata for dashboards not subscribed to the archived workspace', async () => {
+    const websocket = await vi.importActual<typeof import('../server/services/websocket-service.js')>(
+      '../server/services/websocket-service.js',
+    )
+    const clients = [vi.fn(), vi.fn()].map((send) => ({ readyState: 1, bufferedAmount: 0, send }))
+    for (const client of clients) websocket._getClients().set(client as unknown as import('ws').WebSocket, new Set())
+    vi.mocked(wsService.broadcastAll).mockImplementationOnce(websocket.broadcastAll)
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ ...fakeWorkspace, archivedAt: '2026-10-28' })
+    vi.mocked(workspaceService.unarchiveWorkspace).mockReturnValue({ ...fakeWorkspace, archivedAt: null })
+
+    try {
+      const res = await app.request('/api/workspaces/ws-1/unarchive', { method: 'POST' })
+      expect(res.status).toBe(200)
+      for (const client of clients)
+        expect(client.send.mock.calls.map(([frame]) => JSON.parse(frame))).toEqual([
+          { type: 'pins:changed', payload: { workspaceId: 'ws-1' } },
+        ])
+    } finally {
+      for (const client of clients) websocket._getClients().delete(client as unknown as import('ws').WebSocket)
+      vi.mocked(wsService.broadcastAll).mockReset()
+    }
+  })
+
   it('returns 200 with unarchived workspace, status preserved', async () => {
     const archivedWs = { ...fakeWorkspace, status: 'idle' as const, archivedAt: '2026-04-04T10:00:00.000Z' }
     const restoredWs = { ...archivedWs, archivedAt: null }
@@ -5219,6 +5244,7 @@ describe('PATCH /api/workspaces/:id/sessions/:sessionId', () => {
     const body = await res.json()
     expect(body.name).toBe('Mon nom')
     expect(workspaceService.renameSession).toHaveBeenCalledWith('sess-1', 'ws-1', 'Mon nom')
+    expect(wsService.broadcastAll).toHaveBeenCalledWith('pins:changed', { workspaceId: 'ws-1' })
   })
 
   it('retourne 400 si name est vide', async () => {
@@ -5250,6 +5276,29 @@ describe('PATCH /api/workspaces/:id/sessions/:sessionId', () => {
       body: JSON.stringify({ name: 'Test' }),
     })
     expect(res.status).toBe(404)
+  })
+})
+
+describe('session changes refresh pinned metadata', () => {
+  beforeEach(() => vi.clearAllMocks())
+  it.each([true, false])('only broadcasts a successful session deletion (%s)', async (deleted) => {
+    vi.mocked(workspaceService.deleteSession).mockReturnValue(deleted)
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace as any)
+    const response = await app.request('/api/workspaces/ws-1/sessions/sess-1', { method: 'DELETE' })
+    expect(response.status).toBe(deleted ? 200 : 404)
+    if (deleted) expect(wsService.broadcastAll).toHaveBeenCalledWith('pins:changed', { workspaceId: 'ws-1' })
+    else expect(wsService.emitEphemeral).not.toHaveBeenCalled()
+  })
+  it('does not broadcast an unsuccessful rename', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace as any)
+    vi.mocked(workspaceService.renameSession).mockReturnValue(null)
+    const response = await app.request('/api/workspaces/ws-1/sessions/missing', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'New name' }),
+    })
+    expect(response.status).toBe(404)
+    expect(wsService.emitEphemeral).not.toHaveBeenCalled()
   })
 })
 

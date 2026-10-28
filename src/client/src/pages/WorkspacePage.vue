@@ -79,6 +79,10 @@
               @update-workflow="setWorkflowMode" />
           </q-list></q-menu>
         </q-btn>
+        <q-btn flat dense round :aria-label="$t('pins.title')" @click="pinnedMessagesOpen = true">
+          <q-icon name="push_pin" size="18px" />
+          <q-tooltip>{{ $t('pins.title') }}</q-tooltip>
+        </q-btn>
         <WorkspaceWhipControl v-if="!selectedWs.archivedAt" :workspace-id="selectedWs.id"
           :session-id="whipRunningSessionId" :running="whipRunningSessionId !== null" />
         <q-btn v-if="isBusyStatus(selectedWs.status) && !selectedWs.archivedAt"
@@ -196,6 +200,7 @@
     <AgentErrorBanner v-if="selectedId" :workspace-id="selectedId" />
     <StaleSessionBanner v-if="selectedId" :workspace-id="selectedId" />
     <QuotaBackoffBanner v-if="selectedId" :workspace-id="selectedId" />
+    <PinnedMessagesDialog v-if="selectedId && pinnedMessagesOpen" v-model="pinnedMessagesOpen" :workspace-id="selectedId" />
     <WorkspaceHistorySearch
       v-if="selectedId && historySearchOpen"
       :key="selectedId"
@@ -340,6 +345,7 @@ import AskUserQuestionPanel from 'src/components/AskUserQuestionPanel.vue'
 import ChatInput from 'src/components/ChatInput.vue'
 import LatestThinkingPanel from 'src/components/LatestThinkingPanel.vue'
 import PermissionRequestPanel from 'src/components/PermissionRequestPanel.vue'
+import PinnedMessagesDialog from 'src/components/PinnedMessagesDialog.vue'
 import QuotaBackoffBanner from 'src/components/QuotaBackoffBanner.vue'
 import SessionProgressPanel from 'src/components/SessionProgressPanel.vue'
 import StaleSessionBanner from 'src/components/StaleSessionBanner.vue'
@@ -397,6 +403,7 @@ function workspaceStatusColor(workspaceId: string, status: string): string {
 const starting = ref(false)
 const stopping = ref(false)
 const historySearchOpen = ref(false)
+const pinnedMessagesOpen = ref(false)
 const commandPaletteOpen = ref(false)
 const commandPaletteQuery = ref('')
 const commandPaletteInput = ref<{ focus: () => void } | null>(null)

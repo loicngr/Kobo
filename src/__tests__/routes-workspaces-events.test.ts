@@ -338,3 +338,37 @@ describe('GET /:id/events — subagent activity filter', () => {
     expect(body.events.map((event) => event.id)).toEqual(['nested'])
   })
 })
+
+it('opens an available pinned native-session event in its canonical session history', async () => {
+  const { getDb } = await import('../server/db/index.js')
+  const { createPinnedMessage } = await import('../server/services/pinned-message-service.js')
+  const db = getDb()
+  db.prepare('INSERT INTO agent_sessions (id,workspace_id,engine_session_id,started_at) VALUES (?,?,?,?)').run(
+    'canonical',
+    workspaceId,
+    'native',
+    'now',
+  )
+  const target = insertEvent(db, { workspaceId, sessionId: 'native', type: 'agent:event' })
+  db.prepare('UPDATE ws_events SET payload = ? WHERE id = ?').run(
+    JSON.stringify({ kind: 'message:text', messageId: 'message', text: 'legacy message' }),
+    target,
+  )
+  const canonical = insertEvent(db, { workspaceId, sessionId: 'canonical' })
+  const legacyNull = insertEvent(db, { workspaceId })
+  insertEvent(db, { workspaceId, sessionId: 'other-session' })
+  const pin = createPinnedMessage({ workspaceId, eventIds: [target] })
+  expect(pin).toMatchObject({ sessionId: 'canonical', sourceAvailable: true })
+  const app = await getApp()
+  for (const query of [
+    `around=${pin.eventId}&session=${pin.sessionId}`,
+    `session=${pin.sessionId}`,
+    `before=${canonical}&session=${pin.sessionId}`,
+  ]) {
+    const response = await app.request(`/${workspaceId}/events?${query}`)
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as { events: Array<{ id: string }> }
+    expect(body.events.map((e) => e.id)).toContain(target)
+    expect(body.events.every((e) => [target, canonical, legacyNull].includes(e.id))).toBe(true)
+  }
+})

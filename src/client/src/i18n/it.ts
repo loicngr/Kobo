@@ -1,4 +1,21 @@
 export default {
+  'pins.title': 'Messaggi fissati',
+  'pins.allTitle': 'Tutti i messaggi fissati',
+  'pins.pin': 'Fissa messaggio',
+  'pins.unpin': 'Rimuovi messaggio dai fissati',
+  'pins.pinned': 'Messaggio fissato',
+  'pins.actions': 'Azioni del messaggio',
+  'pins.notSaved': 'Questo blocco non è ancora stato salvato.',
+  'pins.actionFailed': 'Impossibile modificare i messaggi fissati: {message}',
+  'pins.loadFailed': 'Impossibile caricare i messaggi fissati: {message}',
+  'pins.empty': 'Nessun messaggio fissato.',
+  'pins.loading': 'Caricamento dei messaggi fissati…',
+  'pins.more': 'Carica altri',
+  'pins.savedCopy': 'Copia salvata al momento del fissaggio. Le modifiche successive non sono incluse.',
+  'pins.viewCopy': 'Visualizza copia salvata',
+  'pins.back': 'Torna ai messaggi fissati',
+  'pins.unnamedSession': 'Sessione senza nome',
+  'pins.archived': 'Archiviato',
   'parallelReview.planHint':
     'Questa revisione parallela richiede la modalità Plan. I permessi dell’agente principale restano invariati.',
   'parallelReview.returnHint':

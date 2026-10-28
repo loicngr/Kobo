@@ -861,6 +861,29 @@ and visibility/network listeners. Wait for settings to load before starting the
 tracker. Disabling invalidates in-flight activity responses without acknowledging
 unread events or deleting history; re-enabling resumes from the saved checkpoint.
 
+### Pinned conversation blocks
+
+Operator-only `/api/pinned-messages` stores immutable snapshots of displayed
+user/agent blocks in SQLite (migration v57). Capture reads persisted events on
+the backend, checks workspace/session ownership and bounds input and snapshot
+size; never accept client-supplied conversation content as the source. List
+responses contain lightweight metadata only; load snapshot content on demand.
+Reuse the existing event folding, card rendering and session/history-focus
+navigation. Pin identities must survive older-history prepends and remain scoped
+to their workspace and session. History focus loads consecutive pages from recent
+events through the target; merge them without discarding live output or creating
+duplicates. Retain explicitly loaded history while reading and restore live
+cache bounds on view changes. Keep loading/error and stale-request protection
+in the shared client store, with global `pins:changed` invalidation (workspace ID
+only, including archived/unsubscribed workspaces) and reconnect refresh. Saved
+copies disable current-session diff/document/subagent navigation and name lookup;
+keep inline expansion, ordinary links and image viewing available.
+
+Archive/worktree purge preserves pins; explicit workspace/session deletion
+cascades them. Retention deletes source events independently, leaving the saved
+copy readable. Do not change retention rules or retain entire sessions for a pin.
+Pins are manual UI bookmarks, not agent memory or an MCP capability.
+
 ### Workspace attention indicators
 
 `src/client/src/utils/workspace-attention.ts` derives a small set of badges (CI failure, changes-requested) from the PR snapshot + git stats stored on each workspace. `WorkspaceAttentionLabels.vue` renders them inline on the workspace cards in the left drawer. The derivation is a pure function, easy to unit-test and free of IO. Drawer cards therefore stay reactive to whatever the pr-watcher / bulk-info refresh writes back into the store.

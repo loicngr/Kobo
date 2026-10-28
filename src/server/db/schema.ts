@@ -4,6 +4,7 @@ import { initAutoLoopSchema } from './auto-loop-schema.js'
 import { initMcpMessageSchema } from './mcp-message-schema.js'
 import { initMemorySchema } from './memory-schema.js'
 import { initParallelReviewSchema } from './parallel-review-schema.js'
+import { initPinnedMessageSchema } from './pinned-message-schema.js'
 import { initProgressBarSchema } from './progress-bar-schema.js'
 import { initReviewReturnSchema } from './review-return-schema.js'
 import { initSearchSchema } from './search-schema.js'
@@ -249,4 +250,5 @@ export function initSchema(db: Database.Database): void {
   initWorkspaceMessageBatchSchema(db)
   initProgressBarSchema(db)
   initParallelReviewSchema(db)
+  initPinnedMessageSchema(db)
 }

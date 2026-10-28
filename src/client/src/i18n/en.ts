@@ -1,4 +1,21 @@
 export default {
+  'pins.title': 'Pinned messages',
+  'pins.allTitle': 'All pinned messages',
+  'pins.pin': 'Pin message',
+  'pins.unpin': 'Unpin message',
+  'pins.pinned': 'Pinned message',
+  'pins.actions': 'Message actions',
+  'pins.notSaved': 'This block has not been saved yet.',
+  'pins.actionFailed': 'Could not update pinned messages: {message}',
+  'pins.loadFailed': 'Could not load pinned messages: {message}',
+  'pins.empty': 'No pinned messages.',
+  'pins.loading': 'Loading pinned messages…',
+  'pins.more': 'Load more',
+  'pins.savedCopy': 'Saved copy captured when pinned. Later changes are not included.',
+  'pins.viewCopy': 'View saved copy',
+  'pins.back': 'Back to pinned messages',
+  'pins.unnamedSession': 'Unnamed session',
+  'pins.archived': 'Archived',
   'parallelReview.planHint':
     'Plan mode is required for this parallel review. The main agent’s permissions stay unchanged.',
   'parallelReview.returnHint':

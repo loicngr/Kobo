@@ -1,4 +1,21 @@
 export default {
+  'pins.title': 'Angeheftete Nachrichten',
+  'pins.allTitle': 'Alle angehefteten Nachrichten',
+  'pins.pin': 'Nachricht anheften',
+  'pins.unpin': 'Nachricht lösen',
+  'pins.pinned': 'Angeheftete Nachricht',
+  'pins.actions': 'Nachrichtenaktionen',
+  'pins.notSaved': 'Dieser Block wurde noch nicht gespeichert.',
+  'pins.actionFailed': 'Angeheftete Nachrichten konnten nicht geändert werden: {message}',
+  'pins.loadFailed': 'Angeheftete Nachrichten konnten nicht geladen werden: {message}',
+  'pins.empty': 'Keine angehefteten Nachrichten.',
+  'pins.loading': 'Angeheftete Nachrichten werden geladen…',
+  'pins.more': 'Mehr laden',
+  'pins.savedCopy': 'Beim Anheften gespeicherte Kopie. Spätere Änderungen sind nicht enthalten.',
+  'pins.viewCopy': 'Gespeicherte Kopie anzeigen',
+  'pins.back': 'Zurück zu angehefteten Nachrichten',
+  'pins.unnamedSession': 'Unbenannte Sitzung',
+  'pins.archived': 'Archiviert',
   'parallelReview.planHint':
     'Für diese parallele Prüfung ist der Plan-Modus erforderlich. Die Berechtigungen des Hauptagenten bleiben unverändert.',
   'parallelReview.returnHint':

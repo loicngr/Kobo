@@ -19,6 +19,7 @@ import { useI18n } from 'vue-i18n'
 
 const props = defineProps<{
   item: Extract<ConversationItem, { type: 'text' }>
+  staticContent?: boolean
 }>()
 
 const documentsStore = useDocumentsStore()
@@ -28,7 +29,7 @@ const { t } = useI18n()
 
 const knownDocumentPaths = computed(() => {
   const wsId = workspaceStore.selectedWorkspaceId
-  if (!wsId) return [] as string[]
+  if (props.staticContent || !wsId) return [] as string[]
   return documentsStore.documentsFor(wsId).map((d) => d.path)
 })
 
@@ -58,7 +59,7 @@ function onMessageClick(event: MouseEvent) {
   event.preventDefault()
   const path = target.getAttribute('data-document-path')
   const wsId = workspaceStore.selectedWorkspaceId
-  if (!path || !wsId) return
+  if (props.staticContent || !path || !wsId) return
   documentsStore.openDocumentByPath(wsId, path).catch((err: unknown) => {
     console.error('[TextMessageItem] openDocumentByPath failed:', err)
     $q.notify({ type: 'negative', message: t('documents.loadFailed'), position: 'top' })

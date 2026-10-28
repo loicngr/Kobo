@@ -19,6 +19,8 @@
       <span v-if="actionCount > 0" class="turn-actions">
         · {{ t('chat.nActions', { n: actionCount }) }}
       </span>
+      <MessagePinMenu v-if="!disablePin && (turn.speaker === 'user' || turn.speaker === 'agent')"
+        :turn="turn" :workspace-id="workspaceId" :session-id="sessionId" :pin-ready="pinReady" />
     </div>
     <div class="turn-body">
       <template v-for="row in displayRows" :key="row.key">
@@ -40,7 +42,7 @@
               </q-item-label>
               <q-item-label caption>{{ t('chat.nActions', { n: row.items.length }) }}</q-item-label>
             </q-item-section>
-            <q-item-section side>
+            <q-item-section v-if="!staticContent" side>
               <q-btn
                 flat
                 round
@@ -56,16 +58,16 @@
           </template>
           <div class="q-px-sm q-pb-sm">
             <template v-for="item in row.items" :key="itemKey(item)">
-              <TextMessageItem v-if="item.type === 'text'" :item="item" />
+              <TextMessageItem v-if="item.type === 'text'" :item="item" :static-content="staticContent" />
               <ThinkingItem v-else-if="item.type === 'thinking'" :item="item" />
-              <ToolCallItem v-else-if="item.type === 'tool'" :item="item" />
+              <ToolCallItem v-else-if="item.type === 'tool'" :item="item" :static-content="staticContent" />
             </template>
           </div>
         </q-expansion-item>
         <template v-else>
-          <TextMessageItem v-if="row.item.type === 'text'" :item="row.item" />
+          <TextMessageItem v-if="row.item.type === 'text'" :item="row.item" :static-content="staticContent" />
           <ThinkingItem v-else-if="row.item.type === 'thinking'" :item="row.item" />
-          <ToolCallItem v-else-if="row.item.type === 'tool'" :item="row.item" />
+          <ToolCallItem v-else-if="row.item.type === 'tool'" :item="row.item" :static-content="staticContent" />
           <UserMessageItem v-else-if="row.item.type === 'user'" :item="row.item" :workspace-id="workspaceId" />
           <SessionEventItem v-else-if="row.item.type === 'session'" :item="row.item" />
           <AgentErrorItem v-else-if="row.item.type === 'error'" :item="row.item" />
@@ -108,12 +110,20 @@ import TextMessageItem from './items/TextMessageItem.vue'
 import ThinkingItem from './items/ThinkingItem.vue'
 import ToolCallItem from './items/ToolCallItem.vue'
 import UserMessageItem from './items/UserMessageItem.vue'
+import MessagePinMenu from './MessagePinMenu.vue'
 
-const props = defineProps<{
-  turn: Turn
-  workspaceId: string
-  highlighted?: boolean
-}>()
+const props = withDefaults(
+  defineProps<{
+    turn: Turn
+    workspaceId: string
+    highlighted?: boolean
+    sessionId?: string | null
+    disablePin?: boolean
+    staticContent?: boolean
+    pinReady?: boolean
+  }>(),
+  { pinReady: true },
+)
 const emit = defineEmits<{
   /** Emitted by the "scroll to top of this message" button — detail carries
       the absolute Y (relative to the scroll-content origin) to land on. */
@@ -236,6 +246,7 @@ type DisplayRow =
     }
 
 function subagentFor(item: SubagentConversationItem) {
+  if (props.staticContent) return undefined
   return findSubagentForActivity(
     item.origin,
     Object.values(workspaceStore.subagents[props.workspaceId] ?? {}),
@@ -283,7 +294,7 @@ const displayRows = computed<DisplayRow[]>(() => {
 })
 
 function openSubagentActivity(item: SubagentConversationItem): void {
-  if (!item.origin) return
+  if (props.staticContent || !item.origin) return
   openSubagentActivityInDrawer?.({ origin: item.origin })
 }
 

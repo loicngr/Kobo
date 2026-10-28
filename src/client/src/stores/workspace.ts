@@ -399,6 +399,7 @@ export interface PendingCron {
 }
 
 const MAX_FEED_ITEMS = 5000
+const activityHistoryReaders = new WeakMap<object, Map<string, number>>()
 
 // Debounce window for `fetchPrSnapshots` called via `triggerGitRefresh`. The
 // backend cache (pr-watcher) only updates on its own 30 s poll, so coalescing
@@ -1735,6 +1736,37 @@ export const useWorkspaceStore = defineStore('workspace', {
         this.selectSession(getCurrentSession(this.sessions)?.id ?? null)
     },
 
+    retainActivityHistory(workspaceId: string): () => void {
+      let readers = activityHistoryReaders.get(this)
+      if (!readers) {
+        readers = new Map()
+        activityHistoryReaders.set(this, readers)
+      }
+      readers.set(workspaceId, (readers.get(workspaceId) ?? 0) + 1)
+      let released = false
+      return () => {
+        if (released) return
+        released = true
+        const remaining = (readers.get(workspaceId) ?? 1) - 1
+        if (remaining > 0) readers.set(workspaceId, remaining)
+        else {
+          readers.delete(workspaceId)
+          // History is inserted after live items; retain the newest messages when leaving it.
+          this.activityFeeds[workspaceId]?.sort((a, b) => a.timestamp.localeCompare(b.timestamp))
+          this.trimActivityHistory(workspaceId)
+        }
+      }
+    },
+
+    trimActivityHistory(workspaceId: string) {
+      if (activityHistoryReaders.get(this)?.has(workspaceId)) return
+      const feed = this.activityFeeds[workspaceId]
+      if (!feed || feed.length <= MAX_FEED_ITEMS) return
+      const removed = feed.splice(0, feed.length - MAX_FEED_ITEMS)
+      const idSet = this.activityFeedIds[workspaceId]
+      for (const item of removed) idSet?.delete(item.id)
+    },
+
     addActivityItem(workspaceId: string, item: ActivityItem) {
       if (!this.activityFeeds[workspaceId]) {
         this.activityFeeds[workspaceId] = []
@@ -1765,14 +1797,7 @@ export const useWorkspaceStore = defineStore('workspace', {
         else if (item.type === 'text' && item.meta?.sender !== 'system-prompt') counts.agentMessages++
       }
       // Cap feed size to prevent unbounded memory growth
-      const feed = this.activityFeeds[workspaceId]
-      if (feed.length > MAX_FEED_ITEMS) {
-        const removed = feed.splice(0, feed.length - MAX_FEED_ITEMS)
-        const idSet = this.activityFeedIds[workspaceId]
-        for (const r of removed) {
-          idSet.delete(r.id)
-        }
-      }
+      this.trimActivityHistory(workspaceId)
     },
 
     removeActivityItem(workspaceId: string, itemId: string) {

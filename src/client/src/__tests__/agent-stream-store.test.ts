@@ -4,6 +4,50 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 describe('agent-stream store', () => {
   beforeEach(() => setActivePinia(createPinia()))
 
+  it('merges overlapping history around cached IDs without losing live or older events', async () => {
+    const { useAgentStreamStore } = await import('../stores/agent-stream')
+    const store = useAgentStreamStore()
+    const event = (id: string) => ({ kind: 'message:end' as const, messageId: id })
+    for (const id of ['old', 'a', 'c', 'live']) store.append('w', event(id), 'same-time', id, 's')
+    store.mergeHistory('w', ['a', 'b', 'c', 'd', 'd'].map(event), Array(5).fill('same-time'), {
+      eventIds: ['a', 'b', 'c', 'd', 'd'],
+      sessionIds: Array(5).fill('s'),
+    })
+    expect(store.eventIdsFor('w')).toEqual(['old', 'a', 'b', 'c', 'd', 'live'])
+    expect(store.eventsFor('w').map((e) => (e as { messageId: string }).messageId)).toEqual(store.eventIdsFor('w'))
+    expect(store.timestampsFor('w')).toEqual(Array(6).fill('same-time'))
+    expect(store.sessionIdsFor('w')).toEqual(Array(6).fill('s'))
+    store.append('w', event('b'), 'same-time', 'b', 's')
+    expect(store.eventsFor('w')).toHaveLength(6)
+  })
+
+  it('retains explicitly read history through live appends until the last reader leaves', async () => {
+    const { MAX_LIVE_EVENTS_PER_WORKSPACE, useAgentStreamStore } = await import('../stores/agent-stream')
+    const store = useAgentStreamStore()
+    const release = store.retainHistory('w')
+    const releaseSecond = store.retainHistory('w')
+    const ids = Array.from({ length: MAX_LIVE_EVENTS_PER_WORKSPACE + 100 }, (_, i) => `e${i}`)
+    store.mergeHistory(
+      'w',
+      ids.map((id) => ({ kind: 'message:end', messageId: id })),
+      ids.map(() => ''),
+      {
+        eventIds: ids,
+        sessionIds: ids.map(() => 's'),
+      },
+    )
+    store.append('w', { kind: 'message:end', messageId: 'live' }, '', 'live', 's')
+    release()
+    release()
+    expect(store.eventIdsFor('w')).toEqual([...ids, 'live'])
+    releaseSecond()
+    expect(store.eventsFor('w').length).toBeLessThanOrEqual(MAX_LIVE_EVENTS_PER_WORKSPACE)
+    expect(store.eventIdsFor('w').at(-1)).toBe('live')
+    expect(store.hasMoreOlderFor('w')).toBe(true)
+    store.append('w', { kind: 'message:end', messageId: 'e0' }, '', 'e0', 's')
+    expect(store.eventIdsFor('w').at(-1)).toBe('e0')
+  })
+
   it('appends events into a per-workspace list', async () => {
     const { useAgentStreamStore } = await import('../stores/agent-stream.js')
     const store = useAgentStreamStore()

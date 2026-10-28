@@ -58,8 +58,8 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 56', () => {
-    expect(SCHEMA_VERSION).toBe(56)
+  it('exporte SCHEMA_VERSION = 57', () => {
+    expect(SCHEMA_VERSION).toBe(57)
   })
 
   it('migration v33 records and backfills the engine on agent sessions', () => {
@@ -2629,7 +2629,7 @@ describe('persistent memory schema migration v51', () => {
     const beforeUpgrade = memoryObjects(old)
     expect(beforeUpgrade.objects).toEqual([])
     expect(getMigrationHistory(old).at(-1)?.version).toBe(50)
-    expect(getPendingMigrations(old)).toEqual([51, 52, 53, 54, 55, 56])
+    expect(getPendingMigrations(old)).toEqual([51, 52, 53, 54, 55, 56, 57])
 
     runMigrations(old)
     migrations.find((entry) => entry.version === 51)!.migrate(old)
@@ -2769,7 +2769,7 @@ describe('durable final reviews v52', () => {
       INSERT INTO pending_review_returns VALUES('w','review','original','{"engine":"codex"}','{"engine":"claude-code"}','c');`)
     for (const migration of migrations.filter((m) => m.version <= 51))
       old.prepare('INSERT INTO schema_migrations VALUES(?,?,?)').run(migration.version, migration.name, 'v51')
-    expect(getPendingMigrations(old)).toEqual([52, 53, 54, 55, 56])
+    expect(getPendingMigrations(old)).toEqual([52, 53, 54, 55, 56, 57])
     runMigrations(old)
     migrations.find((m) => m.version === 52)!.migrate(old)
     expect(old.prepare('SELECT * FROM pending_review_returns').get()).toEqual({
@@ -2923,7 +2923,7 @@ describe('Mistral memory engine migration v55', () => {
       const column = table === 'memory_contexts' || table === 'memory_budget_contexts' ? 'engine' : 'source_engine'
       expect(() => db.exec(`UPDATE ${table} SET ${column} = 'mistral-vibe'`)).toThrow(/CHECK/)
     }
-    expect(getPendingMigrations(db)).toEqual([55, 56])
+    expect(getPendingMigrations(db)).toEqual([55, 56, 57])
     runMigrations(db)
     expect({ ...rows(db), schema_migrations: before.schema_migrations }).toEqual({
       ...before,
@@ -2934,13 +2934,13 @@ describe('Mistral memory engine migration v55', () => {
     expect(
       db
         .prepare(
-          "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name != 'parallel_reviews' ORDER BY name",
+          "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name NOT IN ('parallel_reviews', 'pinned_messages') ORDER BY name",
         )
         .all(),
     ).toEqual(indexes)
     expect(getMigrationHistory(db).at(-1)).toMatchObject({
       version: SCHEMA_VERSION,
-      name: 'parallel-workspace-reviews',
+      name: 'pinned-messages',
     })
     const fresh = new Database(':memory:')
     initSchema(fresh)
@@ -2982,7 +2982,7 @@ describe('Mistral memory engine migration v55', () => {
     spy.mockRestore()
     expect(rows(db)).toEqual(before)
     expect(db.prepare('SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY name').all()).toEqual(schema)
-    expect(getPendingMigrations(db)).toEqual([55, 56])
+    expect(getPendingMigrations(db)).toEqual([55, 56, 57])
     expect(db.pragma('foreign_key_check')).toEqual([])
     runMigrations(db)
     expect(getPendingMigrations(db)).toEqual([])
@@ -3025,6 +3025,40 @@ describe('parallel review migration v56', () => {
     migrations.find((m) => m.version === 56)!.migrate(old)
     expect(old.prepare('SELECT count(*) AS count FROM agent_sessions').get()).toEqual({ count: 1 })
     old.close()
+    fresh.close()
+  })
+})
+
+describe('pinned message migration v57', () => {
+  it('upgrades v56 without changing events and converges with a fresh schema', () => {
+    const upgraded = new Database(':memory:')
+    runMigrations(upgraded)
+    upgraded.exec('DROP TABLE pinned_messages; DELETE FROM schema_migrations WHERE version = 57')
+    upgraded.exec(`INSERT INTO workspaces (id,name,project_path,source_branch,working_branch,created_at,updated_at)
+      VALUES ('w','Workspace','/tmp','main','branch','now','now');
+      INSERT INTO agent_sessions (id,workspace_id,started_at) VALUES ('s','w','now');
+      INSERT INTO ws_events (id,workspace_id,type,payload,session_id,created_at)
+      VALUES ('e','w','user:message','{"content":"keep"}','s','now');`)
+    expect(getPendingMigrations(upgraded)).toEqual([57])
+    runMigrations(upgraded)
+    expect(upgraded.prepare('SELECT payload FROM ws_events WHERE id = ?').get('e')).toEqual({
+      payload: '{"content":"keep"}',
+    })
+    expect(getMigrationHistory(upgraded).at(-1)?.version).toBe(SCHEMA_VERSION)
+    const fresh = new Database(':memory:')
+    runMigrations(fresh)
+    const schema = (db: Database.Database) =>
+      db.prepare("SELECT type,name,sql FROM sqlite_master WHERE tbl_name = 'pinned_messages' ORDER BY name").all()
+    expect(schema(upgraded)).toEqual(schema(fresh))
+    expect(upgraded.prepare('PRAGMA foreign_key_list(pinned_messages)').all()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ table: 'agent_sessions', on_delete: 'CASCADE' }),
+        expect.objectContaining({ table: 'workspaces', on_delete: 'CASCADE' }),
+      ]),
+    )
+    runMigrations(upgraded)
+    expect(getPendingMigrations(upgraded)).toEqual([])
+    upgraded.close()
     fresh.close()
   })
 })

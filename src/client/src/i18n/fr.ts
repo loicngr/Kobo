@@ -1,4 +1,21 @@
 export default {
+  'pins.title': 'Messages épinglés',
+  'pins.allTitle': 'Tous les messages épinglés',
+  'pins.pin': 'Épingler le message',
+  'pins.unpin': 'Désépingler le message',
+  'pins.pinned': 'Message épinglé',
+  'pins.actions': 'Actions du message',
+  'pins.notSaved': 'Ce bloc n’a pas encore été enregistré.',
+  'pins.actionFailed': 'Impossible de modifier les messages épinglés : {message}',
+  'pins.loadFailed': 'Impossible de charger les messages épinglés : {message}',
+  'pins.empty': 'Aucun message épinglé.',
+  'pins.loading': 'Chargement des messages épinglés…',
+  'pins.more': 'Charger la suite',
+  'pins.savedCopy': 'Copie enregistrée lors de l’épinglage. Les modifications ultérieures ne sont pas incluses.',
+  'pins.viewCopy': 'Voir la copie enregistrée',
+  'pins.back': 'Retour aux messages épinglés',
+  'pins.unnamedSession': 'Session sans nom',
+  'pins.archived': 'Archivé',
   'parallelReview.planHint':
     'Le mode Plan est imposé pour cette revue parallèle. Les permissions de l’agent principal restent inchangées.',
   'parallelReview.returnHint':

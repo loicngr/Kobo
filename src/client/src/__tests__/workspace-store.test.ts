@@ -729,6 +729,44 @@ describe('workspace store', () => {
   })
 
   describe('addActivityItem', () => {
+    it('retains requested history during reading and restores the live cap when the last reader leaves', () => {
+      const store = useWorkspaceStore()
+      store.activityFeeds['ws-1'] = Array.from({ length: 5000 }, (_, index) => ({
+        id: `recent-${index}`,
+        type: 'text' as const,
+        content: 'recent',
+        timestamp: new Date(Date.UTC(2026, 0, 2) + index * 1000).toISOString(),
+      }))
+      store.activityFeedIds['ws-1'] = new Set(store.activityFeeds['ws-1'].map((item) => item.id))
+      const releaseFirst = store.retainActivityHistory('ws-1')
+      const releaseSecond = store.retainActivityHistory('ws-1')
+      const oldMessage = { id: 'old', type: 'text' as const, content: 'old', timestamp: '2026-01-01T00:00:00Z' }
+      store.addActivityItem('ws-1', oldMessage)
+      store.addActivityItem('ws-1', oldMessage)
+      store.addActivityItem('ws-1', {
+        id: 'live',
+        type: 'text',
+        content: 'new response',
+        timestamp: '2026-01-03T00:00:00Z',
+      })
+      expect(store.activityFeeds['ws-1']).toHaveLength(5002)
+      releaseFirst()
+      releaseFirst()
+      expect(store.activityFeeds['ws-1']).toHaveLength(5002)
+      releaseSecond()
+      expect(store.activityFeeds['ws-1']).toHaveLength(5000)
+      expect(store.activityFeedIds['ws-1'].has('old')).toBe(false)
+      expect(store.activityFeedIds['ws-1'].has('live')).toBe(true)
+      expect(store.activityFeeds['ws-1'].at(-1)?.id).toBe('live')
+      store.addActivityItem('ws-1', {
+        id: 'later',
+        type: 'text',
+        content: 'later',
+        timestamp: '2026-01-04T00:00:00Z',
+      })
+      expect(store.activityFeeds['ws-1']).toHaveLength(5000)
+    })
+
     it('creates feed for new workspace', () => {
       const store = useWorkspaceStore()
       store.addActivityItem('ws-1', {

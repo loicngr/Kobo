@@ -67,6 +67,30 @@ function workspaceFixture(status = 'executing'): Workspace {
 describe('websocket dispatch — AgentEvent side-effects to workspace store', () => {
   beforeEach(() => setActivePinia(createPinia()))
 
+  it('refreshes known pin lists from a global invalidation and ignores malformed or replayed updates', async () => {
+    const { useWebSocketStore } = await import('../stores/websocket.js')
+    const { usePinnedMessagesStore } = await import('../stores/pinned-messages.js')
+    const pins = usePinnedMessagesStore()
+    pins.list()
+    pins.list('archived')
+    pins.list('unrelated')
+    const fetch = vi.spyOn(await import('../utils/api.js'), 'apiFetch').mockResolvedValue({ pins: [], hasMore: false })
+    const socket = useWebSocketStore()
+    socket._routeMessage({ type: 'pins:changed', payload: { workspaceId: 'archived' } })
+    expect(fetch.mock.calls.map(([url]) => url)).toEqual([
+      '/api/pinned-messages?limit=100&offset=0',
+      '/api/pinned-messages?limit=100&offset=0&workspaceId=archived',
+    ])
+    fetch.mockClear()
+    for (const workspaceId of [undefined, '', 1, [], {}]) {
+      socket._routeMessage({ type: 'pins:changed', payload: { workspaceId } })
+    }
+    socket._replaying = true
+    socket._routeMessage({ type: 'pins:changed', payload: { workspaceId: 'archived' } })
+    expect(fetch).not.toHaveBeenCalled()
+    fetch.mockRestore()
+  })
+
   it('routes durable review status and clears it with a null payload', async () => {
     const { useWebSocketStore } = await import('../stores/websocket.js')
     const { useAutoLoopReviewStore } = await import('../stores/auto-loop-review.js')

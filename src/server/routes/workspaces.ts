@@ -2397,6 +2397,7 @@ app.patch('/:id/sessions/:sessionId', async (c) => {
       return c.json({ error: `Session '${sessionId}' not found` }, 404)
     }
 
+    wsService.broadcastAll('pins:changed', { workspaceId: id })
     return c.json(updated)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
@@ -2411,6 +2412,7 @@ app.delete('/:id/sessions/:sessionId', migrationGuard, (c) => {
     const sessionId = c.req.param('sessionId')
     const deleted = workspaceService.deleteSession(sessionId, workspaceId)
     if (!deleted) return c.json({ error: `Session '${sessionId}' not found` }, 404)
+    wsService.broadcastAll('pins:changed', { workspaceId })
     return c.json({ ok: true, workspace: workspaceService.getWorkspace(workspaceId) })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
@@ -2952,8 +2954,12 @@ app.get('/:id/events', (c) => {
     const parsedLimit = parseInt(c.req.query('limit') ?? '100', 10)
     const limit = Math.max(1, Math.min(Number.isFinite(parsedLimit) ? parsedLimit : 100, 500))
 
-    const sessionClause = session ? ' AND (session_id = ? OR session_id IS NULL)' : ''
-    const sessionParams: string[] = session ? [session] : []
+    const sessionClause = session
+      ? ` AND (session_id = ? OR session_id IN (
+          SELECT engine_session_id FROM agent_sessions WHERE id = ? AND workspace_id = ?
+        ) OR session_id IS NULL)`
+      : ''
+    const sessionParams: string[] = session ? [session, session, id] : []
     const originPayload = "CASE WHEN json_valid(payload) THEN payload ELSE '{}' END"
     const originClauses: string[] = []
     const originParams: string[] = []
@@ -3738,6 +3744,7 @@ app.post('/:id/unarchive', migrationGuard, (c) => {
 
     const updated = workspaceService.unarchiveWorkspace(id)
     wsService.emitEphemeral(id, 'workspace:unarchived', { workspace: updated })
+    wsService.broadcastAll('pins:changed', { workspaceId: id })
     return c.json(updated)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
@@ -3877,6 +3884,7 @@ async function deleteWorkspaceWithSideEffectsUnlocked(
   // cross-tab-sync purpose. Ephemeral: a deleted workspace has no future
   // ws_events history to replay, so persisting this would be pointless.
   wsService.emitEphemeral(workspace.id, 'workspace:deleted', { workspaceId: workspace.id })
+  wsService.broadcastAll('pins:changed', { workspaceId: workspace.id })
 
   return warnings
 }

@@ -48,6 +48,7 @@ export const useAgentStreamStore = defineStore('agent-stream', () => {
   // establishes a dependency scoped to exactly one workspace.
   const versions = ref<Map<string, number>>(new Map())
   const liveAppends = shallowRef(new Map<string, Map<string | null, number>>())
+  const historyReaders = new Map<string, number>()
 
   function liveAppendCountFor(workspaceId: string, matches: (sessionId: string | null) => boolean): number {
     track(workspaceId)
@@ -166,6 +167,7 @@ export const useAgentStreamStore = defineStore('agent-stream', () => {
     sList: Array<string | null>,
     idList: Array<string | null>,
   ): void {
+    if (historyReaders.has(workspaceId)) return
     const overflow = list.length - MAX_LIVE_EVENTS_PER_WORKSPACE
     if (overflow <= 0) return
     const removedCount = overflow + LIVE_EVENT_EVICTION_BATCH - 1
@@ -182,6 +184,28 @@ export const useAgentStreamStore = defineStore('agent-stream', () => {
     if (firstPersistedId) oldestIds.value.set(workspaceId, firstPersistedId)
     else oldestIds.value.delete(workspaceId)
     hasMoreOlder.value.set(workspaceId, true)
+  }
+
+  function retainHistory(workspaceId: string): () => void {
+    historyReaders.set(workspaceId, (historyReaders.get(workspaceId) ?? 0) + 1)
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      const remaining = (historyReaders.get(workspaceId) ?? 1) - 1
+      if (remaining > 0) historyReaders.set(workspaceId, remaining)
+      else {
+        historyReaders.delete(workspaceId)
+        trimOldestLiveEvents(
+          workspaceId,
+          eventsFor(workspaceId),
+          timestampsFor(workspaceId),
+          sessionIdsFor(workspaceId),
+          eventIdsFor(workspaceId),
+        )
+        touch(workspaceId)
+      }
+    }
   }
 
   /** Merge a reconnect delta, preserving existing history and ignoring duplicates. */
@@ -292,6 +316,62 @@ export const useAgentStreamStore = defineStore('agent-stream', () => {
     touch(workspaceId)
   }
 
+  /** Insert paginated history around known IDs, preserving live events and older cached pages. */
+  function mergeHistory(
+    workspaceId: string,
+    incoming: AgentEvent[],
+    incomingTs: string[],
+    meta: { sessionIds: Array<string | null>; eventIds: string[] },
+  ): void {
+    const list = events.value.get(workspaceId) ?? []
+    const tsList = timestamps.value.get(workspaceId) ?? []
+    const sList = sessionIds.value.get(workspaceId) ?? []
+    const ids = eventIds.value.get(workspaceId) ?? []
+    const positions = new Map(ids.flatMap((id, index) => (id ? [[id, index] as const] : [])))
+    const insertions = new Map<number, number[]>()
+    const seen = new Set<string>()
+    let pending: number[] = []
+    let lastAnchor = -1
+    for (let index = 0; index < incoming.length; index++) {
+      const id = meta.eventIds[index]
+      if (seen.has(id)) continue
+      seen.add(id)
+      const anchor = positions.get(id)
+      if (anchor === undefined) pending.push(index)
+      else {
+        if (pending.length) insertions.set(anchor, pending)
+        pending = []
+        lastAnchor = anchor
+      }
+    }
+    if (pending.length) insertions.set(lastAnchor + 1, [...(insertions.get(lastAnchor + 1) ?? []), ...pending])
+    if (!insertions.size) return
+    const next: AgentEvent[] = []
+    const nextTs: string[] = []
+    const nextSids: Array<string | null> = []
+    const nextIds: Array<string | null> = []
+    for (let index = 0; index <= list.length; index++) {
+      for (const incomingIndex of insertions.get(index) ?? []) {
+        next.push(incoming[incomingIndex])
+        nextTs.push(incomingTs[incomingIndex])
+        nextSids.push(meta.sessionIds[incomingIndex])
+        nextIds.push(meta.eventIds[incomingIndex])
+        idIndexFor(workspaceId).add(meta.eventIds[incomingIndex])
+      }
+      if (index === list.length) break
+      next.push(list[index])
+      nextTs.push(tsList[index])
+      nextSids.push(sList[index])
+      nextIds.push(ids[index])
+    }
+    events.value.set(workspaceId, next)
+    timestamps.value.set(workspaceId, nextTs)
+    sessionIds.value.set(workspaceId, nextSids)
+    eventIds.value.set(workspaceId, nextIds)
+    if (nextIds[0]) oldestIds.value.set(workspaceId, nextIds[0])
+    touch(workspaceId)
+  }
+
   /**
    * Remove a single event from the stream by its persisted ws_events row id.
    * No-op if the id is null/undefined or not found. Used by features that
@@ -347,6 +427,8 @@ export const useAgentStreamStore = defineStore('agent-stream', () => {
     setCompacting,
     append,
     merge,
+    mergeHistory,
+    retainHistory,
     reset,
     prepend,
     removeByEventId,

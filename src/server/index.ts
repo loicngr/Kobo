@@ -31,6 +31,7 @@ import mcpCredentialsRouter from './routes/mcp-credentials.js'
 import memoryRouter from './routes/memory.js'
 import { migrationRouter } from './routes/migration.js'
 import notionRouter from './routes/notion.js'
+import pinnedMessagesRouter from './routes/pinned-messages.js'
 import progressBarsRouter from './routes/progress-bars.js'
 import pullRequestsRouter from './routes/pull-requests.js'
 import searchRouter from './routes/search.js'
@@ -236,6 +237,7 @@ app.route('/api/mcp-credentials', mcpCredentialsRouter)
 app.route('/api/mcp', mcpRouter)
 app.route('/api/memory', memoryRouter)
 app.route('/api/progress-bars', progressBarsRouter)
+app.route('/api/pinned-messages', pinnedMessagesRouter)
 app.route('/api/pull-requests', pullRequestsRouter)
 app.route('/api/workspaces', imagesRouter)
 app.route('/api/notion', notionRouter)

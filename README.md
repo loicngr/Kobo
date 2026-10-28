@@ -69,6 +69,7 @@ Kōbō's production build is an installable PWA — use your browser's **Install
 - **Disk-space purge**: reclaim a merged workspace's `node_modules`/`vendor` weight without losing its chat history — see [`CONFIGURATION.md`](./CONFIGURATION.md#auto-purge-worktree-on-pr-merged).
 - **Lifecycle scripts**: shell scripts run on setup, cleanup, archive, session end, PR merge, or auto-loop stop, with output streamed into the chat.
 - **Observability**: a per-session timeline (duration, tools, tokens, errors) and a downloadable redacted diagnostic JSON.
+- **Pinned messages**: save a user or agent conversation block from its menu, find pins across a workspace's sessions or from the dashboard, and jump back to the original conversation. A saved copy remains readable after automatic history retention. See [pinned messages](./CONFIGURATION.md#pinned-messages).
 - **Optional integrations**: Notion (import missions) and Sentry (fix from issue URL), usable by all three agent engines through saved connections, each independently toggled with a **Test connection** action; local voice transcription via `whisper.cpp`.
 
 ### Persistent memory across engines

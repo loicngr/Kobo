@@ -1,4 +1,21 @@
 export default {
+  'pins.title': 'Mensajes fijados',
+  'pins.allTitle': 'Todos los mensajes fijados',
+  'pins.pin': 'Fijar mensaje',
+  'pins.unpin': 'Desfijar mensaje',
+  'pins.pinned': 'Mensaje fijado',
+  'pins.actions': 'Acciones del mensaje',
+  'pins.notSaved': 'Este bloque aún no se ha guardado.',
+  'pins.actionFailed': 'No se pudieron modificar los mensajes fijados: {message}',
+  'pins.loadFailed': 'No se pudieron cargar los mensajes fijados: {message}',
+  'pins.empty': 'No hay mensajes fijados.',
+  'pins.loading': 'Cargando mensajes fijados…',
+  'pins.more': 'Cargar más',
+  'pins.savedCopy': 'Copia guardada al fijar el mensaje. No incluye cambios posteriores.',
+  'pins.viewCopy': 'Ver copia guardada',
+  'pins.back': 'Volver a mensajes fijados',
+  'pins.unnamedSession': 'Sesión sin nombre',
+  'pins.archived': 'Archivado',
   'parallelReview.planHint':
     'Esta revisión paralela requiere el modo Plan. Los permisos del agente principal no cambian.',
   'parallelReview.returnHint':

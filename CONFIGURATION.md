@@ -2524,6 +2524,33 @@ Docker status and logs identify containers by their exact `com.docker.compose.pr
 
 Kōbō checks for a daily backup at startup and every hour while running. A new WAL-safe snapshot is created when the latest backup is at least 24 hours old, keeping the seven most recent daily snapshots. Slow backups never overlap. Failures are logged and retried at the next check; graceful shutdown waits for the active backup before closing SQLite. Pre-migration snapshots have their own independent retention.
 
+## Pinned messages
+
+Use the **⋮** menu at the top right of a user or agent conversation block and
+choose **Pin**. The pin saves the displayed block, including its texts and tool
+calls/results, as it exists at that moment. Later agent output does not update
+the saved copy. Choose **Unpin** to remove it without deleting the conversation.
+
+The workspace toolbar's **Pinned messages** button lists pins from all its
+sessions. The same button on the **Dashboard** lists pins across all workspaces,
+including archived ones. Each entry identifies its workspace, session, author
+and date, with a short preview. Open an entry to return to the original session
+and message. Intermediate history is loaded too, so you can scroll back toward
+recent messages without gaps. Its saved copy is also available when history retention has removed
+the original events. Saved copies retain expandable tool results and inline diffs;
+return to the original conversation to open workspace documents, the Git diff
+viewer or live sub-agent activity.
+
+Pins live in the Kōbō SQLite database and are shared across browsers and included
+in database backups. Archiving a workspace or purging its worktree preserves
+pins. Deleting the workspace or its source session deletes the corresponding
+pins. Automatic conversation-history retention leaves saved copies intact;
+unpinning removes that extra stored copy. Existing history-retention settings
+remain unchanged.
+
+Only persisted blocks can be captured. Missing events or a block exceeding the
+capture limits produce an error instead of silently saving incomplete content.
+
 ## Conversation search index
 
 Global search and workspace history search use the same index of complete messages.
