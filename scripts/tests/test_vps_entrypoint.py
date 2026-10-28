@@ -2,6 +2,7 @@
 import os
 from pathlib import Path
 import subprocess
+import tempfile
 import unittest
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'kobo-vps-entrypoint'
@@ -17,8 +18,8 @@ class EntrypointTests(unittest.TestCase):
                     self.assertNotEqual(result.returncode, 0)
                     self.assertNotIn('UNEXPECTED', result.stdout)
 
-    @unittest.skipUnless(Path('/usr/bin/id').is_file() and os.getuid() != 0 and os.getgid() != 0,
-                         'Needs a non-root host with /usr/bin/id; root bootstrap is checked in Docker.')
+    @unittest.skipUnless(os.getuid() != 0 and os.getgid() != 0,
+                         'Needs a non-root host; root bootstrap is checked in Docker.')
     def test_existing_non_root_identity_executes_with_persistent_home(self):
         env = {**os.environ, 'KOBO_UID': str(os.getuid()), 'KOBO_GID': str(os.getgid())}
         result = subprocess.run(['sh', str(SCRIPT), '--exec', 'sh', '-c', 'printf "%s" "$HOME"'],
@@ -30,3 +31,20 @@ class EntrypointTests(unittest.TestCase):
                                 env=env, capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn('UNEXPECTED', result.stdout)
+
+    @unittest.skipUnless(os.getuid() != 0 and os.getgid() != 0,
+                         'Needs a non-root host; root bootstrap is checked in Docker.')
+    def test_identity_check_ignores_an_id_executable_in_the_runtime_path(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            fake_id = Path(temporary) / 'id'
+            fake_id.write_text('#!/bin/sh\ncase "$1" in\n'
+                               '  -u) printf "%s" "$KOBO_UID" ;;\n'
+                               '  -g) printf "%s" "$KOBO_GID" ;;\nesac\n')
+            fake_id.chmod(0o755)
+            env = {**os.environ, 'KOBO_UID': str(os.getuid() + 1), 'KOBO_GID': str(os.getgid()),
+                   'PATH': temporary + os.pathsep + os.environ['PATH']}
+            result = subprocess.run(['sh', str(SCRIPT), '--exec', 'echo', 'UNEXPECTED'],
+                                    env=env, capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('The runtime user must match', result.stderr)
+            self.assertNotIn('UNEXPECTED', result.stdout)

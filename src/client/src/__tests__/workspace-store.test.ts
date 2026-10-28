@@ -58,6 +58,45 @@ describe('workspace store', () => {
     setActivePinia(createPinia())
   })
 
+  it('keeps newer Git stats when an older prefetch completes after the panel refresh', async () => {
+    let resolveOlder!: (response: Response) => void
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<Response>((resolve) => {
+            resolveOlder = resolve
+          }),
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify({ commitCount: 4, computedAt: 200 })))
+    vi.stubGlobal('fetch', fetchMock)
+    const store = useWorkspaceStore()
+    const older = store.fetchGitStats('w1')
+    await store.fetchGitStats('w1', { freshFetch: true })
+    resolveOlder(new Response(JSON.stringify({ commitCount: 1, computedAt: 100 })))
+    await older
+    expect(store.gitStatsCache.w1).toMatchObject({ commitCount: 4, computedAt: 200 })
+  })
+
+  it('does not restore a Git cache invalidated while its request was pending', async () => {
+    let resolve!: (response: Response) => void
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        () =>
+          new Promise<Response>((done) => {
+            resolve = done
+          }),
+      ),
+    )
+    const store = useWorkspaceStore()
+    const pending = store.fetchGitStats('w1')
+    store.invalidateWorkspaceLifecycleReads('w1')
+    resolve(new Response(JSON.stringify({ commitCount: 1, computedAt: 100 })))
+    await pending
+    expect(store.gitStatsCache.w1).toBeUndefined()
+  })
+
   it('enabling auto-loop does not change the permission mode', async () => {
     const store = useWorkspaceStore()
     store.workspaces = [makeWorkspace({ agentPermissionMode: 'plan' })]

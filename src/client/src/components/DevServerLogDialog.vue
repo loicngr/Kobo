@@ -37,37 +37,43 @@ const devServerStore = useDevServerStore()
 const { t } = useI18n()
 const logs = ref('')
 const loading = ref(false)
-const logContainer = ref<HTMLElement | null>(null)
+const logContainer = ref<{ $el: HTMLElement } | null>(null)
 
 let refreshTimer: ReturnType<typeof setTimeout> | null = null
 let refreshGeneration = 0
+let disposed = false
+
+function canRefresh() {
+  return !disposed && props.modelValue && !!props.workspaceId && !document.hidden
+}
 
 async function refresh() {
-  if (!props.workspaceId || loading.value) return
+  if (!canRefresh() || loading.value) return
   const workspaceId = props.workspaceId
   const generation = refreshGeneration
   loading.value = true
   try {
     const nextLogs = await devServerStore.fetchLogs(workspaceId)
-    if (generation !== refreshGeneration || workspaceId !== props.workspaceId || !props.modelValue) return
+    if (generation !== refreshGeneration || workspaceId !== props.workspaceId || !canRefresh()) return
     logs.value = nextLogs
     await nextTick()
     scrollToBottom()
   } finally {
     loading.value = false
-    scheduleRefresh(generation)
+    if (generation !== refreshGeneration) void refresh()
+    else scheduleRefresh()
   }
 }
 
 function scrollToBottom() {
-  if (logContainer.value) {
-    logContainer.value.scrollTop = logContainer.value.scrollHeight
+  const element = logContainer.value?.$el
+  if (element) {
+    element.scrollTop = element.scrollHeight
   }
 }
 
 function startAutoRefresh() {
   stopAutoRefresh()
-  refreshGeneration++
   void refresh()
 }
 
@@ -79,8 +85,8 @@ function stopAutoRefresh() {
   }
 }
 
-function scheduleRefresh(generation: number) {
-  if (generation !== refreshGeneration || !props.modelValue || document.hidden) return
+function scheduleRefresh() {
+  if (!canRefresh()) return
   if (refreshTimer) clearTimeout(refreshTimer)
   refreshTimer = setTimeout(() => {
     refreshTimer = null
@@ -95,27 +101,19 @@ function onVisibilityChange() {
 }
 
 watch(
-  () => props.modelValue,
-  (isOpen) => {
-    if (isOpen) {
-      refresh()
-      startAutoRefresh()
-    } else {
-      stopAutoRefresh()
-    }
-  },
-)
-
-watch(
-  () => props.workspaceId,
+  () => [props.modelValue, props.workspaceId],
   () => {
+    logs.value = ''
     if (props.modelValue) startAutoRefresh()
+    else stopAutoRefresh()
   },
+  { immediate: true },
 )
 
 document.addEventListener('visibilitychange', onVisibilityChange)
 
 onUnmounted(() => {
+  disposed = true
   stopAutoRefresh()
   document.removeEventListener('visibilitychange', onVisibilityChange)
 })

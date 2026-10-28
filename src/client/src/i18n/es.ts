@@ -1618,6 +1618,8 @@ export default {
   'git.title': 'Git',
   'git.outputDialogTitle': 'Git informó de un error',
   'git.statsFailed': 'No se pudo leer el estado de git',
+  'git.refreshingCached': 'Actualizando Git — últimos valores conocidos, en modo de solo lectura.',
+  'git.cachedReadOnly': 'Últimos valores conocidos — solo lectura hasta que se actualice el estado de Git.',
   'git.section.repository': 'Repositorio',
   'git.section.changes': 'Cambios',
   'git.section.pullRequest': 'Pull request',

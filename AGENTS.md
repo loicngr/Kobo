@@ -179,7 +179,7 @@ and [VPS setup](./docs/vps-projects-and-skills.md#switch-engine-accounts-inside-
 
 ## Persistent memory
 
-Kōbō memory is independent of provider chat history/native memory and shared by Claude Code, Codex and Mistral Vibe. `memoryMode` is a global setting defaulting to `hybrid`: Manual permits reads only; Hybrid applies workspace writes and proposes project/global writes; Automatic applies writes to the explicitly targeted scope. Mode is checked per operation, so a setting change affects existing agent sessions; pending/rejected proposals are never automatically approved or revived. Plan/review/report-only capabilities cannot write.
+Kōbō memory is independent of provider chat history/native memory and shared by Claude Code, Codex and Mistral Vibe. The workspace creation prompt requests reading current applicable memories in global → project → workspace order before analysis or planning, reusing delivered context and respecting retrieval budgets. `memoryMode` is a global setting defaulting to `hybrid`: Manual permits reads only; Hybrid applies workspace writes and proposes project/global writes; Automatic applies writes to the explicitly targeted scope. Mode is checked per operation, so a setting change affects existing agent sessions; pending/rejected proposals are never automatically approved or revived. Plan/review/report-only capabilities cannot write.
 
 `memory_scopes` identify global, normalized configured project path, or durable workspace id. Project identity is not a display name, branch, or worktree path. Clear is transactional: it deletes entries and pending proposals only from the exact scope, increments generation, and writes content-free journal metadata. Every delayed writer supplies its expected generation. Workspace archive/purge preserves memory; workspace deletion cascades its own scope and launch records while leaving global/project scopes intact. Provenance FKs become null when the source session/workspace is deleted; saved memory remains in its scope until explicitly erased.
 
@@ -357,6 +357,13 @@ total capacity; failed inspection or shutdown must not overbook it. Preserve
 queue cancellation during teardown/shutdown, recovered Docker accounting and
 generation checks on asynchronous callbacks. Settings changes reconsider the
 queue without stopping existing servers.
+
+Running dev-server status separates browser `url` from runtime `agentUrl`.
+Docker stacks using the host socket use `KOBO_DEV_SERVER_DOCKER_HOST` for the
+agent address; bundled Compose deployments map `host.docker.internal` to the
+host gateway. Direct child processes keep their announced local address, even
+when Kōbō itself is containerized. Never rewrite all loopback URLs or replace
+the browser's SSH-tunnel link with an internal Docker hostname.
 
 `stopDevServersOnShutdown` is a global boolean, default `true` (JSON settings
 migration v66). Shutdown first rejects new dev-server starts and stops tracked

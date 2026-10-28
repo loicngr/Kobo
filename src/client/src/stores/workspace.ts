@@ -1352,9 +1352,16 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
 
     async fetchGitStats(id: string, opts: { freshFetch?: boolean; signal?: AbortSignal } = {}): Promise<GitStats> {
+      const lifecycleVersion = this.workspaceLifecycleVersions[id] ?? 0
       const url = `/api/workspaces/${id}/git-stats${opts.freshFetch ? '?freshFetch=1' : ''}`
       const stats = await apiFetch<GitStats>(url, { signal: opts.signal, timeoutMs: 60_000 })
-      this.gitStatsCache[id] = stats
+      const cached = this.gitStatsCache[id]
+      if (
+        !opts.signal?.aborted &&
+        lifecycleVersion === (this.workspaceLifecycleVersions[id] ?? 0) &&
+        (!cached || (stats.computedAt ?? 0) >= (cached.computedAt ?? 0))
+      )
+        this.gitStatsCache[id] = stats
       return stats
     },
 

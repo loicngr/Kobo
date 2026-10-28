@@ -5,6 +5,7 @@ import { createApp, h } from 'vue'
 import { createI18n } from 'vue-i18n'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import GitPanel from '../components/GitPanel.vue'
+import PrPanel from '../components/PrPanel.vue'
 import en from '../i18n/en'
 import { type GitStats, useWorkspaceStore, type Workspace } from '../stores/workspace'
 
@@ -51,18 +52,33 @@ let wrapper: VueWrapper
 let confirm: (method?: unknown) => Promise<void>
 let store: ReturnType<typeof useWorkspaceStore>
 
-async function openDialog(methods = true, shallow = true) {
-  if (!methods)
-    vi.mocked(store.fetchGitStats).mockResolvedValue({
-      ...stats,
-      forge: { ...stats.forge!, capabilities: { ...stats.forge!.capabilities, mergeMethods: undefined } },
-    })
+function mountPanel(shallow = true) {
   wrapper = mount(GitPanel, {
     shallow,
     props: { workspace },
     global: {
       plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })],
+      directives: { 'close-popup': {} },
       stubs: {
+        ...(shallow
+          ? Object.fromEntries(
+              [
+                'QTooltip',
+                'QSpinner',
+                'QIcon',
+                'QItemSection',
+                'QItem',
+                'QList',
+                'QBtnDropdown',
+                'QMenu',
+                'QCardSection',
+                'QInput',
+                'QCardActions',
+                'QCard',
+                'QDialog',
+              ].map((name) => [name, true]),
+            )
+          : {}),
         QBtn: { props: ['label', 'icon'], template: '<button :data-icon="icon">{{ label }}</button>' },
         ActionAvailability: true,
         BranchDivergenceDialog: true,
@@ -72,6 +88,15 @@ async function openDialog(methods = true, shallow = true) {
       },
     },
   })
+}
+
+async function openDialog(methods = true, shallow = true) {
+  if (!methods)
+    vi.mocked(store.fetchGitStats).mockResolvedValue({
+      ...stats,
+      forge: { ...stats.forge!, capabilities: { ...stats.forge!.capabilities, mergeMethods: undefined } },
+    })
+  mountPanel(shallow)
   await flushPromises()
   await wrapper.get('button[data-icon="merge"]').trigger('click')
 }
@@ -93,6 +118,174 @@ beforeEach(() => {
   mocks.deleteApi.mockResolvedValue({ ok: true })
 })
 afterEach(() => wrapper?.unmount())
+
+describe('GitPanel cached workspace stats', () => {
+  it('preserves the PR panel across refreshes while keeping cached actions disabled', async () => {
+    mountPanel()
+    await flushPromises()
+    const prPanel = wrapper.getComponent(PrPanel).vm
+    let finish!: (value: GitStats) => void
+    vi.mocked(store.fetchGitStats).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve
+        }),
+    )
+    await wrapper.get('button[data-icon="refresh"]').trigger('click')
+    expect(wrapper.get('[data-testid="git-content"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.getComponent(PrPanel).vm).toBe(prPanel)
+    finish(stats)
+    await flushPromises()
+    expect(wrapper.get('[data-testid="git-content"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.getComponent(PrPanel).vm).toBe(prPanel)
+  })
+
+  it('keeps the fresh read in charge when an agent-triggered refresh fires while it is pending', async () => {
+    vi.useFakeTimers()
+    try {
+      store.gitStatsCache['ws-a'] = stats
+      let finish!: (value: GitStats) => void
+      vi.mocked(store.fetchGitStats).mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve
+          }),
+      )
+      mountPanel()
+      const original = vi.mocked(store.fetchGitStats).mock.calls[0][1]!
+      expect(original.freshFetch).toBe(true)
+      store.gitRefreshTrigger++
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(store.fetchGitStats).toHaveBeenCalledOnce()
+      expect(original.signal!.aborted).toBe(false)
+      expect(wrapper.get('[data-testid="git-content"]').attributes('disabled')).toBeDefined()
+      finish({ ...stats, commitCount: 7 })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(wrapper.text()).toContain('7 commits')
+      expect(wrapper.get('[data-testid="git-content"]').attributes('disabled')).toBeUndefined()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('requires a fresh read for an agent-triggered retry after a failed refresh', async () => {
+    vi.useFakeTimers()
+    try {
+      store.gitStatsCache['ws-a'] = stats
+      vi.mocked(store.fetchGitStats).mockRejectedValueOnce(new Error('offline'))
+      mountPanel()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(wrapper.get('[data-testid="git-content"]').attributes('disabled')).toBeDefined()
+      let finish!: (value: GitStats) => void
+      vi.mocked(store.fetchGitStats).mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve
+          }),
+      )
+      store.gitRefreshTrigger++
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(store.fetchGitStats).toHaveBeenLastCalledWith('ws-a', expect.objectContaining({ freshFetch: true }))
+      expect(wrapper.text()).toContain('offline')
+      expect(wrapper.get('[data-testid="git-content"]').attributes('disabled')).toBeDefined()
+      finish(stats)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(wrapper.find('.git-subcard--error').exists()).toBe(false)
+      expect(wrapper.get('[data-testid="git-content"]').attributes('disabled')).toBeUndefined()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('shows only the target workspace cache and blocks actions until its fresh read completes', async () => {
+    store.gitStatsCache['ws-a'] = { ...stats, commitCount: 4 }
+    store.gitStatsCache['ws-b'] = { ...stats, commitCount: 9 }
+    let finish!: (value: GitStats) => void
+    vi.mocked(store.fetchGitStats).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve
+        }),
+    )
+    mountPanel()
+    expect(wrapper.text()).toContain('4 commits')
+    expect(wrapper.get('[data-testid="git-content"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[role="status"]').text()).toContain('read-only')
+    await wrapper.get('.commit-toggle').trigger('click')
+    expect(mocks.api).not.toHaveBeenCalled()
+    const enter = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+    wrapper.get('.commit-toggle').element.dispatchEvent(enter)
+    expect(enter.defaultPrevented).toBe(true)
+    await wrapper.get('button[data-icon="merge"]').trigger('click')
+    expect(mocks.dialog).not.toHaveBeenCalled()
+    await wrapper.setProps({ workspace: { ...workspace, id: 'ws-b', workingBranch: 'feature/b' } })
+    expect(wrapper.text()).toContain('9 commits')
+    expect(wrapper.text()).not.toContain('4 commits')
+    finish({ ...stats, commitCount: 12 })
+    await flushPromises()
+    expect(wrapper.text()).toContain('12 commits')
+    expect(wrapper.get('[data-testid="git-content"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.find('[data-testid="git-cache-status"]').exists()).toBe(false)
+    await wrapper.get('button[data-icon="merge"]').trigger('click')
+    expect(mocks.dialog).toHaveBeenCalledOnce()
+  })
+
+  it('keeps cached values read-only after failure and unlocks only after a successful retry', async () => {
+    store.gitStatsCache['ws-a'] = { ...stats, commitCount: 4 }
+    vi.mocked(store.fetchGitStats).mockRejectedValueOnce(new Error('offline'))
+    mountPanel()
+    await flushPromises()
+    expect(wrapper.text()).toContain('offline')
+    expect(wrapper.text()).toContain('4 commits')
+    expect(wrapper.get('[data-testid="git-content"]').attributes('disabled')).toBeDefined()
+    store.gitStatsCache['ws-a'] = { ...stats, commitCount: 7 }
+    await flushPromises()
+    expect(wrapper.text()).toContain('4 commits')
+    vi.mocked(store.fetchGitStats).mockResolvedValueOnce({ ...stats, commitCount: 8 })
+    await wrapper.get('.git-subcard--error button').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('8 commits')
+    expect(wrapper.find('.git-subcard--error').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="git-content"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('ignores a previous workspace failure while the new workspace is loading', async () => {
+    store.gitStatsCache['ws-a'] = { ...stats, commitCount: 4 }
+    store.gitStatsCache['ws-b'] = { ...stats, commitCount: 9 }
+    let failOld!: (reason: Error) => void
+    let finishNew!: (value: GitStats) => void
+    vi.mocked(store.fetchGitStats)
+      .mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            failOld = reject
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishNew = resolve
+          }),
+      )
+    mountPanel()
+    await wrapper.setProps({ workspace: { ...workspace, id: 'ws-b' } })
+    failOld(new Error('old failure'))
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('old failure')
+    expect(wrapper.text()).toContain('9 commits')
+    expect(wrapper.get('[data-testid="git-content"]').attributes('disabled')).toBeDefined()
+    finishNew(stats)
+    await flushPromises()
+    expect(wrapper.get('[data-testid="git-content"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('uses the full loader only when the selected workspace has no cached stats', () => {
+    vi.mocked(store.fetchGitStats).mockImplementation(() => new Promise(() => {}))
+    mountPanel()
+    expect(wrapper.find('[data-testid="git-content"]').exists()).toBe(false)
+    expect(wrapper.find('q-spinner-stub').attributes('size')).toBe('32px')
+  })
+})
 
 describe('GitPanel PR merge confirmation', () => {
   it.each(['merge', 'squash', 'rebase'])('offers strategies and sends only the confirmed %s choice', async (method) => {

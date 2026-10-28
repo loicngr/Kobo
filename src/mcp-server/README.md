@@ -363,7 +363,7 @@ Query the backend for the current workspace's development-server status. If the
 request fails, fall back to the saved database status.
 
 **Input:** none
-**Output:** `DevServerStatus` — status, instance/project names, HTTP port, URL, and matched containers. See the [Docker status contract](../../CONFIGURATION.md#dev-server).
+**Output:** `DevServerStatus` — status, instance/project names, HTTP port, browser `url`, runtime `agentUrl` for running services, and matched containers. Agents executing alongside Kōbō use `agentUrl`; remote MCP clients must account for their own network context. See the [Docker status contract](../../CONFIGURATION.md#dev-server).
 Without a configured start command, the backend returns `not_configured` with
 `configured: false`. The database fallback returns `{ workspaceId, status }`.
 `running` describes lifecycle state, not application readiness. Before dependent

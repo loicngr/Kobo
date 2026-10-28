@@ -42,6 +42,10 @@ for (const engine of ['claude-code', 'codex'] as const) {
       expect(text).toContain('do not call every tool or poll')
       expect(text).toContain('Availability does not grant permission')
       expect(text).toContain('preserve the user’s description')
+      expect(text).toContain('whether a native process or Docker services')
+      expect(text).toContain('use the returned `agentUrl`')
+      expect(text).toContain('`url` is the browser/SSH-tunnel address')
+      expect(text).toContain('documented service-local address')
     })
 
     it('does not suggest unavailable operations during an automatic-return review', () => {

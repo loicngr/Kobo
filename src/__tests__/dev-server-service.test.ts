@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Mock child_process before importing the module under test
 vi.mock('node:child_process', () => ({
@@ -47,10 +47,12 @@ import { makeProjectSettings, makeWorkspace } from './helpers/fixtures.js'
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.stubEnv('KOBO_DEV_SERVER_DOCKER_HOST', undefined)
   _resetTrackedProcessesForTests()
   vi.mocked(listWorkspaces).mockReturnValue([])
   vi.mocked(getGlobalSettings).mockReturnValue({ serializeDevServerStarts: true, maxRunningDevServers: 0 } as never)
 })
+afterEach(() => vi.unstubAllEnvs())
 
 function mockCommandOutput(output: string): void {
   vi.mocked(execFile).mockImplementation(((...args: unknown[]) => {
@@ -259,9 +261,42 @@ describe('getStatus', () => {
     expect(status.status).toBe('running')
     expect(status.containers).toEqual(['myapp-web-1', 'myapp-db-1'])
     expect(status.url).toBe('http://localhost:3000')
+    expect(status.agentUrl).toBe('http://localhost:3000')
     expect(status.instanceName).toBe('feature-test')
     expect(status.projectName).toBe('myapp')
   })
+
+  it.each(['host.docker.internal', '172.18.0.1', '[fd00::1]'])(
+    'uses Docker host %s for agents while retaining the browser tunnel URL',
+    async (host) => {
+      vi.stubEnv('KOBO_DEV_SERVER_DOCKER_HOST', host)
+      fs.mkdirSync(path.join(tmpDir, '.container/instances'), { recursive: true })
+      fs.writeFileSync(
+        path.join(tmpDir, '.container/instances/foo.env'),
+        'INSTANCE_NAME=foo\nPROJECT_NAME=foo\nHTTP_PORT=8720',
+      )
+      mockCommandOutput('foo-web-1\tfoo\n')
+      expect(await getStatus(tmpDir, 'foo')).toMatchObject({
+        status: 'running',
+        url: 'http://localhost:8720',
+        agentUrl: `http://${host}:8720`,
+      })
+    },
+  )
+
+  it.each(['user@host', 'host/path', 'host?query', 'host#fragment', 'https://host', 'host:9000', 'host\\path'])(
+    'rejects an invalid Docker host instead of emitting an ambiguous agent URL: %s',
+    async (host) => {
+      vi.stubEnv('KOBO_DEV_SERVER_DOCKER_HOST', host)
+      fs.mkdirSync(path.join(tmpDir, '.container/instances'), { recursive: true })
+      fs.writeFileSync(
+        path.join(tmpDir, '.container/instances/foo.env'),
+        'INSTANCE_NAME=foo\nPROJECT_NAME=foo\nHTTP_PORT=8720',
+      )
+      mockCommandOutput('foo-web-1\tfoo\n')
+      await expect(getStatus(tmpDir, 'foo')).rejects.toThrow('KOBO_DEV_SERVER_DOCKER_HOST')
+    },
+  )
 
   it('returns stopped status when no containers match', async () => {
     const instancesDir = path.join(tmpDir, '.container', 'instances')
@@ -560,11 +595,128 @@ describe('direct dev servers', () => {
     })
   })
 
+  it('exposes stdout and stderr during startup, including split UTF-8 and bounded tail reads', async () => {
+    const proc = launch()
+    const output = Buffer.from('build démarré\n')
+    const split = output.indexOf(Buffer.from('é')) + 1
+    proc.stdout.emit('data', output.subarray(0, split))
+    proc.stdout.emit('data', output.subarray(split))
+    proc.stderr.emit('data', Buffer.from('compiling\n'))
+    expect(await getDevServerLogs('direct')).toContain('build démarré\ncompiling')
+    expect(await getDevServerLogs('direct', 1)).toContain('compiling')
+    expect(await getDevServerLogs('direct', 1)).not.toContain('démarré')
+    expect(execFile).not.toHaveBeenCalled()
+    proc.stdout.emit('data', Buffer.from('Local: http://localhost:5173/\nready\n'))
+    expect(await getDevServerLogs('direct')).toContain('ready')
+    proc.stdout.emit('data', Buffer.from('request served\n'))
+    expect(await getDevServerLogs('direct')).toContain('request served')
+  })
+
+  it('shows Docker build output before containers exist and retains it alongside their runtime logs', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kobo-build-logs-'))
+    try {
+      const proc = launch()
+      fs.mkdirSync(path.join(dir, '.container/instances'), { recursive: true })
+      fs.writeFileSync(
+        path.join(dir, '.container/instances/foo.env'),
+        'INSTANCE_NAME=foo\nPROJECT_NAME=foo\nHTTP_PORT=8720',
+      )
+      vi.mocked(getWorkspace).mockReturnValue(makeWorkspace({ id: 'direct', projectPath: dir, workingBranch: 'foo' }))
+      proc.stderr.emit('data', Buffer.from('#30 compiling PHP\n'))
+      expect(await getDevServerLogs('direct')).toContain('#30 compiling PHP')
+      expect(execFile).not.toHaveBeenCalled()
+      vi.mocked(execFile).mockImplementation(((...args: unknown[]) => {
+        const callback = args.at(-1) as (err: Error | null, stdout: string, stderr: string) => void
+        callback(null, (args[1] as string[])[0] === 'ps' ? 'foo-web-1\tfoo\n' : 'app ready\n', '')
+        return {}
+      }) as never)
+      proc.exitCode = 0
+      proc.emit('exit', 0)
+      await vi.waitFor(async () => {
+        const logs = await getDevServerLogs('direct')
+        expect(logs).toContain('#30 compiling PHP')
+        expect(logs).toContain('=== foo-web-1 ===\napp ready')
+      })
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps failed startup output available and replaces it on the next launch', async () => {
+    const proc = launch()
+    proc.stderr.emit('data', Buffer.from('build failed\n'))
+    proc.exitCode = 1
+    proc.emit('exit', 1)
+    await vi.waitFor(async () => {
+      expect((await getStatus('/tmp/no-instance', 'feature/test', 'direct')).status).not.toBe('starting')
+    })
+    expect(await getDevServerLogs('direct')).toContain('build failed')
+    const next = launch()
+    proc.stdout.emit('data', Buffer.from('stale output\n'))
+    next.stdout.emit('data', Buffer.from('new build\n'))
+    const logs = await getDevServerLogs('direct')
+    expect(logs).toContain('new build')
+    expect(logs).not.toMatch(/build failed|stale output/)
+  })
+
+  it('bounds retained startup output even for a line without a newline', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      const proc = launch()
+      proc.stdout.emit('data', Buffer.from(`old-output${'x'.repeat(300_000)}latest-output`))
+      const logs = await getDevServerLogs('direct')
+      expect(logs.length).toBeLessThan(100_000)
+      expect(logs).toContain('latest-output')
+      expect(logs).not.toContain('old-output')
+    } finally {
+      vi.mocked(console.log).mockRestore()
+    }
+  })
+
+  it('rejects an invalid host setting before launching a process', () => {
+    vi.stubEnv('KOBO_DEV_SERVER_DOCKER_HOST', 'http://host.docker.internal:8720')
+    expect(() => launch()).toThrow('KOBO_DEV_SERVER_DOCKER_HOST')
+    expect(spawn).not.toHaveBeenCalled()
+  })
+
+  it('keeps a direct child reachable on localhost even when sibling Docker services use the host gateway', async () => {
+    vi.stubEnv('KOBO_DEV_SERVER_DOCKER_HOST', 'host.docker.internal')
+    const proc = launch()
+    proc.stdout.emit('data', Buffer.from('Local: http://localhost:5173/\n'))
+    expect(await getStatus('/tmp/no-instance', 'feature/test', 'direct')).toMatchObject({
+      status: 'running',
+      url: 'http://localhost:5173/',
+      agentUrl: 'http://localhost:5173/',
+    })
+  })
+
+  it('accepts an explicit readiness URL on the configured Docker host without accepting arbitrary hosts', async () => {
+    vi.stubEnv('KOBO_DEV_SERVER_DOCKER_HOST', 'host.docker.internal')
+    const proc = launch()
+    proc.stdout.emit(
+      'data',
+      Buffer.from('Local: http://user:secret@host.docker.internal:8720/\nLocal: http://untrusted.example:8720/\n'),
+    )
+    expect(await getStatus('/tmp/no-instance', 'feature/test', 'direct')).toMatchObject({ status: 'starting' })
+    proc.stdout.emit('data', Buffer.from('Local: https://host.docker.internal:8720/app?view=dev\n'))
+    expect(await getStatus('/tmp/no-instance', 'feature/test', 'direct')).toMatchObject({
+      status: 'running',
+      url: 'https://localhost:8720/app?view=dev',
+      agentUrl: 'https://host.docker.internal:8720/app?view=dev',
+    })
+  })
+
   it.each(['stdout', 'stderr'] as const)('detects the Quasar App URL on %s across colored chunks', async (stream) => {
     const proc = launch()
     proc[stream].emit('data', Buffer.from(' » App URL................. \u001b[32mhttp://local'))
     proc[stream].emit('data', Buffer.from('host:9000/\u001b[0m\n    http://192.168.1.48:9000/\n'))
-    const expected = { status: 'running', httpPort: '9000', url: 'http://localhost:9000/', containers: [] }
+    const expected = {
+      status: 'running',
+      httpPort: '9000',
+      url: 'http://localhost:9000/',
+      agentUrl: 'http://localhost:9000/',
+      containers: [],
+    }
     expect(await getStatus('/tmp/no-instance', 'feature/test', 'direct')).toMatchObject(expected)
     expect(updateDevServerStatus).toHaveBeenLastCalledWith('direct', 'running')
     expect(emitEphemeral).toHaveBeenLastCalledWith('direct', 'devserver:status', expect.objectContaining(expected))
@@ -578,6 +730,18 @@ describe('direct dev servers', () => {
       status: 'running',
       httpPort: '5173',
       url: 'http://localhost:5173/',
+      agentUrl: 'http://localhost:5173/',
+    })
+  })
+
+  it.each(['0.0.0.0', '[::]'])('normalizes a wildcard direct listener %s to localhost for agents', async (host) => {
+    vi.stubEnv('KOBO_DEV_SERVER_DOCKER_HOST', 'host.docker.internal')
+    const proc = launch()
+    proc.stdout.emit('data', Buffer.from(`Local: http://${host}:5173/\n`))
+    expect(await getStatus('/tmp/no-instance', 'feature/test', 'direct')).toMatchObject({
+      status: 'running',
+      url: 'http://localhost:5173/',
+      agentUrl: 'http://localhost:5173/',
     })
   })
 

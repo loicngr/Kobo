@@ -41,6 +41,7 @@ services:
     stop_grace_period: 180s
     environment:
       - KOBO_HOME=/root/.config/kobo
+      - KOBO_DEV_SERVER_DOCKER_HOST=${KOBO_DEV_SERVER_DOCKER_HOST:-host.docker.internal}
       - GH_TOKEN=${GH_TOKEN}
       - GITLAB_TOKEN=${GITLAB_TOKEN}
       - KOBO_NETWORK_ACCESS_ENABLED=true
@@ -49,6 +50,8 @@ services:
       # public origin you serve it under. Missing/invalid configuration rejects
       # public requests. A bare domain defaults to HTTPS; specify nonstandard ports.
       - KOBO_NETWORK_ACCESS_PROXY_HOST=kobo.example.com
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       # Named volume: Kōbō's own state (SQLite DB, settings.json, etc).
       - kobo-data:/root/.config/kobo

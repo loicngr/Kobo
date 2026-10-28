@@ -22,9 +22,12 @@ services:
       NPM_CONFIG_INCLUDE: dev
       SERVER_PORT: "3000"
       KOBO_HOME: /root/.config/kobo
+      KOBO_DEV_SERVER_DOCKER_HOST: ${KOBO_DEV_SERVER_DOCKER_HOST:-host.docker.internal}
       KOBO_NETWORK_ACCESS_ENABLED: "true"
       KOBO_NETWORK_ACCESS_BEHIND_PROXY: "true"
       KOBO_NETWORK_ACCESS_PROXY_HOST: ${KOBO_DOMAIN:?Set KOBO_DOMAIN to the public hostname}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       # Includes Kōbō, Claude/Codex state and Git configuration; no PC auth mounts.
       - kobo-home:/root

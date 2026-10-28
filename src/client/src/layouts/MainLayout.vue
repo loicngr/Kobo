@@ -41,9 +41,6 @@
             <q-tab name="git" data-tour="ws-tabnav-git" icon="commit" :aria-label="$t('git.title')">
               <q-tooltip>{{ $t('git.title') }}</q-tooltip>
             </q-tab>
-            <q-tab name="timeline" data-tour="ws-tabnav-timeline" icon="timeline" :aria-label="$t('timeline.title')">
-              <q-tooltip>{{ $t('timeline.title') }}</q-tooltip>
-            </q-tab>
             <q-tab name="tasks" data-tour="ws-tabnav-tasks" icon="checklist" :aria-label="$t('tasks.title')">
               <q-tooltip>{{ $t('tasks.title') }}</q-tooltip>
             </q-tab>
@@ -66,6 +63,9 @@
               <q-badge v-if="pendingMemoryCount" color="warning" floating>{{ pendingMemoryCount }}</q-badge>
               <q-tooltip>{{ $t('memory.panel.title') }}</q-tooltip>
             </q-tab>
+            <q-tab name="timeline" data-tour="ws-tabnav-timeline" icon="timeline" :aria-label="$t('timeline.title')">
+              <q-tooltip>{{ $t('timeline.title') }}</q-tooltip>
+            </q-tab>
           </q-tabs>
 
           <q-separator dark />
@@ -79,10 +79,6 @@
                 />
                 <GitPanel :workspace="store.selectedWorkspace" />
               </q-tab-panel>
-              <q-tab-panel name="timeline" data-tour="ws-tab-timeline" class="q-pa-none">
-                <SessionTimelinePanel v-if="store.selectedWorkspaceId" :workspace-id="store.selectedWorkspaceId" />
-              </q-tab-panel>
-
               <q-tab-panel name="tasks" data-tour="ws-tab-tasks" class="q-pa-none">
                 <TasksPanel :workspace="store.selectedWorkspace" :tasks="store.tasks" />
                 <q-separator dark />
@@ -110,6 +106,9 @@
                   :archived="Boolean(store.selectedWorkspace?.archivedAt)"
                   :purged="Boolean(store.selectedWorkspace?.worktreePurgedAt)"
                 />
+              </q-tab-panel>
+              <q-tab-panel name="timeline" data-tour="ws-tab-timeline" class="q-pa-none">
+                <SessionTimelinePanel v-if="store.selectedWorkspaceId" :workspace-id="store.selectedWorkspaceId" />
               </q-tab-panel>
             </q-tab-panels>
           </div>
@@ -236,7 +235,7 @@ onMounted(() => {
 })
 
 const DRAWER_TAB_KEY = 'kobo:rightTab'
-const VALID_RIGHT_TABS = ['git', 'timeline', 'tasks', 'subagents', 'documents', 'schedule', 'memory'] as const
+const VALID_RIGHT_TABS = ['git', 'tasks', 'subagents', 'documents', 'schedule', 'memory', 'timeline'] as const
 const storedRightTab = localStorage.getItem(DRAWER_TAB_KEY)
 const rightTab = ref(
   storedRightTab && (VALID_RIGHT_TABS as readonly string[]).includes(storedRightTab) ? storedRightTab : 'git',

@@ -403,7 +403,7 @@ export function createManagedMcpDispatcher(context: ManagedMcpContext) {
     {
       name: 'get_dev_server_status',
       description:
-        'CALL BEFORE backend, frontend, integration or E2E tests that need workspace services, or before asking the user whether the app is running. Reuse the existing instance and its returned URL/container names. Returns `not_configured` when this project has no dev server: report the blocker, do not launch one manually. Otherwise returns running/stopped/starting/error + URL, port, container names. Running is lifecycle status, not application readiness: use the documented health check with bounded retries before dependent tests.',
+        'CALL BEFORE backend, frontend, integration or E2E tests that need workspace services, or before asking the user whether the app is running. Reuse the existing instance and returned container names. For native processes and Docker services, a running status includes agentUrl for requests from the Kōbō agent environment; url is the browser/SSH-tunnel address. Inside a project container use its documented service-local address instead. Returns `not_configured` when this project has no dev server: report the blocker, do not launch one manually. Otherwise returns running/stopped/starting/error + URLs, port, container names. Running is lifecycle status, not application readiness: use the documented health check with bounded retries before dependent tests.',
       inputSchema: { type: 'object', properties: {}, required: [] },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },

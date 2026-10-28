@@ -1,5 +1,6 @@
 import { type ChildProcess, execFile, spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
+import { isIP } from 'node:net'
 import { StringDecoder } from 'node:string_decoder'
 import { stripVTControlCharacters } from 'node:util'
 import { resolveInstance, sanitizeBranchName } from '../utils/dev-server-instance.js'
@@ -17,6 +18,20 @@ export { type InstanceConfig, parseEnvFile, resolveInstance, sanitizeBranchName 
 function cleanEnv(): Record<string, string | undefined> {
   const { PORT, SERVER_PORT, ...rest } = process.env
   return rest
+}
+
+/** Host of published sibling Docker ports from the Kōbō process namespace. */
+function dockerAgentHost(): string {
+  const host = process.env.KOBO_DEV_SERVER_DOCKER_HOST?.trim() || 'localhost'
+  const isIpv6 = host.startsWith('[') && host.endsWith(']') && isIP(host.slice(1, -1)) === 6
+  if (!isIpv6 && !/^[a-z\d](?:[a-z\d-]*[a-z\d])?(?:\.[a-z\d](?:[a-z\d-]*[a-z\d])?)*\.?$/i.test(host)) {
+    throw new Error('KOBO_DEV_SERVER_DOCKER_HOST must be a hostname or IP address without a scheme, port or path')
+  }
+  try {
+    return new URL(`http://${host}`).hostname
+  } catch {
+    throw new Error('KOBO_DEV_SERVER_DOCKER_HOST must be a valid hostname or IP address')
+  }
 }
 
 function runCommand(
@@ -41,6 +56,8 @@ export interface DevServerStatus {
   projectName: string
   httpPort: string
   url: string
+  /** Address for requests from the Kōbō agent environment, distinct from the browser/tunnel URL. */
+  agentUrl?: string
   containers: string[]
   error?: string
 }
@@ -52,6 +69,9 @@ const trackedProcesses = new Map<string, ChildProcess>()
 const directServerStatuses = new Map<string, DevServerStatus>()
 const stoppingProcesses = new Map<string, Promise<DevServerStatus>>()
 const generations = new Map<string, number>()
+const processLogs = new Map<string, { output: string }>()
+const MAX_PROCESS_LOG_CHARS = 64 * 1024
+const MAX_PROCESS_LOG_WORKSPACES = 100
 const queuedStarts = new Map<string, DevServerStatus>()
 // A running reservation survives CLI exit and failed Docker/process inspection.
 const reservations = new Map<string, 'starting' | 'running'>()
@@ -120,6 +140,7 @@ export function resumeQueuedDevServers(): void {
               projectName: config.projectName,
               httpPort: config.httpPort,
               url: `http://localhost:${config.httpPort}`,
+              agentUrl: `http://${dockerAgentHost()}:${config.httpPort}`,
               containers,
             })
         } else reservations.delete(workspace.id)
@@ -181,6 +202,7 @@ export function _resetTrackedProcessesForTests(): void {
   directServerStatuses.clear()
   stoppingProcesses.clear()
   generations.clear()
+  processLogs.clear()
   shuttingDown = false
 }
 
@@ -302,6 +324,7 @@ export async function getStatus(
       projectName: config.projectName,
       httpPort: config.httpPort,
       url: `http://localhost:${config.httpPort}`,
+      agentUrl: `http://${dockerAgentHost()}:${config.httpPort}`,
       containers: matching,
     }
   }
@@ -389,6 +412,9 @@ function launchDevServer(workspaceId: string): DevServerStatus {
 
   const instanceName = sanitizeBranchName(workspace.workingBranch)
 
+  // Validate before spawning; output callbacks must never throw on configuration errors.
+  const allowedDockerHost = dockerAgentHost()
+
   // Execute as bash script (supports multi-line scripts)
   const worktreePath = workspace.worktreePath
   const cwd = worktreePath && existsSync(worktreePath) ? worktreePath : workspace.projectPath
@@ -407,6 +433,10 @@ function launchDevServer(workspaceId: string): DevServerStatus {
   generations.set(workspaceId, generation)
   trackedProcesses.set(workspaceId, proc)
   reservations.set(workspaceId, 'starting')
+  const log = { output: '' }
+  processLogs.delete(workspaceId)
+  processLogs.set(workspaceId, log)
+  if (processLogs.size > MAX_PROCESS_LOG_WORKSPACES) processLogs.delete(processLogs.keys().next().value!)
 
   // Parse complete lines separately per stream: CLI output and ANSI sequences
   // can span arbitrary pipe chunks. Bound the unfinished line retained in memory.
@@ -414,6 +444,8 @@ function launchDevServer(workspaceId: string): DevServerStatus {
     const decoder = new StringDecoder('utf8')
     let pending = ''
     return (data: Buffer): void => {
+      const output = decoder.write(data)
+      if (processLogs.get(workspaceId) === log) log.output = (log.output + output).slice(-MAX_PROCESS_LOG_CHARS)
       if (
         shuttingDown ||
         trackedProcesses.get(workspaceId) !== proc ||
@@ -422,7 +454,7 @@ function launchDevServer(workspaceId: string): DevServerStatus {
         directServerStatuses.has(workspaceId)
       )
         return
-      pending += decoder.write(data)
+      pending += output
       const lines = pending.split(/[\r\n]/)
       pending = lines.pop()!.slice(-8192)
       for (const line of lines) {
@@ -442,16 +474,20 @@ function launchDevServer(workspaceId: string): DevServerStatus {
         if (
           url.username ||
           url.password ||
-          !['localhost', '127.0.0.1', '[::1]', '0.0.0.0', '[::]'].includes(url.hostname)
+          !['http:', 'https:'].includes(url.protocol) ||
+          !['localhost', '127.0.0.1', '[::1]', '0.0.0.0', '[::]', allowedDockerHost].includes(url.hostname)
         )
           continue
         if (url.hostname === '0.0.0.0' || url.hostname === '[::]') url.hostname = 'localhost'
+        const agentUrl = url.href
+        if (url.hostname === allowedDockerHost) url.hostname = 'localhost'
         const status: DevServerStatus = {
           status: 'running',
           instanceName,
           projectName: '',
           httpPort: url.port || (url.protocol === 'https:' ? '443' : '80'),
           url: url.href,
+          agentUrl,
           containers: [],
         }
         directServerStatuses.set(workspaceId, status)
@@ -775,30 +811,37 @@ export async function stopAllDevServers(options: { preserveDocker?: boolean } = 
 // ── Logs ───────────────────────────────────────────────────────────────────────
 
 /**
- * Get logs from running dev-server containers for a workspace.
+ * Get retained start-command output and running dev-server container logs.
  * Docker log reads run concurrently without blocking the Node event loop.
  */
 export async function getDevServerLogs(workspaceId: string, tail = 200): Promise<string> {
   const workspace = getWorkspace(workspaceId)
   if (!workspace) {
+    processLogs.delete(workspaceId)
     return 'Workspace not found'
   }
 
+  const lineCount = Number.isFinite(tail) ? Math.max(1, Math.min(Math.trunc(tail), 1000)) : 200
+  const output = stripVTControlCharacters(processLogs.get(workspaceId)?.output ?? '')
+  const processOutput = output.replace(/\r\n?/g, '\n').replace(/\n$/, '').split('\n').slice(-lineCount).join('\n')
+  // BuildKit output belongs to the startup process; no containers need to exist yet.
+  if (trackedProcesses.has(workspaceId) && reservations.get(workspaceId) === 'starting') return processOutput
+
   const config = resolveInstance(workspace.projectPath, workspace.workingBranch)
   if (!config) {
-    return 'No dev-server instance found'
+    return processOutput || 'No dev-server instance found'
   }
 
   const matching = await listRunningContainers(config.projectName)
 
   if (matching.length === 0) {
-    return 'No running containers found'
+    return processOutput || 'No running containers found'
   }
 
   const outputs = await Promise.all(
     matching.map(async (container) => {
       try {
-        const logs = await runCommand('docker', ['logs', '--tail', String(tail), container], { timeout: 10_000 })
+        const logs = await runCommand('docker', ['logs', '--tail', String(lineCount), container], { timeout: 10_000 })
         return `=== ${container} ===\n${logs}`
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
@@ -807,5 +850,5 @@ export async function getDevServerLogs(workspaceId: string, tail = 200): Promise
     }),
   )
 
-  return outputs.join('\n\n')
+  return [processOutput ? `=== Start command ===\n${processOutput}` : '', ...outputs].filter(Boolean).join('\n\n')
 }

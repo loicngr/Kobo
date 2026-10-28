@@ -18,8 +18,12 @@ if [ "${1:-}" = --exec ]; then
     prepare_home=false
     shift
 fi
-if [ "$(/usr/bin/id -u)" != 0 ]; then
-    [ "$(/usr/bin/id -u)" = "$KOBO_UID" ] && [ "$(/usr/bin/id -g)" = "$KOBO_GID" ] || {
+# NixOS keeps coreutils in its root-owned system profile, outside /usr/bin.
+identity_command=/usr/bin/id
+[ -x "$identity_command" ] || identity_command=/run/current-system/sw/bin/id
+runtime_uid=$("$identity_command" -u)
+if [ "$runtime_uid" != 0 ]; then
+    [ "$runtime_uid" = "$KOBO_UID" ] && [ "$("$identity_command" -g)" = "$KOBO_GID" ] || {
         echo 'The runtime user must match KOBO_UID/KOBO_GID.' >&2; exit 1;
     }
     export PATH="$runtime_path"

@@ -1600,6 +1600,8 @@ export default {
   'git.title': 'Git',
   'git.outputDialogTitle': 'Git reported an error',
   'git.statsFailed': 'Git status could not be read',
+  'git.refreshingCached': 'Refreshing Git status — last known values, read-only.',
+  'git.cachedReadOnly': 'Last known values — read-only until Git status is refreshed.',
   'git.section.repository': 'Repository',
   'git.section.changes': 'Changes',
   'git.section.pullRequest': 'Pull request',

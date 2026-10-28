@@ -91,6 +91,22 @@ not an independently exposed project application.
 
 ## Start, stop and troubleshoot workspaces
 
+Agents execute inside the Kōbō container, so their `localhost` is different from
+both your PC and the VPS host. Managed dev-server status exposes `agentUrl` for
+agent requests and keeps `url` for the browser/tunnel link. The bundled Compose
+files use `KOBO_DEV_SERVER_DOCKER_HOST=host.docker.internal` with:
+
+```yaml
+extra_hosts:
+  - "host.docker.internal:host-gateway"
+```
+
+Add both entries to an existing deployment, then recreate Kōbō during a planned
+restart. Workspace Docker ports must listen on an interface reachable through
+that gateway; host-loopback-only bindings do not suffice. This does not publish
+new ports or attach Kōbō to project networks. Direct processes started inside
+Kōbō still use their local address. See [dev-server configuration](../CONFIGURATION.md#dev-server).
+
 Configure the project's start/stop commands in its **Dev server** settings.
 Kōbō runs them in the worktree and supplies `INSTANCE`. Stop commands also receive
 `PROJECT_NAME` when instance metadata was discovered. Use the project's start

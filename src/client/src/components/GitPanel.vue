@@ -21,14 +21,31 @@
     </div>
 
     <template v-if="workspace">
-      <!-- Loader: full panel while the new workspace's stats are being fetched.
-           Replaces every sub-card (Repository / Changes / Actions / PR) so the
-           user doesn't see a half-empty panel during the switch. -->
+      <div v-if="gitStats && statsReadOnly" role="status" class="row items-center q-mb-sm text-caption text-kobo-3" data-testid="git-cache-status">
+        <q-spinner v-if="loadingStats" size="14px" class="q-mr-xs" />
+        {{ $t(loadingStats ? 'git.refreshingCached' : 'git.cachedReadOnly') }}
+      </div>
+      <div v-if="statsError" class="git-subcard git-subcard--error">
+        <div class="git-subcard-title text-negative">{{ $t('git.statsFailed') }}</div>
+        <div class="text-caption text-kobo-3">{{ statsError }}</div>
+        <q-btn
+          dense
+          flat
+          no-caps
+          class="q-mt-xs"
+          icon="refresh"
+          :label="$t('common.retry')"
+          @click="loadGitStats({ freshFetch: true })"
+        />
+      </div>
+
+      <!-- Only a first visit without cached values needs the full loader. -->
       <div v-if="loadingStats && !gitStats" class="row items-center justify-center q-py-xl">
         <q-spinner size="32px" color="primary" />
       </div>
 
-      <template v-else>
+      <fieldset v-else :key="workspace.id" :disabled="statsReadOnly" :aria-busy="loadingStats" class="git-content" data-testid="git-content"
+        @click.capture="blockCachedAction" @keydown.enter.capture="blockCachedAction" @keydown.space.capture="blockCachedAction">
       <!-- Repository sub-card -->
       <div class="git-subcard">
         <div class="git-subcard-title">{{ $t('git.section.repository') }}</div>
@@ -69,23 +86,6 @@
             <span v-else style="color: var(--kobo-warning);">{{ $t('git.unpushed', { count: gitStats.unpushedCount }) }}</span>
           </template>
         </div>
-      </div>
-
-      <!-- Failed load — NOT the same thing as "nothing to show". Replaces the
-           Changes, Actions and Pull-request sub-cards, which used to vanish
-           silently when the stats request failed. -->
-      <div v-if="statsError" class="git-subcard git-subcard--error">
-        <div class="git-subcard-title text-negative">{{ $t('git.statsFailed') }}</div>
-        <div class="text-caption text-kobo-3">{{ statsError }}</div>
-        <q-btn
-          dense
-          flat
-          no-caps
-          class="q-mt-xs"
-          icon="refresh"
-          :label="$t('common.retry')"
-          @click="loadGitStats({ freshFetch: true })"
-        />
       </div>
 
       <!-- Changes sub-card -->
@@ -288,12 +288,13 @@
           <div v-if="gitStats" class="col">
             <ActionAvailability :reason="syncBlocker">
             <q-btn-dropdown
+              :key="String(statsReadOnly)"
               split dense no-caps size="sm" outline color="kobo-2"
               icon="sync"
               :label="syncLabel"
               class="full-width git-btn"
               :loading="pulling || rebasing || merging || fetching"
-              :disable="!!syncBlocker"
+              :disable="statsReadOnly || !!syncBlocker"
               @click="handleSyncPrimary"
             >
               <q-list dark dense style="min-width: 140px;">
@@ -388,7 +389,7 @@
               :aria-label="$t('workspacePage.moreActions')"
               aria-haspopup="true"
             >
-              <q-menu>
+              <q-menu v-if="!statsReadOnly">
                 <q-list dark dense style="min-width: 160px;">
                   <q-item
                     v-if="canRenameBranch"
@@ -449,7 +450,7 @@
         <div class="git-subcard-title">{{ $t('git.section.pullRequest') }}</div>
         <PrPanel :snapshot="prSnapshot" />
       </div>
-      </template>
+      </fieldset>
     </template>
 
     <div v-else class="text-caption text-kobo-3">
@@ -969,6 +970,7 @@ function openSourceChangeErrorDialog(msg: string, op: 'cherry-pick' | 'merge' | 
 }
 
 async function abortSourceChange() {
+  if (statsReadOnly.value) return
   if (!props.workspace) return
   sourceChangeAborting.value = true
   try {
@@ -1012,6 +1014,13 @@ const { showWorkingTreeFiles, loadingWorkingTreeFiles, workingTreeFiles, toggleW
 )
 const loadingStats = ref(false)
 const statsError = ref<string | null>(null)
+const statsReadOnly = computed(() => loadingStats.value || statsError.value !== null)
+
+function blockCachedAction(event: Event) {
+  if (!statsReadOnly.value) return
+  event.preventDefault()
+  event.stopPropagation()
+}
 
 // Raw git output — readable, selectable, and it stays until dismissed. A
 // merge conflict or a rejected pre-push hook is twenty lines the user needs
@@ -1203,36 +1212,38 @@ function openDivergence(tab: 'ahead' | 'behind') {
 }
 
 let inflightController: AbortController | null = null
+let inflightFreshFetch = false
 
 async function loadGitStats(opts: { freshFetch?: boolean } = {}) {
   if (!props.workspace) {
     gitStats.value = null
     return
   }
+  // Background updates must not replace the fresh read that unlocks cached values.
+  if (inflightFreshFetch && inflightController && !inflightController.signal.aborted && !opts.freshFetch) return
+  const freshFetch = opts.freshFetch === true || statsReadOnly.value
   inflightController?.abort()
   const controller = new AbortController()
   inflightController = controller
+  inflightFreshFetch = freshFetch
   const wsIdAtStart = props.workspace.id
   loadingStats.value = true
   try {
-    const stats = await store.fetchGitStats(wsIdAtStart, { freshFetch: opts.freshFetch, signal: controller.signal })
+    const stats = await store.fetchGitStats(wsIdAtStart, { freshFetch, signal: controller.signal })
     if (controller.signal.aborted) return
     if (props.workspace?.id !== wsIdAtStart) return
     gitStats.value = stats
     statsError.value = null
   } catch (err) {
-    if ((err as Error)?.name === 'AbortError') return
-    // Blanking gitStats hides the Changes, Actions and Pull-request sub-cards
-    // at once, which reads as "nothing to show" instead of "the read failed".
-    // Keep the failure visible and offer a way out.
+    if (controller.signal.aborted || props.workspace?.id !== wsIdAtStart) return
     statsError.value = err instanceof Error ? err.message : String(err)
-    gitStats.value = null
   } finally {
     // Only the still-current request may clear the loading flag — a
     // superseded (aborted) request finishing here must not flip the spinner
     // off while a newer request it was replaced by is still in flight.
     if (inflightController === controller) {
       inflightController = null
+      inflightFreshFetch = false
       loadingStats.value = false
     }
   }
@@ -1255,13 +1266,18 @@ watch(
       clearTimeout(gitRefreshTimeout)
       gitRefreshTimeout = null
     }
-    // Immediately clear the previous workspace's data so the panel shows a
-    // loader instead of stale info while the new fetch is in flight.
+    // Cached values belong to the target workspace; actions wait for its fresh read.
     if (newId !== oldId) {
-      gitStats.value = null
+      gitStats.value = newId ? (store.gitStatsCache[newId] ?? null) : null
       statsError.value = null
       commits.value = []
       showCommits.value = false
+      showCommitDialog.value = false
+      showCompareDialog.value = false
+      divergenceDialogOpen.value = false
+      conflictDialog.value = false
+      dirtyDialog.value = false
+      sourceChangeErrorDialog.value = false
     }
     if (newId) {
       loadGitStats({ freshFetch: true })
@@ -1289,7 +1305,7 @@ watch(
   },
   (cached) => {
     if (!cached) return
-    if (loadingStats.value) return
+    if (statsReadOnly.value) return
     gitStats.value = cached
   },
 )
@@ -1319,6 +1335,7 @@ function openRenameBranchDialog() {
     cancel: { flat: true, label: t('common.cancel'), color: 'kobo-2' },
     ok: { flat: true, label: t('git.renameBranch'), color: 'primary' },
   }).onOk(async (newName: string) => {
+    if (statsReadOnly.value || props.workspace?.id !== ws.id) return
     const trimmed = (newName ?? '').trim()
     if (!trimmed || trimmed === ws.workingBranch) return
     renamingBranch.value = true
@@ -1354,6 +1371,7 @@ function escapeHtml(s: string): string {
 }
 
 async function runRebase(opts?: { autostash?: boolean }) {
+  if (statsReadOnly.value) return
   if (!props.workspace) return
   rebasing.value = true
   try {
@@ -1399,6 +1417,7 @@ function handleRebase() {
 }
 
 async function runMerge(opts?: { autostash?: boolean }) {
+  if (statsReadOnly.value) return
   if (!props.workspace) return
   merging.value = true
   try {
@@ -1464,6 +1483,7 @@ function openDirtyDialog(
 }
 
 async function commitChangesDirectly() {
+  if (statsReadOnly.value) return
   if (!props.workspace || !commitMessage.value.trim()) return
   committingDirect.value = true
   try {
@@ -1492,6 +1512,7 @@ async function commitChangesDirectly() {
 }
 
 async function commitWithAgent() {
+  if (statsReadOnly.value) return
   if (!props.workspace) return
   committingWithAgent.value = true
   try {
@@ -1530,6 +1551,7 @@ function dirtyStash() {
 }
 
 async function dirtyCommit() {
+  if (statsReadOnly.value) return
   if (!props.workspace || !dirtyCommitMessage.value.trim()) return
   dirtyBusy.value = true
   try {
@@ -1560,6 +1582,7 @@ function dirtyDiscard() {
     cancel: { flat: true, label: t('common.cancel'), color: 'kobo-2' },
     ok: { flat: true, label: t('git.dirtyDiscard'), color: 'red-4' },
   }).onOk(async () => {
+    if (statsReadOnly.value) return
     dirtyBusy.value = true
     try {
       const res = await apiFetchResponseForStatus(`/api/workspaces/${props.workspace!.id}/git/discard`, {
@@ -1605,6 +1628,7 @@ function settleFinishedOperation() {
 }
 
 async function runAbortGitOperation() {
+  if (statsReadOnly.value) return
   if (!props.workspace) return
   conflictAborting.value = true
   try {
@@ -1633,6 +1657,7 @@ async function runAbortGitOperation() {
 }
 
 async function continueGitOperation() {
+  if (statsReadOnly.value) return
   if (!props.workspace) return
   conflictContinuing.value = true
   try {
@@ -1661,6 +1686,7 @@ async function continueGitOperation() {
 }
 
 async function resolveWithAgent() {
+  if (statsReadOnly.value) return
   if (!props.workspace || !conflictOperation.value) return
   conflictResolving.value = true
   try {
@@ -1727,6 +1753,7 @@ function notifyPushFailure(e: unknown) {
 }
 
 async function runPush(force: boolean) {
+  if (statsReadOnly.value) return
   if (!props.workspace) return
   pushing.value = true
   try {
@@ -1759,6 +1786,7 @@ function handleForcePush() {
 // Fetch directly (not via the store) so we can inspect the 409 `dirty_worktree`
 // body and route it to the recovery dialog — same shape as runRebase/runMerge.
 async function runPull(opts?: { autostash?: boolean }) {
+  if (statsReadOnly.value) return
   if (!props.workspace) return
   pulling.value = true
   try {
@@ -1805,6 +1833,7 @@ function handlePull() {
 // Plain `git fetch` of the workspace repo (all branches of origin). Safe/read-only,
 // so no confirmation dialog; refresh stats afterwards so divergence + branches update.
 async function handleFetchAll() {
+  if (statsReadOnly.value) return
   if (!props.workspace) return
   fetching.value = true
   try {
@@ -1842,7 +1871,7 @@ function handleChangePrBase() {
     cancel: { flat: true, label: t('common.cancel'), color: 'kobo-2' },
     ok: { flat: true, label: t('common.save'), color: 'primary' },
   }).onOk(async (newBase: string) => {
-    if (!newBase.trim() || !props.workspace) return
+    if (statsReadOnly.value || !newBase.trim() || !props.workspace) return
     changingBase.value = true
     try {
       const res = await apiFetchResponseForStatus(`/api/workspaces/${props.workspace.id}/change-pr-base`, {
@@ -1873,7 +1902,7 @@ function handleChangePrBase() {
 }
 
 function handleMergeRequest() {
-  if (!props.workspace || !canMergeRequest.value || mergingRequest.value) return
+  if (statsReadOnly.value || !props.workspace || !canMergeRequest.value || mergingRequest.value) return
   const workspace = props.workspace
   const methods = forge.value.capabilities.mergeMethods
   const canDeleteBranch = forge.value.capabilities.canDeleteRemoteBranch
@@ -1900,7 +1929,7 @@ function handleMergeRequest() {
   })
 
   async function performMerge(method: unknown, admin = false) {
-    if (panelUnmounted || props.workspace?.id !== workspace.id || mergingRequest.value) return
+    if (statsReadOnly.value || panelUnmounted || props.workspace?.id !== workspace.id || mergingRequest.value) return
     mergingRequest.value = true
     try {
       const res = await apiFetchResponse(`/api/workspaces/${workspace.id}/merge-pr`, {
@@ -2017,7 +2046,7 @@ async function handleChangeSourceBranch() {
     cancel: { flat: true, label: t('common.cancel'), color: 'kobo-2' },
     ok: { flat: true, label: t('common.save'), color: 'primary' },
   }).onOk(async (newBase: string) => {
-    if (!newBase.trim() || !props.workspace) return
+    if (statsReadOnly.value || !newBase.trim() || !props.workspace) return
     changingSource.value = true
     // Six-second spinner toast — the operation is also dismissed in `finally`
     // when it resolves sooner.
@@ -2084,6 +2113,7 @@ async function handleChangeSourceBranch() {
 }
 
 async function handleOpenPr() {
+  if (statsReadOnly.value) return
   if (!props.workspace) return
   openingPr.value = true
   try {
@@ -2124,6 +2154,7 @@ async function handleOpenPr() {
 </script>
 
 <style lang="scss" scoped>
+.git-content { border: 0; margin: 0; padding: 0; min-width: 0; }
 .git-btn {
   font-size: 11px;
 }

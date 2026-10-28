@@ -9,6 +9,7 @@ export interface DevServerStatus {
   projectName: string
   httpPort: string
   url: string
+  agentUrl?: string
   containers: string[]
   error?: string
 }

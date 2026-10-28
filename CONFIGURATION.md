@@ -110,6 +110,7 @@ A production-installed Kōbō (`npx @loicngr/kobo`) and a dev server can run sid
 | `KOBO_NETWORK_ACCESS_BEHIND_PROXY` | — | Set `true` to enable [behind a reverse proxy](#behind-a-reverse-proxy) mode at boot (disables the loopback bypass entirely). Requires `KOBO_NETWORK_ACCESS_ENABLED=true`. |
 | `KOBO_NETWORK_ACCESS_PROXY_HOST` | — | Domain your proxy serves Kōbō under (`kobo.example.com`). Makes the [host check](#reachable-addresses) enforce that name in behind-a-reverse-proxy mode instead of accepting any. A scheme and port are ignored. |
 | `KOBO_DEV_CLIENT_ORIGIN` | — | Origin the Quasar dev server is served from (`http://localhost:8080`), so its page counts as Kōbō's own UI despite the proxy rewriting the `Host`. Set by the `dev` npm script; never set in a published build. |
+| `KOBO_DEV_SERVER_DOCKER_HOST` | `localhost` | Hostname/IP agents use to reach ports published by workspace Docker stacks. The bundled Compose files set `host.docker.internal` and map it to `host-gateway`. Direct child-process URLs and browser links are unchanged. |
 | `GH_TOKEN` | — | Non-interactive auth for the `gh` CLI (used by the [forge integration](#forge-integration)). Needed in headless containers where `gh auth login`'s browser flow isn't practical. |
 | `GITLAB_TOKEN` | — | Non-interactive auth for the `glab` CLI, same rationale as `GH_TOKEN`. |
 | `KOBO_WORKTREE_CLEANUP_IMAGE` | `alpine` | Docker image used to reclaim ownership of root-owned files when removing a worktree fails on a permission error. Override with a locally cached image to avoid a pull. |
@@ -1829,19 +1830,27 @@ of the conversation being viewed. Stop cancels a queued start; starting, queued
 and stopping states are shown explicitly. Archived or purged workspaces disable
 start/stop, and a missing start command links to Settings.
 
+The logs button also shows stdout and stderr from the configured start command,
+including Docker image builds before any container exists and native-server
+output. The open viewer refreshes every five seconds. Failed-start output stays
+available until the next start. This is a bounded in-memory tail (64 Ki characters
+per workspace, up to 100 recent launches), not a persistent log archive; restarting
+Kōbō clears it. Once containers run, their logs appear alongside the retained output.
+
 For remote installations, `localhost` in that link is the browser's computer.
 See [VPS dev-server access](./docs/vps-projects-and-skills.md#reach-a-development-server-from-your-pc)
 for SSH forwarding, separate proxy routes and scoped stop/cleanup commands.
 
 ### What the panel actually does
 
-Kōbō treats the dev server in two independent layers:
+Kōbō uses the following sources:
 
 | Layer | Driven by | Works for any project? |
 |---|---|---|
 | **Start / Stop** | The shell commands you configure | ✅ Yes, any shell-startable process |
 | **Status badge, URL** | A tracked process's local readiness announcement, or the Docker convention below | Quasar (`App URL...`) and Vite/Next (`Local:`), or matching Docker containers |
-| **Container count, logs viewer** | The `.container/instances/*.env` convention + Docker | ❌ No, requires the convention below |
+| **Start-command logs** | stdout/stderr of the managed process | ✅ Yes, including Docker builds and native servers |
+| **Container count and container logs** | The `.container/instances/*.env` convention + Docker | ❌ No, requires the convention below |
 
 Configured processes can be started and stopped. A tracked direct process reports
 `starting` until it announces a local HTTP(S) URL in a recognized readiness line
@@ -1997,6 +2006,21 @@ DB_PORT=8702
 
 Kōbō then resolves the workspace (branch `feature/my-thing` → sanitized `feature-my-thing` → matches `INSTANCE_NAME`), shows `http://localhost:8700`, and detects the `sekur-feature-my-thing-*` containers as `running`.
 
+Status responses also include `agentUrl` for running services. Agents running
+alongside Kōbō use this address for checks and tests; `url` remains the browser
+link (including SSH-tunnel usage). For Docker stacks started through the host's
+Docker socket, configure `KOBO_DEV_SERVER_DOCKER_HOST=host.docker.internal` and
+the Compose `extra_hosts` entry `host.docker.internal:host-gateway`. Published
+ports must be reachable from that host interface; a host port bound only to
+`127.0.0.1` is not reachable through the gateway. Override the hostname for a
+remote Docker daemon or use `localhost` with host networking.
+
+Direct processes launched inside Kōbō keep their announced local URL as
+`agentUrl`. Explicit `Local:` or `App URL` announcements may also use the
+configured Docker hostname; unrelated log links remain ignored.
+For such announcements, `agentUrl` retains that hostname while the browser link
+uses `localhost` with the same protocol, port and path for SSH-tunnel access.
+
 ### A minimal, copy-pasteable start script
 
 Drop this in your project as `sh/dev-docker.sh`, make it executable (`chmod +x`), and set the Kōbō `startCommand` to `bash sh/dev-docker.sh`. It is a trimmed-down version of the `sekur` script, keeping only what the convention requires.
@@ -2069,6 +2093,12 @@ Adapt the port stride, the `APP_NAME`, and any extra `*_PORT` keys to your stack
 ## Forge integration
 
 Kōbō can open pull requests (GitHub or Bitbucket) or merge requests (GitLab) directly from the Git panel. The **forge** setting controls which service is used for a given project.
+
+When switching workspaces, the Git panel immediately displays that workspace's
+last known statistics from the browser's in-memory cache. The panel remains
+read-only until its refresh succeeds. If refreshing fails, cached values remain
+visible with a retry action; without cached data, the panel shows a loader.
+Reloading the browser clears this cache.
 
 ### Review and edit a diff
 

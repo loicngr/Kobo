@@ -720,6 +720,10 @@ describe('POST /api/workspaces', () => {
     expect(prompt).toContain('Match this screenshot')
     expect(prompt).toContain('Attached document')
     expect(prompt).toContain('## Constraints')
+    expect(prompt).toContain('Before analysis or planning, consult the latest Kōbō memories')
+    expect(prompt).toContain('global → project → workspace')
+    expect(prompt).toContain('`list_memory_scopes`')
+    expect(prompt).toContain('`list_memories` and `read_memory`')
     expect(
       vi.mocked(fs.writeFileSync).mock.invocationCallOrder[
         vi.mocked(fs.writeFileSync).mock.calls.indexOf(documentWrite!)
