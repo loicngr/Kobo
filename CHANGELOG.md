@@ -4,6 +4,10 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads released version sections.
 
+## 2.1.34
+
+- feat(workspace): improve git refresh and dev server visibility
+
 ## 2.1.33
 
 - feat(chat): add pinned messages across workspace sessions
