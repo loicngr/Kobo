@@ -370,7 +370,16 @@ describe('archive auto-disables auto-loop', () => {
 })
 
 describe('GET /api/workspaces/:id/events with session filter', () => {
-  it('includes workspace-level rows without session_id in a session-scoped fetch', async () => {
+  beforeEach(async () => {
+    const db = (await import('../server/db/index.js')).getDb()
+    const insert = db.prepare(
+      "INSERT INTO agent_sessions (id, workspace_id, status, started_at) VALUES (?, ?, 'completed', ?)",
+    )
+    insert.run('sess-1', wsId, '2026-01-01T00:00:00Z')
+    insert.run('sess-2', wsId, '2026-01-02T00:00:00Z')
+  })
+
+  it('includes workspace-level rows without session_id in the first session', async () => {
     const db = (await import('../server/db/index.js')).getDb()
     db.prepare(
       "INSERT INTO ws_events (id, workspace_id, type, payload, session_id, created_at) VALUES (?, ?, 'user:message', ?, NULL, ?)",
@@ -438,7 +447,7 @@ describe('GET /api/workspaces/:id/events with session filter', () => {
     expect(body.hasMore).toBe(false)
   })
 
-  it('counts older workspace-level rows when computing hasMore for a session view', async () => {
+  it('counts older workspace-level rows when computing hasMore for the first session', async () => {
     const db = (await import('../server/db/index.js')).getDb()
     db.prepare(
       "INSERT INTO ws_events (id, workspace_id, type, payload, session_id, created_at) VALUES (?, ?, 'user:message', ?, NULL, ?)",
