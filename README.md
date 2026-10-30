@@ -1,176 +1,211 @@
 # Kōbō
 
-**Run a fleet of Claude Code, Codex and Mistral Vibe agents in parallel — each in its own git worktree, all from one dashboard.**
+**Run coding agents in parallel. Review their changes. Preview the result.**
 
-[![npm](https://img.shields.io/npm/v/@loicngr/kobo.svg)](https://www.npmjs.com/package/@loicngr/kobo)
-[![license](https://img.shields.io/npm/l/@loicngr/kobo.svg)](./LICENSE)
-[![node](https://img.shields.io/node/v/@loicngr/kobo.svg)](https://nodejs.org/)
+[![npm version](https://img.shields.io/npm/v/@loicngr/kobo.svg)](https://www.npmjs.com/package/@loicngr/kobo)
+[![CI](https://github.com/loicngr/Kobo/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/loicngr/Kobo/actions/workflows/ci.yml)
+[![Node.js](https://img.shields.io/node/v/@loicngr/kobo.svg)](https://nodejs.org/)
+[![License](https://img.shields.io/npm/l/@loicngr/kobo.svg)](./LICENSE)
 
-Kōbō (工房, "workshop") turns *one agent, one terminal* into a real workflow. Spin up as many isolated workspaces as you need, watch every agent work live, review and merge their diffs from a Monaco-based Git panel, and let auto-loop or scheduled wakeups keep them going while you're away.
+Kōbō (工房, “workshop”) is a self-hosted workspace for **Claude Code, OpenAI Codex and Mistral Vibe**. Give each coding mission its own Git worktree, agent conversations and task list. Follow the work live, inspect the diff, test the application and manage the pull request from one browser interface.
 
-> [!NOTE]
-> Active development on `develop`. Forward-only migrations and timestamped pre-migration backups keep upgrades safe.
+Run it on your computer or on your own server. Use your existing provider accounts, repositories and development commands. Kōbō is designed for a single operator managing several missions, with manual control and optional automation.
 
-![Kōbō workspace view: live chat and git panel](docs/assets/images/workspace-chat.png)
+[Quick start](#quick-start) · [Features](#features) · [Live preview](#live-preview) · [Documentation](#documentation) · [Contributing](#contributing)
 
-## Why Kōbō
-
-| | |
-|---|---|
-| **🗂️ Isolated worktrees, three engines** | Every workspace is its own git worktree and branch — parallel sessions never collide. Pick Claude Code, OpenAI Codex or Mistral Vibe per workspace, and [continue in a fresh session](#fresh-sessions-and-llm-handoffs) with the same LLM or a different model/engine, preserving the worktree and mission history. |
-| **💬 Live chat, real diff review** | Streaming responses, inline Edit/Write diffs, a reasoning panel, and a Monaco diff viewer with **inline file editing**, conflict resolution, and one-click `Sync` / `Push` / `Open PR` / `Merge`. |
-| **🔁 Auto-loop, cron, wakeups** | Turn an agent loose on the task list: it works through tasks, retries on rate limits, and stops itself when there's nothing left, progress stalls, or it needs you. An optional [independent final review](CONFIGURATION.md#final-review-for-auto-loop) returns findings to the original session for automatic correction and repeats until none remain, with durable recovery after restart. Cron schedules and one-shot wakeups keep workspaces moving on their own timeline. |
-| **🔀 Create from a PR/MR, or from a ticket** | Pick an open pull/merge request from GitHub, GitLab, or Bitbucket and Kōbō resolves every local conflict for you before spinning up the workspace. Or start straight from a Notion page or a Sentry issue URL. |
-
-Use [group messages](CONFIGURATION.md#group-workspace-messages) to send one instruction to selected workspaces, filtered by tags and status, from the interface or MCP. Auto-loops receive it on their next iteration; each recipient has a durable delivery result.
-
-[Session progress bars](CONFIGURATION.md#session-progress-bars) show labelled long-running activities above the message input, including work delegated to subagents. Agents report progress through internal or external MCP; you can dismiss an individual bar without stopping its work.
+![Kōbō workspace with live agent conversation, workspace list and Git panel](docs/assets/images/workspace-chat.png)
 
 ## Quick start
 
-Requires Node.js ≥ 26.12.1, Git, Bash and your own authentication for the chosen engine (Claude Code, Codex or Mistral Vibe). No skill plugin or ticket integration is required. Kōbō is a local, single-user tool; each user installs their own instance.
+You need **Node.js 26.12.1 or later**, **Git**, **Bash**, a local Git repository and authentication for at least one supported engine. Mistral Vibe requires a separate installation; see [agent runtimes](#agent-runtimes).
 
 ```bash
 npx @loicngr/kobo@latest
 ```
 
-Open <http://localhost:3000> and follow the first-run check. Use **Choose a folder** beside the project field to select a local Git repository; completing setup opens the mission form without launching an agent. New installs use the plugin-free **Standard** suite, **Plan** permissions for Claude Code/Codex (**Interactive** for Mistral Vibe), manual commit/push/publication preferences, and disabled optional integrations/audio. Existing preferences are preserved on upgrade.
+Open **<http://localhost:3000>** and follow the first-run setup:
 
-Follow [your first mission](./docs/getting-started.md), [troubleshooting](./docs/troubleshooting.md), or the [security and privacy model](./SECURITY.md).
+1. Choose an engine and a project folder, then check the environment.
+2. Create a mission with an objective and acceptance criteria.
+3. Review the plan, select the appropriate execution permissions and ask the agent to implement it.
+4. Review the changes, run the project and publish when ready.
 
-Data is persisted under `~/.config/kobo/` (override via `KOBO_HOME`).
+A basic mission needs no Docker, skill plugin, forge CLI or ticket integration. The first-run check does not launch an agent. New installations default to the **Standard** skill suite, manual Git publication preferences and Plan permissions for Claude Code/Codex, or Interactive permissions for Vibe.
 
-Default port is `3000`; if it's taken, `SERVER_PORT` (checked first) or `PORT` picks another:
+[Follow the first-mission guide →](./docs/getting-started.md)
 
-```bash
-SERVER_PORT=9997 PORT=9998 npx @loicngr/kobo@latest
-```
+> [!NOTE]
+> This README describes `develop`, which can be ahead of the latest npm release. Embedded previews are currently an unreleased feature. See the [changelog](./CHANGELOG.md) for published changes, or [run from source](./CONTRIBUTING.md#setup).
 
-Kōbō's production build is an installable PWA — use your browser's **Install app** action. Want to run from source or contribute instead? See [`CONTRIBUTING.md`](./CONTRIBUTING.md). Prefer Docker? Jump to [Docker deployment](#docker).
+## Why Kōbō
 
-![Diff viewer with side-by-side changes](docs/assets/images/diff-viewer.png)
+Coding agents can implement a change, but parallel work also needs organization: which checkout belongs to which task, what is waiting for your input, what changed, and what is ready to review.
 
-## Everything else Kōbō does
+Kōbō keeps those pieces together. A workspace follows a mission from its initial prompt through implementation, verification and review. You can move between missions without switching branches in your main checkout, continue with another model, or return later to the conversation and Git state.
 
-- **Attachments from the first prompt**: paste, drop or attach screenshots, Markdown, text files or PDFs to the creation description or workspace chat. Kōbō copies them into the worktree for the agent. See [creation attachments](./CONFIGURATION.md#attachments-in-the-creation-description) and [chat attachments](./CONFIGURATION.md#attachments-in-workspace-chat).
+| Capability | What it gives you |
+|---|---|
+| **Parallel workspaces** | Separate worktrees and branches for coding missions, with their own sessions, tasks and dev servers. |
+| **Multiple agent engines** | Claude Code, Codex and experimental Mistral Vibe support, with engine-specific models and permissions. |
+| **Review and editing** | Live conversations, Monaco diffs, inline comments, file editing and conflict resolution. |
+| **Live application preview** | Chat beside the running application, or preview on its own, with resizable panels and mobile switching. |
+| **Optional automation** | Task-driven auto-loop, independent final review, schedules, quota waits and lifecycle hooks. |
+| **Persistent context** | Searchable conversations, pinned messages, handoffs and shared memory across engines. |
 
-- **Command palette & search**: `/` autocompletes skills and commands, `@` fuzzy-completes worktree file paths, `Ctrl+F` searches readable messages, `Ctrl+K` opens a command palette. The global search page deep-links to the same spot.
-- **MCP toolset (`kobo-tasks`)**: task/acceptance-criteria CRUD, dev server control, a unified `get_ticket` (Notion or Sentry), cross-workspace conversation search, per-session usage, and a `.ai/thoughts` decision log — see the [MCP guide](./src/mcp-server/README.md#tools). Internal and external MCP clients can create fully configured workspaces, including final auto-loop review, attachments and checkout of an existing PR. HTTP and stdio clients can also archive, purge, delete or restore workspaces, read conversations, send messages, and answer questions.
+Worktrees isolate checkouts. They do **not** isolate processes, credentials, ports or databases; configure each project's environment accordingly.
 
-  ![Sub-agents panel showing parallel tool calls](docs/assets/images/sub-agents-panel.png)
-- **Multi-forge Git panel**: GitHub (`gh`), GitLab (`glab`), or Bitbucket Community (`bkt`), auto-detected from the remote — `Open PR`, `Merge ready PR`, `Change PR base`, `Change source branch`, all from the UI.
-- **Dev server panel**: start, stop, and tail a workspace's dev server (Docker or npm) from the Tools panel.
-- **Attention indicators**: CI failures, review-requested changes, and a conflict-aware **ready-to-merge** badge on every workspace card, plus a one-click **Fix CI** button.
-- **Interactive Q&A**: an agent can pause mid-session to ask you a question through the UI instead of guessing.
+## Features
 
-  ![Agent asking a clarifying question, awaiting the user's answer](docs/assets/images/agent-question.png)
-- **Quota-aware**: 5-hour / 7-day Claude usage is shown in the footer; engine-reported rate limits guide quota waits; auto-loops can resume after a reset. Explicit cron/wakeup schedules can also resume work; a manual workspace does not restart solely because its quota resets.
-- **Account switching**: with optional [ccswap](https://github.com/errhythm/ccswap), view and switch the active Claude Code or Codex account from the usage popover. Credentials are shared across workspaces using that engine; [setup and session behavior](./CONFIGURATION.md#switch-claude-code-and-codex-accounts-with-ccswap).
-- **Disk-space purge**: reclaim a merged workspace's `node_modules`/`vendor` weight without losing its chat history — see [`CONFIGURATION.md`](./CONFIGURATION.md#auto-purge-worktree-on-pr-merged).
-- **Lifecycle scripts**: shell scripts run on setup, cleanup, archive, session end, PR merge, or auto-loop stop, with output streamed into the chat.
-- **Observability**: a per-session timeline (duration, tools, tokens, errors) and a downloadable redacted diagnostic JSON.
-- **Pinned messages**: save a user or agent conversation block from its menu, find pins across a workspace's sessions or from the dashboard, and jump back to the original conversation. A saved copy remains readable after automatic history retention. See [pinned messages](./CONFIGURATION.md#pinned-messages).
-- **Optional integrations**: Notion (import missions) and Sentry (fix from issue URL), usable by all three agent engines through saved connections, each independently toggled with a **Test connection** action; local voice transcription via `whisper.cpp`.
+### Follow several missions
 
-### Persistent memory across engines
+Create a workspace from a prompt, a Notion page, a Sentry issue or an existing pull/merge request. Add screenshots, text files or PDFs to the mission or chat. Organize workspaces with tags and status filters, send group instructions, or compare two workspaces side by side.
 
-Kōbō offers **Manual**, **Hybrid** (the default), and **Automatic** memory behavior in **Settings → Memory**. Global, project, and workspace scopes are shared by Claude Code, Codex and Mistral Vibe but remain independently manageable. Hybrid applies workspace notes while asking for human approval before shared project/global changes. The workspace's right-hand **Memory** tab shows the current conversation's delivered context, pending proposals, and a provenance-aware operation journal. Memory has conservative per-response and per-conversation budgets; it cannot retract facts already transmitted into an agent or provider conversation. See the [persistent memory guide](./CONFIGURATION.md#persistent-memory) and [MCP memory tools](./src/mcp-server/README.md#persistent-memory-tools).
+The interface surfaces pending questions, CI failures, requested changes and merge readiness. Live output, reasoning, tool activity and agent-reported progress help you see what each session is doing. Search conversations globally, pin useful messages, and use the command palette to navigate.
 
-## Fresh sessions and LLM handoffs
+### Review and deliver changes
 
-Long conversation getting crowded? Use **Continue in a fresh session** at the bottom of the right-hand Tools panel. **Change LLM** uses the same transfer flow and also lets you select another model within the current engine.
+Inspect changes side by side or inline in the Monaco diff viewer. Add review comments, edit files and resolve conflicts before using the Git panel to synchronize, push or open a pull request. GitHub, GitLab and Bitbucket Community integrations use the configured forge and credentials; repositories without a forge remain usable.
 
-1. Choose the destination model, reasoning effort and permission mode. A fresh session starts with the workspace's current configuration selected.
-2. Leave **Generate a handoff with the current agent** enabled to have the current conversation summarize the objective, constraints, decisions, verified progress, failed approaches and next action. Disable it when the old provider has no quota left: Kōbō builds context from the mission, tasks, Git state and source history without calling that LLM.
-3. Start the transfer. Kōbō interrupts the current work immediately, waits for confirmed shutdown, prepares the handoff and opens a fresh native conversation that continues the mission automatically.
+Run an independent review session when you want another agent to inspect the work. Use the integrated terminal for project commands alongside the conversation.
 
-Mistral Vibe can be a destination with a supported execution mode. When Vibe is the source, disable **Generate a handoff with the current agent**: its restricted summary launch is unsupported. Existing Plan selections are never silently promoted.
+Git workflow preferences control requested commit, push and publication behavior. Engine permissions remain a separate control, and your explicit instructions still apply.
 
-The workspace, worktree, task list and conversation history remain available. The transfer links to its source session and a Markdown report in **Documents** (`.ai/handoffs/`, ignored by Git). Auto-loop keeps its intent and diagnostic budget; queued instructions retain their delivery state. Pending wakeups from the source conversation follow the fresh session once its startup is confirmed.
+![Kōbō diff viewer with side-by-side code changes](docs/assets/images/diff-viewer.png)
 
-If generation fails, choose **Retry**, **Continue without an LLM summary**, or **Cancel transfer**. Cancel and Stop leave the work stopped and restore the source conversation and LLM configuration, including when the destination failed to start. Failed attempts remain in history without being resumed automatically. If there was no source conversation, the next message starts a fresh one. A server restart preserves the transfer and report for an explicit recovery decision; it never automatically replays a potentially delivered prompt. Transfers are manual—conversation size does not trigger them automatically.
+### Live preview
 
-## Configuration
+Start the workspace's dev server from **Tools**, then select **Preview** on its card or use the layout menu beside **Configure** in the workspace header. Preview controls appear while the server is running.
 
-The most common knobs:
+| View | Use it to |
+|---|---|
+| **Chat** | Work with the agent using the normal conversation layout. |
+| **Chat + preview** | Test the application while asking for changes; drag the divider to adjust the balance. |
+| **Preview** | Give the application the available workspace area while keeping access to the side drawers. |
 
-| Env var | Default | Purpose |
-|---|---|---|
-| `PORT` / `SERVER_PORT` | `3000` | HTTP / WebSocket server port (`SERVER_PORT` takes precedence) |
-| `KOBO_HOME` | `~/.config/kobo` | Data directory (SQLite, settings, voice models) |
-| `NOTION_API_TOKEN` | none | Notion integration token |
-| `ANTHROPIC_API_KEY` | none | Claude Code engine credential (alternative to `claude /login`) |
-| `OPENAI_API_KEY` | none | Codex engine credential (alternative to `codex login`) |
+The workspace list and right drawer remain independent. Width preferences are saved in your browser. On mobile or in a narrow workspace, switch between Chat and Preview rather than squeezing them into columns. The **×** button restores the previous drawer layout without stopping the server or losing the chat draft. Stopping the server returns you to Chat.
 
-Everything else — worktree paths, dev server commands, prompt templates, git conventions, lifecycle scripts, forge selection, permission modes — lives in **Settings**, with per-project values inheriting from global ones. The full reference (every env var, every setting key, MCP server registration, forge/Notion/Sentry/voice setup) is in [`CONFIGURATION.md`](./CONFIGURATION.md).
+Local previews support native dev processes and Docker-published ports. For a VPS, an optional authenticated gateway and Traefik configuration make the server-side application reachable through HTTPS. Remote setup requires DNS/TLS configuration; a VPS `localhost` URL is not reachable directly from your home browser.
 
-### Workflow and integration settings
+[Set up local, Docker or VPS previews →](./docs/dev-server-preview.md)
 
-**Settings → Git** groups manual/automatic commit, push and publication preferences,
-Git conventions and branch prefixes. **Prompts** contains post-PR/MR, review, CI-fix
-and finalization instructions. New workspaces snapshot the workflow preferences;
-changing global defaults does not alter existing workspaces. These preferences guide
-agents, while engine permissions remain a separate control.
+### Automate with explicit controls
 
-Notion and Sentry are optional. Save a **Direct connection** in the integration tab,
-enable it, save Settings, then use **Test connection**. Saved direct connections take
-priority over the Claude MCP selector, which is disabled while one exists. Enabled
-connections also reach Claude Code, Codex and Mistral Vibe agents through `kobo-notion-*` and
-`kobo-sentry-*` MCP servers. Stop and resume a running agent to apply a connection
-change. See [managed integration MCPs](./CONFIGURATION.md#managed-integration-mcps-in-agent-sessions)
-for credential priority and native-configuration scope.
+Auto-loop works through tasks and acceptance criteria, tracks progress and pauses when it needs input or cannot make progress. An optional independent final review sends findings back for correction. Cron schedules, one-shot wakeups and lifecycle scripts support recurring work and project-specific checks.
 
-### Docker
+Quota handling follows the selected engine's reported limits. Concurrency settings limit unattended starts. Manual sessions do not restart solely because a quota resets, and enabling automation does not silently elevate Plan permissions.
 
-An official `Dockerfile` and four Compose examples ship in this repository: a local test stack, a local Traefik rehearsal, a deployment including Traefik, and a fresh VPS instance behind an existing Traefik.
+[Automation and recovery](./CONFIGURATION.md#auto-loop-completion-and-recovery) · [Final review](./CONFIGURATION.md#final-review-for-auto-loop) · [Concurrent agents](./CONFIGURATION.md#concurrent-agents)
 
-**Working remotely on your own VPS?** The [VPS deployment guide](./docs/deployment-vps.md) includes a guided `kobo-install` installer, optional renewable GitHub App authentication, persistent agent logins and Docker updates. Your browser runs on your PC; repositories and agents run on the VPS. See [`CONFIGURATION.md`](./CONFIGURATION.md#docker-deployment) for the Compose comparison and shared settings.
+### Fresh sessions and LLM handoffs
 
-### Network access
+Use **Continue in a fresh session** or **Change LLM** to continue a mission with a fresh conversation, another model or another engine. Keep the worktree, task list and history, and choose whether the current agent generates a handoff or Kōbō assembles context without another provider call.
 
-Kōbō binds to `127.0.0.1` only by default. Enabling **Settings → General → Network access** re-binds to the LAN behind a shared token (a QR code makes pairing a phone easy). Plain HTTP — keep it to trusted networks, or front it with HTTPS/a VPN for anything further. Details in [`CONFIGURATION.md`](./CONFIGURATION.md#network-access).
+[Handoff behavior, permissions and recovery →](./CONFIGURATION.md#fresh-sessions-and-llm-handoffs)
+
+### Context, tools and integrations
+
+- **Persistent memory:** global, project and workspace knowledge shared across engines, with Manual, Hybrid and Automatic modes. Hybrid asks for approval before shared project/global changes.
+- **MCP access:** managed agent tools and separately authorized external clients can work with tasks, conversations, workspace creation, lifecycle operations and progress reporting.
+- **Optional integrations:** Notion, Sentry, forge tools and local voice transcription through `whisper.cpp`.
+- **Skill suites:** Standard works without extensions; optional Superpowers, gstack, ECC and custom instructions reuse skills installed for the chosen engine.
+- **Account controls:** optional `ccswap` integration switches Claude Code or Codex credentials; account changes are provider-wide, not isolated per workspace.
+- **Lifecycle and storage:** hooks, workspace presets, conversation retention, worktree purge/restore and session diagnostics help manage longer-running installations.
+
+[Configuration reference →](./CONFIGURATION.md) · [MCP guide →](./src/mcp-server/README.md)
 
 ## Agent runtimes
 
-- **Claude Code**: authenticate once with `claude /login`. Kōbō calls the embedded SDK directly — no separately installed Claude CLI is required at runtime; the SDK supplies its runtime.
-- **OpenAI Codex**: run `codex login` or export `OPENAI_API_KEY`. Kōbō spawns a long-lived `codex app-server` subprocess per workspace.
-- **Mistral Vibe** (experimental): install and authenticate native Vibe as the server user, with `vibe-acp` on that user's PATH. Kōbō uses ACP v1 and native model/thinking selection (Auto or discovered native values). [Setup, limits and compatibility evidence](./CONFIGURATION.md#mistral-vibe).
+| Engine | Runtime and authentication | Notes |
+|---|---|---|
+| **Claude Code** | Embedded SDK runtime; authenticate with `claude /login` or `ANTHROPIC_API_KEY`. | A separately installed Claude CLI is not required for Kōbō's runtime. |
+| **OpenAI Codex** | `codex app-server`; authenticate with `codex login` or `OPENAI_API_KEY`. | Each active workspace session uses its own native conversation. |
+| **Mistral Vibe** | Separately installed and authenticated Vibe, with `vibe-acp` on the server user's PATH. | Experimental ACP integration; native Interactive permissions by default, no Plan mode. |
 
-All three engines share task tracking, memory and managed MCP. Permissions and available controls depend on the engine; Mistral Vibe offers fresh reviews under native permissions (Interactive by default; no guaranteed filesystem read-only access) and excludes Plan, live steering, account/quota controls, managed skills and sub-agent cards. The mapping of Kōbō's four permission modes (`plan` / `bypass` / `strict` / `interactive`) to each engine's native permission semantics is in [`CONFIGURATION.md`](./CONFIGURATION.md#permission-modes).
+All three engines use Kōbō's task tracking, memory and managed MCP tools. Permissions and capabilities differ: Vibe does not support live steering, managed skill suites, account/quota controls or sub-agent cards. A review prompt is not a filesystem sandbox.
 
-## Skill suites
+Kōbō does not include provider subscriptions or credits. Authenticate tools on the machine running the server, including inside the container for Docker installations.
 
-**Standard** is the default and works without a skill extension. **Settings → Skills** also offers **Superpowers**, **gstack**, **ECC**, **Superpowers + gstack**, **Superpowers + gstack + ECC**, and **Custom** instructions. These choices adapt the review, grooming, QA and brainstorming instructions; selecting one does not install a suite or change permissions. External skills must already be available to the selected Claude Code or Codex engine.
+[Runtime setup](./CONFIGURATION.md#agent-runtimes) · [Permission modes](./CONFIGURATION.md#permission-modes)
 
-The Settings guided tour includes a dedicated skill-suite explanation; replay it from the help icon or Help menu. See the [skill-suite reference](./CONFIGURATION.md#skill-suites) for the available choices and custom instructions.
+## Deployment
+
+| Mode | Where the work runs | Guide |
+|---|---|---|
+| **Local** | On your computer, with loopback access by default. | [Quick start](#quick-start) |
+| **Docker** | Inside your configured container environment, with persistent data and project mounts. | [Docker configuration](./CONFIGURATION.md#docker-deployment) |
+| **Own VPS** | On your server, accessed from your browser over HTTPS through Traefik. | [VPS installation and updates](./docs/deployment-vps.md) |
+| **From source** | Backend and frontend development processes, with a separate development data home. | [Contributing](./CONTRIBUTING.md#setup) |
+
+The production frontend is an installable PWA. The mobile interface uses the same server and workspaces; it does not move agent execution onto your phone.
+
+### Configuration
+
+Settings support global defaults and per-project overrides for worktrees, dev-server commands, prompts, integrations and Git workflow preferences.
+
+| Environment variable | Default | Purpose |
+|---|---|---|
+| `SERVER_PORT` / `PORT` | `3000` | Server port; `SERVER_PORT` takes precedence. |
+| `KOBO_HOME` | `$XDG_CONFIG_HOME/kobo` or `~/.config/kobo` | SQLite database, settings and other persistent state. |
+| `KOBO_PREVIEW_DOMAIN` | Unset | Enable the optional remote preview gateway; requires the documented HTTPS setup. |
+
+```bash
+SERVER_PORT=9997 npx @loicngr/kobo@latest
+```
+
+[Full settings and environment reference →](./CONFIGURATION.md)
+
+### Security and data
+
+Kōbō is a **single-user development tool**, not a multi-tenant service. It binds to `127.0.0.1` by default. Optional network access uses an operator token and browser sessions; internet-facing deployments require the documented reverse-proxy configuration.
+
+Agents and project commands run with the server account's privileges and the selected engine's permissions. Conversations are stored locally, but agents send applicable context to their provider. Back up the data home and repositories before upgrading; database migrations do not replace a full backup.
+
+[Security model and private vulnerability reporting →](./SECURITY.md)
+
+## Documentation
+
+| Guide | Covers |
+|---|---|
+| [Getting started](./docs/getting-started.md) | Requirements, first-run setup and your first mission. |
+| [Configuration](./CONFIGURATION.md) | Settings, engines, integrations, automation and environment variables. |
+| [Dev-server previews](./docs/dev-server-preview.md) | Layouts, mobile behavior, local/Docker setup and authenticated remote previews. |
+| [VPS deployment](./docs/deployment-vps.md) | Installation, HTTPS, credentials, backups and updates. |
+| [VPS projects and skills](./docs/vps-projects-and-skills.md) | Project environments, remote dev servers and container-side tools. |
+| [MCP](./src/mcp-server/README.md) | Agent tools, external clients and scoped authorization. |
+| [Troubleshooting](./docs/troubleshooting.md) | Environment checks, recovery and common problems. |
+| [Contributing](./CONTRIBUTING.md) | Development setup, quality checks and release workflow. |
+| [Architecture and agent guidance](./AGENTS.md) | Code organization, data model, migrations and engine contracts. |
+| [Changelog](./CHANGELOG.md) | Published release history. |
 
 ## Architecture
 
-Hono backend, Vue 3 + Quasar PWA, SQLite (WAL) for persistence, WebSocket for live updates. Each workspace spawns its own agent engine and a dedicated MCP server (`kobo-tasks`) that the agent uses to query and mutate workspace state.
+TypeScript throughout: **Hono** serves HTTP APIs, **Vue 3 + Quasar** provides the PWA, **SQLite in WAL mode** stores workspace state, and **WebSockets** carry live updates. Engine adapters manage native agent sessions; managed MCP tools call the backend's authorization and services.
 
-```
+```text
 src/
-├── server/         # Hono backend (routes, services, db, agent orchestrator)
-│   ├── services/agent/engines/  # claude-code/ + codex/ + mistral-vibe/ engines
-│   └── ...
-├── client/         # Vue 3 + Quasar PWA
-├── mcp-server/     # kobo-tasks MCP server, spawned per workspace
-├── shared/         # types shared backend ↔ frontend
-└── __tests__/      # backend Vitest suite; client tests live in client/src/__tests__/
+├── server/       # APIs, persistence, engine adapters and workspace services
+├── client/       # Vue + Quasar interface and client tests
+├── mcp-server/   # Workspace stdio bridge and managed tool handlers
+├── shared/       # Shared contracts, model catalogues and utilities
+└── __tests__/    # Backend tests and fixtures
 ```
-
-[`AGENTS.md`](./AGENTS.md) covers the data model, WebSocket protocol, engine contracts, MCP tool surface, migration discipline, i18n rules, and contribution guidelines.
 
 ## Contributing
 
-PRs welcome. See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for the from-source setup, scripts, and release process, and [`AGENTS.md`](./AGENTS.md) for code conventions and the database-migration discipline.
+Development happens on `develop`. Start with the [contributing guide](./CONTRIBUTING.md) and [design system](./DESIGN.md), then run the local CI pipeline before opening a pull request:
 
-## License
+```bash
+make ci
+```
 
-GPL-3.0-or-later. See [`LICENSE`](./LICENSE).
+It installs and audits all three dependency trees, checks formatting and types, builds the application, runs backend/client/deployment tests, and installs and smoke-tests the packaged tarball. Deployment tests require Python 3.10+ and OpenSSL; native dependencies may require a compiler toolchain.
+
+Linux is locally exercised and CI includes Linux/macOS jobs. See the [compatibility notes](./docs/getting-started.md#requirements) for limits; do not assume native Windows support.
 
 ## Community and support
 
-Report reproducible bugs and feature requests in [GitHub Issues](https://github.com/loicngr/Kobo/issues). Read [Contributing](./CONTRIBUTING.md) and the [Code of conduct](./CODE_OF_CONDUCT.md) before participating. Vulnerabilities belong in the private channel described in [Security](./SECURITY.md), not public issues. Support is maintained on a best-effort basis; no response-time commitment is implied.
+Use [GitHub Issues](https://github.com/loicngr/Kobo/issues) for reproducible bugs and feature requests. Follow the [Code of conduct](./CODE_OF_CONDUCT.md). Report vulnerabilities through the [private security channel](./SECURITY.md#report-privately), not public issues. Support is provided on a best-effort basis.
 
-Linux is locally exercised; macOS CI, WSL and real-provider beta sessions require their own evidence. See [third-party notices](./THIRD_PARTY_NOTICES.md) for redistributed assets.
+## License
+
+[GPL-3.0-or-later](./LICENSE). See [third-party notices](./THIRD_PARTY_NOTICES.md) for redistributed assets.

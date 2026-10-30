@@ -1,0 +1,18 @@
+# Optional overlay for docker-compose.vps.yml. No port is published on the host.
+# docker compose -f compose.yaml -f docker-compose.preview.yml up -d
+services:
+  kobo:
+    environment:
+      KOBO_PREVIEW_DOMAIN: ${KOBO_PREVIEW_DOMAIN:?Set the preview DNS domain}
+      KOBO_PREVIEW_PORT: "3001"
+      KOBO_PREVIEW_BIND_HOST: "0.0.0.0"
+    labels:
+      traefik.http.routers.kobo.service: kobo
+      traefik.http.routers.kobo-preview.rule: 'HostRegexp(`^[a-f0-9]{32}\.${KOBO_PREVIEW_DOMAIN:?Set the preview DNS domain}$`)'
+      traefik.http.routers.kobo-preview.entrypoints: ${TRAEFIK_ENTRYPOINT:-websecure}
+      traefik.http.routers.kobo-preview.tls: "true"
+      traefik.http.routers.kobo-preview.tls.certresolver: ${TRAEFIK_CERTRESOLVER:-letsencrypt}
+      traefik.http.routers.kobo-preview.tls.domains[0].main: ${KOBO_PREVIEW_DOMAIN:?Set the preview DNS domain}
+      traefik.http.routers.kobo-preview.tls.domains[0].sans: '*.${KOBO_PREVIEW_DOMAIN:?Set the preview DNS domain}'
+      traefik.http.routers.kobo-preview.service: kobo-preview
+      traefik.http.services.kobo-preview.loadbalancer.server.port: "3001"

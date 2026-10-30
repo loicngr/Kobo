@@ -1,4 +1,16 @@
 export default {
+  'preview.title': 'Vista previa',
+  'preview.chat': 'Chat',
+  'preview.split': 'Chat + vista previa',
+  'preview.layout': 'Diseño del espacio',
+  'preview.resize': 'Cambiar tamaño del chat y la vista previa',
+  'preview.reload': 'Recargar vista previa',
+  'preview.external': 'Abrir en otra pestaña',
+  'preview.close': 'Cerrar vista previa y restaurar diseño',
+  'preview.stopped': 'Inicia el servidor de desarrollo para abrir la vista previa.',
+  'preview.failed': 'Vista previa no disponible: {message}',
+  'preview.frameHint': 'Si el sitio bloquea la vista integrada, ábrelo en otra pestaña.',
+
   'pins.title': 'Mensajes fijados',
   'pins.allTitle': 'Todos los mensajes fijados',
   'pins.pin': 'Fijar mensaje',

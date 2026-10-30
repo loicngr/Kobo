@@ -15,7 +15,7 @@ const routes: RouteRecordRaw[] = [
         component: () => import('../pages/DashboardPage.vue'),
       },
       {
-        path: 'workspace/:id?',
+        path: 'workspace/:id?/:view(preview)?',
         name: 'workspace',
         component: () => import('../pages/WorkspacePage.vue'),
       },

@@ -38,12 +38,14 @@ Reference for Kōbō configuration and external integrations. The tables cover t
   - [VPS with existing Traefik](#vps-with-existing-traefik)
   - [Docker updates and backups](#docker-updates-and-backups)
   - [Troubleshooting](#troubleshooting)
+- [Fresh sessions and LLM handoffs](#fresh-sessions-and-llm-handoffs)
 - [Agent runtimes](#agent-runtimes)
   - [Claude Code](#claude-code)
   - [OpenAI Codex](#openai-codex)
   - [Mistral Vibe](#mistral-vibe)
   - [Permission modes](#permission-modes)
 - [Dev server](#dev-server)
+  - [Embedded previews](#embedded-dev-server-previews)
 - [Forge integration](#forge-integration)
 - [Notion integration](#notion-integration)
 - [Sentry integration](#sentry-integration)
@@ -111,6 +113,9 @@ A production-installed Kōbō (`npx @loicngr/kobo`) and a dev server can run sid
 | `KOBO_NETWORK_ACCESS_PROXY_HOST` | — | Domain your proxy serves Kōbō under (`kobo.example.com`). Makes the [host check](#reachable-addresses) enforce that name in behind-a-reverse-proxy mode instead of accepting any. A scheme and port are ignored. |
 | `KOBO_DEV_CLIENT_ORIGIN` | — | Origin the Quasar dev server is served from (`http://localhost:8080`), so its page counts as Kōbō's own UI despite the proxy rewriting the `Host`. Set by the `dev` npm script; never set in a published build. |
 | `KOBO_DEV_SERVER_DOCKER_HOST` | `localhost` | Hostname/IP agents use to reach ports published by workspace Docker stacks. The bundled Compose files set `host.docker.internal` and map it to `host-gateway`. Direct child-process URLs and browser links are unchanged. |
+| `KOBO_PREVIEW_DOMAIN` | Unset | Enable the remote preview gateway with this DNS suffix. Requires HTTPS, operator sessions and proxy configuration; see [embedded previews](#embedded-dev-server-previews). |
+| `KOBO_PREVIEW_PORT` | `3001` | Remote preview listener port, separate from the Kōbō API/UI port. |
+| `KOBO_PREVIEW_BIND_HOST` | `127.0.0.1` | Remote preview bind address. The Docker overlay uses `0.0.0.0` inside the container, without publishing a host port. |
 | `GH_TOKEN` | — | Non-interactive auth for the `gh` CLI (used by the [forge integration](#forge-integration)). Needed in headless containers where `gh auth login`'s browser flow isn't practical. |
 | `GITLAB_TOKEN` | — | Non-interactive auth for the `glab` CLI, same rationale as `GH_TOKEN`. |
 | `KOBO_WORKTREE_CLEANUP_IMAGE` | `alpine` | Docker image used to reclaim ownership of root-owned files when removing a worktree fails on a permission error. Override with a locally cached image to avoid a pull. |
@@ -1329,6 +1334,11 @@ Traefik already exists. Build the image from a source checkout before starting.
 | [`docker-compose.vps.yml`](./docker-compose.vps.yml) | Kōbō only, existing external Traefik network, persistent `/root`, no published ports or host credential mounts. | A fresh, independent remote instance; follow the [VPS guide](./docs/deployment-vps.md). |
 | [`docker-compose.example.yml`](./docker-compose.example.yml) | Traefik + Let's Encrypt (real domain, real TLS), SSH access, optional Docker-socket passthrough. | The reference for an actual production deployment (VPS behind a reverse proxy). |
 
+The optional [`docker-compose.preview.yml`](./docker-compose.preview.yml) overlays
+the VPS setup with an authenticated HTTPS application preview service. It is not
+a standalone stack. See [preview deployment](./docs/dev-server-preview.md#vps-through-traefik),
+including the single-file configuration required by `kobo-update`.
+
 All four use the same underlying image (`docker build -t kobo:local .` from the
 repo root). The original three mount provider/Git configuration from the host;
 the VPS example keeps independent credentials in a persistent container home.
@@ -1553,6 +1563,21 @@ An old image alone is not a complete rollback after database migrations.
   see a 401 in the health log on a custom-built image, you're missing that exemption.
 - **The token is absent from startup logs** — this is intentional. Use the local
   [token retrieval command](#token--login-flow), then the browser login dialog.
+
+## Fresh sessions and LLM handoffs
+
+Long conversation getting crowded? Use **Continue in a fresh session** at the bottom of the right-hand Tools panel. **Change LLM** uses the same transfer flow and also lets you select another model within the current engine.
+
+1. Choose the destination model, reasoning effort and permission mode. A fresh session starts with the workspace's current configuration selected.
+2. Leave **Generate a handoff with the current agent** enabled to have the current conversation summarize the objective, constraints, decisions, verified progress, failed approaches and next action. Disable it when the old provider has no quota left: Kōbō builds context from the mission, tasks, Git state and source history without calling that LLM.
+3. Start the transfer. Kōbō interrupts the current work immediately, waits for confirmed shutdown, prepares the handoff and opens a fresh native conversation that continues the mission automatically.
+
+Mistral Vibe can be a destination with a supported execution mode. When Vibe is the source, disable **Generate a handoff with the current agent**: its restricted summary launch is unsupported. Existing Plan selections are never silently promoted.
+
+The workspace, worktree, task list and conversation history remain available. The transfer links to its source session and a Markdown report in **Documents** (`.ai/handoffs/`, ignored by Git). Auto-loop keeps its intent and diagnostic budget; queued instructions retain their delivery state. Pending wakeups from the source conversation follow the fresh session once its startup is confirmed.
+
+If generation fails, choose **Retry**, **Continue without an LLM summary**, or **Cancel transfer**. Cancel and Stop leave the work stopped and restore the source conversation and LLM configuration, including when the destination failed to start. Failed attempts remain in history without being resumed automatically. If there was no source conversation, the next message starts a fresh one. A server restart preserves the transfer and report for an explicit recovery decision; it never automatically replays a potentially delivered prompt. Transfers are manual—conversation size does not trigger them automatically.
+
 
 ## Agent runtimes
 
@@ -1840,6 +1865,29 @@ Kōbō clears it. Once containers run, their logs appear alongside the retained 
 For remote installations, `localhost` in that link is the browser's computer.
 See [VPS dev-server access](./docs/vps-projects-and-skills.md#reach-a-development-server-from-your-pc)
 for SSH forwarding, separate proxy routes and scoped stop/cleanup commands.
+
+### Embedded dev-server previews
+
+When the workspace dev server is **Running**, use **Preview** in its Tools card,
+or the layout button beside **Configure** in the workspace header. Choose
+**Chat**, **Chat + preview**, or **Preview**. The layout selector is hidden when
+the server is not running; stopping a running server returns the workspace to
+Chat and does not automatically reopen the preview on restart.
+
+Chat + preview has a draggable, keyboard-accessible divider. Widths are saved
+in the browser, separately with and without the right drawer. Both drawers remain
+independent. On mobile, or when the available space is too narrow, switch between
+Chat and Preview instead of displaying two columns. Closing the preview restores
+the previous drawer layout and preserves the chat draft without stopping the server.
+
+Local previews use `kobo-preview.localhost` and the project's published port to
+keep Kōbō's host-only cookies off the initial project request. Native processes
+and Docker containers are supported; Docker ports must be published to the host.
+Remote previews use a separate authenticated HTTPS origin through the optional
+Traefik overlay. Neither mode rewrites application JavaScript or isolates databases.
+
+See [the preview guide](./docs/dev-server-preview.md) for setup, environment
+variables, authentication, application requirements and troubleshooting.
 
 ### What the panel actually does
 

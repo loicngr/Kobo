@@ -653,3 +653,18 @@ For troubleshooting, start with `docker compose ps`, the private update log and
 `docker compose logs --tail 100 kobo`. A Traefik 404/502 calls for checking the
 shared network, hostname, resolver and container health before restoring data.
 The application update banner only reports releases; it does not run this script.
+
+## Embedded application previews
+
+To test a workspace application from the Kōbō interface, configure the optional
+[authenticated preview gateway](./dev-server-preview.md#vps-through-traefik).
+It uses a dedicated wildcard HTTPS domain and a separate internal listener,
+through [the preview Compose overlay](../docker-compose.preview.yml). No project
+HTTP port needs to be exposed publicly for this route.
+
+The installer does not provision preview DNS or certificates. If you use
+`kobo-update`, integrate the overlay's environment and labels into the deployment's
+`compose.yaml`: the updater does not load an additional preview overlay. Keep the
+main Kōbō and preview Traefik services explicitly assigned to their routers.
+Follow the preview guide before enabling it; project API/HMR URLs still need to
+work from a remote browser.

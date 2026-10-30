@@ -1,4 +1,16 @@
 export default {
+  'preview.title': 'Preview',
+  'preview.chat': 'Chat',
+  'preview.split': 'Chat + preview',
+  'preview.layout': 'Workspace layout',
+  'preview.resize': 'Resize chat and preview',
+  'preview.reload': 'Reload preview',
+  'preview.external': 'Open in a new tab',
+  'preview.close': 'Close preview and restore layout',
+  'preview.stopped': 'Start the dev server to open its preview.',
+  'preview.failed': 'Preview unavailable: {message}',
+  'preview.frameHint': 'If the site refuses embedding, open it in a new tab.',
+
   'pins.title': 'Pinned messages',
   'pins.allTitle': 'All pinned messages',
   'pins.pin': 'Pin message',

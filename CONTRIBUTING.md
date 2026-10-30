@@ -4,7 +4,9 @@ Thanks for considering a contribution. This guide covers the from-source setup, 
 
 ## Prerequisites
 
-Node.js ≥ 26.12.1. The repository's `.nvmrc` pins the tested version; run
+Node.js ≥ 26.12.1, Git and Bash. The full `make ci` pipeline also requires
+Python 3.10+ and OpenSSL on `PATH` for deployment-tooling tests. Native dependency
+builds may require make and a C++ compiler. The repository's `.nvmrc` pins the tested version; run
 `nvm use` when using nvm.
 
 ## Setup
@@ -42,7 +44,7 @@ npx tsc --noEmit       # backend type check
 npm run typecheck:tests # backend tests and fixtures type check
 (cd src/client && npm run type-check) # client + Vue type check
 
-make ci                # install + audit + lint + type checks + build + both test suites
+make ci                # install + audit + lint + types + build + tests + installed-package smoke test
 make help              # list every Makefile target
 ```
 
@@ -64,7 +66,7 @@ Schema changes must append a migration and update the fresh-install schema, with
 - Keep commits atomic — each one compiles and passes tests.
 - Never force-push to shared branches.
 
-Run `make ci` before pushing. It reinstalls all three dependency trees with `npm ci`, audits them, runs Biome and the three type checks, builds production assets, then runs both test suites. CI runs on pushes to `develop` and PRs targeting `develop` or `main`.
+Run `make ci` before pushing. It reinstalls all three dependency trees with `npm ci`, audits them, runs Biome and the three type checks, builds production assets, runs backend/client/deployment tests and smoke-tests the installed tarball. CI runs on pushes to `develop` and PRs targeting `develop` or `main`.
 
 Full commit and branch conventions are in [`AGENTS.md`](./AGENTS.md#git-workflow).
 
@@ -80,4 +82,4 @@ Read [Security](./SECURITY.md) before attaching diagnostics and follow the [Code
 
 Run secret scanning with Gitleaks 8.30.1 (`GITLEAKS_BINARY` may point to the executable). Findings must be redacted. The single historical fingerprint in `.gitleaksignore` is a reviewed synthetic test fixture; do not add broad path or rule exclusions. A passing scan is evidence for known signatures, not proof that every historical document or binary is public-safe.
 
-See the [opening checklist](./docs/release/public-opening-checklist.md) for remaining human and platform gates. No release, visibility change or repository-history rewrite is implied by local development.
+Check the [documented platform requirements](./docs/getting-started.md#requirements) and run the relevant manual/provider checks before claiming compatibility. No release, visibility change or repository-history rewrite is implied by local development.

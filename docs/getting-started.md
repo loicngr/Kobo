@@ -44,6 +44,20 @@ New installations use manual commit, push and PR/MR publication preferences, dis
 
 You can skip setup and reopen it from **Help → First-run setup**. Setup checks do not start a mission automatically.
 
+## Preview the application
+
+Configure the project's dev-server start/stop commands in Settings, then start
+it from **Tools → Dev server**. When it is running, select **Preview** on the card
+or open the layout menu beside **Configure** in the workspace header. Use
+**Chat + preview** to test the site while continuing the conversation, or
+**Preview** for the central area alone. Drag the divider to resize the two views.
+
+The close button returns to Chat without stopping the server or losing your chat
+draft. Stopping the server also returns to Chat. On a phone, switch between Chat
+and Preview; both are not displayed side by side. For local Docker ports, the
+isolated localhost address and optional VPS HTTPS setup, see
+[dev-server previews](./dev-server-preview.md).
+
 ## Using a phone or tablet
 
 Open a side panel from the chat header. Drag its inner edge with a finger to

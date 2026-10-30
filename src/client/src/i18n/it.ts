@@ -1,4 +1,16 @@
 export default {
+  'preview.title': 'Anteprima',
+  'preview.chat': 'Chat',
+  'preview.split': 'Chat + anteprima',
+  'preview.layout': 'Layout dello spazio',
+  'preview.resize': 'Ridimensiona chat e anteprima',
+  'preview.reload': 'Ricarica anteprima',
+  'preview.external': 'Apri in una nuova scheda',
+  'preview.close': 'Chiudi anteprima e ripristina layout',
+  'preview.stopped': 'Avvia il server di sviluppo per aprire l’anteprima.',
+  'preview.failed': 'Anteprima non disponibile: {message}',
+  'preview.frameHint': 'Se il sito blocca la visualizzazione integrata, aprilo in una nuova scheda.',
+
   'pins.title': 'Messaggi fissati',
   'pins.allTitle': 'Tutti i messaggi fissati',
   'pins.pin': 'Fissa messaggio',

@@ -64,8 +64,10 @@ pull is a registry permission problem, not evidence that Git login failed.
 ## Reach a development server from your PC
 
 `localhost` in the browser means **your PC**, not the VPS. Kōbō's HTTPS dashboard
-does not automatically proxy project applications. If the workspace publishes
-port `8700` on the VPS host, run this **on your PC**:
+does not proxy project applications by default. To embed them in Kōbō, configure
+the optional [authenticated HTTPS preview gateway](./dev-server-preview.md#vps-through-traefik).
+For a separate browser tab without that setup, use an SSH tunnel. If the workspace
+publishes port `8700` on the VPS host, run this **on your PC**:
 
 ```bash
 ssh -N -L 127.0.0.1:8700:127.0.0.1:8700 \

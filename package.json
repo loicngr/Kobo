@@ -21,6 +21,8 @@
     "docs/getting-started.md",
     "docs/deployment-vps.md",
     "docker-compose.vps.yml",
+    "docker-compose.preview.yml",
+    "docs/dev-server-preview.md",
     "scripts/kobo-update",
     "scripts/kobo-install",
     "scripts/kobo-github-app-token",

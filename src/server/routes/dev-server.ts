@@ -1,12 +1,25 @@
 import { Hono } from 'hono'
+import { getCookie } from 'hono/cookie'
 import { migrationGuard } from '../middleware/migration-guard.js'
 import { getDevServerLogs, getStatus, startDevServer, stopDevServer } from '../services/dev-server-service.js'
-import { getProjectSettings } from '../services/settings-service.js'
+import { browserCookieName, getBrowserSession } from '../services/network-session-service.js'
+import { openPreview } from '../services/preview-service.js'
+import { getGlobalSettings, getProjectSettings } from '../services/settings-service.js'
 import { getWorkspace, updateDevServerStatus } from '../services/workspace-service.js'
 import { WorkspaceLifecycleBusyError } from '../utils/workspace-lifecycle-guard.js'
 
 /** Hono sub-router for per-workspace dev server lifecycle (start, stop, status, logs). */
 const app = new Hono()
+
+app.post('/:workspaceId/preview', async (c) => {
+  try {
+    const policy = getGlobalSettings()
+    const session = getBrowserSession(getCookie(c, browserCookieName(policy)), policy)
+    return c.json(await openPreview(c.req.param('workspaceId'), session))
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : String(err) }, 409)
+  }
+})
 
 // GET /api/dev-server/:workspaceId/status
 app.get('/:workspaceId/status', async (c) => {

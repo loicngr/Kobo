@@ -1,4 +1,16 @@
 export default {
+  'preview.title': 'Vorschau',
+  'preview.chat': 'Chat',
+  'preview.split': 'Chat + Vorschau',
+  'preview.layout': 'Arbeitsbereich-Layout',
+  'preview.resize': 'Chat und Vorschau skalieren',
+  'preview.reload': 'Vorschau neu laden',
+  'preview.external': 'In neuem Tab öffnen',
+  'preview.close': 'Vorschau schließen und Layout wiederherstellen',
+  'preview.stopped': 'Starte den Entwicklungsserver für die Vorschau.',
+  'preview.failed': 'Vorschau nicht verfügbar: {message}',
+  'preview.frameHint': 'Falls die Einbettung blockiert wird, öffne die Seite in einem neuen Tab.',
+
   'pins.title': 'Angeheftete Nachrichten',
   'pins.allTitle': 'Alle angehefteten Nachrichten',
   'pins.pin': 'Nachricht anheften',

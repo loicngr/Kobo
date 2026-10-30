@@ -2,6 +2,7 @@ import { Dialog } from 'quasar'
 import i18n from 'src/i18n'
 import { getWorkspaceQueueHost } from 'src/services/workspace-queue-bridge'
 import { useWorkspaceStore } from 'src/stores/workspace'
+import { isWorkspacePreviewNavigation } from 'src/utils/preview'
 import {
   hasPanePendingWork,
   isPassiveSplitNavigation,
@@ -26,7 +27,7 @@ export default defineRouter(() => {
   // Returns instead of the `next()` callback (deprecated in Vue Router 4.4+):
   // the dialog's onOk/onCancel are wrapped in a promise the guard awaits.
   Router.beforeEach((to, from) => {
-    if (isPassiveSplitNavigation(to, from)) return true
+    if (isPassiveSplitNavigation(to, from) || isWorkspacePreviewNavigation(to, from)) return true
     if (to.fullPath === from.fullPath || !hasUnsavedWork()) return true
     const t = i18n.global.t
     return new Promise<boolean>((resolve) => {

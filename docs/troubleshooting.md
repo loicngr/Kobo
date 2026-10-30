@@ -33,6 +33,17 @@ Enable the feature, save a direct connection or configure the legacy Claude MCP 
 
 Kōbō hides MCP error text and stderr because third-party errors can include credentials. Inspect the MCP's configuration locally without pasting credentials into an issue. For Notion, server token environment variables override stored token variables; explicit `OPENAPI_MCP_HEADERS` remain authoritative for compatibility.
 
+## Dev-server preview does not open
+
+The Preview button and layout selector appear only while the workspace dev
+server is running. Local previews use `kobo-preview.localhost` and the published
+host port: allow that hostname in the project's dev configuration. Containers
+need a published port and an appropriate listen address. A remote VPS requires
+the optional HTTPS preview gateway; the browser's localhost is your PC.
+
+For framing refusals, expired preview tickets, mixed-content errors and HMR/API
+configuration, use the [preview troubleshooting table](./dev-server-preview.md#troubleshooting).
+
 ## Backup and restore
 
 Daily and pre-migration SQLite snapshots are not a backup of settings, private integration configuration, repositories or uncommitted worktree changes.

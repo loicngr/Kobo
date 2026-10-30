@@ -94,6 +94,7 @@ import {
   registerNetworkSocket,
 } from './services/network-session-service.js'
 import { startPrWatcher, stopPrWatcher } from './services/pr-watcher-service.js'
+import { startPreviewGateway, stopPreviewGateway } from './services/preview-service.js'
 import { reconcileOrphanedProgressBars } from './services/progress-bar-service.js'
 import * as quotaBackoffService from './services/quota-backoff-service.js'
 import { reconcileReviewReturns } from './services/review-return-service.js'
@@ -317,6 +318,7 @@ if (Object.keys(networkAccessEnvOverrides).length > 0) {
   }
   updateNetworkAccessSettings(patch)
 }
+startPreviewGateway()
 const bindHost = resolveBindHost(getGlobalSettings().networkAccessEnabled)
 const stopStartupSpinner = startStartupSpinner()
 const server = serve(
@@ -580,6 +582,7 @@ async function gracefulShutdown(signal: string, exitCode = 0): Promise<void> {
 
   console.log(`\n[kobo] Received ${signal}, shutting down gracefully…`)
 
+  stopPreviewGateway()
   const forceExitTimer = setTimeout(() => {
     console.error('[kobo] Graceful shutdown timed out; forcing exit')
     process.exit(1)

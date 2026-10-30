@@ -79,6 +79,20 @@
               @update-workflow="setWorkflowMode" />
           </q-list></q-menu>
         </q-btn>
+        <q-btn v-if="(devServerStore.getStatus(selectedWs.id)?.status ?? selectedWs.devServerStatus) === 'running'"
+          flat dense round icon="view_quilt" :aria-label="$t('preview.layout')"
+          :color="previewRef?.mode !== 'chat' ? 'primary' : undefined">
+          <q-tooltip>{{ $t('preview.layout') }}</q-tooltip>
+          <q-menu><q-list style="min-width: 180px">
+            <q-item v-for="option in previewRef?.options" :key="option.value" clickable v-close-popup
+              :active="previewRef?.mode === option.value" active-class="text-primary"
+              @click="previewRef?.setMode(option.value)">
+              <q-item-section avatar><q-icon :name="option.icon" size="20px" /></q-item-section>
+              <q-item-section>{{ option.label }}</q-item-section>
+              <q-item-section side v-if="previewRef?.mode === option.value"><q-icon name="check" size="18px" color="primary" /></q-item-section>
+            </q-item>
+          </q-list></q-menu>
+        </q-btn>
         <q-btn flat dense round :aria-label="$t('pins.title')" @click="pinnedMessagesOpen = true">
           <q-icon name="push_pin" size="18px" />
           <q-tooltip>{{ $t('pins.title') }}</q-tooltip>
@@ -197,6 +211,7 @@
       />
     </div>
 
+    <WorkspacePreview ref="previewRef" v-if="selectedId" :key="selectedId" :workspace-id="selectedId">
     <AgentErrorBanner v-if="selectedId" :workspace-id="selectedId" />
     <StaleSessionBanner v-if="selectedId" :workspace-id="selectedId" />
     <QuotaBackoffBanner v-if="selectedId" :workspace-id="selectedId" />
@@ -238,6 +253,7 @@
       ref="chatInputRef"
       :workspace-id="selectedId"
     />
+    </WorkspacePreview>
     <q-dialog v-model="commandPaletteOpen">
       <q-card dark class="command-palette-card">
         <q-card-section class="q-pb-sm">
@@ -315,6 +331,7 @@ import { useWorktreeRestore } from 'src/composables/use-worktree-restore'
 import { EFFORT_OPTION_DEFS_BY_ENGINE } from 'src/constants/efforts'
 import { MODEL_OPTION_DEFS, MODEL_OPTION_DEFS_BY_ENGINE } from 'src/constants/models'
 import { PERMISSION_MODES_BY_ENGINE } from 'src/constants/permissionModes'
+import { useDevServerStore } from 'src/stores/dev-server'
 import { useLayoutStore } from 'src/stores/layout'
 import { useParallelReviewStore } from 'src/stores/parallel-review'
 import type { AgentSession } from 'src/stores/workspace'
@@ -351,6 +368,7 @@ import SessionProgressPanel from 'src/components/SessionProgressPanel.vue'
 import StaleSessionBanner from 'src/components/StaleSessionBanner.vue'
 import WakeupBanner from 'src/components/WakeupBanner.vue'
 import WorkspaceHistorySearch from 'src/components/WorkspaceHistorySearch.vue'
+import WorkspacePreview from 'src/components/WorkspacePreview.vue'
 import WorkspaceToolbarSelectors from 'src/components/WorkspaceToolbarSelectors.vue'
 import WorkspaceWhipControl from 'src/components/WorkspaceWhipControl.vue'
 
@@ -360,6 +378,7 @@ const store = useWorkspaceStore()
 useSessionHandoff(computed(() => store.selectedWorkspaceId))
 const { restoreWorktree } = useWorktreeRestore()
 const layout = useLayoutStore()
+const devServerStore = useDevServerStore()
 const { t } = useI18n()
 const { timeAgo } = useTimeAgo()
 const { runTour, scheduleAutoRun } = useTours()
@@ -407,6 +426,7 @@ const pinnedMessagesOpen = ref(false)
 const commandPaletteOpen = ref(false)
 const commandPaletteQuery = ref('')
 const commandPaletteInput = ref<{ focus: () => void } | null>(null)
+const previewRef = ref<InstanceType<typeof WorkspacePreview> | null>(null)
 const chatInputRef = ref<{ focus: () => void } | null>(null)
 const pendingWorkspaceUpdates = new Set<Promise<unknown>>()
 

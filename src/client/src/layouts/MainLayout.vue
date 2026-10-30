@@ -202,7 +202,7 @@ import { useWorkspaceStore } from 'src/stores/workspace'
 import { getCurrentSession } from 'src/utils/current-session'
 import { cappedDrawerWidth } from 'src/utils/drawer-width'
 import { isWorkspacePane } from 'src/utils/split-workspace'
-import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, provide, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, provide, ref, toRef, watch } from 'vue'
 import { useRoute } from 'vue-router'
 
 // The four heaviest panels of the right drawer. q-tab-panels only renders the
@@ -283,15 +283,13 @@ watch(
 )
 
 const DRAWER_WIDTH_KEY = 'at-left-drawer-width'
-const savedWidth = parseInt(localStorage.getItem(DRAWER_WIDTH_KEY) ?? '260', 10)
-const leftDrawerWidth = ref(Math.min(500, Math.max(140, savedWidth)))
+const leftDrawerWidth = toRef(layout, 'leftDrawerWidth')
 const resize = usePointerResize()
 
 const RIGHT_DRAWER_WIDTH_KEY = 'kobo:rightDrawerWidth'
 const RIGHT_DRAWER_MIN = 240
 const RIGHT_DRAWER_MAX = 800
-const savedRightWidth = parseInt(localStorage.getItem(RIGHT_DRAWER_WIDTH_KEY) ?? '300', 10)
-const rightDrawerWidth = ref(Math.min(RIGHT_DRAWER_MAX, Math.max(RIGHT_DRAWER_MIN, savedRightWidth)))
+const rightDrawerWidth = toRef(layout, 'rightDrawerWidth')
 
 // Cap the overlay drawer width to the viewport (minus a safe strip) on small
 // screens so it never covers the whole screen; full saved width on large screens.

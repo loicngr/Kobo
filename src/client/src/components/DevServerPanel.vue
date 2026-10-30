@@ -40,6 +40,9 @@
         <a :href="status.url" target="_blank" style="color: var(--kobo-text-2);">{{ status.url }}</a>
       </div>
 
+      <q-btn v-if="status.status === 'running'" outline dense no-caps color="primary" class="full-width q-my-sm" icon="preview" :label="$t('preview.title')"
+        :to="{ path: `/workspace/${workspaceId}/preview`, query: { preview: 'split' } }" />
+
       <!-- Containers -->
       <div v-if="status.containers.length > 0" class="text-caption text-kobo-3" style="font-size: 10px;">
         {{ $t('devServer.containers', { count: status.containers.length }, status.containers.length) }}

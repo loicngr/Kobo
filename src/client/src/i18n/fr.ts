@@ -1,4 +1,16 @@
 export default {
+  'preview.title': 'Aperçu',
+  'preview.chat': 'Chat',
+  'preview.split': 'Chat + aperçu',
+  'preview.layout': 'Disposition du workspace',
+  'preview.resize': 'Redimensionner le chat et l’aperçu',
+  'preview.reload': 'Actualiser l’aperçu',
+  'preview.external': 'Ouvrir dans un nouvel onglet',
+  'preview.close': 'Fermer l’aperçu et restaurer la disposition',
+  'preview.stopped': 'Démarre le serveur de développement pour ouvrir son aperçu.',
+  'preview.failed': 'Aperçu indisponible : {message}',
+  'preview.frameHint': 'Si le site refuse l’affichage intégré, ouvre-le dans un nouvel onglet.',
+
   'pins.title': 'Messages épinglés',
   'pins.allTitle': 'Tous les messages épinglés',
   'pins.pin': 'Épingler le message',

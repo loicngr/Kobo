@@ -4,7 +4,7 @@ import { apiFetch, apiFetchResponse, apiResponseError } from 'src/utils/api'
 const statusRequests = new Map<string, number>()
 
 export interface DevServerStatus {
-  status: 'unknown' | 'stopped' | 'queued' | 'starting' | 'running' | 'stopping' | 'error'
+  status: 'not_configured' | 'unknown' | 'stopped' | 'queued' | 'starting' | 'running' | 'stopping' | 'error'
   instanceName: string
   projectName: string
   httpPort: string

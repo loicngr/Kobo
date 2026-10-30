@@ -112,6 +112,25 @@ src/
 └── __tests__/                      # backend Vitest suites; client tests live under client/src/__tests__/
 ```
 
+## Embedded dev-server previews
+
+`WorkspacePreview.vue` owns the chat/preview layout and exposes its controls to
+`WorkspacePage.vue`'s existing header. Keep the layout menu and Tools preview
+button visible only for a running dev server. A running-to-stopped transition
+closes the preview, invalidates in-flight loads and restores Chat; restarting does
+not reopen it. Preserve the chat draft, independent drawers and saved split ratios.
+Mobile/narrow workspaces show one panel at a time.
+
+`preview-service.ts` resolves targets through the existing dev-server service.
+Local browser URLs use `kobo-preview.localhost` to separate Kōbō's cookie host;
+Docker still requires published host ports. The optional remote gateway has its
+own listener, workspace HTTPS origins and one-use session-bound tickets. Keep
+operator credentials out of upstream requests, validate targets and origins,
+retain entry paths/query/fragment, and revoke access with the parent session.
+No arbitrary browser-supplied proxy destinations. Cover lifecycle races and
+proxy authorization in the preview component/service tests. See
+[the preview guide](./docs/dev-server-preview.md) for deployment constraints.
+
 ## Data model (SQLite)
 
 | Table | Purpose |

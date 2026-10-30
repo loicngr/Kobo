@@ -60,6 +60,29 @@ Review prompts forbid modifications, but native permissions do not guarantee
 filesystem read-only access. Kōbō-managed review tools and memory remain restricted
 to reads, scoped reports and progress. See [Mistral Vibe](./CONFIGURATION.md#mistral-vibe).
 
+## Embedded dev-server previews
+
+Local previews use `kobo-preview.localhost` rather than Kōbō's own localhost/IP
+hostname, so its host-only session cookie is not sent with the initial request
+to the project's port. The application still controls its own requests and
+redirects; direct local mode is not a general-purpose network sandbox.
+
+The optional remote gateway uses separate workspace HTTPS origins. An
+authenticated operator session issues a single-use, 60-second ticket, exchanged
+for a host-only HttpOnly/Secure preview cookie. Preview access is bounded by the
+operator session and expires within an hour. Kōbō cookies are filtered before
+proxying to the dev server. The upstream target comes from workspace dev-server
+status, not browser input, and must be loopback or the configured Docker host.
+Logout and policy changes invalidate authorization; active connections and target
+status are checked periodically. Keep the gateway listener reachable only through
+the reverse proxy, and do not expose project ports publicly as a workaround.
+
+The gateway adjusts framing headers to permit the configured Kōbō origin while
+preserving other application CSP directives. Applications remain responsible for
+their authentication, API URLs and data sources. A worktree does not isolate a
+database, and the preview is not a public sharing feature. See the
+[preview guide](./docs/dev-server-preview.md) for deployment and limitations.
+
 ## Data and credentials
 
 KOBO_HOME stores conversations, workspaces, backups and settings. Direct integration
