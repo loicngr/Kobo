@@ -2941,8 +2941,9 @@ app.get('/:id/events', (c) => {
 
     const before = c.req.query('before') // event ID cursor
     const around = c.req.query('around') // event ID to include in a focused history window
-    // optional: scope to a session view. Session views also include
-    // workspace-level rows where session_id IS NULL (legacy/pre-session items).
+    // Match the client's session view: workspace-level rows belong only to
+    // the first session. Otherwise setup logs can fill entire history pages
+    // with rows that the selected conversation will never display.
     const session = c.req.query('session')
     // Optional, narrow history to one child. Nested tool calls keep their
     // parent origin, so match both that origin and their own toolCallId.
@@ -2958,9 +2959,11 @@ app.get('/:id/events', (c) => {
     const sessionClause = session
       ? ` AND (session_id = ? OR session_id IN (
           SELECT engine_session_id FROM agent_sessions WHERE id = ? AND workspace_id = ?
-        ) OR session_id IS NULL)`
+        ) OR (session_id IS NULL AND ? = (
+          SELECT id FROM agent_sessions WHERE workspace_id = ? ORDER BY started_at ASC LIMIT 1
+        )))`
       : ''
-    const sessionParams: string[] = session ? [session, session, id] : []
+    const sessionParams: string[] = session ? [session, session, id, session, id] : []
     const originPayload = "CASE WHEN json_valid(payload) THEN payload ELSE '{}' END"
     const originClauses: string[] = []
     const originParams: string[] = []

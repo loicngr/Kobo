@@ -67,6 +67,57 @@ const globalStubs = {
 }
 
 describe('ActivityFeed.vue', () => {
+  it('hydrates session history even when the workspace sync already contains a recent fragment', async () => {
+    const store = useWorkspaceStore()
+    store.selectedWorkspaceId = 'partial'
+    store.selectedSessionId = 'session-partial'
+    const stream = useAgentStreamStore()
+    const recent = { kind: 'message:text' as const, messageId: 'recent', text: 'recent', streaming: false }
+    stream.reset('partial', [recent], ['2026-01-02T00:00:00Z'], {
+      eventIds: ['recent'],
+      sessionIds: ['session-partial'],
+      hasMoreOlder: true,
+      oldestId: 'recent',
+    })
+    vi.mocked(fetch).mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            events: [
+              {
+                id: 'old',
+                workspaceId: 'partial',
+                type: 'agent:event',
+                sessionId: 'session-partial',
+                createdAt: '2026-01-01T00:00:00Z',
+                payload: { ...recent, messageId: 'old', text: 'history' },
+              },
+              {
+                id: 'recent',
+                workspaceId: 'partial',
+                type: 'agent:event',
+                sessionId: 'session-partial',
+                createdAt: '2026-01-02T00:00:00Z',
+                payload: recent,
+              },
+            ],
+            hasMore: false,
+          }),
+        ),
+    )
+    const wrapper = mount(ActivityFeed, {
+      props: { workspaceId: 'partial' },
+      global: { plugins: [i18n], stubs: globalStubs },
+    })
+    await flushPromises()
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/workspaces/partial/events?session=session-partial&limit=500',
+      expect.anything(),
+    )
+    expect(stream.eventIdsFor('partial')).toEqual(['old', 'recent'])
+    wrapper.unmount()
+  })
+
   it('loads every page between a pin and recent messages while preserving live events', async () => {
     const stream = useAgentStreamStore()
     const agent = (id: string) => ({

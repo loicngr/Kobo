@@ -1072,8 +1072,8 @@ watch([() => props.workspaceId, () => workspaceStore.selectedSessionId], () => {
 
 // sync:response only replays the 300 most recent events of the workspace
 // (INITIAL_WINDOW backend-side). For workspaces with many sessions, older
-// sessions (e.g. session #1 after hours of auto-loop) have zero events in
-// the stream. When the user switches to such a session we do a targeted
+// sessions can have zero events or only a few recent fragments in the stream.
+// When the user switches to a session we do a targeted
 // fetch filtered by session_id — cheap (one request, server-side SQL filter)
 // and avoids walking unrelated events via infinite scroll.
 const sessionsFetched = new Set<string>()
@@ -1082,7 +1082,6 @@ async function fetchSessionIfMissing(): Promise<void> {
   const workspaceId = props.workspaceId
   const sid = selectedSessionId.value
   if (!sid) return
-  if (eventCount.value > 0) return
   const cacheKey = sessionCacheKey(workspaceId, sid)
   if (sessionsFetched.has(cacheKey)) return
   sessionsFetched.add(cacheKey)
@@ -1106,18 +1105,15 @@ async function fetchSessionIfMissing(): Promise<void> {
     const agentEvents = fetched.filter((e) => e.type === 'agent:event' && e.workspaceId === workspaceId)
     const userMsgs = fetched.filter((e) => e.type === 'user:message' && e.workspaceId === workspaceId)
 
-    // Prepend into the stream — these events are older than whatever is
-    // currently loaded (the stream holds the most recent 300). Order is
-    // preserved inside the prepended batch.
+    // The scoped page can overlap the workspace sync or newly received live
+    // events. Merge by persisted ID rather than duplicating that overlap.
     const olderEvents = agentEvents.map((e) => e.payload as unknown as AgentEvent)
     const olderTs = agentEvents.map((e) => e.createdAt)
     const olderSids = agentEvents.map((e) => e.sessionId ?? null)
     const olderIds = agentEvents.map((e) => e.id)
     setSessionHasMoreOlder(workspaceId, sid, body.hasMore)
     if (olderEvents.length > 0) {
-      stream.prepend(workspaceId, olderEvents, olderTs, {
-        oldestId: fetched[0].id,
-        hasMoreOlder: stream.hasMoreOlderFor(workspaceId),
+      stream.mergeHistory(workspaceId, olderEvents, olderTs, {
         sessionIds: olderSids,
         eventIds: olderIds,
       })

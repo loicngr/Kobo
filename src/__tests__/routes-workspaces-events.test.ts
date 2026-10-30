@@ -75,6 +75,37 @@ async function getApp() {
   return mod.default
 }
 
+it('keeps setup logs out of later sessions without hiding first-session or legacy history', async () => {
+  const { getDb } = await import('../server/db/index.js')
+  const db = getDb()
+  const insertSession = db.prepare(
+    `INSERT INTO agent_sessions (id, workspace_id, engine_session_id, status, started_at)
+     VALUES (?, ?, ?, 'completed', ?)`,
+  )
+  insertSession.run('first', workspaceId, 'engine-first', '2026-01-01T00:00:00Z')
+  insertSession.run('second', workspaceId, 'engine-second', '2026-01-02T00:00:00Z')
+  const first = insertEvent(db, { workspaceId, sessionId: 'first' })
+  const second = insertEvent(db, { workspaceId, sessionId: 'second' })
+  const legacy = insertEvent(db, { workspaceId, sessionId: 'engine-second' })
+  const setup = Array.from({ length: 5 }, () => insertEvent(db, { workspaceId, type: 'setup:output' }))
+  const app = await getApp()
+  const page = async (query: string) => {
+    const res = await app.request(`/${workspaceId}/events?${query}`)
+    expect(res.status).toBe(200)
+    return (await res.json()) as { events: Array<{ id: string }>; hasMore: boolean }
+  }
+  const latest = await page('session=second&limit=1')
+  expect(latest.events.map((event) => event.id)).toEqual([legacy])
+  expect(latest.hasMore).toBe(true)
+  const older = await page(`session=second&before=${legacy}&limit=1`)
+  expect(older.events.map((event) => event.id)).toEqual([second])
+  expect(older.hasMore).toBe(false)
+  const focused = await page(`session=second&around=${legacy}&limit=20`)
+  expect(focused.events.map((event) => event.id)).toEqual([second, legacy])
+  const firstPage = await page('session=first&limit=20')
+  expect(firstPage.events.map((event) => event.id)).toEqual([first, ...setup])
+})
+
 it.each(['global', 'workspace'])(
   'opens the matched passage of a long streamed response from %s search',
   async (scope) => {
