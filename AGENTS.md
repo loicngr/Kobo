@@ -907,6 +907,14 @@ Snapshot each target and its delivery mode before scheduling: auto-loop uses `ne
 
 ### File editing in the diff viewer
 
+The Git panel opens the viewer through **Changes**. Below 1024px, full-width
+panels share bottom navigation; keep Monaco mounted while a panel hides it so
+unsaved edits and comment inputs survive. Desktop panel preferences must not be
+rewritten by mobile navigation. Display settings cannot change the comparison
+while edits are dirty. Review overlays follow the modified editor's geometry and
+Monaco view-zone positions, including collapsed code and the last line; size
+placeholders from the rendered comment content rather than fixed line counts.
+
 The diff defaults to inline view. Busy workspace status or known live controller disables
 Edit with an explanatory tooltip, and updates Monaco to read-only without discarding
 the current buffer. Historical commit comparisons remain read-only. Unpushed mode

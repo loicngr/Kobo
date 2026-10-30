@@ -2102,7 +2102,21 @@ Reloading the browser clears this cache.
 
 ### Review and edit a diff
 
-The diff viewer opens in **Inline** view. Use **Side by side** to change the layout.
+Open **Changes** in the Git panel to review or edit files. The viewer defaults to
+**Inline** view with wrapped lines. **Display** groups the comparison scope,
+side-by-side layout, line wrapping and visibility options. Use the arrows to
+move between files or jump to the next change; folder names also expand/collapse
+the file tree.
+
+The review draft and checklist are collapsible panels. Select a code line and
+use **Add comment**, or click its line number. Open **Comments** to review the
+collected notes, add a global message and send them to the agent. In Edit mode,
+unsaved changes expose a persistent **Save** bar; save before switching modes or
+comparison scope.
+
+Below 1024px, **Files**, **Code**, **Review** and **Checklist** share the full width
+through bottom navigation. The code stays in inline layout, and switching panels
+preserves unsaved edits. Desktop panel preferences remain independent.
 While an agent is working, **Edit** is disabled and its tooltip explains why;
 the diff remains readable and review comments remain available. The editor also
 becomes read-only if an agent starts while the diff is open. Stop the agent to

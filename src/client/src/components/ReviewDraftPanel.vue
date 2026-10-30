@@ -9,20 +9,21 @@
         {{ $t('diff.reviewEmpty') }}
       </div>
       <div v-for="group in grouped" :key="group.filePath" class="file-group q-mb-sm">
-        <div class="file-group-header text-kobo-1 cursor-pointer ellipsis" @click="emit('jumpToFile', group.filePath)">
+        <button type="button" class="file-group-header text-kobo-1" :title="group.filePath" @click="emit('jumpToFile', group.filePath)">
           <q-icon name="description" size="14px" color="primary" class="q-mr-xs" />
-          <span style="font-family: var(--kobo-font-mono); font-size: 11px;">{{ group.filePath }}</span>
+          <span class="ellipsis" style="font-family: var(--kobo-font-mono); font-size: 12px;">{{ group.filePath }}</span>
           <q-badge :label="String(group.comments.length)" color="primary" text-color="white" class="q-ml-xs" />
-        </div>
-        <div
+        </button>
+        <button
+          type="button"
           v-for="c in group.comments"
           :key="c.id"
           class="draft-line cursor-pointer"
           @click="emit('jumpToComment', c.filePath, c.line)"
         >
-          <span class="text-kobo-3 q-mr-xs" style="font-family: monospace;">L{{ c.line }}</span>
+          <span class="text-kobo-3 q-mr-xs" style="font-family: var(--kobo-font-mono);">L{{ c.line }}</span>
           <span class="text-kobo-1 ellipsis">{{ snippet(c.content) }}</span>
-        </div>
+        </button>
       </div>
     </q-scroll-area>
 
@@ -36,6 +37,7 @@
         dark
         outlined
         :placeholder="$t('diff.reviewGlobalPlaceholder')"
+        :aria-label="$t('diff.reviewGlobalPlaceholder')"
         class="global-textarea"
         @update:model-value="(v) => emit('updateGlobal', String(v))"
       />
@@ -100,7 +102,7 @@ function snippet(content: string): string {
   display: flex;
   flex-direction: column;
   background: var(--kobo-bg);
-  border-right: 1px solid var(--kobo-border-subtle);
+  min-height: 0;
 }
 /* Absorbs the space between the header and the pinned message box, so the
    textarea + submit button sit flush at the bottom — robust to the autogrow
@@ -109,26 +111,43 @@ function snippet(content: string): string {
   flex: 1;
   min-height: 0;
 }
+.file-group-header,
+.draft-line {
+  border: 0;
+  background: transparent;
+  width: 100%;
+  text-align: left;
+  color: var(--kobo-text-2);
+  cursor: pointer;
+}
+.file-group-header:focus-visible,
+.draft-line:focus-visible { outline: 2px solid var(--kobo-accent); outline-offset: -2px; }
 .file-group-header {
   font-weight: 500;
-  padding: 4px 0;
+  padding: var(--kobo-space-sm) 0;
   display: flex;
   align-items: center;
 }
 .draft-line {
-  padding: 2px 8px 2px 20px;
-  font-size: 11px;
+  padding: var(--kobo-space-sm) var(--kobo-space-md);
+  font-size: 13px;
   display: flex;
   gap: 4px;
   align-items: center;
 }
 .draft-line:hover {
-  background: rgba(var(--kobo-accent-rgb), 0.1);
+  background: var(--kobo-hover);
 }
 .global-message-box {
   flex-shrink: 0;
 }
 .global-textarea {
-  font-size: 12px;
+  font-size: 14px;
+  max-height: 25vh;
+  overflow-y: auto;
+}
+@media (max-width: 1023px) {
+  .file-group-header, .draft-line, .review-draft-panel :deep(.q-btn) { min-height: 44px; }
+  .global-textarea { font-size: 16px; }
 }
 </style>

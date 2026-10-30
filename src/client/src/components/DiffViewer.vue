@@ -1,237 +1,91 @@
 <template>
-  <div class="diff-viewer column full-height">
-    <!-- Header — same style as .wp-header in WorkspacePage -->
-    <div class="diff-header row items-center q-px-md q-py-sm no-wrap">
-      <!-- Tout le contenu variable défile horizontalement ; les deux boutons
-           de droite restent épinglés. Sans cela, sous ~900 px le bouton de
-           fermeture sortait du cadre et il ne restait qu'Échap. -->
-      <div class="diff-header__scroll row items-center no-wrap">
-      <q-icon name="difference" size="18px" color="primary" class="q-mr-xs" />
-      <span class="text-body1 text-weight-medium text-kobo-1">{{ $t('diff.title') }}</span>
-      <q-badge
-        :label="`${files.length}`"
-        color="kobo-hover"
-        text-color="kobo-2"
-        class="q-ml-sm"
-        style="font-size: 10px;"
-      />
-      <span v-if="sourceBranch" class="text-caption text-kobo-3 q-ml-md" style="font-size: 11px;">
-        <template v-if="diffMode === 'branch'">
-          <span class="text-kobo-3">{{ sourceBranch }}</span>
-          <q-icon name="arrow_forward" size="11px" color="kobo-3" class="q-mx-xs" />
-          <span class="text-green-4">{{ workingBranch }}</span>
-        </template>
-        <template v-else>
-          <span class="text-kobo-3">{{ unpushedBaseRef }}</span>
-          <q-icon name="arrow_forward" size="11px" color="kobo-3" class="q-mx-xs" />
-          <span class="text-green-4">{{ $t('diff.workingTree') }}</span>
-        </template>
-      </span>
-      <span
-        v-if="selectedFile"
-        class="text-caption text-kobo-2 q-ml-md ellipsis"
-        style="font-size: 11px; font-family: var(--kobo-font-mono); max-width: 400px;"
-      >
-        {{ selectedFile }}
-      </span>
-      <!-- Rendu dès qu'il y a des modifications, même quand `canEdit` est
-           faux : le faire disparaître du DOM piégeait le tampon sans un mot.
-           Désactivé plutôt qu'absent, avec la raison en infobulle. -->
-      <q-btn
-        v-if="dirty"
-        dense
-        flat
-        size="sm"
-        no-caps
-        icon="save"
-        :label="$t('diffViewer.save')"
-        color="primary"
-        :loading="savingFile"
-        :disable="!canEdit"
-        class="q-ml-sm"
-        @click="onSaveClicked"
-      >
-        <q-tooltip v-if="!canEdit">{{ $t('diffViewer.saveBlocked') }}</q-tooltip>
-      </q-btn>
-      <q-badge
-        v-if="dirty && !canEdit"
-        color="orange-9"
-        text-color="white"
-        class="q-ml-sm"
-        style="font-size: 10px;"
-        :label="$t('diffViewer.unsavedBanner')"
-      />
-      <q-space />
-      <q-chip
-        v-if="isCommitsMode"
-        dense
-        square
-        color="kobo-surface-2"
-        text-color="kobo-2"
-        icon="difference"
-        class="q-mr-sm"
-      >
-        {{ compareLabel }} · {{ $t('diff.commitsReadOnly') }}
-      </q-chip>
+  <div class="diff-viewer column no-wrap full-height">
+    <div class="diff-header">
+      <div class="diff-heading">
+        <span class="text-body1 text-weight-medium">{{ $t('diff.title') }}</span>
+        <q-badge color="kobo-surface-2" text-color="kobo-2" :label="files.length" />
+        <span class="diff-branches ellipsis" :title="comparisonLabel">{{ comparisonLabel }}</span>
+      </div>
       <q-btn-toggle
-        v-else
-        v-model="diffMode"
-        dense
-        no-caps
-        size="sm"
-        toggle-color="primary"
-        color="kobo-surface-2"
-        text-color="kobo-2"
-        :options="[
-          { label: $t('diff.scopeBranch'), value: 'branch' },
-          { label: $t('diff.scopeUnpushed'), value: 'unpushed' },
-        ]"
-        class="q-mr-sm"
-      />
-      <div class="q-mr-sm">
-      <q-btn-toggle
-        v-model="reviewMode"
-        dense
-        no-caps
-        size="sm"
-        toggle-color="primary"
-        color="kobo-surface-2"
-        text-color="kobo-2"
+        v-model="reviewMode" no-caps unelevated toggle-color="primary"
+        color="kobo-surface-2" text-color="kobo-2" class="diff-mode-toggle"
         :options="[
           { label: $t('diff.modeInspect'), value: 'inspect', disable: agentEditingBlocked || isCommitsMode },
-          { label: $t('diff.modeReview'), value: 'review' },
+          { label: $t('diff.modeReview'), value: 'review', disable: dirty },
         ]"
-      />
-        <q-tooltip v-if="agentEditingBlocked">{{ $t('diffViewer.agentRunning') }}</q-tooltip>
+      >
+        <q-tooltip v-if="dirty">{{ $t('diff.saveBeforeSwitch') }}</q-tooltip>
+        <q-tooltip v-else-if="agentEditingBlocked">{{ $t('diffViewer.agentRunning') }}</q-tooltip>
         <q-tooltip v-else-if="isCommitsMode">{{ $t('diff.commitsReadOnly') }}</q-tooltip>
-      </div>
-      <q-btn-toggle
-        v-model="viewMode"
-        dense
-        no-caps
-        size="sm"
-        toggle-color="primary"
-        color="kobo-surface-2"
-        text-color="kobo-2"
-        :options="[
-          { label: $t('diff.side'), value: 'side' },
-          { label: $t('diff.inline'), value: 'inline' },
-        ]"
-        class="q-mr-sm"
-      />
-      <q-btn
-        :icon="hideUnchanged ? 'unfold_less' : 'unfold_more'"
-        dense
-        flat
-        size="sm"
-        :color="hideUnchanged ? 'primary' : 'kobo-2'"
-        class="q-mr-sm"
-        :aria-label="hideUnchanged ? $t('diff.showUnchanged') : $t('diff.hideUnchanged')"
-        @click="hideUnchanged = !hideUnchanged"
+      </q-btn-toggle>
+      <q-btn-dropdown
+        v-model="displayOptionsOpen" flat no-caps icon="tune" color="kobo-2"
+        :label="isMobile ? undefined : $t('diff.display')"
+        :aria-label="$t('diff.display')" class="diff-display-button"
       >
-        <q-tooltip anchor="bottom middle" self="top middle" :delay="400">
-          {{ hideUnchanged ? $t('diff.showUnchanged') : $t('diff.hideUnchanged') }}
-        </q-tooltip>
-      </q-btn>
-      <q-btn
-        v-if="diffMode === 'branch'"
-        icon="visibility"
-        dense
-        flat
-        size="sm"
-        :color="includeUntracked ? 'primary' : 'kobo-2'"
-        class="q-mr-sm"
-        :aria-label="includeUntracked ? $t('diff.hideUntracked') : $t('diff.showUntracked')"
-        @click="includeUntracked = !includeUntracked"
-      >
-        <q-tooltip anchor="bottom middle" self="top middle" :delay="400">
-          {{ includeUntracked ? $t('diff.hideUntracked') : $t('diff.showUntracked') }}
-        </q-tooltip>
-      </q-btn>
-      </div>
-
-      <q-btn
-        icon="account_tree"
-        dense
-        flat
-        size="sm"
-        :color="fileTreeOpen ? 'primary' : 'kobo-2'"
-        class="q-ml-sm q-mr-sm diff-header__pinned"
-        :aria-label="fileTreeOpen ? $t('diffViewer.fileTreeHide') : $t('diffViewer.fileTreeShow')"
-        :aria-expanded="fileTreeOpen"
-        @click="fileTreeOpen = !fileTreeOpen"
-      >
-        <q-tooltip anchor="bottom middle" self="top middle" :delay="400">
-          {{ fileTreeOpen ? $t('diffViewer.fileTreeHide') : $t('diffViewer.fileTreeShow') }}
-        </q-tooltip>
-      </q-btn>
-      <q-btn
-        icon="checklist"
-        dense
-        flat
-        size="sm"
-        :color="criteriaRailOpen ? 'primary' : 'kobo-2'"
-        class="q-mr-sm diff-header__pinned"
-        :aria-label="criteriaRailOpen ? $t('diffViewer.criteriaRailHide') : $t('diffViewer.criteriaRailShow')"
-        :aria-expanded="criteriaRailOpen"
-        @click="criteriaRailOpen = !criteriaRailOpen"
-      >
-        <q-tooltip anchor="bottom middle" self="top middle" :delay="400">
-          {{ criteriaRailOpen ? $t('diffViewer.criteriaRailHide') : $t('diffViewer.criteriaRailShow') }}
-        </q-tooltip>
-      </q-btn>
-      <q-btn
-        flat
-        round
-        dense
-        icon="close"
-        color="kobo-2"
-        size="sm"
-        :disable="submittingReview"
-        class="diff-header__pinned"
-        :aria-label="$t('tooltip.closeDiffViewer')"
-        @click="requestClose"
-      >
-        <q-tooltip>{{ $t('tooltip.closeDiffViewer') }}</q-tooltip>
-      </q-btn>
+        <div class="diff-display-options">
+          <div class="text-caption text-kobo-3">{{ $t('diff.scope') }}</div>
+          <div v-if="isCommitsMode" class="text-caption">{{ compareLabel }} · {{ $t('diff.commitsReadOnly') }}</div>
+          <q-btn-toggle
+            v-else v-model="diffMode" no-caps unelevated toggle-color="primary"
+            color="kobo-surface-2" text-color="kobo-2" :disable="dirty || loadingFile"
+            :options="[
+              { label: $t('diff.scopeBranch'), value: 'branch' },
+              { label: $t('diff.scopeUnpushed'), value: 'unpushed' },
+            ]"
+          />
+          <q-btn-toggle
+            v-model="viewMode" no-caps unelevated toggle-color="primary"
+            color="kobo-surface-2" text-color="kobo-2"
+            :options="[
+              { label: $t('diff.inline'), value: 'inline' },
+              { label: $t('diff.side'), value: 'side', disable: isDrawerCollapsed },
+            ]"
+          />
+          <q-checkbox v-model="hideUnchanged" :label="$t('diff.hideUnchanged')" />
+          <q-checkbox v-model="wordWrap" :label="$t('diff.wordWrap')" />
+          <q-checkbox
+            v-if="!isCommitsMode && diffMode === 'branch'" v-model="includeUntracked"
+            :label="$t('diff.showUntracked')" :disable="dirty || loadingFile"
+          />
+          <div v-if="dirty" class="text-caption text-kobo-3">{{ $t('diff.saveBeforeSwitch') }}</div>
+        </div>
+      </q-btn-dropdown>
+      <q-btn flat icon="close" color="kobo-2" :disable="submittingReview"
+        :aria-label="$t('tooltip.closeDiffViewer')" @click="requestClose" />
     </div>
 
-    <q-separator dark />
+    <div class="diff-file-toolbar">
+      <q-btn v-if="!isDrawerCollapsed" flat no-caps icon="account_tree" :label="$t('diff.files')"
+        :aria-expanded="fileTreeVisible" :class="{ 'diff-control-active': fileTreeVisible }" @click="togglePanel('files')" />
+      <q-btn flat icon="chevron_left" :aria-label="$t('diff.previousFile')"
+        :disable="selectedFileIndex <= 0 || loadingFile || savingFile" @click="navigateFile(-1)" />
+      <span class="diff-file-counter">{{ selectedFileIndex + 1 }} / {{ files.length }}</span>
+      <q-btn flat icon="chevron_right" :aria-label="$t('diff.nextFile')"
+        :disable="selectedFileIndex >= files.length - 1 || loadingFile || savingFile" @click="navigateFile(1)" />
+      <button class="diff-current-file" :title="selectedFile ?? $t('diff.selectFile')"
+        :aria-label="selectedFile ?? $t('diff.selectFile')" @click="togglePanel('files')">
+        {{ (isDrawerCollapsed ? selectedFile?.split('/').pop() : selectedFile) ?? $t('diff.selectFile') }}
+      </button>
+      <q-btn flat icon="keyboard_double_arrow_down" :aria-label="$t('diff.nextChange')"
+        :disable="!selectedFile || loadingFile || !!fileLoadError" @click="nextChange" />
+      <template v-if="!isDrawerCollapsed">
+        <q-btn v-if="reviewMode === 'review'" flat no-caps icon="chat_bubble_outline"
+          :label="$t('diff.commentsCount', { count: draftComments.length })"
+          :aria-expanded="reviewDraftPanelOpen" :class="{ 'diff-control-active': reviewDraftPanelOpen }" @click="togglePanel('review')" />
+        <q-btn flat icon="checklist" :aria-label="$t('diffViewer.criteriaRail')"
+          :aria-expanded="criteriaRailVisible" :class="{ 'diff-control-active': criteriaRailVisible }" @click="togglePanel('checklist')" />
+      </template>
+    </div>
 
-    <div class="row col no-wrap" style="min-height: 0;">
-      <!-- Review mode: draft panel on the far left.
-           Note: `reviewDraft.draft` is a Ref nested inside the returned object,
-           so Vue does NOT auto-unwrap it in the template — we go through the
-           `draftComments` / `draftGlobalMessage` computed wrappers below. -->
-      <!-- Sous 1024 px, le panneau de brouillon céderait toute sa largeur à
-           l'éditeur : on le rend proportionnel plutôt que fixe. -->
-      <div
-        v-if="reviewDraftPanelOpen"
-        class="review-draft-panel-wrapper"
-        :style="
-          isDrawerCollapsed
-            ? { width: '45%', minWidth: '0', flexShrink: 1, borderRight: '1px solid var(--kobo-border-subtle)' }
-            : { width: '300px', minWidth: '240px', flexShrink: 0, borderRight: '1px solid var(--kobo-border-subtle)' }
-        "
-      >
-        <ReviewDraftPanel
-          :comments="draftComments"
-          :global-message="draftGlobalMessage"
-          :submitting="submittingReview"
-          @update-global="reviewDraft.setGlobalMessage"
-          @jump-to-file="onJumpToFile"
-          @jump-to-comment="onJumpToComment"
-          @submit="onSubmitReview"
-        />
-      </div>
-
+    <div class="diff-body row col no-wrap">
       <!-- File tree sidebar (resizable via the drag handle on its right edge) -->
       <div
-        v-if="fileTreeOpen"
+        v-if="fileTreeVisible"
         class="diff-file-list-wrapper"
         :style="
           isDrawerCollapsed
-            ? { width: '55%', minWidth: '0' }
+            ? { width: '100%', minWidth: '0' }
             : { width: `${fileListWidth}px`, minWidth: `${FILE_LIST_MIN}px` }
         "
       >
@@ -244,6 +98,7 @@
         clearable
         :debounce="150"
         :placeholder="$t('diff.searchFiles')"
+        :aria-label="$t('diff.searchFiles')"
         class="diff-file-search q-ma-xs"
       >
         <template #prepend>
@@ -286,17 +141,11 @@
           dark
           dense
           v-model:expanded="expandedNodes"
-          no-selection-unset
           :selected="selectedNodeKey"
           :filter="fileFilter"
           :filter-method="filterTreeNode"
           class="diff-tree"
-          @update:selected="
-            (key) => {
-              if (typeof key !== 'string' || !key.startsWith('file:')) return
-              selectedFile = key.slice('file:'.length)
-            }
-          "
+          @update:selected="selectTreeNode"
         >
           <template #default-header="{ node }">
             <template v-if="node.isFolder">
@@ -372,11 +221,17 @@
         </q-tree>
         </template>
       </q-scroll-area>
-        <div class="diff-file-list-resize-handle" @mousedown="startFileListResize" />
+        <div v-if="!isDrawerCollapsed" class="diff-file-list-resize-handle" @mousedown="startFileListResize" />
       </div>
 
       <!-- Monaco diff editor -->
-      <div class="col column" style="min-width: 0; position: relative;">
+      <div v-show="!isDrawerCollapsed || mobilePanel === 'code'" class="diff-editor-column col column">
+        <div v-if="selectedFile && reviewMode === 'review' && !loadingFile && !fileLoadError" class="diff-review-tools">
+          <span class="text-caption text-kobo-3">{{ $t('diff.commentLine', { line: commentLine }) }}</span>
+          <q-btn flat no-caps icon="add_comment" :label="$t('diff.addComment')"
+            :disable="!commentLine" @click="commentCurrentLine" />
+        </div>
+        <div v-else-if="agentEditingBlocked" class="diff-readonly-hint">{{ $t('diffViewer.agentRunning') }}</div>
         <div v-if="loadingFile" class="col column items-center justify-center">
           <q-spinner-dots size="32px" color="primary" />
         </div>
@@ -400,7 +255,8 @@
           v-else-if="!selectedFile"
           class="col column items-center justify-center text-kobo-3 text-caption"
         >
-          {{ $t('diff.selectFile') }}
+          <span>{{ $t('diff.selectFile') }}</span>
+          <q-btn flat no-caps icon="account_tree" :label="$t('diff.files')" @click="togglePanel('files')" />
         </div>
         <!-- Editor area + Review-mode overlays. The wrapper is `position:
              relative` so the overlays inside are positioned against this
@@ -413,10 +269,11 @@
             v-for="zone in mountedZones"
             :key="zone.zoneId"
             class="review-zone-overlay"
-            :style="{ top: `${zone.topPx}px`, height: `${zone.heightPx}px` }"
+            :style="{ top: `${zone.topPx}px`, height: `${zone.heightPx}px`, left: `${commentBounds.left}px`, width: `${commentBounds.width}px` }"
           >
             <ReviewCommentBlock
               :comments="zone.comments"
+              @resize="(size) => resizeCommentZone(zone, size.height)"
               :start-in-add-mode="zone.transient"
               @add="(content) => onZoneAdd(selectedFile ?? '', zone.line, content)"
               @update="(id, content) => onZoneUpdate(selectedFile ?? '', zone.line, id, content)"
@@ -440,8 +297,16 @@
         />
       </div>
 
+      <div v-if="reviewDraftPanelOpen" class="review-draft-panel-wrapper">
+        <ReviewDraftPanel
+          :comments="draftComments" :global-message="draftGlobalMessage" :submitting="submittingReview"
+          @update-global="reviewDraft.setGlobalMessage" @jump-to-file="onJumpToFile"
+          @jump-to-comment="onJumpToComment" @submit="onSubmitReview"
+        />
+      </div>
+
       <!-- Rail « Revue » — le contexte de relecture, DANS le diff. -->
-      <div v-if="criteriaRailOpen" class="diff-criteria-rail column no-wrap">
+      <div v-if="criteriaRailVisible" class="diff-criteria-rail column no-wrap">
         <div class="diff-criteria-rail__title">{{ $t('diffViewer.criteriaRail') }}</div>
         <q-separator dark />
         <div class="col" style="overflow-y: auto; min-height: 0;">
@@ -452,11 +317,28 @@
       </div>
     </div>
 
+    <div v-if="dirty" class="diff-save-bar" role="status">
+      <span>{{ canEdit ? $t('diffViewer.unsavedChanges.title') : $t('diffViewer.unsavedBanner') }}</span>
+      <q-btn unelevated no-caps icon="save" color="primary" :label="$t('diffViewer.save')"
+        :loading="savingFile" :disable="!canEdit" @click="onSaveClicked" />
+    </div>
+    <nav v-if="isDrawerCollapsed" class="diff-mobile-nav" :aria-label="$t('diff.title')">
+      <q-btn flat no-caps stack icon="account_tree" :label="$t('diff.files')"
+        :class="{ 'diff-control-active': mobilePanel === 'files' }" :aria-pressed="mobilePanel === 'files'" @click="mobilePanel = 'files'" />
+      <q-btn flat no-caps stack icon="code" :label="$t('diff.code')"
+        :class="{ 'diff-control-active': mobilePanel === 'code' }" :aria-pressed="mobilePanel === 'code'" @click="mobilePanel = 'code'" />
+      <q-btn v-if="reviewMode === 'review'" flat no-caps stack icon="chat_bubble_outline"
+        :label="`${$t('diff.modeReview')} · ${draftComments.length}`"
+        :class="{ 'diff-control-active': mobilePanel === 'review' }" :aria-pressed="mobilePanel === 'review'" @click="mobilePanel = 'review'" />
+      <q-btn flat no-caps stack icon="checklist" :label="$t('diff.checklist')"
+        :class="{ 'diff-control-active': mobilePanel === 'checklist' }" :aria-pressed="mobilePanel === 'checklist'" @click="mobilePanel = 'checklist'" />
+    </nav>
+
     <!-- Conflit de sauvegarde : trois issues, dont une qui débloque
          réellement le fichier. Persistant : Échap ne doit pas refermer un
          dialogue dont chaque option a une conséquence. -->
     <q-dialog v-model="conflictDialogOpen" persistent>
-      <q-card dark style="min-width: 420px; max-width: 560px;">
+      <q-card dark class="diff-confirm-card">
         <q-card-section>
           <div class="text-subtitle1">{{ $t('diffViewer.conflict.title') }}</div>
           <div class="text-body2 text-kobo-2 q-mt-sm">{{ $t('diffViewer.conflict.message') }}</div>
@@ -498,7 +380,7 @@
          n'existait que sur le CHANGEMENT DE FICHIER. Échap ou un clic sur le
          fond détruisaient le tampon sans un mot. -->
     <q-dialog v-model="closeConfirmOpen" persistent>
-      <q-card dark style="min-width: 420px; max-width: 560px;">
+      <q-card dark class="diff-confirm-card">
         <q-card-section>
           <div class="text-subtitle1">{{ $t('diffViewer.closeConfirm.title') }}</div>
           <div class="text-body2 text-kobo-2 q-mt-sm">{{ $t('diffViewer.closeConfirm.message') }}</div>
@@ -543,7 +425,7 @@ import { coalesceFrames } from 'src/utils/raf-coalesce'
 import { countCommentsByPath } from 'src/utils/review-comment-counts'
 import { registerUnsavedScope, unregisterUnsavedScope } from 'src/utils/unsaved-guard'
 import { isBusyStatus } from 'src/utils/workspace-status'
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, markRaw, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AcceptancePanel from './AcceptancePanel.vue'
 import ReviewCommentBlock from './ReviewCommentBlock.vue'
@@ -566,6 +448,10 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const $q = useQuasar()
+const { isMobile, isDrawerCollapsed } = useIsMobile()
+const displayOptionsOpen = ref(false)
+const wordWrap = ref(true)
+const commentLine = ref(1)
 
 const isCommitsMode = computed(() => !!props.compareFrom && !!props.compareTo)
 const compareLabel = computed(() =>
@@ -581,6 +467,14 @@ const files = ref<DiffFile[]>([])
 const sourceBranch = ref('')
 const workingBranch = ref('')
 const unpushedBaseRef = ref('')
+const comparisonLabel = computed(() =>
+  isCommitsMode.value
+    ? compareLabel.value
+    : diffMode.value === 'branch'
+      ? `${sourceBranch.value} → ${workingBranch.value}`
+      : `${unpushedBaseRef.value} → ${t('diff.workingTree')}`,
+)
+const selectedFileIndex = computed(() => files.value.findIndex((file) => file.path === selectedFile.value))
 const selectedFile = ref<string | null>(null)
 const loading = ref(false)
 const loadingFile = ref(false)
@@ -629,24 +523,9 @@ watch(reviewMode, (m) => {
   // Service has been disposed"). We just turn the gutter handler + zones
   // on or off as needed.
   if (m === 'review') {
-    // Réaffirmation manuelle : rebasculer en mode review réaffiche le panneau
-    // de brouillon même s'il avait été replié pour laisser la place à l'arbre
-    // de fichiers / au rail de critères sur petit écran (bug 1 du correctif
-    // task-7). On ne le referme jamais automatiquement en dehors de ce geste
-    // explicite de l'utilisateur.
-    reviewDraftHidden.value = false
-    // Troisième sens de l'exclusion mutuelle (bug 2 du correctif task-7) :
-    // sous le seuil responsive, le panneau de brouillon qui réapparaît ne doit
-    // pas coexister avec l'arbre de fichiers ni le rail de critères, sous
-    // peine d'écraser l'éditeur à 0px. On les referme au même titre que
-    // l'ouverture de l'un ou l'autre le fait déjà pour les deux autres
-    // colonnes. Ne touche à rien en desktop.
-    if (isDrawerCollapsed.value) {
-      fileTreeOpen.value = false
-      criteriaRailOpen.value = false
-    }
     setupReviewMode()
   } else {
+    if (mobilePanel.value === 'review') mobilePanel.value = 'code'
     teardownReviewMode()
   }
 })
@@ -724,7 +603,22 @@ function folderPathOf(node: { nodeKey: string }): string {
 }
 
 function onJumpToFile(filePath: string) {
+  mobilePanel.value = 'code'
   selectedFile.value = filePath
+}
+
+function navigateFile(direction: number) {
+  const file = files.value[selectedFileIndex.value + direction]
+  if (file) onJumpToFile(file.path)
+}
+
+function nextChange() {
+  mobilePanel.value = 'code'
+  void nextTick(() => diffEditor?.goToDiff('next'))
+}
+
+function commentCurrentLine() {
+  if (selectedFile.value && commentLine.value) addCommentOnLine(selectedFile.value, commentLine.value)
 }
 
 async function waitForDiffLoad(timeoutMs = 3000): Promise<void> {
@@ -736,10 +630,14 @@ async function waitForDiffLoad(timeoutMs = 3000): Promise<void> {
 }
 
 async function onJumpToComment(filePath: string, line: number) {
+  mobilePanel.value = 'code'
+  await nextTick()
   if (selectedFile.value !== filePath) {
     selectedFile.value = filePath
+    await nextTick()
     await waitForDiffLoad()
   }
+  diffEditor?.getModifiedEditor().setPosition({ lineNumber: line, column: 1 })
   diffEditor?.getModifiedEditor().revealLineInCenter(line)
 }
 
@@ -818,7 +716,7 @@ let reviewModeDisposables: Array<{ dispose(): void }> = []
 // Sync the overlay's top to the line position on scroll + relayout.
 interface MountedZone {
   zoneId: string
-  placeholderNode: HTMLDivElement // empty, owned by Monaco — just reserves space
+  viewZone: import('monaco-editor').editor.IViewZone
   line: number
   comments: ReviewComment[]
   transient: boolean
@@ -828,20 +726,28 @@ interface MountedZone {
 const mountedZones = ref<MountedZone[]>([])
 const editorWrapperRef = ref<HTMLElement | null>(null)
 
+const commentBounds = ref({ left: 0, width: 0 })
+
 function refreshZonePositions() {
-  if (!diffEditor) return
-  const me = diffEditor.getModifiedEditor()
-  const scrollTop = me.getScrollTop()
-  for (const z of mountedZones.value) {
-    // `getTopForLineNumber(N)` accounts for view zones inserted before N,
-    // so for our placeholder inserted `afterLineNumber: zone.line` we want
-    // the position of `zone.line + 1` (the line BELOW the zone) MINUS the
-    // zone height, which gives us the top of the placeholder itself.
-    const top = me.getTopForLineNumber(z.line + 1) - scrollTop - z.heightPx
-    // Skip the write when nothing moved: mutating a deeply reactive object
-    // triggers a full re-render even when the value is identical.
-    if (z.topPx !== top) z.topPx = top
+  if (!diffEditor || !editorWrapperRef.value) return
+  const editor = diffEditor.getModifiedEditor()
+  const rect = editor.getDomNode()?.getBoundingClientRect()
+  if (!rect) return
+  const layout = editor.getLayoutInfo()
+  const gutter = isDrawerCollapsed.value ? 0 : layout.contentLeft
+  commentBounds.value = {
+    left: rect.left - editorWrapperRef.value.getBoundingClientRect().left + gutter,
+    width: Math.max(0, rect.width - gutter - layout.verticalScrollbarWidth),
   }
+}
+
+function resizeCommentZone(zone: MountedZone, height: number) {
+  if (!diffEditor || height <= 0 || !mountedZones.value.includes(zone)) return
+  const nextHeight = Math.ceil(height)
+  if (nextHeight === zone.heightPx) return
+  zone.heightPx = nextHeight
+  zone.viewZone.heightInPx = nextHeight
+  diffEditor.getModifiedEditor().changeViewZones((accessor) => accessor.layoutZone(zone.zoneId))
 }
 
 // One position pass per animation frame, not one per scroll event.
@@ -877,23 +783,24 @@ function mountCommentZone(line: number, comments: ReviewComment[], transient: bo
   const placeholderNode = document.createElement('div')
   placeholderNode.style.pointerEvents = 'none'
 
-  const baseHeight = comments.length > 0 ? comments.length * 4 + 1 : 0
-  const transientHeight = transient ? 6 : 0
-  const heightInLines = Math.max(6, baseHeight + transientHeight)
-
+  let topPx = 0
   let zoneId = ''
-  modifiedEditor.changeViewZones((accessor) => {
-    zoneId = accessor.addZone({ afterLineNumber: line, heightInLines, domNode: placeholderNode })
+  const viewZone = markRaw<import('monaco-editor').editor.IViewZone>({
+    afterLineNumber: line,
+    showInHiddenAreas: true,
+    heightInPx: 160,
+    domNode: placeholderNode,
+    onDomNodeTop: (top) => {
+      topPx = top
+      const zone = mountedZones.value.find((item) => item.zoneId === zoneId)
+      if (zone) zone.topPx = top
+    },
   })
-
-  // Approximate height in pixels for the overlay. Monaco's line height is
-  // configured at editor creation (lineHeight: 18 — see createDiffEditor).
-  const lineHeightPx = 18
-  const heightPx = heightInLines * lineHeightPx
-  // See refreshZonePositions() above — top = position of next line minus zone height.
-  const topPx = modifiedEditor.getTopForLineNumber(line + 1) - modifiedEditor.getScrollTop() - heightPx
-
-  mountedZones.value.push({ zoneId, placeholderNode, line, comments, transient, topPx, heightPx })
+  modifiedEditor.changeViewZones((accessor) => {
+    zoneId = accessor.addZone(viewZone)
+  })
+  mountedZones.value.push({ zoneId, viewZone, line, comments, transient, topPx, heightPx: 160 })
+  refreshZonePositions()
 }
 
 function disposeZonesForLine(line: number) {
@@ -987,6 +894,7 @@ function addCommentOnLine(filePath: string, line: number) {
     .filter((c) => c.filePath === filePath && c.line === line)
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
   mountCommentZone(line, existing, true)
+  diffEditor?.getModifiedEditor().revealLineInCenter(line)
 }
 
 // ── Inline editing ───────────────────────────────────────────────────────────
@@ -1020,6 +928,8 @@ watch(canEdit, (allowed) => {
 })
 
 function disposeEditor() {
+  hasSelection.value = false
+  commentLine.value = 1
   modifiedModelDispose?.()
   modifiedModelDispose = null
   // View zones must be disposed BEFORE the editor instance — disposeAllZones
@@ -1038,80 +948,46 @@ function disposeEditor() {
   model?.modified?.dispose()
 }
 
-// ── Rail « Revue » ───────────────────────────────────────────────────────────
-// Le diff est une modale PLEIN ÉCRAN : il fallait donc le fermer pour relire
-// les critères d'acceptation, qui vivent dans le tiroir droit de MainLayout —
-// exactement au moment où on en a le plus besoin. Plutôt que de sortir le diff
-// de sa modale (remaniement de mise en page, hors périmètre), on lui fait
-// emporter le contexte : `AcceptancePanel` et `TasksPanel` sont déjà autonomes
-// et lisent le store, ils se réutilisent tels quels.
+// Desktop panel preferences stay independent from the phone's full-width navigation.
 const CRITERIA_RAIL_KEY = 'kobo:diff:criteriaRail'
-const criteriaRailOpen = ref<boolean>(
-  localStorage.getItem(CRITERIA_RAIL_KEY) === null
-    ? window.innerWidth >= 1280
-    : localStorage.getItem(CRITERIA_RAIL_KEY) === '1',
+const FILE_TREE_KEY = 'kobo:diff:fileTree'
+const criteriaRailOpen = ref(localStorage.getItem(CRITERIA_RAIL_KEY) === '1')
+const fileTreeOpen = ref(localStorage.getItem(FILE_TREE_KEY) !== '0')
+const reviewDraftHidden = ref(true)
+const mobilePanel = ref<'code' | 'files' | 'review' | 'checklist'>('files')
+const fileTreeVisible = computed(() => (isDrawerCollapsed.value ? mobilePanel.value === 'files' : fileTreeOpen.value))
+const criteriaRailVisible = computed(() =>
+  isDrawerCollapsed.value ? mobilePanel.value === 'checklist' : criteriaRailOpen.value,
+)
+const reviewDraftPanelOpen = computed(
+  () =>
+    reviewMode.value === 'review' &&
+    (isDrawerCollapsed.value ? mobilePanel.value === 'review' : !reviewDraftHidden.value),
 )
 watch(criteriaRailOpen, (open) => localStorage.setItem(CRITERIA_RAIL_KEY, open ? '1' : '0'))
+watch(fileTreeOpen, (open) => localStorage.setItem(FILE_TREE_KEY, open ? '1' : '0'))
 
-/** Le visualiseur est toujours monté pour le workspace sélectionné. */
+function togglePanel(panel: 'files' | 'review' | 'checklist') {
+  if (isDrawerCollapsed.value) {
+    mobilePanel.value = mobilePanel.value === panel ? 'code' : panel
+  } else if (panel === 'files') {
+    fileTreeOpen.value = !fileTreeOpen.value
+  } else if (panel === 'review') {
+    reviewDraftHidden.value = !reviewDraftHidden.value
+    if (!reviewDraftHidden.value) criteriaRailOpen.value = false
+  } else {
+    criteriaRailOpen.value = !criteriaRailOpen.value
+    if (criteriaRailOpen.value) reviewDraftHidden.value = true
+  }
+}
+
+watch(isDrawerCollapsed, () => {
+  mobilePanel.value = selectedFile.value ? 'code' : 'files'
+  displayOptionsOpen.value = false
+})
 const railWorkspace = computed(() => workspaceStore.workspaces.find((w) => w.id === props.workspaceId) ?? null)
 const railTasks = computed(() => workspaceStore.tasks.filter((task) => !task.isAcceptanceCriterion))
 const railCriteria = computed(() => workspaceStore.acceptanceCriteria)
-
-// ── Repli des colonnes en petite largeur ─────────────────────────────────────
-const { isDrawerCollapsed } = useIsMobile()
-
-// L'arbre de fichiers occupe au minimum 180 px et n'était pas rétractable :
-// avec le panneau de brouillon (240 px) et le rail (240 px), l'éditeur
-// recevait une largeur NULLE sous 900 px.
-const FILE_TREE_KEY = 'kobo:diff:fileTree'
-const fileTreeOpen = ref<boolean>(
-  localStorage.getItem(FILE_TREE_KEY) === null ? window.innerWidth >= 900 : localStorage.getItem(FILE_TREE_KEY) === '1',
-)
-watch(fileTreeOpen, (open) => localStorage.setItem(FILE_TREE_KEY, open ? '1' : '0'))
-
-// En mode Review, un TROISIÈME panneau concurrence l'arbre de fichiers et le
-// rail de critères pour la largeur disponible : le panneau de brouillon de
-// revue (`review-draft-panel-wrapper`). Il n'a pas de bouton dédié — sa
-// visibilité découle normalement de `reviewMode === 'review'` — donc on le
-// masque via ce flag plutôt qu'en le fermant réellement, pour pouvoir le
-// réafficher sans perdre l'état de la revue. Non persisté : chaque montage du
-// visualiseur repart visible.
-const reviewDraftHidden = ref<boolean>(false)
-const reviewDraftPanelOpen = computed(
-  () => reviewMode.value === 'review' && !(isDrawerCollapsed.value && reviewDraftHidden.value),
-)
-
-// Sous 1024 px, l'écran ne peut porter qu'UNE colonne latérale à la fois.
-// Ouvrir l'une referme les deux autres (l'autre colonne ET le panneau de
-// brouillon de revue s'il est affiché) plutôt que d'écraser l'éditeur.
-watch(criteriaRailOpen, (open) => {
-  if (open && isDrawerCollapsed.value) {
-    fileTreeOpen.value = false
-    reviewDraftHidden.value = true
-  }
-})
-watch(fileTreeOpen, (open) => {
-  if (open && isDrawerCollapsed.value) {
-    criteriaRailOpen.value = false
-    reviewDraftHidden.value = true
-  }
-})
-
-// Un état ouvert (arbre et/ou rail) peut avoir été persisté en localStorage
-// depuis un usage en grand écran. Si la fenêtre est ensuite redimensionnée
-// vers une largeur étroite SANS rechargement de page, les watchers ci-dessus
-// ne se déclenchent pas (ils portent sur les refs elles-mêmes, pas sur le
-// passage sous le seuil responsive) : on referme donc explicitement toutes
-// les colonnes concurrentes dès que `isDrawerCollapsed` bascule à `true`. On
-// ne referme rien quand il repasse à `false` — on laisse l'utilisateur
-// rouvrir manuellement ce qu'il veut en grand écran.
-watch(isDrawerCollapsed, (collapsed) => {
-  if (!collapsed) return
-  fileTreeOpen.value = false
-  criteriaRailOpen.value = false
-  reviewDraftHidden.value = true
-})
 
 // ── File tree ────────────────────────────────────────────────────────────────
 
@@ -1122,6 +998,18 @@ const selectedNodeKey = computed(() => (selectedFile.value ? `file:${selectedFil
 const AUTO_EXPAND_FILE_LIMIT = 200
 
 const expandedNodes = ref<string[]>([])
+
+function selectTreeNode(key: unknown) {
+  if (key === null && selectedFile.value) mobilePanel.value = 'code'
+  if (typeof key !== 'string') return
+  if (key.startsWith('dir:')) {
+    expandedNodes.value = expandedNodes.value.includes(key)
+      ? expandedNodes.value.filter((expanded) => expanded !== key)
+      : [...expandedNodes.value, key]
+  } else if (key.startsWith('file:')) {
+    onJumpToFile(key.slice('file:'.length))
+  }
+}
 
 // Recompute the initial expansion whenever the file list changes: everything
 // open on a small diff, first level only on a large one. The user's manual
@@ -1258,12 +1146,18 @@ async function loadFileDiff(filePath: string) {
       theme: 'kobo-dark',
       readOnly: !canEdit.value,
       originalEditable: false,
-      renderSideBySide: viewMode.value === 'side',
+      renderSideBySide: !isDrawerCollapsed.value && viewMode.value === 'side',
+      renderOverviewRuler: !isDrawerCollapsed.value,
+      wordWrap: wordWrap.value ? 'on' : 'off',
+      diffWordWrap: wordWrap.value ? 'on' : 'off',
+      fontFamily: getComputedStyle(document.documentElement).getPropertyValue('--kobo-font-mono').trim(),
+      lineNumbersMinChars: 3,
+      glyphMargin: false,
       automaticLayout: true,
       minimap: { enabled: false },
       scrollBeyondLastLine: false,
-      fontSize: 12,
-      lineHeight: 18,
+      fontSize: 13,
+      lineHeight: 22,
       hideUnchangedRegions: {
         enabled: hideUnchanged.value,
         contextLineCount: 3,
@@ -1518,7 +1412,12 @@ async function closeSaving(): Promise<void> {
  * d'Échap, en la faisant passer par la garde.
  */
 function onDiffKeydown(event: KeyboardEvent): void {
-  if (event.key !== 'Escape') return
+  if (event.key !== 'Escape' || displayOptionsOpen.value) return
+  if (isDrawerCollapsed.value && mobilePanel.value !== 'code') {
+    mobilePanel.value = 'code'
+    event.preventDefault()
+    return
+  }
   // Un dialogue enfant est ouvert : c'est à lui de traiter la touche.
   if (conflictDialogOpen.value || closeConfirmOpen.value) return
   event.preventDefault()
@@ -1603,6 +1502,7 @@ function setupSelectionTracking() {
     const disposable = editor.onDidChangeCursorSelection(() => {
       const sel = editor.getSelection()
       hasSelection.value = !!(sel && !sel.isEmpty())
+      if (editor === modifiedEditor) commentLine.value = sel?.positionLineNumber ?? 1
     })
     selectionDisposables.push(disposable)
   }
@@ -1697,10 +1597,13 @@ watch(selectedFile, async (filePath, previousPath) => {
   }
 })
 
-watch(viewMode, () => {
-  if (diffEditor) {
-    diffEditor.updateOptions({ renderSideBySide: viewMode.value === 'side' })
-  }
+watch([viewMode, isDrawerCollapsed, wordWrap], () => {
+  diffEditor?.updateOptions({
+    renderSideBySide: !isDrawerCollapsed.value && viewMode.value === 'side',
+    renderOverviewRuler: !isDrawerCollapsed.value,
+    wordWrap: wordWrap.value ? 'on' : 'off',
+    diffWordWrap: wordWrap.value ? 'on' : 'off',
+  })
 })
 
 watch(hideUnchanged, (enabled) => {
@@ -1765,7 +1668,7 @@ function selectRequestedFile(path: string) {
   // A tool card may refer to a file that no longer belongs to the current
   // diff scope. Do not replace the current selection in that case.
   if (!files.value.some((file) => file.path === path)) return
-  selectedFile.value = path
+  onJumpToFile(path)
   // The watcher performs the actual load after the next DOM tick.
 }
 
@@ -1797,77 +1700,132 @@ onUnmounted(() => {
 </script>
 
 <style lang="scss" scoped>
-// Match the main app color scheme from MainLayout / WorkspaceList
 .diff-viewer {
-  background-color: var(--kobo-bg);
-}
-
-/* L'en-tête ne passe pas à la ligne (les contrôles perdraient leur
-   alignement) : il défile. Les deux boutons de droite restent atteignables
-   quelle que soit la largeur — sans quoi la seule sortie était Échap. */
-.diff-header__scroll {
-  flex: 1 1 auto;
+  background: var(--kobo-bg);
   min-width: 0;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: thin;
-}
-
-.diff-header__scroll::-webkit-scrollbar {
-  height: 4px;
-}
-
-.diff-header__scroll::-webkit-scrollbar-thumb {
-  background-color: var(--kobo-border);
-  border-radius: var(--kobo-radius-sm);
-}
-
-.diff-header__pinned {
-  flex: 0 0 auto;
-}
-
-/* Rail de revue : même largeur que le panneau de brouillon de revue, pour que
-   l'oeil retrouve la même colonne des deux côtés. Jetons de design
-   exclusivement — aucune valeur en dur (cf. DESIGN.md). */
-.diff-criteria-rail {
-  width: 300px;
-  min-width: 240px;
-  flex-shrink: 0;
-  border-left: 1px solid var(--kobo-border-subtle);
-  background-color: var(--kobo-bg-deep);
   overflow: hidden;
 }
-
-.diff-criteria-rail__title {
-  font-family: var(--kobo-font-sans);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--kobo-text-3);
-  padding: var(--kobo-space-md) var(--kobo-space-lg);
-}
-
-// Same as .wp-header in WorkspacePage
-.diff-header {
-  min-height: 48px;
-  background-color: var(--kobo-bg-deep);
-  border-bottom: 1px solid var(--kobo-border-subtle);
-  // `.diff-header` est un item flex de la colonne `.diff-viewer` : sans
-  // width: 100% + min-width: 0, son contenu (largement plus large que
-  // l'écran sous ~550 px) le fait déborder de la page entière au lieu de
-  // laisser `.diff-header__scroll` défiler EN INTERNE. C'est ce qui causait
-  // le bouton de fermeture hors cadre.
-  width: 100%;
+.diff-body { min-width: 0; min-height: 0; overflow: hidden; }
+.diff-header,
+.diff-file-toolbar,
+.diff-review-tools,
+.diff-save-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--kobo-space-sm);
+  padding: var(--kobo-space-xs) var(--kobo-space-md);
+  flex-shrink: 0;
   min-width: 0;
+  border-bottom: 1px solid var(--kobo-border-subtle);
+}
+.diff-header { background: var(--kobo-bg-deep); }
+.diff-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--kobo-space-sm);
+  flex: 1;
+  min-width: 0;
+}
+.diff-branches { font-size: 12px; color: var(--kobo-text-3); }
+.diff-file-toolbar { gap: var(--kobo-space-xs); }
+.diff-file-counter { font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--kobo-text-3); }
+.diff-current-file {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--kobo-text-2);
+  font-family: var(--kobo-font-mono);
+  font-size: 12px;
+  text-align: left;
+  padding: var(--kobo-space-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.diff-current-file:hover { background: var(--kobo-hover); }
+.diff-current-file:focus-visible { outline: 2px solid var(--kobo-accent); outline-offset: -2px; }
+.diff-control-active { background: var(--kobo-hover); color: var(--kobo-text); }
+.diff-editor-column { min-width: 0; min-height: 0; position: relative; }
+.diff-review-tools { justify-content: space-between; }
+.diff-readonly-hint { padding: var(--kobo-space-sm) var(--kobo-space-md); color: var(--kobo-text-3); font-size: 12px; }
+.diff-display-options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--kobo-space-sm);
+  padding: var(--kobo-space-md);
+  max-width: calc(100vw - var(--kobo-space-2xl));
+  background: var(--kobo-bg-deep);
+}
+.diff-criteria-rail,
+.review-draft-panel-wrapper {
+  width: 300px;
+  min-width: 0;
+  flex-shrink: 0;
+  overflow: hidden;
+  border-left: 1px solid var(--kobo-border-subtle);
+  background: var(--kobo-bg-deep);
+}
+.diff-criteria-rail__title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--kobo-text-3);
+  padding: var(--kobo-space-md);
+}
+.diff-save-bar {
+  justify-content: space-between;
+  font-size: 13px;
+  border-top: 1px solid var(--kobo-border);
+  background: var(--kobo-bg-deep);
+  padding-bottom: max(var(--kobo-space-xs), env(safe-area-inset-bottom));
+}
+.diff-save-bar > span { min-width: 0; }
+.diff-save-bar > .q-btn { flex-shrink: 0; }
+.diff-save-bar :deep(.q-btn__content) { flex-wrap: nowrap; }
+.diff-confirm-card { width: 560px; max-width: calc(100vw - var(--kobo-space-3xl)); }
+.diff-mobile-nav {
+  display: flex;
+  flex-shrink: 0;
+  border-top: 1px solid var(--kobo-border-subtle);
+  background: var(--kobo-bg-deep);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.diff-mobile-nav > .q-btn { flex: 1; min-width: 0; font-size: 11px; }
+@media (max-width: 1023px) {
+  .review-draft-panel-wrapper,
+  .diff-criteria-rail { width: 100%; border: 0; }
+  .diff-branches { display: none; }
+  .diff-viewer :deep(.q-btn),
+  .diff-display-options :deep(.q-btn),
+  .diff-current-file { min-height: 44px; min-width: 44px; }
+  .diff-viewer .diff-tree :deep(.q-tree__node-header) { min-height: 44px; }
+  .diff-header :deep(.q-btn), .diff-file-toolbar :deep(.q-btn) { padding-inline: var(--kobo-space-sm); }
+  .diff-header { gap: var(--kobo-space-xs); padding-inline: var(--kobo-space-xs); }
+  .diff-mode-toggle :deep(.q-btn) { padding-inline: var(--kobo-space-sm); }
+  .diff-file-toolbar { padding-inline: var(--kobo-space-xs); }
+  .diff-current-file { font-size: 11px; }
+}
+@media (max-width: 599px) {
+  .diff-header { flex-wrap: wrap; }
+  .diff-mode-toggle { order: 1; width: 100%; }
+  .diff-mode-toggle :deep(.q-btn) { flex: 1; }
+  .diff-heading > .q-badge { display: none; }
+  .diff-heading { font-size: 13px; }
+  .diff-heading > span { font-size: inherit; }
+  .diff-display-button :deep(.q-btn-dropdown__arrow) { display: none; }
 }
 
 .diff-file-list-wrapper {
+  max-width: 100%;
   position: relative;
   height: 100%;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
+}
+@media (min-width: 1024px) {
+  .diff-file-list-wrapper { max-width: 35%; }
 }
 .diff-file-search {
   flex-shrink: 0;
@@ -1897,8 +1855,8 @@ onUnmounted(() => {
 
 .diff-tree {
   :deep(.q-tree__node-header) {
-    padding: 2px 4px;
-    min-height: 22px;
+    padding: var(--kobo-space-xs) var(--kobo-space-sm);
+    min-height: 32px;
     align-items: center;
   }
   // Quasar applies `q-tree__node--selected` directly ON the `q-tree__node-header`
@@ -1914,14 +1872,14 @@ onUnmounted(() => {
   // Hover style applied only on non-selected rows so the selected background
   // stays clean while the cursor browses other files.
   :deep(.q-tree__node-header:not(.q-tree__node--selected):hover) {
-    background-color: rgba(255, 255, 255, 0.03);
+    background-color: var(--kobo-hover);
   }
 }
 
 .send-to-chat-btn {
   position: absolute;
-  bottom: 16px;
-  right: 16px;
+  bottom: var(--kobo-space-lg);
+  right: var(--kobo-space-lg);
   z-index: 10;
   font-size: 11px;
   padding: 2px 10px;
@@ -1943,16 +1901,13 @@ onUnmounted(() => {
    none of its event handlers interfere. */
 .review-zone-overlay {
   position: absolute;
-  left: 60px; /* skip the gutter (line numbers + glyph margin); empirical */
-  right: 16px;
+
   z-index: 50;
   pointer-events: auto;
-  background: rgba(20, 20, 35, 0.95);
-  backdrop-filter: blur(2px);
-  padding: 4px;
+  background: var(--kobo-bg);
   box-sizing: border-box;
   overflow: auto;
-  border-left: 3px solid rgba(var(--kobo-accent-rgb), 0.6);
+  border-left: 1px solid var(--kobo-border);
 }
 
 .dirty-dot {

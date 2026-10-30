@@ -1,5 +1,6 @@
 <template>
   <div class="review-comment-block">
+    <q-resize-observer @resize="(size) => emit('resize', size)" />
     <div
       v-for="(comment, idx) in comments"
       :key="comment.id"
@@ -17,10 +18,11 @@
           autofocus
           class="comment-textarea"
           :placeholder="$t('diff.commentPlaceholder')"
+        :aria-label="$t('diff.commentPlaceholder')"
         />
         <div class="comment-actions q-mt-xs">
-          <q-btn flat dense size="sm" :label="$t('common.cancel')" @click="cancelEdit" />
-          <q-btn unelevated dense size="sm" color="primary" :label="$t('common.save')" @click="saveEdit(comment.id)" />
+          <q-btn flat no-caps dense size="sm" :label="$t('common.cancel')" @click="cancelEdit" />
+          <q-btn unelevated no-caps dense size="sm" color="primary" :label="$t('common.save')" @click="saveEdit(comment.id)" />
         </div>
       </template>
       <template v-else>
@@ -28,10 +30,10 @@
         <div class="comment-content" v-html="renderMarkdown(comment.content)" />
         <div class="comment-footer">
           <span class="comment-time text-caption text-kobo-3">{{ relativeTime(comment.createdAt) }}</span>
-          <q-btn flat dense round size="xs" icon="edit" color="kobo-2" @click="startEdit(comment)">
+          <q-btn flat dense round size="xs" icon="edit" :aria-label="$t('diff.editComment')" color="kobo-2" @click="startEdit(comment)">
             <q-tooltip>{{ $t('diff.editComment') }}</q-tooltip>
           </q-btn>
-          <q-btn flat dense round size="xs" icon="delete" color="kobo-2" @click="confirmDelete(comment.id)">
+          <q-btn flat dense round size="xs" icon="delete" :aria-label="$t('diff.deleteComment')" color="kobo-2" @click="confirmDelete(comment.id)">
             <q-tooltip>{{ $t('diff.deleteComment') }}</q-tooltip>
           </q-btn>
         </div>
@@ -48,11 +50,13 @@
         autofocus
         class="comment-textarea q-mt-sm"
         :placeholder="$t('diff.commentPlaceholder')"
+        :aria-label="$t('diff.commentPlaceholder')"
       />
       <div class="comment-actions q-mt-xs">
-        <q-btn flat dense size="sm" :label="$t('common.cancel')" @click="cancelAdd" />
+        <q-btn flat no-caps dense size="sm" :label="$t('common.cancel')" @click="cancelAdd" />
         <q-btn
           unelevated
+          no-caps
           dense
           size="sm"
           color="primary"
@@ -65,6 +69,7 @@
     <q-btn
       v-else-if="comments.length > 0"
       flat
+      no-caps
       dense
       size="sm"
       icon="reply"
@@ -88,6 +93,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
+  resize: [size: { width: number; height: number }]
   add: [content: string]
   update: [id: string, content: string]
   delete: [id: string]
@@ -169,11 +175,13 @@ function confirmAdd() {
 
 <style scoped>
 .review-comment-block {
-  background: rgba(40, 40, 60, 0.7);
-  border: 1px solid rgba(var(--kobo-accent-rgb), 0.4);
-  border-radius: 6px;
-  padding: 8px 10px;
-  font-size: 12px;
+  position: relative;
+  background: var(--kobo-surface);
+  border: 1px solid var(--kobo-border);
+  border-radius: var(--kobo-radius-sm);
+  padding: var(--kobo-space-md);
+  font-size: 13px;
+  overflow-wrap: anywhere;
 }
 .comment-thread-item.with-separator {
   border-top: 1px solid rgba(var(--kobo-accent-rgb), 0.2);
@@ -202,13 +210,18 @@ function confirmAdd() {
 }
 .comment-actions {
   display: flex;
-  gap: 6px;
+  gap: var(--kobo-space-sm);
   justify-content: flex-end;
+  flex-wrap: wrap;
 }
 .comment-textarea {
-  font-size: 12px;
+  font-size: 14px;
 }
 .reply-btn {
   font-size: 11px;
+}
+@media (max-width: 1023px) {
+  .review-comment-block :deep(.q-btn) { min-height: 44px; min-width: 44px; }
+  .comment-textarea { font-size: 16px; }
 }
 </style>

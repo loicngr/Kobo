@@ -725,7 +725,7 @@
     </q-dialog>
 
     <!-- Diff viewer dialog (fullscreen). `diffInitialReview` selects which
-         mode the viewer opens in — set to true by the "Diff v2" button. -->
+         mode the viewer opens in — set to true by the "Changes" button. -->
     <!-- `persistent` : Échap et le clic sur le fond ne doivent plus détruire
          un tampon d'édition non enregistré. DiffViewer réimplémente Échap
          lui-même, en le faisant passer par sa garde. -->
