@@ -1535,6 +1535,17 @@ export const useWebSocketStore = defineStore('websocket', {
           break
         }
 
+        case 'workspace:tags-updated': {
+          const tags = payload.tags
+          if (wid && Array.isArray(tags) && tags.every((tag) => typeof tag === 'string')) {
+            workspaceStore.updateWorkspaceFromEvent(wid, { tags })
+            workspaceStore.archivedWorkspaces = workspaceStore.archivedWorkspaces.map((workspace) =>
+              workspace.id === wid ? { ...workspace, tags } : workspace,
+            )
+          }
+          break
+        }
+
         case 'workspace:description-updated': {
           if (!wid) break
           const desc = (payload.description as string | null | undefined) ?? null

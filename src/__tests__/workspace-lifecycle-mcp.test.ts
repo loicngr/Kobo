@@ -251,6 +251,9 @@ describe('MCP workspace lifecycle', () => {
   })
   it('publishes strict schemas for all lifecycle tools and rejects unknown names', () => {
     expect(WORKSPACE_LIFECYCLE_TOOLS.map(({ name }) => name)).toEqual([
+      'add_workspace_tags',
+      'remove_workspace_tags',
+      'run_setup_script',
       'archive_workspace',
       'purge_workspace_worktree',
       'delete_workspace',

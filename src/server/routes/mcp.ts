@@ -10,7 +10,9 @@ import { isWorkspaceCreationTool } from '../../shared/workspace-creation-tools.j
 import { isWorkspaceGroupMessageTool } from '../../shared/workspace-group-message-tools.js'
 import { isWorkspaceLifecycleTool } from '../../shared/workspace-lifecycle-tools.js'
 import type { MessageSource } from '../../shared/workspace-message-types.js'
+import { isWorkspaceObservationTool } from '../../shared/workspace-observation-tools.js'
 import { getDb } from '../db/index.js'
+import { executeCodeReviewTool } from '../services/code-review-mcp-service.js'
 import {
   authenticateExternalMcpToken,
   EXTERNAL_TOOL_CATALOGUE,
@@ -31,6 +33,7 @@ import {
   executeWorkspaceLifecycleTool,
   WorkspaceLifecycleMcpError,
 } from '../services/workspace-lifecycle-mcp-service.js'
+import { executeWorkspaceObservationTool } from '../services/workspace-observation-mcp-service.js'
 import { prepareMemoryToolEnvelope } from '../utils/memory-token-budget.js'
 
 function authenticateRequest(authorization = ''): ExternalMcpPrincipal | null {
@@ -78,8 +81,14 @@ async function dispatchWorkspaceRequest(pathname: string, init: RequestInit): Pr
     throw new Error('Bulk operations are not supported by workspace MCP tools')
   const isWorkspaceOperation =
     (init.method === 'POST' &&
+      /^\/api\/workspaces\/[^/]+\/parallel-review\/(stop|retry-return|cancel-return)$/.test(pathname)) ||
+    (init.method === 'POST' && /^\/api\/workspaces\/[^/]+\/review-return\/(retry|cancel)$/.test(pathname)) ||
+    (init.method === 'PATCH' && /^\/api\/workspaces\/[^/]+\/tags$/.test(pathname)) ||
+    (init.method === 'POST' &&
       (pathname === '/api/workspaces' ||
-        /^\/api\/workspaces\/[^/]+\/(unarchive|archive|purge-worktree|restore-worktree)$/.test(pathname))) ||
+        /^\/api\/workspaces\/[^/]+\/(unarchive|archive|purge-worktree|restore-worktree|start-review|run-setup-script)$/.test(
+          pathname,
+        ))) ||
     ((init.method === 'GET' || init.method === 'DELETE' || init.method === 'PATCH') &&
       /^\/api\/workspaces\/[^/]+$/.test(pathname))
   if (isWorkspaceOperation) {
@@ -139,22 +148,26 @@ export async function executeExternalMcpTool(
   const isMemory = isMemoryToolName(name)
   try {
     if (principal) args = authorizeExternalMcpCall(principal, name, args)
-    let data = isProgressBarTool(name)
-      ? executeProgressBarTool(name, args)
-      : isMemory
-        ? executeMemoryMcpTool(
-            name,
-            args,
-            source,
-            principal && !principal.allWorkspaces ? principal.workspaceIds : undefined,
-          )
-        : isWorkspaceCreationTool(name)
-          ? await executeWorkspaceCreationTool(name, args, dispatchWorkspaceRequest)
-          : isWorkspaceLifecycleTool(name)
-            ? await executeWorkspaceLifecycleTool(name, args, dispatchWorkspaceRequest)
-            : isWorkspaceGroupMessageTool(name)
-              ? executeWorkspaceGroupMessageTool(name, args, source)
-              : await executeWorkspaceDialogueTool(name, args, source)
+    let data = isWorkspaceObservationTool(name)
+      ? await executeWorkspaceObservationTool(name, args, dispatchWorkspaceRequest)
+      : name === 'start_code_review'
+        ? await executeCodeReviewTool(args, dispatchWorkspaceRequest)
+        : isProgressBarTool(name)
+          ? executeProgressBarTool(name, args)
+          : isMemory
+            ? executeMemoryMcpTool(
+                name,
+                args,
+                source,
+                principal && !principal.allWorkspaces ? principal.workspaceIds : undefined,
+              )
+            : isWorkspaceCreationTool(name)
+              ? await executeWorkspaceCreationTool(name, args, dispatchWorkspaceRequest)
+              : isWorkspaceLifecycleTool(name)
+                ? await executeWorkspaceLifecycleTool(name, args, dispatchWorkspaceRequest)
+                : isWorkspaceGroupMessageTool(name)
+                  ? executeWorkspaceGroupMessageTool(name, args, source)
+                  : await executeWorkspaceDialogueTool(name, args, source)
     if (principal && !principal.allWorkspaces && name === 'list_workspaces' && Array.isArray(data)) {
       data = data.filter((workspace) => principal.workspaceIds.includes(workspace.id))
     }

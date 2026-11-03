@@ -1,15 +1,19 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import { START_CODE_REVIEW_TOOL } from '../../shared/code-review-tools.js'
 import { EXTERNAL_MEMORY_TOOL_DEFINITIONS } from '../../shared/memory-tools.js'
 import { PROGRESS_BAR_TOOLS } from '../../shared/progress-bar-tools.js'
 import { WORKSPACE_CREATION_TOOLS } from '../../shared/workspace-creation-tools.js'
 import { EXTERNAL_MCP_TOOLS } from '../../shared/workspace-dialogue-tools.js'
 import { WORKSPACE_GROUP_MESSAGE_TOOLS } from '../../shared/workspace-group-message-tools.js'
 import { WORKSPACE_LIFECYCLE_TOOLS } from '../../shared/workspace-lifecycle-tools.js'
+import { WORKSPACE_OBSERVATION_TOOLS } from '../../shared/workspace-observation-tools.js'
 import { ensureKoboHome, getKoboHome } from '../utils/paths.js'
 
 export const EXTERNAL_TOOL_CATALOGUE = [
+  START_CODE_REVIEW_TOOL,
+  ...WORKSPACE_OBSERVATION_TOOLS,
   ...EXTERNAL_MCP_TOOLS,
   ...WORKSPACE_CREATION_TOOLS,
   ...WORKSPACE_LIFECYCLE_TOOLS,

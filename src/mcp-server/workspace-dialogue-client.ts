@@ -1,5 +1,6 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import { validateCodeReviewArguments } from '../shared/code-review-tools.js'
 import { isMemoryToolName, validateMemoryToolArguments } from '../shared/memory-tools.js'
 import { isProgressBarTool, validateProgressBarArguments } from '../shared/progress-bar-tools.js'
 import { isWorkspaceCreationTool, validateWorkspaceCreationArguments } from '../shared/workspace-creation-tools.js'
@@ -10,6 +11,10 @@ import {
 } from '../shared/workspace-group-message-tools.js'
 import { isWorkspaceLifecycleTool, validateWorkspaceLifecycleArguments } from '../shared/workspace-lifecycle-tools.js'
 import { normalizeClientName } from '../shared/workspace-message-types.js'
+import {
+  isWorkspaceObservationTool,
+  validateWorkspaceObservationArguments,
+} from '../shared/workspace-observation-tools.js'
 
 /** Stateless HTTP bridge: external stdio clients never own agent runtime state. */
 export async function callWorkspaceDialogueTool(
@@ -35,21 +40,30 @@ export async function callWorkspaceDialogueTool(
       }
     }
   }
-  const arguments_ = isMemoryToolName(name)
-    ? validateMemoryToolArguments(name, args, true)
-    : isProgressBarTool(name)
-      ? (args as Record<string, unknown>)
-      : isWorkspaceCreationTool(name)
-        ? validateWorkspaceCreationArguments(name, args)
-        : isWorkspaceLifecycleTool(name)
-          ? validateWorkspaceLifecycleArguments(name, args)
-          : isWorkspaceGroupMessageTool(name)
-            ? validateWorkspaceGroupMessageArguments(name, args)
-            : validateDialogueArguments(name, args)
+  const arguments_ = isWorkspaceObservationTool(name)
+    ? validateWorkspaceObservationArguments(name, args)
+    : name === 'start_code_review'
+      ? validateCodeReviewArguments(args)
+      : isMemoryToolName(name)
+        ? validateMemoryToolArguments(name, args, true)
+        : isProgressBarTool(name)
+          ? (args as Record<string, unknown>)
+          : isWorkspaceCreationTool(name)
+            ? validateWorkspaceCreationArguments(name, args)
+            : isWorkspaceLifecycleTool(name)
+              ? validateWorkspaceLifecycleArguments(name, args)
+              : isWorkspaceGroupMessageTool(name)
+                ? validateWorkspaceGroupMessageArguments(name, args)
+                : validateDialogueArguments(name, args)
   const client = new Client({ name: 'kobo-stdio-bridge', version: '1.0.0' })
   // Creation can include forge reads, worktree setup and user setup scripts.
   // A timed-out creation is ambiguous and must never be retried automatically.
-  const timeout = isWorkspaceCreationTool(name) || isWorkspaceLifecycleTool(name) ? 15 * 60_000 : 30_000
+  const timeout =
+    isWorkspaceCreationTool(name) || isWorkspaceLifecycleTool(name) || name === 'start_code_review'
+      ? 15 * 60_000
+      : name === 'list_agent_options' && arguments_.engine === 'mistral-vibe'
+        ? 90_000
+        : 30_000
   const signal = AbortSignal.timeout(timeout)
   const transport = new StreamableHTTPClientTransport(new URL(`${backendUrl.replace(/\/$/, '')}/api/mcp`), {
     requestInit: {

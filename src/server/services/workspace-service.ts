@@ -6,6 +6,7 @@ import {
   resolveWorkflowPolicy,
   type WorkflowPolicy,
 } from '../../shared/workflow-policy.js'
+import { MAX_TAG_LENGTH, MAX_WORKSPACE_TAGS, validateWorkspaceTagList } from '../../shared/workspace-tags.js'
 import { getDb } from '../db/index.js'
 import { isValidBranchName } from '../utils/git-ops.js'
 import { resolveWorkspaceWorktreePath } from '../utils/worktree-paths.js'
@@ -1108,8 +1109,7 @@ export function setPrWatchEnabled(id: string): Workspace {
 }
 
 /** Maximum tag length (characters) and max number of tags per workspace. */
-export const MAX_TAG_LENGTH = 50
-export const MAX_WORKSPACE_TAGS = 50
+export { MAX_TAG_LENGTH, MAX_WORKSPACE_TAGS } from '../../shared/workspace-tags.js'
 
 /** Replace the workspace's tag list. Trims, dedupes, caps length per tag and count total. */
 export function setWorkspaceTags(id: string, tags: string[]): Workspace {
@@ -1129,6 +1129,26 @@ export function setWorkspaceTags(id: string, tags: string[]): Workspace {
     throw new Error(`Workspace '${id}' not found`)
   }
   return getWorkspace(id) as Workspace
+}
+
+/** Apply a delta atomically so concurrent additions never overwrite one another. */
+export function changeWorkspaceTags(id: string, tags: unknown, operation: 'add' | 'remove'): Workspace {
+  const requested = validateWorkspaceTagList(tags)
+  const workspace = getDb()
+    .transaction(() => {
+      const current = getWorkspace(id)
+      if (!current) throw new Error(`Workspace '${id}' not found`)
+      const next =
+        operation === 'add'
+          ? [...new Set([...current.tags, ...requested])]
+          : current.tags.filter((tag) => !requested.includes(tag))
+      if (next.length > MAX_WORKSPACE_TAGS)
+        throw new RangeError(`A workspace can have at most ${MAX_WORKSPACE_TAGS} tags`)
+      return setWorkspaceTags(id, next)
+    })
+    .immediate()
+  emitEphemeral(id, 'workspace:tags-updated', { tags: workspace.tags })
+  return workspace
 }
 
 // ── Agent Sessions ────────────────────────────────────────────────────────────

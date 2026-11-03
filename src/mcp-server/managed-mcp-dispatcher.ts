@@ -1,16 +1,25 @@
 import type { Tool } from '@modelcontextprotocol/sdk/types.js'
 import type Database from 'better-sqlite3'
+import { INTERNAL_START_CODE_REVIEW_TOOL, START_CODE_REVIEW_TOOL } from '../shared/code-review-tools.js'
 import { EXTERNAL_MEMORY_TOOL_DEFINITIONS, isMemoryToolName, MEMORY_TOOL_DEFINITIONS } from '../shared/memory-tools.js'
 import { INTERNAL_PROGRESS_BAR_TOOLS, isProgressBarTool, PROGRESS_BAR_TOOLS } from '../shared/progress-bar-tools.js'
 import { isWorkspaceCreationTool, WORKSPACE_CREATION_TOOLS } from '../shared/workspace-creation-tools.js'
 import { WORKSPACE_DIALOGUE_TOOLS } from '../shared/workspace-dialogue-tools.js'
 import { isWorkspaceGroupMessageTool, WORKSPACE_GROUP_MESSAGE_TOOLS } from '../shared/workspace-group-message-tools.js'
 import {
+  INTERNAL_RUN_SETUP_SCRIPT_TOOL,
+  INTERNAL_WORKSPACE_TAG_TOOLS,
   isWorkspaceLifecycleTool,
+  isWorkspaceTagTool,
   SET_WORKSPACE_STATUS_TOOL,
   validateWorkspaceLifecycleArguments,
   WORKSPACE_LIFECYCLE_TOOLS,
 } from '../shared/workspace-lifecycle-tools.js'
+import {
+  INTERNAL_WORKSPACE_OBSERVATION_TOOLS,
+  isWorkspaceObservationTool,
+  WORKSPACE_OBSERVATION_TOOLS,
+} from '../shared/workspace-observation-tools.js'
 import {
   createTaskHandler,
   cronListHandler,
@@ -578,9 +587,15 @@ export function createManagedMcpDispatcher(context: ManagedMcpContext) {
     },
     ...MEMORY_TOOL_DEFINITIONS,
     ...INTERNAL_PROGRESS_BAR_TOOLS,
+    INTERNAL_START_CODE_REVIEW_TOOL,
+    ...INTERNAL_WORKSPACE_OBSERVATION_TOOLS,
+    INTERNAL_RUN_SETUP_SCRIPT_TOOL,
+    ...INTERNAL_WORKSPACE_TAG_TOOLS,
   ]
 
   const GLOBAL_TOOLS: typeof WORKSPACE_SCOPED_TOOLS = [
+    START_CODE_REVIEW_TOOL,
+    ...WORKSPACE_OBSERVATION_TOOLS,
     ...WORKSPACE_DIALOGUE_TOOLS,
     ...WORKSPACE_CREATION_TOOLS,
     ...WORKSPACE_LIFECYCLE_TOOLS,
@@ -639,7 +654,13 @@ export function createManagedMcpDispatcher(context: ManagedMcpContext) {
           ...WORKSPACE_SCOPED_TOOLS,
           ...GLOBAL_TOOLS.filter(
             (tool) =>
-              !isMemoryToolName(tool.name) && !isProgressBarTool(tool.name) && tool.name !== 'set_workspace_status',
+              !isMemoryToolName(tool.name) &&
+              !isProgressBarTool(tool.name) &&
+              tool.name !== 'set_workspace_status' &&
+              tool.name !== 'start_code_review' &&
+              !isWorkspaceObservationTool(tool.name) &&
+              tool.name !== 'run_setup_script' &&
+              !isWorkspaceTagTool(tool.name),
           ),
         ]
       : GLOBAL_TOOLS
@@ -748,6 +769,22 @@ export function createManagedMcpDispatcher(context: ManagedMcpContext) {
             ? { isError: true }
             : {}),
         }
+      }
+      if (
+        isWorkspaceObservationTool(name) ||
+        name === 'start_code_review' ||
+        name === 'run_setup_script' ||
+        isWorkspaceTagTool(name)
+      ) {
+        if (workspaceId && a.workspace_id !== undefined && a.workspace_id !== workspaceId)
+          return fail('Tool is bound to its launch workspace')
+        return await dialogueTool(
+          backendUrl,
+          name,
+          { ...a, ...(workspaceId ? { workspace_id: workspaceId } : {}) },
+          undefined,
+          env.KOBO_MCP_CLIENT_NAME ?? undefined,
+        )
       }
       if (
         isWorkspaceCreationTool(name) ||

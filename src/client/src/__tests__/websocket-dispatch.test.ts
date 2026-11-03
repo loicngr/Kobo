@@ -91,6 +91,23 @@ describe('websocket dispatch — AgentEvent side-effects to workspace store', ()
     fetch.mockRestore()
   })
 
+  it('updates workspace tags immediately without accepting malformed events', async () => {
+    const { useWebSocketStore } = await import('../stores/websocket.js')
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const store = useWorkspaceStore()
+    store.workspaces = [workspaceFixture()]
+    store.archivedWorkspaces = [{ ...workspaceFixture(), id: 'archived', archivedAt: '2026-01-01' }]
+    const socket = useWebSocketStore()
+    for (const workspaceId of ['w1', 'archived']) {
+      socket._routeMessage({ type: 'workspace:tags-updated', workspaceId, payload: { tags: ['API'] } })
+      socket._routeMessage({ type: 'workspace:tags-updated', workspaceId, payload: { tags: [42] } })
+    }
+    expect(store.workspaces[0]!.tags).toEqual(['API'])
+    expect(store.archivedWorkspaces[0]!.tags).toEqual(['API'])
+    socket._routeMessage({ type: 'workspace:tags-updated', workspaceId: 'w1', payload: { tags: [] } })
+    expect(store.workspaces[0]!.tags).toEqual([])
+  })
+
   it('routes durable review status and clears it with a null payload', async () => {
     const { useWebSocketStore } = await import('../stores/websocket.js')
     const { useAutoLoopReviewStore } = await import('../stores/auto-loop-review.js')

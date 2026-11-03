@@ -3,6 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import Database from 'better-sqlite3'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createManagedMcpDispatcher } from '../mcp-server/managed-mcp-dispatcher.js'
 
 // Mock settings-service to avoid filesystem access during tests.
 vi.mock('../server/services/settings-service.js', () => ({
@@ -940,10 +941,24 @@ describe('MCP server tool registration — global workspace tools', () => {
   })
 
   it('gates the exposed tool list on workspaceId being set', () => {
-    const src = readServerSource()
-    expect(src).toMatch(
-      /const tools\s*=\s*workspaceId\s*\?\s*\[\s*\.\.\.WORKSPACE_SCOPED_TOOLS,\s*\.\.\.GLOBAL_TOOLS\.filter\(\s*\(tool\) =>\s*!isMemoryToolName\(tool\.name\) && !isProgressBarTool\(tool\.name\) && tool\.name !== 'set_workspace_status',?\s*\),?\s*\]\s*:\s*GLOBAL_TOOLS/,
-    )
+    const db = new Database(':memory:')
+    try {
+      const context = { db, backendUrl: 'http://localhost', env: {}, backendRequest: vi.fn() }
+      const global = createManagedMcpDispatcher(context).availableTools()
+      const bound = createManagedMcpDispatcher({ ...context, workspaceId: 'own' }).availableTools()
+      expect(global.some((tool) => tool.name === 'list_tasks')).toBe(false)
+      expect(bound.some((tool) => tool.name === 'list_tasks')).toBe(true)
+      for (const tools of [global, bound]) {
+        expect(new Set(tools.map((tool) => tool.name)).size).toBe(tools.length)
+        expect(tools.some((tool) => tool.name === 'create_workspace')).toBe(true)
+      }
+      expect(global.find((tool) => tool.name === 'start_code_review')?.inputSchema.required).toContain('workspace_id')
+      expect(bound.find((tool) => tool.name === 'start_code_review')?.inputSchema.required).not.toContain(
+        'workspace_id',
+      )
+    } finally {
+      db.close()
+    }
   })
 
   it('no longer exits the process when KOBO_WORKSPACE_ID is unset', () => {

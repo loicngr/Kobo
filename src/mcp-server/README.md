@@ -61,6 +61,7 @@ Leave `KOBO_WORKSPACE_ID` unset or empty for an external client. Set `KOBO_MCP_T
 | `send_workspace_message` | `workspace_id`, `content` and/or `attachments`, optional `session_id`, `idempotency_key` | `{ accepted: true, sessionId }`; keyed sends also return `requestId`, `eventId`, and `replayed` on a successful retry. |
 | `get_workspace_questions` | `workspace_id` | Pending `questions` and `requiresHumanApproval` for a permission request at the head of the queue. |
 | `answer_workspace_question` | `workspace_id`, `tool_call_id`, `answers`, optional `selections` | `{ accepted: true }` after answering the current question. |
+| `start_code_review` | `workspace_id`, optional LLM configuration, instructions and session options | `{ ok, messageSent, newSession, parallel, sessionId }` after launching the review. |
 
 Typical dialogue:
 
@@ -338,6 +339,93 @@ and successfully call `mark_auto_loop_ready`, then change status and let the ses
 end naturally without implementing; the next iteration waits for native closure.
 Plan prompts request neither mutation.
 
+### Discover options and follow workspace operations
+
+These tools are available through managed workspace stdio, external HTTP and global
+stdio. Managed calls are bound to the launch workspace and omit `workspace_id`;
+external calls must supply it and have the corresponding tool and workspace grants.
+Existing credentials are not automatically expanded. Read-only launches can use the
+four inspection tools, but cannot stop a reviewer or retry/cancel a report return.
+
+| Tool | Arguments beyond `workspace_id` | Result / purpose |
+|---|---|---|
+| `get_code_review_status` | None | `{parallel, return}` with review session IDs, phases and errors; either can be null. Ordinary primary reviews without a return remain visible through `list_workspace_sessions`. |
+| `stop_code_review` | `session_id` | Stop the exact parallel reviewer; never stops the primary session. |
+| `retry_code_review_return` | `review_type`: `parallel` or `return`, `session_id` | Retry the report return using the UI recovery guards. |
+| `cancel_code_review_return` | Same selectors | Cancel a pending report return using the UI lifecycle. |
+| `list_agent_options` | Optional `engine`; native Vibe discovery also accepts `model`, `agent_permission_mode` | Registered engine capabilities, model IDs, efforts, permission modes and current workspace selections. |
+| `get_setup_script_status` | Optional `run_id`, `after_id`, `limit` (1–100, default 50) | Latest or selected setup outcome and a bounded page of persisted output. |
+| `list_workspace_tags` | None | `{tags, workspaceTags}`: configured catalogue and current workspace tags, without enumerating other workspaces. |
+
+Read review status first and pass its exact `reviewSessionId` as `session_id`.
+A stale ID is rejected, including at the sequential return mutation boundary.
+All review actions also pass through the workspace router and its transfer guard.
+Retries are explicit: an uncertain delivery must never be retried automatically.
+
+`list_agent_options` uses the same catalogues as the interface, not a provider
+account entitlement check. With `engine: "mistral-vibe"`, it uses the existing
+native discovery service in the authorized workspace and returns `nativeOptions`
+(model and thinking selectors). Discovery failures are reported as tool errors;
+other engines do not start native discovery. The global stdio bridge allows
+90 seconds for native Vibe discovery, matching the UI; ordinary reads retain
+their 30-second deadline. It does not return global settings
+or credentials. Tags currently have names only, without stored per-tag colours.
+
+Setup runs persist start and finish receipts alongside their existing output.
+Reruns record the new attempt before stopping the agent, so a failed stop is
+reported for that attempt instead of showing a previous success.
+`get_setup_script_status` returns `preparing`, `running`, `succeeded`, `failed` or `unknown`,
+plus `runId`, `exitCode`, `error`, timestamps, `logs`, `hasMore` and `nextAfterId`.
+A preparation failure has a null exit code and an error message; the script did not run.
+For the next page, pass the returned `runId` as `run_id` and `nextAfterId` as
+`after_id`. Cursors must belong to that workspace and run; starting a new run
+does not change a pinned run's pages. Each output record is limited to 1,000
+characters with an explicit `truncated` flag. Do not copy sensitive script output
+into reports. History follows normal event retention: legacy runs, expired history
+or a server restart without a finish receipt are **unknown**, never assumed successful.
+This tool does not restart a stopped agent or automatically retry a setup.
+
+### Start a code review
+
+`start_code_review` uses the same backend handler as the **Start review** dialog.
+It is available through managed workspace stdio, external HTTP and global stdio.
+Managed agents omit `workspace_id`: the launch capability binds the tool to their
+own workspace. Plan/read-only, review and handoff capabilities cannot launch a
+review. External clients must supply `workspace_id` and have an explicit
+`start_code_review` grant covering that workspace; existing keys are not expanded.
+
+| Argument | Behavior |
+|---|---|
+| `engine` | `claude-code`, `codex` or `mistral-vibe`; omitted inherits the workspace engine. |
+| `model` | Model ID; omitted inherits the current model, or `auto` when changing engines. |
+| `reasoning_effort` | Engine-supported effort; inherits the workspace value, or `auto` when changing engines. |
+| `agent_permission_mode` | `plan`, `bypass`, `strict` or `interactive`, validated for the selected engine. The same UI restrictions apply to returning and parallel reviewers. |
+| `additional_instructions` | Optional instructions, up to 20,000 characters. |
+| `new_session` | Defaults to `true`. Set `false` to allow reuse of an idle session; engine/configuration changes, parallel reviews and report returns still force a new session. |
+| `return_to_session` | Defaults to `false`. Return the report to the exact source session; requires a resumable source. |
+
+For example, from an agent inside a workspace:
+
+```json
+{
+  "engine": "codex",
+  "model": "auto",
+  "reasoning_effort": "high",
+  "agent_permission_mode": "plan",
+  "additional_instructions": "Review correctness and regression risks. Do not modify files.",
+  "new_session": true,
+  "return_to_session": true
+}
+```
+
+An external client adds `"workspace_id": "<workspace ID>"`. The result identifies
+the review session, not a finished report. Read it with `read_workspace_messages`
+and that `session_id`, or use automatic report return. A launch conflict or
+unavailable workspace returns a tool error. After a timeout or uncertain response,
+inspect `list_workspace_sessions` before another launch; no automatic retries.
+Without parallel/return mode, the selected permissions apply just as in the UI;
+choose `plan` for a read-only Claude/Codex review.
+
 Manual reviews can run in a separate `parallel-review` session while the primary
 continues. Claude/Codex use Plan; Vibe uses native permissions with read-only MCP
 grants, without a filesystem read-only guarantee. These reviewers read the live
@@ -514,6 +602,47 @@ Creation requests have no automatic retry or exactly-once guarantee. After a dis
 `decisions` uses the existing checkout contract's camelCase keys: `existingWorkspace: "open"`, `archivedWorkspace: "unarchive"`, `orphanWorktree: "attach" | "create-elsewhere"`, `pathCollision: {worktreePath}`, `localChanges: "stash" | "commit" | "discard" | "keep"`, `ongoingOperation: "abort" | "cancel"`, `divergence: "fast-forward" | "rebase" | "reset-hard" | "keep"`. Destructive choices must be supplied explicitly. The backend rechecks Git state under its checkout lock before applying them. Forks, unavailable forge CLIs and other blockers are reported using the same rules as the form.
 
 ---
+
+#### `add_workspace_tags` and `remove_workspace_tags`
+
+Add or remove tags on an existing workspace without replacing unrelated tags.
+Managed agents pass `{"tags":["API","urgent"]}` for their own workspace.
+External HTTP/global stdio clients also supply `"workspace_id":"<ID>"` and
+need the corresponding tool grant and access to that workspace. Read-only
+managed launches cannot modify tags. These operations do not edit or delete
+the global tag catalogue.
+
+Both tools accept 1–50 tag strings. Whitespace is trimmed, duplicates are removed,
+and matching is case-sensitive (`API` and `api` are different tags). Each tag
+must contain 1–50 characters after trimming. Adding an existing tag or removing
+an absent tag is harmless. An addition exceeding the workspace's 50-tag limit
+fails without changing its existing tags. Updates are transactional, so concurrent
+additions do not overwrite one another. The response contains `{workspaceId, tags}`
+with the final list, and a WebSocket event updates connected workspace views.
+
+#### `run_setup_script`
+
+Re-run the configured setup script using the same backend action as the UI.
+Managed workspace agents call it with `{}`; their launch capability binds the
+target. External HTTP/global stdio clients pass `{"workspace_id":"<ID>"}` and
+need an explicit `run_setup_script` grant covering that workspace. Read-only
+launches cannot call it. Commands, script bodies, environment overrides and
+worktree paths are not accepted as arguments.
+
+Kōbō stops the running agent, then executes the saved project/global setup script
+in the workspace worktree with the usual workspace environment. Output streams
+to the workspace's setup logs. Success returns `{"success":true}`; missing setup,
+missing checkout, an unconfirmed stop, a concurrent setup or a nonzero exit code
+returns a tool error. Archived/purged workspaces must first be restored. These
+workspace, script and checkout checks happen before stopping the agent, so an
+invalid request leaves the current session running. The script retains its five-minute timeout; the stdio bridge
+allows up to 15 minutes for the request, including agent shutdown.
+
+**Calling from the target agent stops that caller too.** The accepted backend
+operation continues even when stopping revokes the calling capability, but that
+agent may never receive the tool response. The agent is not automatically
+restarted. Inspect setup logs before retrying an uncertain request; do not retry
+automatically. Setup scripts can modify files just as when run from the UI.
 
 #### `archive_workspace`
 Archive a workspace by id, like the "Archiver" action in the workspace context menu. Stops its processes and auto-loop, preserves checkout and history, and may run the configured archive script. Available on internal stdio, global stdio and external HTTP; requires the backend to be running.

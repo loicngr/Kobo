@@ -5080,6 +5080,8 @@ describe('POST /api/workspaces/:id/run-setup-script', () => {
         sourceBranch: 'main',
         projectPath: '/tmp/project',
       },
+      undefined,
+      expect.any(Function),
     )
   })
 

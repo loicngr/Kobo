@@ -1,4 +1,5 @@
 import type { Tool } from '@modelcontextprotocol/sdk/types.js'
+import { MAX_TAG_LENGTH, MAX_WORKSPACE_TAGS, validateWorkspaceTagList } from './workspace-tags.js'
 
 const workspaceId = {
   type: 'string',
@@ -31,7 +32,56 @@ export const SET_WORKSPACE_STATUS_TOOL: Tool = {
   annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
 }
 
+export const RUN_SETUP_SCRIPT_TOOL: Tool = {
+  name: 'run_setup_script',
+  description:
+    'Re-run the configured project setup script in a workspace worktree, exactly like the UI action. Stops the running agent first and does not restart it. Uses the saved project/global setup configuration and normal workspace environment; no caller-supplied command or path. Logs stream to the workspace, with a five-minute script timeout. Calling this from the target agent stops that caller too: setup continues in the backend but the tool response may be lost. Inspect setup logs before retrying an uncertain execution; never retry automatically.',
+  inputSchema: {
+    type: 'object',
+    properties: { workspace_id: workspaceId },
+    required: ['workspace_id'],
+    additionalProperties: false,
+  },
+  annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+}
+
+export const INTERNAL_RUN_SETUP_SCRIPT_TOOL: Tool = {
+  ...RUN_SETUP_SCRIPT_TOOL,
+  description: `${RUN_SETUP_SCRIPT_TOOL.description} Bound to the calling agent's workspace; omit workspace_id.`,
+  inputSchema: { ...RUN_SETUP_SCRIPT_TOOL.inputSchema, required: [] },
+}
+
+export const WORKSPACE_TAG_TOOLS: Tool[] = ['add_workspace_tags', 'remove_workspace_tags'].map((name) => ({
+  name,
+  description: `${name === 'add_workspace_tags' ? 'Add tags to' : 'Remove tags from'} a workspace without replacing unrelated tags. Trim surrounding whitespace, deduplicate and match case-sensitively. Adding existing tags or removing absent tags is harmless. At most 50 tags per workspace, each at most 50 characters. Exceeding the limit fails without changes. Updates the visible workspace immediately. Does not edit the global tag catalogue.`,
+  inputSchema: {
+    type: 'object',
+    properties: {
+      workspace_id: workspaceId,
+      tags: {
+        type: 'array',
+        minItems: 1,
+        maxItems: MAX_WORKSPACE_TAGS,
+        items: { type: 'string', minLength: 1, maxLength: MAX_TAG_LENGTH },
+      },
+    },
+    required: ['workspace_id', 'tags'],
+    additionalProperties: false,
+  },
+  annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+}))
+export const INTERNAL_WORKSPACE_TAG_TOOLS: Tool[] = WORKSPACE_TAG_TOOLS.map((tool) => ({
+  ...tool,
+  description: `${tool.description} Bound to the calling agent's workspace; omit workspace_id.`,
+  inputSchema: { ...tool.inputSchema, required: ['tags'] },
+}))
+export function isWorkspaceTagTool(name: string): boolean {
+  return WORKSPACE_TAG_TOOLS.some((tool) => tool.name === name)
+}
+
 export const WORKSPACE_LIFECYCLE_TOOLS: Tool[] = [
+  ...WORKSPACE_TAG_TOOLS,
+  RUN_SETUP_SCRIPT_TOOL,
   {
     name: 'archive_workspace',
     description:
@@ -120,7 +170,9 @@ export function validateWorkspaceLifecycleArguments(name: string, raw: unknown):
   for (const [key, value] of Object.entries(input)) {
     if (!Object.hasOwn(properties, key)) throw new Error(`Unknown field: ${key}`)
     const definition = properties[key]!
-    if (definition.type === 'boolean') {
+    if (definition.type === 'array') {
+      validateWorkspaceTagList(value)
+    } else if (definition.type === 'boolean') {
       if (typeof value !== 'boolean' || (definition.const !== undefined && value !== definition.const))
         throw new Error(`${key} must be ${definition.const === true ? 'true' : 'a boolean'}`)
     } else if (

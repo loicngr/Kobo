@@ -2126,16 +2126,36 @@ app.get('/:id/review-return', (c) => {
   if (!workspaceService.getWorkspace(id)) return c.json({ error: 'Workspace not found' }, 404)
   return c.json(getReviewReturnStatus(id))
 })
-app.post('/:id/review-return/retry', migrationGuard, (c) => {
+app.post('/:id/review-return/retry', migrationGuard, async (c) => {
   try {
+    if (c.req.header('Content-Type')?.includes('application/json')) {
+      const text = await c.req.text()
+      const body = text ? JSON.parse(text) : {}
+      if (
+        body?.sessionId !== undefined &&
+        (typeof body.sessionId !== 'string' ||
+          getReviewReturnStatus(c.req.param('id'))?.reviewSessionId !== body.sessionId)
+      )
+        return c.json({ error: 'Review session does not match the current review' }, 409)
+    }
     agentManager.retryReviewReturn(c.req.param('id'))
     return c.json(getReviewReturnStatus(c.req.param('id')))
   } catch (error) {
     return c.json({ error: error instanceof Error ? error.message : 'Review recovery failed' }, 409)
   }
 })
-app.post('/:id/review-return/cancel', migrationGuard, (c) => {
+app.post('/:id/review-return/cancel', migrationGuard, async (c) => {
   try {
+    if (c.req.header('Content-Type')?.includes('application/json')) {
+      const text = await c.req.text()
+      const body = text ? JSON.parse(text) : {}
+      if (
+        body?.sessionId !== undefined &&
+        (typeof body.sessionId !== 'string' ||
+          getReviewReturnStatus(c.req.param('id'))?.reviewSessionId !== body.sessionId)
+      )
+        return c.json({ error: 'Review session does not match the current review' }, 409)
+    }
     agentManager.cancelReviewReturn(c.req.param('id'))
     return c.json({ ok: true })
   } catch (error) {
@@ -3289,6 +3309,35 @@ app.put('/:id/tags', async (c) => {
   }
 })
 
+// Incremental tag edits share normalization and persistence with the UI's PUT.
+app.patch('/:id/tags', async (c) => {
+  try {
+    const body: unknown = await c.req.json()
+    if (
+      !body ||
+      typeof body !== 'object' ||
+      Array.isArray(body) ||
+      Object.keys(body).some((key) => key !== 'operation' && key !== 'tags') ||
+      !('operation' in body) ||
+      (body.operation !== 'add' && body.operation !== 'remove') ||
+      !('tags' in body)
+    )
+      return c.json({ error: 'Expected operation (add or remove) and tags' }, 400)
+    const workspace = workspaceService.changeWorkspaceTags(c.req.param('id'), body.tags, body.operation)
+    return c.json({ workspaceId: workspace.id, tags: workspace.tags })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unable to change tags'
+    return c.json(
+      { error: message },
+      error instanceof TypeError || error instanceof RangeError || error instanceof SyntaxError
+        ? 400
+        : message.includes('not found')
+          ? 404
+          : 500,
+    )
+  }
+})
+
 // PATCH /api/workspaces/:id — update workspace fields (status, model, agentPermissionMode, name)
 app.patch('/:id', migrationGuard, async (c) => {
   if (workspaceLifecycleReason(c.req.param('id')) === 'session-handoff')
@@ -3588,6 +3637,8 @@ app.post('/:id/run-setup-script', async (c) => {
     const id = c.req.param('id')
     const workspace = workspaceService.getWorkspace(id)
     if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    if (workspace.archivedAt || workspace.worktreePurgedAt)
+      return c.json({ error: 'Restore the workspace before running its setup script' }, 409)
 
     if (setupScriptRunning.has(id)) {
       return c.json({ error: 'Setup script is already running for this workspace' }, 409)
@@ -3600,31 +3651,32 @@ app.post('/:id/run-setup-script', async (c) => {
     // Everything below releases the claim, including the validation failures:
     // a workspace left marked as running would refuse every later attempt.
     try {
-      // Stop the running agent before re-running the setup script — the script
-      // rewrites the worktree the agent may still be writing to.
-      try {
-        assertAgentStopped(await agentManager.stopAgentAndWait(id, undefined, 'setup'))
-      } catch (err) {
-        console.error(`[workspaces] stopAgentAndWait before setup script failed for '${id}':`, err)
-        throw err
-      }
-
       const effectiveSettings = settingsService.getEffectiveSettings(workspace.projectPath)
       if (!effectiveSettings.setupScript) {
         return c.json({ error: 'No setup script configured' }, 400)
       }
-
       const worktreePath = workspace.worktreePath
       if (!fs.existsSync(worktreePath)) {
         return c.json({ error: `Worktree path does not exist: ${worktreePath}` }, 400)
       }
 
-      const result = await runSetupScript(workspace.id, worktreePath, effectiveSettings.setupScript, {
-        workspaceName: workspace.name,
-        branchName: workspace.workingBranch,
-        sourceBranch: workspace.sourceBranch,
-        projectPath: workspace.projectPath,
-      })
+      const result = await runSetupScript(
+        workspace.id,
+        worktreePath,
+        effectiveSettings.setupScript,
+        {
+          workspaceName: workspace.name,
+          branchName: workspace.workingBranch,
+          sourceBranch: workspace.sourceBranch,
+          projectPath: workspace.projectPath,
+        },
+        undefined,
+        async () => {
+          // Record the attempt before stopping its caller so lost responses remain inspectable.
+          assertAgentStopped(await agentManager.stopAgentAndWait(id, undefined, 'setup'))
+          if (!fs.existsSync(worktreePath)) throw new Error(`Worktree path does not exist: ${worktreePath}`)
+        },
+      )
 
       if (result.exitCode !== 0) {
         return c.json({ error: `Setup script failed with exit code ${result.exitCode}` }, 500)

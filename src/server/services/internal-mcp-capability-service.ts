@@ -3,7 +3,8 @@ import { isProgressBarTool } from '../../shared/progress-bar-tools.js'
 import { WORKSPACE_CREATION_TOOLS } from '../../shared/workspace-creation-tools.js'
 import { EXTERNAL_MCP_TOOLS } from '../../shared/workspace-dialogue-tools.js'
 import { WORKSPACE_GROUP_MESSAGE_TOOLS } from '../../shared/workspace-group-message-tools.js'
-import { WORKSPACE_LIFECYCLE_TOOLS } from '../../shared/workspace-lifecycle-tools.js'
+import { isWorkspaceTagTool, WORKSPACE_LIFECYCLE_TOOLS } from '../../shared/workspace-lifecycle-tools.js'
+import { WORKSPACE_OBSERVATION_TOOLS } from '../../shared/workspace-observation-tools.js'
 
 export interface InternalMcpCapability {
   token: string
@@ -14,6 +15,7 @@ export interface InternalMcpCapability {
 }
 const capabilities = new Map<string, InternalMcpCapability>()
 const readTools = new Set([
+  ...WORKSPACE_OBSERVATION_TOOLS.filter((t) => t.annotations?.readOnlyHint).map((t) => t.name),
   'list_tasks',
   'get_settings',
   'get_dev_server_status',
@@ -40,6 +42,8 @@ const readTools = new Set([
   ...WORKSPACE_CREATION_TOOLS.filter((t) => t.annotations?.readOnlyHint).map((t) => t.name),
 ])
 const writeTools = new Set([
+  ...WORKSPACE_OBSERVATION_TOOLS.filter((t) => !t.annotations?.readOnlyHint).map((t) => t.name),
+  'start_code_review',
   'mark_task_done',
   'mark_auto_loop_ready',
   'create_task',
@@ -66,7 +70,9 @@ const writeTools = new Set([
 const externalTools = new Set([
   ...EXTERNAL_MCP_TOOLS.map((t) => t.name),
   ...WORKSPACE_CREATION_TOOLS.map((t) => t.name),
-  ...WORKSPACE_LIFECYCLE_TOOLS.filter((t) => t.name !== 'set_workspace_status').map((t) => t.name),
+  ...WORKSPACE_LIFECYCLE_TOOLS.filter(
+    (t) => t.name !== 'set_workspace_status' && t.name !== 'run_setup_script' && !isWorkspaceTagTool(t.name),
+  ).map((t) => t.name),
   ...WORKSPACE_GROUP_MESSAGE_TOOLS.map((t) => t.name),
   'stop_workspace',
 ])

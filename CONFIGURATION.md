@@ -154,7 +154,7 @@ settings exports.
 | `notionInitialPromptTemplate` | `string` | Template injected as the first user message when a workspace is created from a Notion page. |
 | `sentryInitialPromptTemplate` | `string` | Template injected as the first user message when a workspace is created from a Sentry issue. |
 | `gitConventions` | `string` | Markdown block written to `.ai/.git-conventions.md` inside every workspace. |
-| `setupScript` | `string` | Shell script run in a worktree after it is created, before the agent starts. Empty disables the setup script. |
+| `setupScript` | `string` | Shell script run in a worktree after it is created, before the agent starts. Empty disables the setup script. Can be rerun from the UI or MCP [`run_setup_script`](src/mcp-server/README.md#run_setup_script), which stops the workspace agent first without restarting it. |
 | `cleanupScript` | `string` | Shell script run after a session ends. Empty disables. See `cleanupScriptMode`. |
 | `cleanupScriptMode` | `'idle' \| 'no-tasks'` | When the cleanup script fires: after every session (`idle`) or only when no Kōbō task remains (`no-tasks`). In auto-loop it runs only once every task is done. |
 | `cleanupScriptOnlyOnChanges` | `boolean` | Run the cleanup script only when the worktree has uncommitted changes (modified / added / deleted / untracked files). |
@@ -673,6 +673,19 @@ above.
 The workspace's **Start review** dialog offers engine (Claude Code, Codex or Mistral Vibe),
 model, reasoning effort and permission mode using the same catalogues as workspace
 creation. The current workspace settings are selected initially.
+
+MCP clients can discover the same engine/model/effort catalogue with
+`list_agent_options` and follow reviews with `get_code_review_status`.
+`stop_code_review` targets only the exact parallel reviewer; report-return recovery
+uses `retry_code_review_return` / `cancel_code_review_return` with an explicit
+review type and session ID. See the [MCP operation tools](src/mcp-server/README.md#discover-options-and-follow-workspace-operations)
+for grants, setup status/log pagination and tag discovery.
+
+Agents and external MCP clients can launch the same review with `start_code_review`,
+including the LLM, permission mode, additional instructions and report return.
+Managed calls target their own workspace; external keys need an explicit tool
+and workspace grant. MCP defaults to a new session; `new_session: false` allows
+the dialog's reuse behavior. See the [MCP arguments and example](src/mcp-server/README.md#start-a-code-review).
 
 When the main agent is running, the review starts alongside it in a separate
 session. **New session** is forced, and Claude Code/Codex use locked **Plan**

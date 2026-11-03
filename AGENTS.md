@@ -309,6 +309,44 @@ status use the same compaction snapshot.
 
 ### External MCP dialogue and update checks
 
+`start_code_review` is shared by managed workspace MCP and external HTTP/global
+stdio. Its schema and snake_case-to-dialog mapping live in `shared/code-review-tools.ts`;
+`code-review-mcp-service.ts` dispatches through the existing `/start-review` route,
+preserving migration, lifecycle, model validation, parallel review and return guards.
+Managed calls are bound to their launch workspace and denied in read-only launches;
+external calls require explicit tool/workspace grants. Never retry uncertain launches
+automatically. Unlike the dialog, omitted `new_session` defaults to true.
+
+Workspace observation/review-control tools share `workspace-observation-tools.ts`
+and `workspace-observation-mcp-service.ts` across managed stdio, global stdio and
+HTTP. All are workspace-bound, including model/tag discovery. Inspection remains
+available to read-only launches; review mutations require write capability and
+explicit external grants. Review mutations target exact session IDs; preserve the
+sequential route's final ID check and the parallel orchestrator's existing check.
+Use engine capabilities and contextual native Vibe discovery, never duplicate model
+catalogues or expose full settings. Setup start/finish receipts use `ws_events`,
+with bounded run-scoped output pagination; missing completion is unknown, not success.
+Record rerun attempts before agent shutdown, expose preparing, and persist
+preparation failures with a null exit code. Route parallel review actions through
+the workspace router so session-transfer guards apply. Native Vibe discovery uses
+the UI-equivalent 90-second global stdio deadline.
+Normal event retention applies; no schema change is needed.
+
+`run_setup_script` uses the shared workspace lifecycle MCP contract and the UI's
+`/run-setup-script` route. Managed calls bind to their own workspace; external keys
+need explicit tool/workspace grants. Reject script/path/environment overrides and
+read-only callers. The existing route stops the agent before running setup, so a
+self-call can lose its response while backend execution continues after capability
+revocation. Never automatically retry or restart the stopped agent.
+
+`add_workspace_tags` / `remove_workspace_tags` apply atomic deltas through
+`PATCH /api/workspaces/:id/tags`, sharing persistence and normalization with the
+UI's replacement action. Keep existing tags on overflow; never implement MCP
+deltas as a GET followed by PUT. Managed calls bind to their launch workspace,
+external calls require tool/workspace grants, and read-only launches cannot write.
+Broadcast `workspace:tags-updated` only after commit. Tag mutations do not edit
+the global tag catalogue.
+
 Workspace-bound stdio, global stdio and HTTP expose shared `create_workspace` / `diagnose_workspace_pr` definitions in `src/shared/workspace-creation-tools.ts`. Stdio forwards them to the backend. `workspace-creation-mcp-service.ts` validates inputs and dispatches through the existing workspace and PR routes in process; preserve UI validation, checkout fingerprints, lifecycle guards and rollback. Inputs use snake_case except the existing camelCase PR checkout decisions. Attachments are inline base64, bounded to the shared 10-file/50 MiB decoded limit before checkout mutations. Keep SDK HTTP/stdio limits aligned with the shared creation envelope budget. Creation and send_workspace_message envelopes with attachments get the larger base64 HTTP body budget; ordinary MCP requests remain 1 MiB. After a known PR creation failure, rollback only a checkout proven newly created, unchanged, clean (including ignored files) and unowned, under the Git repository lock; retain other checkouts and expose recovery details. Do not retry uncertain creation automatically or treat `creation_id` as an idempotency key. Restricted review/handoff launches cannot create workspaces or invoke lifecycle mutations. Shared lifecycle tools (`workspace-lifecycle-tools.ts` / `workspace-lifecycle-mcp-service.ts`) also expose archive, purge, delete, unarchive and restore through the same transports. Reject reserved/bulk/path-like IDs, require explicit purge/delete flags, and preserve warnings. Single-workspace DELETE accepts optional `confirmationBranch`, rechecked under its lifecycle guard before stopping processes; MCP always supplies it. Branch rename/resync share this guard so the confirmed branch and checkout path cannot change during teardown. Recovery uses `restore-worktree` before unarchive and never starts an agent.
 
 `set_workspace_status` uses the shared lifecycle schema and the existing workspace

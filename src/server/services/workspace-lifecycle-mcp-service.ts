@@ -46,6 +46,12 @@ export async function executeWorkspaceLifecycleTool(name: string, raw: unknown, 
   }
   const workspaceId = input.workspace_id as string
   const path = `/api/workspaces/${encodeURIComponent(workspaceId)}`
+  if (name === 'add_workspace_tags' || name === 'remove_workspace_tags')
+    return request(dispatch, `${path}/tags`, 'tags', 'PATCH', {
+      operation: name === 'add_workspace_tags' ? 'add' : 'remove',
+      tags: input.tags,
+    })
+  if (name === 'run_setup_script') return request(dispatch, `${path}/run-setup-script`, 'setup', 'POST')
   if (name === 'set_workspace_status') return request(dispatch, path, 'set-status', 'PATCH', { status: input.status })
   if (name === 'archive_workspace') return request(dispatch, `${path}/archive`, 'archive', 'POST')
   if (name === 'purge_workspace_worktree') return request(dispatch, `${path}/purge-worktree`, 'purge', 'POST')
