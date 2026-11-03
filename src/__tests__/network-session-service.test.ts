@@ -1,10 +1,14 @@
+import { createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import Database from 'better-sqlite3'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { initBrowserSessionSchema } from '../server/db/browser-session-schema.js'
 import {
   consumeWebSocketTicket,
   createBrowserSession,
   createWebSocketTicket,
   getBrowserSession,
+  initializeBrowserSessions,
   isNetworkSocketAuthorized,
   isNetworkTransportAllowed,
   registerNetworkSocket,
@@ -13,8 +17,16 @@ import {
 } from '../server/services/network-session-service.js'
 
 const policy = { networkAccessEnabled: true, networkAccessBehindProxy: true, networkAccessToken: 'synthetic' }
+let db: Database.Database
+beforeEach(() => {
+  db = new Database(':memory:')
+  initBrowserSessionSchema(db)
+  initializeBrowserSessions(db)
+})
 afterEach(() => {
   revokeNetworkSessions()
+  initializeBrowserSessions(undefined)
+  db.close()
   vi.useRealTimers()
 })
 
@@ -90,5 +102,86 @@ describe('network sessions', () => {
     expect(getBrowserSession(second.token, policy)).toBeDefined()
     expect(consumeWebSocketTicket(ticket, '/ws', policy)).toBeUndefined()
     expect(ws.terminate).toHaveBeenCalledOnce()
+  })
+})
+
+describe('remembered browser sessions', () => {
+  it('stores only hashes and restores remembered sessions, not ordinary sessions or tickets', () => {
+    const regular = createBrowserSession(policy)
+    const remembered = createBrowserSession(policy, true)
+    const ticket = createWebSocketTicket('/ws', policy, remembered)
+    expect(db.prepare('SELECT * FROM browser_sessions').all()).toEqual([
+      {
+        token_hash: createHash('sha256').update(remembered.token).digest('hex'),
+        expires_at: remembered.expiresAt,
+        policy_fingerprint: remembered.policy,
+      },
+    ])
+    const persisted = JSON.stringify(db.prepare('SELECT * FROM browser_sessions').all())
+    expect(persisted).not.toContain(remembered.token)
+    expect(persisted).not.toContain(policy.networkAccessToken)
+    initializeBrowserSessions(db)
+    expect(getBrowserSession(regular.token, policy)).toBeUndefined()
+    expect(getBrowserSession(remembered.token, policy)).toEqual(remembered)
+    expect(consumeWebSocketTicket(ticket, '/ws', policy)).toBeUndefined()
+  })
+
+  it('expires after 30 days without sliding renewal and prunes expired rows on startup', () => {
+    vi.useFakeTimers()
+    const remembered = createBrowserSession(policy, true)
+    vi.advanceTimersByTime(29 * 24 * 60 * 60 * 1000)
+    initializeBrowserSessions(db)
+    expect(getBrowserSession(remembered.token, policy)).toEqual(remembered)
+    vi.advanceTimersByTime(24 * 60 * 60 * 1000)
+    expect(getBrowserSession(remembered.token, policy)).toBeUndefined()
+    initializeBrowserSessions(db)
+    expect(db.prepare('SELECT COUNT(*) AS count FROM browser_sessions').get()).toEqual({ count: 0 })
+  })
+
+  it('persists targeted logout and global revocation across restarts', () => {
+    const first = createBrowserSession(policy, true)
+    const second = createBrowserSession(policy, true)
+    revokeBrowserSession(first.token)
+    initializeBrowserSessions(db)
+    expect(getBrowserSession(first.token, policy)).toBeUndefined()
+    expect(getBrowserSession(second.token, policy)).toBeDefined()
+    revokeNetworkSessions()
+    initializeBrowserSessions(db)
+    expect(getBrowserSession(second.token, policy)).toBeUndefined()
+  })
+
+  it.each([
+    { ...policy, networkAccessToken: 'rotated' },
+    { ...policy, networkAccessEnabled: false },
+    { ...policy, networkAccessBehindProxy: false },
+  ])('rejects restored sessions under a different policy', (changed) => {
+    const remembered = createBrowserSession(policy, true)
+    initializeBrowserSessions(db)
+    expect(getBrowserSession(remembered.token, changed)).toBeUndefined()
+  })
+
+  it('does not overflow long socket timers and reconnects without asking for an operator token', () => {
+    vi.useFakeTimers()
+    const remembered = createBrowserSession(policy, true)
+    const socket = () => Object.assign(new EventEmitter(), { terminate: vi.fn() })
+    const first = socket()
+    expect(registerNetworkSocket(first as never, '127.0.0.1', policy, () => policy, remembered)).toBe(true)
+    vi.advanceTimersByTime(1000)
+    expect(first.terminate).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(12 * 60 * 60 * 1000)
+    expect(first.terminate).toHaveBeenCalledOnce()
+    expect(getBrowserSession(remembered.token, policy)).toBeDefined()
+    const ticket = createWebSocketTicket('/ws', policy, remembered)
+    expect(consumeWebSocketTicket(ticket, '/ws', policy)).toBeDefined()
+    const next = socket()
+    expect(registerNetworkSocket(next as never, '127.0.0.1', policy, () => policy, remembered)).toBe(true)
+    revokeBrowserSession(remembered.token)
+    expect(next.terminate).toHaveBeenCalledOnce()
+  })
+
+  it('counts restored sessions towards the existing capacity limit', () => {
+    for (let i = 0; i < 256; i++) createBrowserSession(policy, true)
+    initializeBrowserSessions(db)
+    expect(() => createBrowserSession(policy, true)).toThrow('Session capacity reached')
   })
 })

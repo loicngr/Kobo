@@ -9,7 +9,7 @@ import {
   isWorkspacePane,
   type WorkspacePaneWindow,
 } from 'src/utils/split-workspace'
-import { hasUnsavedWork } from 'src/utils/unsaved-guard'
+import { hasUnsavedWork, listDirtyScopes } from 'src/utils/unsaved-guard'
 import { createRouter, createWebHashHistory } from 'vue-router'
 import { defineRouter } from '#q-app'
 import routes from './routes'
@@ -28,7 +28,8 @@ export default defineRouter(() => {
   // the dialog's onOk/onCancel are wrapped in a promise the guard awaits.
   Router.beforeEach((to, from) => {
     if (isPassiveSplitNavigation(to, from) || isWorkspacePreviewNavigation(to, from)) return true
-    if (to.fullPath === from.fullPath || !hasUnsavedWork()) return true
+    // Composer drafts survive in-app navigation; other unsaved work still needs confirmation.
+    if (to.fullPath === from.fullPath || !listDirtyScopes().some((scope) => scope !== 'chat:message')) return true
     const t = i18n.global.t
     return new Promise<boolean>((resolve) => {
       Dialog.create({
@@ -49,7 +50,11 @@ export default defineRouter(() => {
   const hasPendingPaneWork = () => {
     const store = useWorkspaceStore()
     // Mirrored queues outlive this pane; only their owner must guard their destruction.
-    return hasPanePendingWork(hasUnsavedWork(), getWorkspaceQueueHost(store) ? {} : store.queuedMessages)
+    return hasPanePendingWork(
+      hasUnsavedWork() ||
+        Object.values(store.chatComposerDrafts).some((draft) => !!draft.text.trim() || draft.attachments.length > 0),
+      getWorkspaceQueueHost(store) ? {} : store.queuedMessages,
+    )
   }
   window.addEventListener('beforeunload', (event) => {
     if (!hasPendingPaneWork()) return

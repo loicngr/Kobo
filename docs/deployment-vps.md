@@ -220,7 +220,10 @@ curl -s -o /dev/null -w '%{http_code}\n' https://kobo.example.com/api/workspaces
 Expect health JSON with `status: "ok"` and the installed version, then `401`
 without a token. `/api/health` is intentionally public. Ordinary authenticated
 REST scripts use the operator token in `X-Kobo-Token`; browser login creates a
-12-hour HttpOnly session cookie. External MCP clients require a dedicated key,
+12-hour HttpOnly session cookie, or a persistent 30-day session when
+**Remember this device for 30 days** is checked in the login dialog. Remembered
+sessions survive Kōbō updates/restarts with the same database and authentication
+policy; the browser does not store the operator token. External MCP clients require a dedicated key,
 with explicitly granted tools/workspaces, even on loopback. See
 [external MCP credentials](../CONFIGURATION.md#external-llm-access-through-mcp).
 No additional Traefik route is needed for WebSocket upgrades: the browser obtains

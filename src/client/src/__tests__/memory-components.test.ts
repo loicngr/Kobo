@@ -1,12 +1,15 @@
 import { mount } from '@vue/test-utils'
-import { describe, expect, it } from 'vitest'
+import { createPinia, setActivePinia } from 'pinia'
+import { beforeEach, describe, expect, it } from 'vitest'
 import { createI18n } from 'vue-i18n'
+import { DEFAULT_MEMORY_LIMITS } from '../../../shared/memory-limits'
 import MemoryEntryEditor from '../components/memory/MemoryEntryEditor.vue'
 import MemoryEntryList from '../components/memory/MemoryEntryList.vue'
 import MemoryOperationsList from '../components/memory/MemoryOperationsList.vue'
 import MemoryProposalList from '../components/memory/MemoryProposalList.vue'
 import MemoryScopeSelect from '../components/memory/MemoryScopeSelect.vue'
 import en from '../i18n/en'
+import { useSettingsStore } from '../stores/settings'
 
 const global = { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })] }
 const entry = {
@@ -22,6 +25,15 @@ const entry = {
 }
 
 describe('reusable memory components', () => {
+  beforeEach(() => setActivePinia(createPinia()))
+  it('uses saved note limits without truncating an existing draft', () => {
+    useSettingsStore().global.memoryLimits = { ...DEFAULT_MEMORY_LIMITS, titleChars: 3, bodyChars: 5 }
+    const wrapper = mount(MemoryEntryEditor, { props: { scopeId: 'scope-1', entry }, global })
+    expect(wrapper.get('input[name="title"]').attributes('maxlength')).toBe('3')
+    expect(wrapper.get('textarea').attributes('maxlength')).toBe('5')
+    expect((wrapper.get('textarea').element as HTMLTextAreaElement).value).toBe(entry.body)
+  })
+
   it('resets a dirty draft when switching to a different entry identity', async () => {
     const wrapper = mount(MemoryEntryEditor, { props: { scopeId: 'scope-1', entry }, global })
     await wrapper.get('input[name="title"]').setValue('Unsaved A')

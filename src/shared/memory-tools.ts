@@ -1,4 +1,4 @@
-import { MEMORY_BODY_MAX_CHARS, MEMORY_PAGE_SIZE_MAX, MEMORY_TITLE_MAX_CHARS } from './memory.js'
+import { MEMORY_LIMIT_RANGES } from './memory-limits.js'
 
 export type MemoryToolName =
   | 'list_memory_scopes'
@@ -24,7 +24,7 @@ export const MEMORY_TOOL_DEFINITIONS: MemoryToolDefinition[] = [
       type: 'object',
       properties: {
         cursor: { type: 'string', pattern: '^\\d+$' },
-        limit: { type: 'integer', minimum: 1, maximum: MEMORY_PAGE_SIZE_MAX },
+        limit: { type: 'integer', minimum: 1, maximum: MEMORY_LIMIT_RANGES.pageMaxSize[1] },
       },
       required: [],
     },
@@ -38,7 +38,7 @@ export const MEMORY_TOOL_DEFINITIONS: MemoryToolDefinition[] = [
       properties: {
         scope_id: { type: 'string', minLength: 1 },
         cursor: { type: 'string', pattern: '^\\d+$' },
-        limit: { type: 'integer', minimum: 1, maximum: MEMORY_PAGE_SIZE_MAX },
+        limit: { type: 'integer', minimum: 1, maximum: MEMORY_LIMIT_RANGES.pageMaxSize[1] },
       },
       required: [],
     },
@@ -72,7 +72,7 @@ export const MEMORY_TOOL_DEFINITIONS: MemoryToolDefinition[] = [
         scope_id: { type: 'string', minLength: 1 },
         query: { type: 'string', minLength: 1, maxLength: 200 },
         cursor: { type: 'string', pattern: '^\\d+$' },
-        limit: { type: 'integer', minimum: 1, maximum: MEMORY_PAGE_SIZE_MAX },
+        limit: { type: 'integer', minimum: 1, maximum: MEMORY_LIMIT_RANGES.pageMaxSize[1] },
       },
       required: ['scope_id', 'query'],
     },
@@ -86,7 +86,7 @@ export const MEMORY_TOOL_DEFINITIONS: MemoryToolDefinition[] = [
       properties: {
         scope_id: { type: 'string', minLength: 1 },
         cursor: { type: 'string', pattern: '^\\d+$' },
-        limit: { type: 'integer', minimum: 1, maximum: MEMORY_PAGE_SIZE_MAX },
+        limit: { type: 'integer', minimum: 1, maximum: MEMORY_LIMIT_RANGES.pageMaxSize[1] },
       },
       required: ['scope_id'],
     },
@@ -102,8 +102,8 @@ export const MEMORY_TOOL_DEFINITIONS: MemoryToolDefinition[] = [
         scope_id: { type: 'string', minLength: 1 },
         expected_generation: { type: 'integer', minimum: 0 },
         key: { type: 'string', minLength: 1, maxLength: 80 },
-        title: { type: 'string', minLength: 1, maxLength: MEMORY_TITLE_MAX_CHARS },
-        body: { type: 'string', minLength: 1, maxLength: MEMORY_BODY_MAX_CHARS },
+        title: { type: 'string', minLength: 1, maxLength: MEMORY_LIMIT_RANGES.titleChars[1] },
+        body: { type: 'string', minLength: 1, maxLength: MEMORY_LIMIT_RANGES.bodyChars[1] },
         entry_id: { type: 'string', minLength: 1 },
         expected_revision: { type: 'integer', minimum: 1 },
       },
@@ -146,7 +146,7 @@ export const EXTERNAL_MEMORY_TOOL_DEFINITIONS: MemoryToolDefinition[] = MEMORY_T
   if (tool.name === 'list_memory_scopes') {
     properties.workspace_id = { type: 'string', minLength: 1 }
     properties.cursor = { type: 'string', pattern: '^\\d+$' }
-    properties.limit = { type: 'integer', minimum: 1, maximum: MEMORY_PAGE_SIZE_MAX }
+    properties.limit = { type: 'integer', minimum: 1, maximum: MEMORY_LIMIT_RANGES.pageMaxSize[1] }
   } else if (
     tool.name === 'list_memories' ||
     tool.name === 'search_memories' ||
@@ -211,7 +211,9 @@ export function validateMemoryToolArguments(
     throw new TypeError('Invalid memory_context_id')
   if (
     args.limit !== undefined &&
-    (!Number.isInteger(args.limit) || (args.limit as number) < 1 || (args.limit as number) > MEMORY_PAGE_SIZE_MAX)
+    (!Number.isInteger(args.limit) ||
+      (args.limit as number) < 1 ||
+      (args.limit as number) > MEMORY_LIMIT_RANGES.pageMaxSize[1])
   )
     throw new TypeError('Invalid page size')
   if (args.query !== undefined && (typeof args.query !== 'string' || !args.query.trim() || args.query.length > 200))
@@ -224,7 +226,8 @@ export function validateMemoryToolArguments(
       throw new TypeError(`Invalid ${key}`)
   }
   for (const key of ['key', 'title', 'body'] as const) {
-    const max = key === 'key' ? 80 : key === 'title' ? MEMORY_TITLE_MAX_CHARS : MEMORY_BODY_MAX_CHARS
+    const max =
+      key === 'key' ? 80 : key === 'title' ? MEMORY_LIMIT_RANGES.titleChars[1] : MEMORY_LIMIT_RANGES.bodyChars[1]
     if (args[key] !== undefined && (typeof args[key] !== 'string' || !args[key].trim() || args[key].length > max))
       throw new TypeError(`Invalid ${key}`)
   }

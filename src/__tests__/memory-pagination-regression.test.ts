@@ -1,9 +1,13 @@
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { Hono } from 'hono'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import router from '../server/routes/memory.js'
 import { allocateMemoryConversationKey, createMemoryCapability } from '../server/services/memory-agent-runtime.js'
 import { executeMemoryMcpTool } from '../server/services/memory-mcp-service.js'
 import { createMemory, resolveMemoryScope } from '../server/services/memory-service.js'
+import { _setSettingsPath } from '../server/services/settings-service.js'
 import { createIdleSession, createWorkspace } from '../server/services/workspace-service.js'
 import { prepareMemoryToolEnvelope } from '../server/utils/memory-token-budget.js'
 import { validateMemoryToolArguments } from '../shared/memory-tools.js'
@@ -175,4 +179,13 @@ describe('memory MCP pagination regressions', () => {
     expect(data.items.length).toBeLessThan(5)
     expect(data.nextCursor).toBe(String(3 + data.items.length))
   })
+})
+
+let settingsDir: string
+beforeEach(() => {
+  settingsDir = mkdtempSync(join(tmpdir(), 'kobo-memory-settings-'))
+  _setSettingsPath(join(settingsDir, 'settings.json'))
+})
+afterEach(() => {
+  rmSync(settingsDir, { recursive: true, force: true })
 })

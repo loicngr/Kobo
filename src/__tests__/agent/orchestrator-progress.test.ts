@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { MISTRAL_CAPABILITIES } from '../../server/services/agent/engines/mistral-vibe/capabilities.js'
 import type { AgentEngine, AgentEvent, EngineProcess, StartOptions } from '../../server/services/agent/engines/types.js'
+import { DEFAULT_MEMORY_LIMITS } from '../../shared/memory-limits.js'
 import { resetDb } from '../helpers/reset-db.js'
 
 vi.mock('../../server/services/websocket-service.js', () => ({
@@ -9,6 +10,7 @@ vi.mock('../../server/services/websocket-service.js', () => ({
   broadcastAll: vi.fn(),
 }))
 vi.mock('../../server/services/settings-service.js', () => ({
+  getMemoryLimits: () => ({ ...DEFAULT_MEMORY_LIMITS }),
   getGlobalSettings: () => ({ autoLoopMaxRetries: 5, memoryMode: 'hybrid' }),
   getProjectSettings: () => ({ forge: 'none' }),
   getEffectiveFinalization: () => ({ prompt: '' }),

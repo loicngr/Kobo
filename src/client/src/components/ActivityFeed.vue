@@ -233,6 +233,7 @@ const sessionActive = computed(() => {
 // the stream is not a pure append.
 let foldCache = createFoldCache()
 let foldCacheKey = ''
+let previousTurns: Turn[] = []
 
 // Missing delta IDs must not silently produce a partial saved copy.
 const unpersistedItemKeys = computed(() => {
@@ -271,6 +272,7 @@ const turns = computed(() => {
   const viewKey = `${props.workspaceId}::${selectedSessionId.value ?? '*'}`
   if (viewKey !== foldCacheKey) {
     foldCache = createFoldCache()
+    previousTurns = []
     foldCacheKey = viewKey
   }
   const agentItems = foldEventsCached(foldCache, filteredEvents, filteredTs, sessionActive.value, filteredIds)
@@ -288,7 +290,8 @@ const turns = computed(() => {
     if (item.kind !== 'ended') return settings.showVerboseSystemMessages
     return settings.showVerboseSystemMessages || !isNormalSessionEnd(item.detail)
   })
-  return groupIntoTurns(filtered)
+  previousTurns = groupIntoTurns(filtered, previousTurns)
+  return previousTurns
 })
 
 const rawLines = computed(() => {

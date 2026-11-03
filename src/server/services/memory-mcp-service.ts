@@ -23,6 +23,7 @@ import {
   remember,
   searchMemories,
 } from './memory-service.js'
+import { getMemoryLimits } from './settings-service.js'
 
 function externalActor(source: MessageSource): MemoryActor {
   if (source.kind !== 'mcp') throw new TypeError('External memory tools require MCP client context')
@@ -125,7 +126,7 @@ function readFragment(args: Record<string, unknown>, scopeId: string, actor: Mem
     revision: entry.revision,
     kind: 'body-fragment' as const,
     start: offset,
-    end: offset + 40,
+    end: Math.min([...entry.body].length, offset + getMemoryLimits().fragmentChars),
   }
   const alreadyDelivered = wasMemoryFragmentDelivered(budgetId, delivery)
   const fragment = sliceMemoryBodyFragment({
@@ -179,13 +180,17 @@ function chargeExternalOutput(input: {
   deliveries?: Array<{ entryId: string; revision: number; kind: 'metadata' | 'excerpt'; start?: number; end?: number }>
   pageOffset?: number
 }): Record<string, unknown> {
+  const limits = getMemoryLimits()
   // Use a worst-case fixed-width receipt while sizing, then reserve before the
   // result leaves the server. The external estimate counts text + structuredContent.
-  const sized = prepareMemoryToolEnvelope(addBudgetReceipt(input.data, input.contextId, 1_000, 6_000), {
-    targetTokens: 1_000,
-    transport: 'external',
-    pageOffset: input.pageOffset,
-  })
+  const sized = prepareMemoryToolEnvelope(
+    addBudgetReceipt(input.data, input.contextId, limits.responseTokens, limits.conversationTokens),
+    {
+      targetTokens: limits.responseTokens,
+      transport: 'external',
+      pageOffset: input.pageOffset,
+    },
+  )
   const emittedItems = Array.isArray(sized.data.items) ? sized.data.items : []
   const emittedIds = new Set(
     emittedItems
@@ -203,7 +208,7 @@ function chargeExternalOutput(input: {
   const reservation = reserveMemoryBudget({
     budgetContextId: input.contextId,
     estimatedTokens: sized.estimatedTokens,
-    responseLimitTokens: 1_000,
+    responseLimitTokens: limits.responseHardTokens,
     ...(emittedDelivery ? { delivery: emittedDelivery } : {}),
     ...(emittedDeliveries.length ? { deliveries: emittedDeliveries } : {}),
   })
@@ -214,7 +219,7 @@ function chargeExternalOutput(input: {
         budgetExhausted: true,
         message: 'Lectures épuisées; remember reste disponible.',
       },
-      { targetTokens: 1_000, transport: 'external' },
+      { targetTokens: limits.denialTokens, transport: 'external' },
     )
     const denialReservation = reserveMemoryBudgetDenial(input.contextId, denial.estimatedTokens)
     return denialReservation.responseAllowed ? denial.data : { memoryOutputSuppressed: true }

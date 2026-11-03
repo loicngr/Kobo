@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentEvent } from '../../server/services/agent/engines/types.js'
+import { DEFAULT_MEMORY_LIMITS } from '../../shared/memory-limits.js'
 import { resetDb } from '../helpers/reset-db.js'
 
 vi.mock('../../server/services/websocket-service.js', () => ({ emit: vi.fn(), emitEphemeral: vi.fn() }))
 vi.mock('../../server/services/settings-service.js', () => ({
+  getMemoryLimits: () => ({ ...DEFAULT_MEMORY_LIMITS }),
   getGlobalSettings: () => ({ autoLoopMaxRetries: 5 }),
   getProjectSettings: () => ({ forge: 'none' }),
   getEffectiveSettings: () => ({ model: 'auto', sessionEndedScript: '', autoLoopDisabledScript: '' }),

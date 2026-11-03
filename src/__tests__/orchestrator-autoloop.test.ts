@@ -5,6 +5,7 @@ import Database from 'better-sqlite3'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { initSchema } from '../server/db/schema.js'
 import type { AgentEvent } from '../server/services/agent/engines/types.js'
+import { DEFAULT_MEMORY_LIMITS } from '../shared/memory-limits.js'
 
 vi.mock('../server/services/websocket-service.js', () => ({
   emit: vi.fn(),
@@ -39,6 +40,7 @@ vi.mock('../server/services/usage/poller.js', () => ({
 }))
 
 vi.mock('../server/services/settings-service.js', () => ({
+  getMemoryLimits: () => ({ ...DEFAULT_MEMORY_LIMITS }),
   getGlobalSettings: () => ({ autoLoopMaxRetries: 5 }),
   getEffectiveSettings: () => ({
     model: 'claude-opus-4-7',

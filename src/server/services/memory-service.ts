@@ -7,18 +7,10 @@ import type {
   MemoryProvenance,
   MemoryScope,
 } from '../../shared/memory.js'
-import {
-  deriveMemoryActor,
-  isMemoryScope,
-  MEMORY_BODY_MAX_CHARS,
-  MEMORY_PAGE_SIZE,
-  MEMORY_PAGE_SIZE_MAX,
-  MEMORY_TITLE_MAX_CHARS,
-  memoryWriteDecision,
-} from '../../shared/memory.js'
+import { deriveMemoryActor, isMemoryScope, memoryWriteDecision } from '../../shared/memory.js'
 import { getDb } from '../db/index.js'
 import { normalizeMemoryProjectPath } from '../utils/memory-project-identity.js'
-import { getGlobalSettings } from './settings-service.js'
+import { getGlobalSettings, getMemoryLimits } from './settings-service.js'
 import { broadcastAll } from './websocket-service.js'
 
 export interface ResolvedMemoryScope {
@@ -208,9 +200,10 @@ function now(): string {
 }
 
 function requireBoundedPage(limit: number | undefined): number {
-  const resolved = limit ?? MEMORY_PAGE_SIZE
-  if (!Number.isInteger(resolved) || resolved < 1 || resolved > MEMORY_PAGE_SIZE_MAX) {
-    throw new TypeError(`Page size must be between 1 and ${MEMORY_PAGE_SIZE_MAX}`)
+  const limits = getMemoryLimits()
+  const resolved = limit ?? limits.pageSize
+  if (!Number.isInteger(resolved) || resolved < 1 || resolved > limits.pageMaxSize) {
+    throw new TypeError(`Page size must be between 1 and ${limits.pageMaxSize}`)
   }
   return resolved
 }
@@ -445,10 +438,11 @@ function notifyCommitted(scope: ScopeRow, operationId: number, journalOnly = fal
 
 /** Create idempotently by exact scope/key, atomically journaling and revising the scope. */
 export function createMemory(input: CreateMemoryInput): MemoryEntry {
+  const limits = getMemoryLimits()
   if (!input || typeof input !== 'object') throw new TypeError('Invalid memory input')
   const key = requireKey(input.key)
-  const title = requireText(input.title, 'Title', MEMORY_TITLE_MAX_CHARS)
-  const body = requireText(input.body, 'Body', MEMORY_BODY_MAX_CHARS)
+  const title = requireText(input.title, 'Title', limits.titleChars)
+  const body = requireText(input.body, 'Body', limits.bodyChars)
   const actor = deriveMemoryActor(input.actor)
   const db = getDb()
   let operationId: number | undefined
@@ -512,6 +506,7 @@ export interface UpdateMemoryInput {
 
 /** Compare-and-swap update; stale revisions conflict and all writes roll back together. */
 export function updateMemory(input: UpdateMemoryInput): MemoryEntry {
+  const limits = getMemoryLimits()
   if (!Number.isInteger(input.expectedRevision) || input.expectedRevision < 1)
     throw new TypeError('Invalid expected revision')
   if (input.key === undefined && input.title === undefined && input.body === undefined)
@@ -529,9 +524,8 @@ export function updateMemory(input: UpdateMemoryInput): MemoryEntry {
       if (!current) throw new MemoryNotFoundError('Memory entry not found in the selected scope')
       if (current.revision !== input.expectedRevision) throw new MemoryConflictError()
       const key = input.key === undefined ? current.memory_key : requireKey(input.key)
-      const title =
-        input.title === undefined ? current.title : requireText(input.title, 'Title', MEMORY_TITLE_MAX_CHARS)
-      const body = input.body === undefined ? current.body : requireText(input.body, 'Body', MEMORY_BODY_MAX_CHARS)
+      const title = input.title === undefined ? current.title : requireText(input.title, 'Title', limits.titleChars)
+      const body = input.body === undefined ? current.body : requireText(input.body, 'Body', limits.bodyChars)
       const keyOwner = db
         .prepare('SELECT id FROM memory_entries WHERE scope_id = ? AND memory_key = ?')
         .get(scope.id, key) as { id: string } | undefined
@@ -589,7 +583,7 @@ export interface MemoryPage {
   totalCount: number
 }
 
-function applicableScopes(workspaceId: string): ResolvedMemoryScope[] {
+export function applicableScopes(workspaceId: string): ResolvedMemoryScope[] {
   const workspace = getDb().prepare('SELECT project_path FROM workspaces WHERE id = ?').get(workspaceId) as
     | { project_path: string }
     | undefined
@@ -830,7 +824,7 @@ export function listWorkspaceMemoryOperations(
   )
     .filter((row) => normalizeMemoryProjectPath(row.project_path) === projectPath)
     .map((row) => row.id)
-  const scopes = listMemoryScopes({ workspaceId }).items
+  const scopes = applicableScopes(workspaceId)
   const globalScope = scopes.find((scope) => scope.level === 'global')
   const projectScope = scopes.find((scope) => scope.level === 'project')
   const workspaceScope = scopes.find((scope) => scope.level === 'workspace')
@@ -954,9 +948,10 @@ export type RememberMemoryResult =
 
 /** Agent-facing write boundary; reads the operating mode on every invocation. */
 export function remember(input: RememberMemoryInput): RememberMemoryResult {
+  const limits = getMemoryLimits()
   const key = requireKey(input.key)
-  const title = requireText(input.title, 'Title', MEMORY_TITLE_MAX_CHARS)
-  const body = requireText(input.body, 'Body', MEMORY_BODY_MAX_CHARS)
+  const title = requireText(input.title, 'Title', limits.titleChars)
+  const body = requireText(input.body, 'Body', limits.bodyChars)
   const actor = deriveMemoryActor(input.actor)
   if (actor.kind === 'human') throw new TypeError('remember is reserved for agent-originated writes')
   if (!Number.isInteger(input.expectedGeneration) || input.expectedGeneration < 0)

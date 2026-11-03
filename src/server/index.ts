@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+
 import fs from 'node:fs'
 import path from 'node:path'
 import { serve } from '@hono/node-server'
@@ -90,6 +91,7 @@ import {
 } from './services/network-access-service.js'
 import {
   consumeWebSocketTicket,
+  initializeBrowserSessions,
   isNetworkTransportAllowed,
   registerNetworkSocket,
 } from './services/network-session-service.js'
@@ -145,6 +147,7 @@ try {
 }
 
 runMigrations(db)
+initializeBrowserSessions(db)
 reconcileMessageRequests(db)
 reconcileGroupMessageBatches(db)
 reconcileMemoryContextsOnStartup()

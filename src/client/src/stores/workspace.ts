@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { is } from 'quasar'
+import type { PendingAttachment } from 'src/composables/use-chat-attachments'
 import { disposeTerminalEntry } from 'src/services/terminal-registry'
 import { getWorkspaceQueueHost } from 'src/services/workspace-queue-bridge'
 import { apiFetch, apiFetchOk, apiFetchResponse, apiFetchResponseForStatus, apiResponseError } from 'src/utils/api'
@@ -507,6 +508,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     hasMoreEvents: {} as Record<string, boolean>,
     providerUsage: {} as Record<ProviderId, UsageSnapshot | undefined>,
     chatDraft: '',
+    chatComposerDrafts: {} as Record<string, { text: string; attachments: PendingAttachment[] }>,
     queuedMessages: {} as Record<string, { content: string; sessionId: string }>,
     activeAgentSessionIds: {} as Record<string, string>,
     // A model turn may be complete while its engine stream is still draining.
@@ -647,6 +649,7 @@ export const useWorkspaceStore = defineStore('workspace', {
 
   actions: {
     clearWorkspaceLocalState(id: string) {
+      delete this.chatComposerDrafts[id]
       delete this.activityFeeds[id]
       delete this.activityFeedIds[id]
       delete this.activityCounts[id]
@@ -1784,8 +1787,9 @@ export const useWorkspaceStore = defineStore('workspace', {
       if (!this.activityCounts[workspaceId]) {
         this.activityCounts[workspaceId] = { toolUses: 0, agentMessages: 0, userMessages: 0, errors: 0 }
       }
-      // When agent responds, resolve pending user messages
-      if (item.meta?.sender !== 'user' && item.meta?.sender !== 'system-prompt') {
+      // Replays and script logs are not new agent replies.
+      if (this.activityFeedIds[workspaceId].has(item.id)) return
+      if (!item.meta?.sender || item.meta.sender === 'agent') {
         for (const existing of this.activityFeeds[workspaceId]) {
           if (existing.meta?.pending && (!item.sessionId || existing.sessionId === item.sessionId)) {
             existing.meta.pending = false

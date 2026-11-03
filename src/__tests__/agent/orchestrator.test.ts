@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentEvent } from '../../server/services/agent/engines/types.js'
+import { DEFAULT_MEMORY_LIMITS } from '../../shared/memory-limits.js'
 import { resetDb } from '../helpers/reset-db.js'
 
 vi.mock('../../server/services/websocket-service.js', () => ({
@@ -14,6 +15,7 @@ const integrationSettings = vi.hoisted(() => ({
   sentryMcpKey: '',
 }))
 vi.mock('../../server/services/settings-service.js', () => ({
+  getMemoryLimits: () => ({ ...DEFAULT_MEMORY_LIMITS }),
   getGlobalSettings: () => ({ autoLoopMaxRetries: 5, ...integrationSettings }),
   getEffectiveSettings: () => ({
     model: 'claude-opus-4-7',

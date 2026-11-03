@@ -17,6 +17,7 @@ import {
   EXTERNAL_TOOL_CATALOGUE,
 } from '../server/services/external-mcp-credentials-service.js'
 import { createInternalMcpCapability } from '../server/services/internal-mcp-capability-service.js'
+import { _setSettingsPath } from '../server/services/settings-service.js'
 import { executeWorkspaceDialogueTool } from '../server/services/workspace-dialogue-service.js'
 
 vi.mock('../server/services/agent/orchestrator.js', () => ({
@@ -61,6 +62,7 @@ beforeEach(() => {
   directory = mkdtempSync(join(tmpdir(), 'kobo-external-mcp-'))
   previousHome = process.env.KOBO_HOME
   process.env.KOBO_HOME = directory
+  _setSettingsPath(join(directory, 'settings.json'))
   mcpToken = createExternalMcpCredential({
     name: 'integration',
     allWorkspaces: true,

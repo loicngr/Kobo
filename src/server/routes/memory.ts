@@ -1,6 +1,6 @@
 import { type Context, Hono } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
-import { MEMORY_BODY_MAX_CHARS, MEMORY_PAGE_SIZE_MAX, MEMORY_TITLE_MAX_CHARS } from '../../shared/memory.js'
+import { MEMORY_LIMIT_RANGES } from '../../shared/memory-limits.js'
 import { isMemoryToolName, validateMemoryToolArguments } from '../../shared/memory-tools.js'
 import { getMemoryCapability } from '../services/memory-agent-runtime.js'
 import {
@@ -11,6 +11,7 @@ import {
 } from '../services/memory-budget-service.js'
 import { listMemoryContextRecords } from '../services/memory-context-service.js'
 import {
+  applicableScopes,
   approveMemoryProposal,
   clearMemoryScope,
   createMemory,
@@ -30,6 +31,7 @@ import {
   searchMemories,
   updateMemory,
 } from '../services/memory-service.js'
+import { getMemoryLimits } from '../services/settings-service.js'
 import {
   prepareMemoryControlReply,
   prepareMemoryToolEnvelope,
@@ -38,7 +40,8 @@ import {
 
 const app = new Hono()
 const human = { kind: 'human' } as const
-const MAX_BODY_BYTES = 16 * 1024
+// JSON can escape each UTF-16 code unit as six bytes; retain room for metadata.
+const MAX_BODY_BYTES = 6 * (MEMORY_LIMIT_RANGES.bodyChars[1] + MEMORY_LIMIT_RANGES.titleChars[1]) + 16 * 1024
 
 type JsonObject = Record<string, unknown>
 
@@ -71,7 +74,7 @@ function parseLimit(value: string | undefined): number | undefined {
   if (value === undefined) return undefined
   if (!/^\d+$/.test(value)) throw new TypeError('Invalid page size')
   const limit = Number(value)
-  if (!Number.isSafeInteger(limit) || limit < 1 || limit > MEMORY_PAGE_SIZE_MAX)
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > getMemoryLimits().pageMaxSize)
     throw new TypeError('Invalid page size')
   return limit
 }
@@ -83,13 +86,14 @@ function parseCursor(value: string | undefined): string | undefined {
 }
 
 function parseEntry(value: JsonObject, partial = false): { key?: string; title?: string; body?: string } {
+  const limits = getMemoryLimits()
   const result: { key?: string; title?: string; body?: string } = {}
   if (!partial || value.key !== undefined) result.key = requiredString(value.key, 'key', 80).toLowerCase()
-  if (!partial || value.title !== undefined) result.title = requiredString(value.title, 'title', MEMORY_TITLE_MAX_CHARS)
+  if (!partial || value.title !== undefined) result.title = requiredString(value.title, 'title', limits.titleChars)
   if (!partial || value.body !== undefined) {
-    if (typeof value.body === 'string' && value.body.length > MEMORY_BODY_MAX_CHARS)
+    if (typeof value.body === 'string' && value.body.length > limits.bodyChars)
       throw new PayloadTooLargeError('Memory body exceeds the character limit')
-    result.body = requiredString(value.body, 'body', MEMORY_BODY_MAX_CHARS)
+    result.body = requiredString(value.body, 'body', limits.bodyChars)
   }
   if (partial && Object.keys(result).length === 0) throw new TypeError('At least one memory field is required')
   return result
@@ -119,6 +123,7 @@ function boundedAgentReply(
   }> = [],
   pageOffset?: number,
 ): Response {
+  const limits = getMemoryLimits()
   let ledger: ReturnType<typeof getInternalMemoryBudgetContext>
   try {
     ledger = getInternalMemoryBudgetContext(capability.conversationKey)
@@ -126,15 +131,26 @@ function boundedAgentReply(
     // Capabilities are normally created alongside their ledger. If stale or
     // malformed runtime state breaks that invariant, preserve the validation
     // status without turning a client error into a 500 or doing any write.
-    const bounded = prepareMemoryToolEnvelope(value, { targetTokens: 1_000, transport: 'internal' })
+    const bounded = prepareMemoryToolEnvelope(value, {
+      targetTokens: limits.responseTokens,
+      transport: 'internal',
+    })
     const statusCode = error instanceof TypeError ? status : 500
     return c.json(bounded.data, { status: statusCode })
   }
   const placeholder = {
     ...value,
-    budget: { estimatedTokens: 1_000, remainingTokens: 6_000, exhausted: false },
+    budget: {
+      estimatedTokens: limits.responseTokens,
+      remainingTokens: limits.conversationTokens,
+      exhausted: false,
+    },
   }
-  const sized = prepareMemoryToolEnvelope(placeholder, { targetTokens: 1_000, transport: 'internal', pageOffset })
+  const sized = prepareMemoryToolEnvelope(placeholder, {
+    targetTokens: limits.responseTokens,
+    transport: 'internal',
+    pageOffset,
+  })
   const emittedItems = Array.isArray(sized.data.items) ? sized.data.items : []
   const emittedIds = new Set(
     emittedItems
@@ -151,7 +167,7 @@ function boundedAgentReply(
   const reservation = reserveMemoryBudget({
     budgetContextId: ledger.id,
     estimatedTokens: sized.estimatedTokens,
-    responseLimitTokens: 1_000,
+    responseLimitTokens: limits.responseHardTokens,
     deliveries: emittedDeliveries,
   })
   if (!reservation.accepted) {
@@ -165,7 +181,10 @@ function boundedAgentReply(
       exhausted: reservation.remainingTokens <= 0,
     },
   }
-  const bounded = prepareMemoryToolEnvelope(result, { targetTokens: 1_000, transport: 'internal' })
+  const bounded = prepareMemoryToolEnvelope(result, {
+    targetTokens: limits.responseTokens,
+    transport: 'internal',
+  })
   return c.json(bounded.data, { status })
 }
 
@@ -174,15 +193,16 @@ function exhaustedAgentReply(
   capability: NonNullable<ReturnType<typeof getMemoryCapability>>,
   message = 'Lectures épuisées; remember reste disponible.',
 ): Response {
+  const limits = getMemoryLimits()
   const ledger = getInternalMemoryBudgetContext(capability.conversationKey)
   const denial = prepareMemoryToolEnvelope(
     {
       budgetExhausted: true,
       message,
       remainingTokens: 0,
-      limitTokens: 6_000,
+      limitTokens: limits.conversationTokens,
     },
-    { targetTokens: 1_000, transport: 'internal' },
+    { targetTokens: limits.denialTokens, transport: 'internal' },
   )
   const reservation = reserveMemoryBudgetDenial(ledger.id, denial.estimatedTokens)
   return c.json(
@@ -362,8 +382,7 @@ app.get('/operations', (c) => {
 app.get('/workspaces/:workspaceId/view', (c) => {
   try {
     const workspaceId = requiredString(c.req.param('workspaceId'), 'workspaceId')
-    const scopePage = listMemoryScopes({ workspaceId })
-    const scopes = scopePage.items
+    const scopes = applicableScopes(workspaceId)
     const entries = listMemories({ workspaceId })
     const proposals = scopes.flatMap((scope) => listMemoryProposals(scope.id))
     // Context persistence is populated by the session-injection phase. Returning an
@@ -460,7 +479,7 @@ app.post('/agent/:toolName', async (c) => {
         revision: entry.revision,
         kind: 'body-fragment' as const,
         start: offset,
-        end: offset + 40,
+        end: Math.min([...entry.body].length, offset + getMemoryLimits().fragmentChars),
       }
       const fragment = sliceMemoryBodyFragment({
         body: entry.body,

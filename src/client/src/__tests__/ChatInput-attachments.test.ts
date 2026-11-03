@@ -512,3 +512,131 @@ it('preserves the reviewer draft and targeted stop while native closure is pendi
   expect(interrupt).not.toHaveBeenCalled()
   expect(store.startWorkspace).not.toHaveBeenCalled()
 })
+
+it('keeps separate unsent drafts when switching workspaces and sessions', async () => {
+  const { store, wrapper } = await setup()
+  store.workspaces.push({ ...store.workspaces[0]!, id: 'b', name: 'B' })
+  await wrapper.get('textarea').setValue('Draft A')
+  await wrapper.setProps({ workspaceId: 'b' })
+  expect(wrapper.get('textarea').element.value).toBe('')
+  await wrapper.get('textarea').setValue('Draft B')
+  store.selectedSessionId = 'another-session'
+  await flushPromises()
+  expect(wrapper.get('textarea').element.value).toBe('Draft B')
+  await wrapper.setProps({ workspaceId: 'a' })
+  expect(wrapper.get('textarea').element.value).toBe('Draft A')
+  await wrapper.setProps({ workspaceId: 'b' })
+  expect(wrapper.get('textarea').element.value).toBe('Draft B')
+  expect(store.startWorkspace).not.toHaveBeenCalled()
+})
+
+it('restores text and ready attachments after the composer is unmounted and recreated', async () => {
+  const { wrapper } = await setup()
+  await wrapper.get('textarea').setValue('Read this ')
+  await attach(wrapper)
+  const text = wrapper.get('textarea').element.value
+  wrapper.unmount()
+  wrappers.splice(wrappers.indexOf(wrapper), 1)
+  await flushPromises()
+  expect(deletes()).toEqual([])
+  const { wrapper: restored } = await setup()
+  expect(restored.get('textarea').element.value).toBe(text)
+  expect(restored.findAll('.attachment-tag')).toHaveLength(1)
+  await restored.get('button[aria-label="Remove attachment"]').trigger('click')
+  await flushPromises()
+  expect(deletes()).toHaveLength(1)
+})
+
+it('does not resurrect a sent message when returning to its workspace', async () => {
+  const { store, wrapper } = await setup()
+  store.workspaces.push({ ...store.workspaces[0]!, id: 'b' })
+  await wrapper.get('textarea').setValue('Send once')
+  await wrapper.get('button[data-icon="send"]').trigger('click')
+  await flushPromises()
+  await wrapper.setProps({ workspaceId: 'b' })
+  await wrapper.setProps({ workspaceId: 'a' })
+  expect(wrapper.get('textarea').element.value).toBe('')
+  expect(store.startWorkspace).toHaveBeenCalledOnce()
+})
+
+it('restores a failed send in its original workspace without replacing another draft', async () => {
+  const { store, wrapper } = await setup()
+  store.workspaces.push({ ...store.workspaces[0]!, id: 'b' })
+  vi.spyOn(console, 'error').mockImplementation(() => {})
+  let reject!: (error: Error) => void
+  vi.mocked(store.startWorkspace).mockReturnValueOnce(
+    new Promise((_, fail) => {
+      reject = fail
+    }),
+  )
+  await wrapper.get('textarea').setValue('Unsent A')
+  await wrapper.get('button[data-icon="send"]').trigger('click')
+  store.chatComposerDrafts.b = { text: 'Keep B', attachments: [] }
+  await wrapper.setProps({ workspaceId: 'b' })
+  reject(new Error('offline'))
+  await flushPromises()
+  expect(wrapper.get('textarea').element.value).toBe('Keep B')
+  await wrapper.setProps({ workspaceId: 'a' })
+  expect(wrapper.get('textarea').element.value).toBe('Unsent A')
+})
+
+it('merges a late failed send into the remounted composer and preserves its attachments on navigation', async () => {
+  const { store, wrapper } = await setup()
+  vi.spyOn(console, 'error').mockImplementation(() => {})
+  let reject!: (error: Error) => void
+  vi.mocked(store.startWorkspace).mockReturnValueOnce(
+    new Promise((_, fail) => {
+      reject = fail
+    }),
+  )
+  await wrapper.get('textarea').setValue('Unsent A ')
+  await attach(wrapper)
+  const original = wrapper.get('textarea').element.value.trim()
+  await wrapper.get('button[data-icon="send"]').trigger('click')
+  wrapper.unmount()
+  wrappers.splice(wrappers.indexOf(wrapper), 1)
+  const { wrapper: returned } = await setup()
+  await returned.get('textarea').setValue('New draft')
+  reject(new Error('offline'))
+  await flushPromises()
+  expect(returned.get('textarea').element.value).toBe(`${original}\nNew draft`)
+  expect(returned.findAll('.attachment-tag')).toHaveLength(1)
+  expect(store.chatComposerDrafts.a).toBeUndefined()
+  returned.unmount()
+  wrappers.splice(wrappers.indexOf(returned), 1)
+  const { wrapper: restored } = await setup()
+  expect(restored.get('textarea').element.value).toBe(`${original}\nNew draft`)
+  expect(restored.findAll('.attachment-tag')).toHaveLength(1)
+  expect(deletes()).toEqual([])
+})
+
+it('removes unfinished attachment placeholders and cleans late uploads without changing another draft', async () => {
+  const { store, wrapper } = await setup()
+  store.workspaces.push({ ...store.workspaces[0]!, id: 'b' })
+  let resolve!: (response: Response) => void
+  fetchMock.mockImplementationOnce(
+    () =>
+      new Promise<Response>((done) => {
+        resolve = done
+      }),
+  )
+  await wrapper.get('textarea').setValue('Keep my text ')
+  await wrapper.trigger('drop', { dataTransfer: { files: [new File(['pending'], 'pending.md')] } })
+  await flushPromises()
+  await wrapper.setProps({ workspaceId: 'b' })
+  await wrapper.get('textarea').setValue('Other draft')
+  resolve(
+    Response.json({
+      uid: 'late',
+      kind: 'file',
+      path: '.ai/attachments/late.md',
+      reference: '[file: .ai/attachments/late.md]',
+    }),
+  )
+  await flushPromises()
+  expect(wrapper.get('textarea').element.value).toBe('Other draft')
+  expect(deletes()).toHaveLength(1)
+  await wrapper.setProps({ workspaceId: 'a' })
+  expect(wrapper.get('textarea').element.value.trim()).toBe('Keep my text')
+  expect(wrapper.findAll('.attachment-tag')).toHaveLength(0)
+})

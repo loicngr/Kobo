@@ -4,9 +4,11 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { AgentEvent, StartOptions } from '../server/services/agent/engines/types.js'
+import { DEFAULT_MEMORY_LIMITS } from '../shared/memory-limits.js'
 import { resetDb } from './helpers/reset-db.js'
 
 vi.mock('../server/services/settings-service.js', () => ({
+  getMemoryLimits: () => ({ ...DEFAULT_MEMORY_LIMITS }),
   getGlobalSettings: () => ({ autoLoopMaxRetries: 5 }),
   getProjectSettings: () => undefined,
   getEffectiveSettings: () => ({ model: 'auto', dangerouslySkipPermissions: true, sourceBranch: 'main' }),

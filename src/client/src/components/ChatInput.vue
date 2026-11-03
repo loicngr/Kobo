@@ -274,7 +274,7 @@ import { buildTemplateVars, expandTemplate } from 'src/utils/expand-template'
 import { KOBO_COMMANDS } from 'src/utils/kobo-commands'
 import { registerUnsavedScope, unregisterUnsavedScope } from 'src/utils/unsaved-guard'
 import { isBusyStatus } from 'src/utils/workspace-status'
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ATTACHMENT_ACCEPT } from '../../../shared/attachments'
 
@@ -290,6 +290,8 @@ const settingsStore = useSettingsStore()
 const wsStore = useWebSocketStore()
 const templatesStore = useTemplatesStore()
 const message = ref('')
+let draftWorkspaceId = props.workspaceId
+let composerMounted = true
 const sendingMessage = ref(false)
 const interrupting = ref(false)
 const forcingQueue = ref(false)
@@ -447,6 +449,61 @@ const attachments = useChatAttachments({
 })
 const { pending: pendingAttachments, blocked: attachmentsBlocked, remove: removeAttachment } = attachments
 
+function loadComposerDraft() {
+  const draft = store.chatComposerDrafts[draftWorkspaceId]
+  message.value = draft?.text ?? ''
+  attachments.restore(draft?.attachments ?? [])
+  delete store.chatComposerDrafts[draftWorkspaceId]
+}
+
+function saveComposerDraft() {
+  if (![...store.workspaces, ...store.archivedWorkspaces].some((workspace) => workspace.id === draftWorkspaceId)) {
+    attachments.discard()
+    delete store.chatComposerDrafts[draftWorkspaceId]
+    return
+  }
+  // Unfinished uploads remain owned by this component and clean up their late receipts.
+  for (const file of [...pendingAttachments.value]) {
+    if (file.status !== 'ready') attachments.remove(file.tempId)
+  }
+  const files = attachments.take()
+  const queued = store.getQueuedMessage(draftWorkspaceId, store.selectedSessionId)
+  const text = message.value.trim() === queued?.content.trim() ? '' : message.value
+  if (text || files.length) store.chatComposerDrafts[draftWorkspaceId] = { text, attachments: files }
+  else delete store.chatComposerDrafts[draftWorkspaceId]
+}
+
+loadComposerDraft()
+onBeforeUnmount(() => {
+  composerMounted = false
+  saveComposerDraft()
+})
+
+// An older composer can finish a failed send after this one has mounted.
+watch(
+  () => store.chatComposerDrafts[props.workspaceId],
+  (draft) => {
+    if (!draft || !composerMounted || draftWorkspaceId !== props.workspaceId) return
+    delete store.chatComposerDrafts[props.workspaceId]
+    restoreSentDraft(props.workspaceId, draft.text, draft.attachments)
+  },
+  { flush: 'sync' },
+)
+
+function restoreSentDraft(workspaceId: string, text: string, files: typeof pendingAttachments.value) {
+  if (![...store.workspaces, ...store.archivedWorkspaces].some((workspace) => workspace.id === workspaceId)) return
+  if (composerMounted && draftWorkspaceId === workspaceId) {
+    message.value = message.value && message.value !== text ? `${text}\n${message.value}` : text
+    attachments.restore(files)
+  } else {
+    const existing = store.chatComposerDrafts[workspaceId]
+    store.chatComposerDrafts[workspaceId] = {
+      text: existing?.text && existing.text !== text ? `${text}\n${existing.text}` : text,
+      attachments: [...files, ...(existing?.attachments ?? [])],
+    }
+  }
+}
+
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const isDragging = ref(false)
 const isRecording = ref(false)
@@ -542,6 +599,7 @@ function forceQueuedMessage() {
 }
 
 watch(queuedMessage, (queued, previous) => {
+  if (draftWorkspaceId !== props.workspaceId) return
   if (!queued) forcingQueue.value = false
   if (previous && !queued && !cancelledManually && message.value.trim() === previous.content.trim()) {
     message.value = ''
@@ -552,9 +610,16 @@ watch(queuedMessage, (queued, previous) => {
   cancelledManually = false
 })
 
+watch(
+  () => props.workspaceId,
+  () => {
+    saveComposerDraft()
+    draftWorkspaceId = props.workspaceId
+    loadComposerDraft()
+  },
+)
+
 watch([() => props.workspaceId, () => store.selectedSessionId], () => {
-  attachments.discard()
-  message.value = ''
   if (isRecording.value) void stopVoiceCapture()
 })
 
@@ -749,6 +814,7 @@ localStorage.removeItem('kobo:chatHistory')
 
 onMounted(loadHistory)
 onMounted(() => {
+  registerUnsavedScope('chat:upload', () => pendingAttachments.value.some((file) => file.status === 'uploading'))
   registerUnsavedScope(
     'chat:message',
     () => !!message.value.trim() && message.value.trim() !== queuedMessage.value?.content.trim(),
@@ -756,6 +822,7 @@ onMounted(() => {
 })
 onUnmounted(() => {
   unregisterUnsavedScope('chat:message')
+  unregisterUnsavedScope('chat:upload')
 })
 watch(() => props.workspaceId, loadHistory)
 
@@ -791,19 +858,14 @@ async function sendMessageNow() {
     // A queued iteration can become selected before its HTTP receipt arrives.
     // Transfer attachment ownership before that change clears the old draft.
     const sentAttachments = attachments.take()
+    message.value = ''
     try {
       const instruction = KOBO_COMMANDS[text]?.prompt ?? text
       await store.queueAutoLoopMessage(workspaceId, instruction)
       pushToHistory(text, workspaceId)
-      if (props.workspaceId === workspaceId && store.selectedSessionId === targetSessionId) {
-        resetHistoryNav()
-        message.value = ''
-      }
+      if (props.workspaceId === workspaceId) resetHistoryNav()
     } catch (error) {
-      if (props.workspaceId === workspaceId && store.selectedSessionId === targetSessionId) {
-        message.value = text
-        attachments.restore(sentAttachments)
-      }
+      restoreSentDraft(workspaceId, text, sentAttachments)
       $q.notify({
         type: 'negative',
         message: error instanceof Error ? error.message : t('network.login.unreachable'),
@@ -827,7 +889,7 @@ async function sendMessageNow() {
       content: koboCmd.prompt,
       timestamp: new Date().toISOString(),
       sessionId: store.selectedSessionId ?? undefined,
-      meta: { sender: 'user', pending: true },
+      meta: { sender: 'user', pending: true, optimistic: true },
     })
     pushToHistory(text)
     resetHistoryNav()
@@ -840,6 +902,7 @@ async function sendMessageNow() {
     if (!store.selectedSessionId) return
     store.queueMessage(workspaceId, text, store.selectedSessionId)
     attachments.take()
+    message.value = ''
     return
   }
   if (!immediate) store.cancelQueuedMessage(workspaceId, store.selectedSessionId)
@@ -858,12 +921,8 @@ async function sendMessageNow() {
   // Detach before createSession can switch the selected session. The draft's
   // files now belong to this send until it succeeds or is restored on failure.
   const sentAttachments = attachments.take()
-  const restoreDraft = () => {
-    if (props.workspaceId === workspaceId && store.selectedSessionId === targetSessionId) {
-      message.value = koboCmd ? text : composedText
-      attachments.restore(sentAttachments)
-    }
-  }
+  message.value = ''
+  const restoreDraft = () => restoreSentDraft(workspaceId, koboCmd ? text : composedText, sentAttachments)
   // Historical completed/error sessions without an engine conversation cannot
   // be resumed. Start a new session transparently so the user's message can
   // still continue the workspace.
@@ -908,12 +967,11 @@ async function sendMessageNow() {
     content: composedText,
     timestamp: new Date().toISOString(),
     sessionId: sessionTag,
-    meta: { sender: 'user', pending: true },
+    meta: { sender: 'user', pending: true, optimistic: true },
   })
 
-  pushToHistory(text)
+  pushToHistory(text, workspaceId)
   resetHistoryNav()
-  if (props.workspaceId === workspaceId && store.selectedSessionId === targetSessionId) message.value = ''
 
   // On failure: roll back the optimistic item and restore the input so the
   // user doesn't lose their message. Only applies to HTTP flows that can fail
@@ -954,7 +1012,7 @@ async function sendMessageNow() {
       rollback(err, 'resume session')
     }
   } else {
-    if (!wsStore.sendChatMessage(workspaceId, composedText, store.selectedSessionId ?? undefined)) {
+    if (!wsStore.sendChatMessage(workspaceId, composedText, targetSessionId ?? undefined)) {
       rollback(new Error(t('network.login.unreachable')), 'send chat message')
     }
   }

@@ -214,6 +214,24 @@ export default {
   'memory.context.state.unknown': 'Übermittlung unbekannt',
   'memory.settings.intro':
     'Erinnerungen speichern explizite Notizen für künftige Agentensitzungen. Sie ersetzen weder den Verlauf des Anbieters noch den Chatverlauf.',
+  'memory.limits.title': 'Speicherlimits',
+  'memory.limits.hint':
+    'Konservative Schätzung (UTF-8-Bytes, keine Modell-Tokens). Änderungen gelten für folgende Aufrufe ohne Verbrauch zurückzusetzen. Erschöpfte Gespräche warten auf Kompaktierung oder ein neues Gespräch.',
+  'memory.limits.invalid':
+    'Grenzen prüfen: Ziel ≤ Obergrenze, Standardseite ≤ Maximum, Start/Antwort ≤ Gesamtbudget minus Reserve.',
+  'memory.limits.reset': 'Standardwerte wiederherstellen',
+  'memory.limits.bootstrapTokens': 'Startkontext (Einheiten)',
+  'memory.limits.responseTokens': 'MCP-Antwortziel (Einheiten)',
+  'memory.limits.responseHardTokens': 'MCP-Antwortgrenze (Einheiten)',
+  'memory.limits.conversationTokens': 'Gesprächsbudget (Einheiten)',
+  'memory.limits.denialTokens': 'Ablehnungsreserve (Einheiten)',
+  'memory.limits.fragmentChars': 'Lesefragment (Unicode-Zeichen)',
+  'memory.limits.bodyChars': 'Maximale Speichergröße (Zeichen)',
+  'memory.limits.titleChars': 'Maximale Titellänge (Zeichen)',
+  'memory.limits.pageSize': 'Standardergebnisse pro Seite',
+  'memory.limits.pageMaxSize': 'Maximale Ergebnisse pro Seite',
+  'memory.limits.outputBytes': 'Maximale MCP-Antwort (Bytes)',
+  'memory.limits.bootstrapBytes': 'Maximaler Startkontext (Bytes)',
   'memory.settings.mode': 'Automatisches Erinnerungsverhalten',
   'memory.settings.mode.manual': 'Manuell',
   'memory.settings.modeHint.manual': 'Agenten können Erinnerungen lesen. Nur Sie können Notizen erstellen oder ändern.',
@@ -2146,6 +2164,9 @@ export default {
   'settings.forceImmediateMessages': 'Nachrichten sofort senden',
   'settings.forceImmediateMessagesHint':
     'Standardmäßig deaktiviert. Neue Nachrichten während der Arbeit des Agenten wie mit Strg+Enter ohne Warteschlange senden. Bei Auto-Loop sofort senden und die Schleife pausieren. Bereits wartende Nachrichten bleiben unverändert; Komprimierungs- und Berechtigungssperren gelten weiterhin.',
+  'settings.autoExitPlanMode': 'Automatisches Verlassen des Plan-Modus erlauben (Claude Code)',
+  'settings.autoExitPlanModeHint':
+    'Bei ExitPlanMode in den interaktiven Modus mit normalen Berechtigungsanfragen wechseln. Deaktiviert: Ausstieg verweigern. Schreibgeschützte Reviews bleiben geschützt. Gespeicherte Änderungen gelten ab dem nächsten Aufruf.',
   'settings.showProgressBars': 'Fortschrittsbalken anzeigen',
   'settings.showProgressBarsHint':
     'Standardmäßig aktiviert. Das Ausblenden schließt keine Aktivitäten und beendet nicht deren Verfolgung. Änderungen gelten nach dem Speichern.',
@@ -2633,6 +2654,9 @@ export default {
   'staleSessionBanner.switchToCurrent': 'Zur aktuellen wechseln',
 
   // Network login
+  'network.login.remember': 'Dieses Gerät 30 Tage lang merken',
+  'network.login.rememberHint':
+    'Nur auf einem vertrauenswürdigen Gerät aktivieren. Das Zugriffstoken wird nicht im Browser gespeichert.',
   'network.login.title': 'Netzwerkzugriff',
   'network.login.description':
     'Dieses Kōbō benötigt ein Token, um über das Netzwerk gesteuert zu werden. Füge das in den Einstellungen auf dem Host angezeigte Token ein.',

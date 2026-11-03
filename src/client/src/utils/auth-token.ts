@@ -45,10 +45,11 @@ export function isSameOriginApi(url: string): boolean {
   }
 }
 
-export async function authenticateBrowser(token: string): Promise<Response> {
+export async function authenticateBrowser(token: string, remember = false): Promise<Response> {
   const response = await window.fetch('/api/auth/session', {
     method: 'POST',
-    headers: { 'X-Kobo-Token': token },
+    headers: { 'X-Kobo-Token': token, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ remember }),
     credentials: 'same-origin',
     redirect: 'error',
     signal: AbortSignal.timeout(15_000),

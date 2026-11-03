@@ -164,14 +164,6 @@ export interface MemoryBudgetReceipt {
   readonly alreadyDelivered?: boolean
 }
 
-export const MEMORY_TITLE_MAX_CHARS = 160
-export const MEMORY_BODY_MAX_CHARS = 2_000
-export const MEMORY_PAGE_SIZE = 50
-export const MEMORY_PAGE_SIZE_MAX = 100
-export const MEMORY_BOOTSTRAP_MAX_TOKENS = 1_000
-export const MEMORY_MCP_RESPONSE_MAX_TOKENS = 1_000
-export const MEMORY_MCP_RESPONSE_HARD_MAX_TOKENS = 1_500
-export const MEMORY_CONVERSATION_BUDGET_TOKENS = 6_000
 export const MEMORY_CLIENT_NAME_MAX_CHARS = 120
 
 export function normalizeMemoryClientName(value: unknown): string {

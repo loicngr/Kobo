@@ -1369,34 +1369,29 @@ function onVisibilityChange(): void {
   if (document.visibilityState === 'visible') void store.fetchWorkspacesInfo()
 }
 
+let listUnmounted = false
 onMounted(async () => {
-  await store.fetchWorkspaces()
-  // Silently fetch archived workspaces so the Archived group header renders
-  // if any exist — the group stays collapsed by default.
-  await store.fetchArchivedWorkspaces()
-  // Batch PR-snapshot from pr-watcher cache (free — no gh calls).
-  // Drives the small PR indicator in the drawer. Refreshed on gitRefreshTrigger
-  // bumps (see store.triggerGitRefresh).
+  // Archives are secondary; neither they nor settings should delay live workspace data.
+  void store.fetchArchivedWorkspaces()
   void store.fetchPrSnapshots()
   void store.fetchAutoLoopStates()
-  await settingsStore.fetchSettings()
-  // Subscribe to ALL workspaces so events are received even when not viewing them
-  for (const ws of store.workspaces) {
-    wsStore.subscribe(ws.id)
-    const project = settingsStore.getProjectByPath(ws.projectPath)
-    if (project?.devServer?.startCommand) {
-      devServerStore.fetchStatus(ws.id)
-    }
-  }
-  // Keep every non-archived workspace ≤15s fresh (status + PR + git stats)
-  // by polling the server-cached bulk endpoint. Fetch once immediately so the
-  // git-stats / CI recap are populated at load instead of after the first tick.
+  const settingsReady = settingsStore.fetchSettings()
+  await store.fetchWorkspaces()
+  if (listUnmounted) return
+  for (const ws of store.workspaces) wsStore.subscribe(ws.id)
   void store.fetchWorkspacesInfo()
   workspaceInfoInterval = setInterval(pollWorkspacesInfoIfVisible, WORKSPACE_INFO_POLL_MS)
   document.addEventListener('visibilitychange', onVisibilityChange)
+
+  await settingsReady
+  if (listUnmounted) return
+  for (const ws of store.workspaces) {
+    if (settingsStore.getProjectByPath(ws.projectPath)?.devServer?.startCommand) void devServerStore.fetchStatus(ws.id)
+  }
 })
 
 onBeforeUnmount(() => {
+  listUnmounted = true
   document.removeEventListener('visibilitychange', onVisibilityChange)
   if (workspaceInfoInterval) {
     clearInterval(workspaceInfoInterval)

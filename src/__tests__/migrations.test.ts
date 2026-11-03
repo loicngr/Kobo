@@ -58,8 +58,8 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 57', () => {
-    expect(SCHEMA_VERSION).toBe(57)
+  it('exporte SCHEMA_VERSION = 58', () => {
+    expect(SCHEMA_VERSION).toBe(58)
   })
 
   it('migration v33 records and backfills the engine on agent sessions', () => {
@@ -2629,7 +2629,7 @@ describe('persistent memory schema migration v51', () => {
     const beforeUpgrade = memoryObjects(old)
     expect(beforeUpgrade.objects).toEqual([])
     expect(getMigrationHistory(old).at(-1)?.version).toBe(50)
-    expect(getPendingMigrations(old)).toEqual([51, 52, 53, 54, 55, 56, 57])
+    expect(getPendingMigrations(old)).toEqual([51, 52, 53, 54, 55, 56, 57, 58])
 
     runMigrations(old)
     migrations.find((entry) => entry.version === 51)!.migrate(old)
@@ -2769,7 +2769,7 @@ describe('durable final reviews v52', () => {
       INSERT INTO pending_review_returns VALUES('w','review','original','{"engine":"codex"}','{"engine":"claude-code"}','c');`)
     for (const migration of migrations.filter((m) => m.version <= 51))
       old.prepare('INSERT INTO schema_migrations VALUES(?,?,?)').run(migration.version, migration.name, 'v51')
-    expect(getPendingMigrations(old)).toEqual([52, 53, 54, 55, 56, 57])
+    expect(getPendingMigrations(old)).toEqual([52, 53, 54, 55, 56, 57, 58])
     runMigrations(old)
     migrations.find((m) => m.version === 52)!.migrate(old)
     expect(old.prepare('SELECT * FROM pending_review_returns').get()).toEqual({
@@ -2923,7 +2923,7 @@ describe('Mistral memory engine migration v55', () => {
       const column = table === 'memory_contexts' || table === 'memory_budget_contexts' ? 'engine' : 'source_engine'
       expect(() => db.exec(`UPDATE ${table} SET ${column} = 'mistral-vibe'`)).toThrow(/CHECK/)
     }
-    expect(getPendingMigrations(db)).toEqual([55, 56, 57])
+    expect(getPendingMigrations(db)).toEqual([55, 56, 57, 58])
     runMigrations(db)
     expect({ ...rows(db), schema_migrations: before.schema_migrations }).toEqual({
       ...before,
@@ -2934,13 +2934,13 @@ describe('Mistral memory engine migration v55', () => {
     expect(
       db
         .prepare(
-          "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name NOT IN ('parallel_reviews', 'pinned_messages') ORDER BY name",
+          "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name NOT IN ('parallel_reviews', 'pinned_messages', 'browser_sessions') ORDER BY name",
         )
         .all(),
     ).toEqual(indexes)
     expect(getMigrationHistory(db).at(-1)).toMatchObject({
       version: SCHEMA_VERSION,
-      name: 'pinned-messages',
+      name: 'remembered-browser-sessions',
     })
     const fresh = new Database(':memory:')
     initSchema(fresh)
@@ -2982,7 +2982,7 @@ describe('Mistral memory engine migration v55', () => {
     spy.mockRestore()
     expect(rows(db)).toEqual(before)
     expect(db.prepare('SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY name').all()).toEqual(schema)
-    expect(getPendingMigrations(db)).toEqual([55, 56, 57])
+    expect(getPendingMigrations(db)).toEqual([55, 56, 57, 58])
     expect(db.pragma('foreign_key_check')).toEqual([])
     runMigrations(db)
     expect(getPendingMigrations(db)).toEqual([])
@@ -3060,5 +3060,31 @@ describe('pinned message migration v57', () => {
     expect(getPendingMigrations(upgraded)).toEqual([])
     upgraded.close()
     fresh.close()
+  })
+})
+
+describe('remembered browser sessions migration v58', () => {
+  it('upgrades v57 without losing workspaces and matches fresh installs', () => {
+    const upgraded = new Database(':memory:')
+    const fresh = new Database(':memory:')
+    try {
+      runMigrations(upgraded)
+      upgraded.exec('DROP TABLE browser_sessions; DELETE FROM schema_migrations WHERE version = 58')
+      upgraded.exec(`INSERT INTO workspaces (id,name,project_path,source_branch,working_branch,created_at,updated_at)
+        VALUES ('w','Existing','/tmp','main','branch','now','now')`)
+      expect(getPendingMigrations(upgraded)).toEqual([58])
+      runMigrations(upgraded)
+      expect(upgraded.prepare('SELECT name FROM workspaces').get()).toEqual({ name: 'Existing' })
+      expect(getMigrationHistory(upgraded).at(-1)?.version).toBe(SCHEMA_VERSION)
+      runMigrations(fresh)
+      const schema = (db: Database.Database) =>
+        db.prepare("SELECT type,name,sql FROM sqlite_master WHERE tbl_name = 'browser_sessions' ORDER BY name").all()
+      expect(schema(upgraded)).toEqual(schema(fresh))
+      migrations.find((m) => m.version === 58)!.migrate(upgraded)
+      expect(upgraded.prepare('SELECT COUNT(*) AS count FROM browser_sessions').get()).toEqual({ count: 0 })
+    } finally {
+      upgraded.close()
+      fresh.close()
+    }
   })
 })

@@ -283,7 +283,8 @@ export function createClaudeCodeEngine(): AgentEngine {
       // Pending canUseTool callbacks, keyed by SDK ctx.toolUseID.
       const pendingResolvers = new Map<string, PendingResolver>()
 
-      const isInteractive = options.agentPermissionMode === 'interactive'
+      let isInteractive = options.agentPermissionMode === 'interactive'
+      let exitedPlan = false
       const promptCapabilities = getKoboPromptCapabilities(
         options.mcpServers?.find((server) => server.name === 'kobo-tasks')?.env,
       )
@@ -325,12 +326,20 @@ export function createClaudeCodeEngine(): AgentEngine {
           })
         }
 
-        // Approving a proposed plan is not permission to change the launch mode.
-        if (options.agentPermissionMode === 'plan' && toolName === 'ExitPlanMode') {
+        if (toolName === 'ExitPlanMode') {
+          if (!ctx.signal.aborted && options.onExitPlanMode?.()) {
+            isInteractive = true
+            exitedPlan = true
+            return Promise.resolve<PermissionResult>({
+              behavior: 'allow',
+              updatedInput: input,
+              updatedPermissions: [{ type: 'setMode', mode: 'default', destination: 'session' }],
+            })
+          }
           return Promise.resolve<PermissionResult>({
             behavior: 'deny',
             message:
-              'Remain in Plan mode. The user must explicitly select permissions in Kōbō and start a new launch before implementation.',
+              'Remain in Plan mode. Automatic exit is disabled or unavailable. The user can enable automatic Plan exit in Kōbō Settings → Agents, or explicitly select permissions in Kōbō and start a new launch before implementation.',
             interrupt: false,
           })
         }
@@ -428,7 +437,7 @@ export function createClaudeCodeEngine(): AgentEngine {
                 buildStopHookOutput(options.workspaceId, input as Parameters<typeof buildStopHookOutput>[1], {
                   canScheduleWakeup:
                     !options.readOnly &&
-                    options.agentPermissionMode !== 'plan' &&
+                    (exitedPlan || options.agentPermissionMode !== 'plan') &&
                     !promptCapabilities.handoff &&
                     !promptCapabilities.finalReview,
                   autoLoop: options.autoLoop,

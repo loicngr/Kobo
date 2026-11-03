@@ -1,6 +1,8 @@
 import { getConnInfo } from '@hono/node-server/conninfo'
+import Database from 'better-sqlite3'
 import { Hono } from 'hono'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { initBrowserSessionSchema } from '../server/db/browser-session-schema.js'
 
 vi.mock('@hono/node-server/conninfo', () => ({ getConnInfo: vi.fn() }))
 vi.mock('../server/services/settings-service.js', () => ({ getGlobalSettings: vi.fn() }))
@@ -11,19 +13,26 @@ import {
   consumeWebSocketTicket,
   createBrowserSession,
   getBrowserSession,
+  initializeBrowserSessions,
   revokeNetworkSessions,
 } from '../server/services/network-session-service.js'
 import { getGlobalSettings } from '../server/services/settings-service.js'
 
 const policy = { networkAccessEnabled: true, networkAccessBehindProxy: true, networkAccessToken: 'synthetic' }
 const app = new Hono().use('/api/*', networkAuthMiddleware).route('/api/auth', router)
+let db: Database.Database
 beforeEach(() => {
+  db = new Database(':memory:')
+  initBrowserSessionSchema(db)
+  initializeBrowserSessions(db)
   vi.mocked(getConnInfo).mockReturnValue({ remote: { address: '127.0.0.1' } } as never)
   vi.mocked(getGlobalSettings).mockReturnValue({ ...policy } as never)
   vi.stubEnv('KOBO_NETWORK_ACCESS_PROXY_HOST', 'kobo.example.com')
 })
 afterEach(() => {
   revokeNetworkSessions()
+  initializeBrowserSessions(undefined)
+  db.close()
   vi.unstubAllEnvs()
   vi.clearAllMocks()
 })
@@ -126,4 +135,65 @@ describe('browser authentication routes', () => {
     expect(consumeWebSocketTicket(ticket, '/ws', policy)).toBeUndefined()
     expect(getBrowserSession(session.token, policy)).toBeUndefined()
   })
+})
+
+it.each([false, true])('sets an explicit cookie lifetime and remembers only opt-in sessions (%s)', async (remember) => {
+  vi.useFakeTimers()
+  try {
+    const response = await app.request('/api/auth/session', {
+      method: 'POST',
+      headers: { 'X-Kobo-Token': 'synthetic', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ remember }),
+    })
+    expect(response.status).toBe(200)
+    const cookie = response.headers.get('Set-Cookie')!
+    expect(cookie).toContain(`Max-Age=${remember ? 30 * 24 * 60 * 60 : 12 * 60 * 60}`)
+    expect(cookie).toContain('HttpOnly')
+    expect(cookie).toContain('Secure')
+    expect(cookie).toContain('SameSite=Strict')
+    expect(cookie).not.toContain('Domain=')
+    const token = cookie.split(';')[0].split('=')[1]
+    initializeBrowserSessions(db)
+    expect(!!getBrowserSession(token, policy)).toBe(remember)
+  } finally {
+    vi.useRealTimers()
+  }
+})
+
+it.each([{ remember: 'true' }, { remember: 1 }, { remember: null }, null, []])(
+  'rejects invalid opt-in payloads (%j)',
+  async (body) => {
+    const response = await app.request('/api/auth/session', {
+      method: 'POST',
+      headers: { 'X-Kobo-Token': 'synthetic', 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    expect(response.status).toBe(400)
+    expect(response.headers.get('Set-Cookie')).toBeNull()
+  },
+)
+
+it('does not create a remembered session after policy changes while reading its request', async () => {
+  vi.mocked(getGlobalSettings)
+    .mockReturnValueOnce({ ...policy } as never)
+    .mockReturnValue({ ...policy, networkAccessToken: 'rotated' } as never)
+  const response = await app.request('/api/auth/session', {
+    method: 'POST',
+    headers: { 'X-Kobo-Token': 'synthetic' },
+    body: JSON.stringify({ remember: true }),
+  })
+  expect(response.status).toBe(401)
+  expect(db.prepare('SELECT COUNT(*) AS count FROM browser_sessions').get()).toEqual({ count: 0 })
+})
+
+it('replaces and revokes a remembered cookie when logging in without remember', async () => {
+  const old = createBrowserSession(policy, true)
+  const response = await app.request('/api/auth/session', {
+    method: 'POST',
+    headers: { 'X-Kobo-Token': 'synthetic', Cookie: `__Host-kobo-session=${old.token}` },
+    body: JSON.stringify({ remember: false }),
+  })
+  expect(response.status).toBe(200)
+  expect(getBrowserSession(old.token, policy)).toBeUndefined()
+  expect(db.prepare('SELECT COUNT(*) AS count FROM browser_sessions').get()).toEqual({ count: 0 })
 })

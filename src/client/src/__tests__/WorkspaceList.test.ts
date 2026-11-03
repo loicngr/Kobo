@@ -201,3 +201,55 @@ it('offers catalogue tags and preserves a configured selection while settings ar
   expect(menu.props('modelValue')).toEqual(['bug'])
   expect(wrapper.findAllComponents({ name: 'WorkspaceCard' })).toHaveLength(0)
 })
+
+it('starts independent loads together and polls active workspaces before archives/settings finish', async () => {
+  const store = useWorkspaceStore()
+  let resolveWorkspaces!: () => void
+  let resolveArchives!: () => void
+  let resolveSettings!: () => void
+  vi.mocked(store.fetchWorkspaces).mockImplementation(
+    () =>
+      new Promise<void>((resolve) => {
+        resolveWorkspaces = resolve
+      }),
+  )
+  vi.mocked(store.fetchArchivedWorkspaces).mockImplementation(
+    () =>
+      new Promise<void>((resolve) => {
+        resolveArchives = resolve
+      }),
+  )
+  vi.mocked(useSettingsStore().fetchSettings).mockImplementation(
+    () =>
+      new Promise<void>((resolve) => {
+        resolveSettings = resolve
+      }),
+  )
+  wrapper = mountList()
+  expect(store.fetchWorkspaces).toHaveBeenCalled()
+  expect(store.fetchArchivedWorkspaces).toHaveBeenCalled()
+  expect(useSettingsStore().fetchSettings).toHaveBeenCalled()
+  resolveWorkspaces()
+  await flushPromises()
+  expect(store.fetchWorkspacesInfo).toHaveBeenCalled()
+  resolveArchives()
+  resolveSettings()
+  await flushPromises()
+})
+
+it('does not resume initialization or install polling after unmount during loading', async () => {
+  const store = useWorkspaceStore()
+  let resolveWorkspaces!: () => void
+  vi.mocked(store.fetchWorkspaces).mockImplementation(
+    () =>
+      new Promise<void>((resolve) => {
+        resolveWorkspaces = resolve
+      }),
+  )
+  wrapper = mountList()
+  wrapper.unmount()
+  wrapper = undefined
+  resolveWorkspaces()
+  await flushPromises()
+  expect(store.fetchWorkspacesInfo).not.toHaveBeenCalled()
+})

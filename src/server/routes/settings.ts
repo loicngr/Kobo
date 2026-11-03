@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
 import { isMemoryMode } from '../../shared/memory.js'
+import { resolveMemoryLimits } from '../../shared/memory-limits.js'
 import { isValidSkillSuite } from '../../shared/skill-suite-prompts.js'
 import { isWorkflowPolicy } from '../../shared/workflow-policy.js'
 import { getDb } from '../db/index.js'
@@ -198,6 +199,13 @@ app.put('/global', async (c) => {
       (!Number.isSafeInteger(body.maxConcurrentAgents) || (body.maxConcurrentAgents as number) < 0)
     )
       return c.json({ error: 'maxConcurrentAgents must be a non-negative safe integer' }, 400)
+    if ('memoryLimits' in body) {
+      try {
+        resolveMemoryLimits(body.memoryLimits, settingsService.getMemoryLimits())
+      } catch (error) {
+        return c.json({ error: error instanceof Error ? error.message : 'Invalid memory limits' }, 400)
+      }
+    }
     const previousLimit =
       'maxConcurrentAgents' in body ? settingsService.getGlobalSettings().maxConcurrentAgents : undefined
     const updated = settingsService.updateGlobalSettings(body)

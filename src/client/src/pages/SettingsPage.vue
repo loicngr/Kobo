@@ -69,6 +69,8 @@
             <MemorySettingsPanel
               v-if="activeTab === 'memory'"
               :memory-mode="globalMemoryMode"
+              :memory-limits="globalMemoryLimits"
+              @update:memory-limits="globalMemoryLimits = $event"
               @update:memory-mode="globalMemoryMode = $event"
             />
 
@@ -263,6 +265,11 @@
                 <div class="text-caption text-kobo-3 q-mt-xs">
                   {{ $t('settings.agentWatchdogHint') }}
                 </div>
+              </div>
+
+              <div class="q-mb-md">
+                <q-toggle v-model="globalAutoExitPlanMode" :label="$t('settings.autoExitPlanMode')" color="primary" data-test="auto-exit-plan-mode" />
+                <div class="text-caption text-kobo-3 q-mt-xs">{{ $t('settings.autoExitPlanModeHint') }}</div>
               </div>
 
               <q-input
@@ -2910,6 +2917,7 @@ import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import { WORKTREES_PATH } from '../../../shared/consts'
 import type { MemoryMode } from '../../../shared/memory'
+import { DEFAULT_MEMORY_LIMITS, type MemoryLimits } from '../../../shared/memory-limits'
 import {
   AGNOSTIC_AUTO_LOOP_GROOMING_INTRO,
   AGNOSTIC_AUTO_LOOP_REVIEW_GATE,
@@ -3015,6 +3023,7 @@ const maxConcurrentAgentsValid = computed(
 const globalAutoLoopMaxRetries = ref(5)
 const globalAgentWatchdogEnabled = ref(false)
 const globalForceImmediateMessages = ref(false)
+const globalAutoExitPlanMode = ref(false)
 const globalShowProgressBars = ref(true)
 const globalSerializeDevServerStarts = ref(true)
 const globalMaxRunningDevServers = ref<number | string | null>(0)
@@ -3030,6 +3039,7 @@ const globalActivityDigestEnabled = ref(true)
 const globalWsEventsRetentionDays = ref(0)
 const globalWsEventsKeepPerWorkspace = ref(0)
 const globalMemoryMode = ref<MemoryMode>('hybrid')
+const globalMemoryLimits = ref<MemoryLimits>({ ...DEFAULT_MEMORY_LIMITS })
 
 // Network access
 interface NetworkState {
@@ -4123,6 +4133,7 @@ function readGlobalForm(): Record<string, unknown> {
     autoLoopMaxRetries: globalAutoLoopMaxRetries.value,
     agentWatchdogEnabled: globalAgentWatchdogEnabled.value,
     forceImmediateMessages: globalForceImmediateMessages.value,
+    autoExitPlanMode: globalAutoExitPlanMode.value,
     showProgressBars: globalShowProgressBars.value,
     serializeDevServerStarts: globalSerializeDevServerStarts.value,
     maxRunningDevServers: globalMaxRunningDevServers.value,
@@ -4181,6 +4192,7 @@ function readGlobalForm(): Record<string, unknown> {
     worktreesPrefixByProject: globalWorktreesPrefixByProject.value,
     flattenWorkspaceList: globalFlattenWorkspaceList.value,
     memoryMode: globalMemoryMode.value,
+    memoryLimits: { ...globalMemoryLimits.value },
     skillSuite: globalSkillSuite.value,
     customReviewTemplate: globalCustomReviewTemplate.value,
     customAutoLoopReviewGate: globalCustomAutoLoopReviewGate.value,
@@ -4267,6 +4279,7 @@ function syncGlobalForm() {
   globalAutoLoopMaxRetries.value = store.global.autoLoopMaxRetries ?? 5
   globalAgentWatchdogEnabled.value = store.global.agentWatchdogEnabled === true
   globalForceImmediateMessages.value = store.global.forceImmediateMessages === true
+  globalAutoExitPlanMode.value = store.global.autoExitPlanMode === true
   globalShowProgressBars.value = store.global.showProgressBars !== false
   globalSerializeDevServerStarts.value = store.global.serializeDevServerStarts !== false
   globalMaxRunningDevServers.value = store.global.maxRunningDevServers ?? 0
@@ -4359,6 +4372,7 @@ function syncGlobalForm() {
   globalWorktreesPrefixByProject.value = store.global.worktreesPrefixByProject ?? false
   globalFlattenWorkspaceList.value = store.global.flattenWorkspaceList ?? false
   globalMemoryMode.value = store.global.memoryMode ?? 'hybrid'
+  globalMemoryLimits.value = { ...DEFAULT_MEMORY_LIMITS, ...store.global.memoryLimits }
   globalSkillSuite.value = store.global.skillSuite ?? 'standard'
   globalCustomReviewTemplate.value = store.global.customReviewTemplate ?? ''
   globalCustomAutoLoopReviewGate.value = store.global.customAutoLoopReviewGate ?? ''
@@ -4668,6 +4682,7 @@ async function saveGlobal() {
       autoLoopMaxRetries: globalAutoLoopMaxRetries.value,
       agentWatchdogEnabled: globalAgentWatchdogEnabled.value,
       forceImmediateMessages: globalForceImmediateMessages.value,
+      autoExitPlanMode: globalAutoExitPlanMode.value,
       showProgressBars: globalShowProgressBars.value,
       serializeDevServerStarts: globalSerializeDevServerStarts.value,
       maxRunningDevServers: globalMaxRunningDevServers.value as number,
@@ -4728,6 +4743,7 @@ async function saveGlobal() {
       worktreesPrefixByProject: globalWorktreesPrefixByProject.value,
       flattenWorkspaceList: globalFlattenWorkspaceList.value,
       memoryMode: globalMemoryMode.value,
+      memoryLimits: { ...globalMemoryLimits.value },
       skillSuite: globalSkillSuite.value,
       customReviewTemplate: globalCustomReviewTemplate.value,
       customAutoLoopReviewGate: globalCustomAutoLoopReviewGate.value,
@@ -5126,7 +5142,7 @@ onUnmounted(() => {
   border-radius: var(--kobo-radius-md);
 }
 
-.settings-subcard {
+:deep(.settings-subcard) {
   background: var(--kobo-surface);
   border: 1px solid var(--kobo-border-subtle);
   border-radius: var(--kobo-radius-md);

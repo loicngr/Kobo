@@ -104,3 +104,10 @@ export function getMemoryCapability(token: string | undefined): Readonly<MemoryC
 export function revokeMemoryCapability(token: string): void {
   activeCapabilities.delete(token)
 }
+
+/** Backend-only permission transition; revoked launches can never be revived. */
+export function allowMemoryCapabilityWrites(token: string): void {
+  const capability = getMemoryCapability(token)
+  if (!capability) throw new Error('Invalid or revoked memory capability')
+  activeCapabilities.set(token, Object.freeze({ ...capability, readOnly: false }))
+}

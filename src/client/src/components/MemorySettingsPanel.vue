@@ -2,15 +2,17 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { MemoryEntry, MemoryMode } from '../../../shared/memory'
+import { DEFAULT_MEMORY_LIMITS, type MemoryLimits } from '../../../shared/memory-limits'
 import { useMemoryStore } from '../stores/memory'
 import MemoryEntryEditor from './memory/MemoryEntryEditor.vue'
 import MemoryEntryList from './memory/MemoryEntryList.vue'
+import MemoryLimitsEditor from './memory/MemoryLimitsEditor.vue'
 import MemoryOperationsList from './memory/MemoryOperationsList.vue'
 import MemoryProposalList from './memory/MemoryProposalList.vue'
 import MemoryScopeSelect from './memory/MemoryScopeSelect.vue'
 
-const props = defineProps<{ memoryMode: MemoryMode }>()
-const emit = defineEmits<{ 'update:memoryMode': [mode: MemoryMode] }>()
+const props = defineProps<{ memoryMode: MemoryMode; memoryLimits?: MemoryLimits }>()
+const emit = defineEmits<{ 'update:memoryMode': [mode: MemoryMode]; 'update:memoryLimits': [limits: MemoryLimits] }>()
 const { t } = useI18n()
 const memory = useMemoryStore()
 const scopeId = ref('')
@@ -265,6 +267,7 @@ function handleRebase(): void {
 
 <template>
   <section class="memory-settings" data-tour="settings-card-memory" aria-labelledby="memory-settings-title">
+    <div class="settings-subcard q-pa-md memory-settings__card">
     <header class="memory-settings__header">
       <h3 id="memory-settings-title">{{ t('memory.settings.title') }}</h3>
       <p>{{ t('memory.settings.intro') }}</p>
@@ -285,8 +288,10 @@ function handleRebase(): void {
       </label>
       <p class="memory-settings__note">{{ t('memory.settings.saveNote') }}</p>
     </fieldset>
+    </div>
+    <MemoryLimitsEditor class="settings-subcard q-pa-md" :model-value="memoryLimits ?? DEFAULT_MEMORY_LIMITS" @update:model-value="emit('update:memoryLimits', $event)" />
 
-    <div class="memory-settings__divider" />
+    <div class="settings-subcard q-pa-md memory-settings__card">
     <h4>{{ t('memory.settings.manageTitle') }}</h4>
     <p class="memory-settings__note">{{ t('memory.settings.independentNote') }}</p>
     <MemoryScopeSelect :scopes="scopes" :model-value="scopeId" @update:model-value="scopeId = $event" />
@@ -345,6 +350,7 @@ function handleRebase(): void {
     <button v-if="memory.hasMoreEntries(scopeId)" type="button" :disabled="memory.loadingEntries[`${scopeId}\u0000`]" @click="memory.loadEntries(scopeId, '', true).catch((cause: Error) => error = cause.message)">{{ t('memory.entry.loadMore') }}</button>
     <MemoryProposalList :proposals="proposals" :busy-proposal-id="busyProposalId" @decision="decideProposal" />
     <MemoryOperationsList :operations="operations" :has-more="Boolean(operationCursor)" @load-more="memory.loadOperations(scopeId, true)" />
+    </div>
   </section>
 </template>
 
@@ -359,7 +365,9 @@ function handleRebase(): void {
 .memory-settings__modes label { display: grid; grid-template-columns: auto 1fr; gap: var(--kobo-space-xs) var(--kobo-space-sm); align-items: center; }
 .memory-settings__modes small { grid-column: 2; color: var(--kobo-text-2); }
 .memory-settings__modes input { accent-color: var(--kobo-accent); }
-.memory-settings__divider { height: 1px; background: var(--kobo-border-subtle); margin-block: var(--kobo-space-sm); }
+.memory-settings__card { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--kobo-space-md); min-width: 0; }
+.memory-settings > .settings-subcard { margin-bottom: 0; }
+.memory-settings__card :deep(select) { min-width: 0; max-width: 100%; }
 .memory-settings__actions, .memory-clear-confirm { display: flex; flex-wrap: wrap; gap: var(--kobo-space-sm); align-items: center; }
 .memory-clear-confirm { display: grid; padding: var(--kobo-space-md); border-inline-start: 3px solid var(--kobo-danger); background: var(--kobo-surface-2); }
 .memory-settings :deep(button) { min-height: 36px; padding: 4px var(--kobo-space-md); color: var(--kobo-text); background: var(--kobo-surface); border: 1px solid var(--kobo-border-subtle); border-radius: var(--kobo-radius-sm); font: inherit; cursor: pointer; }

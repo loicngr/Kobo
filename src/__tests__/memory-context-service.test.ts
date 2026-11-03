@@ -1,4 +1,7 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { getDb } from '../server/db/index.js'
 import { allocateMemoryConversationKey } from '../server/services/memory-agent-runtime.js'
 import {
@@ -10,6 +13,7 @@ import {
   reconcileMemoryContextsOnStartup,
 } from '../server/services/memory-context-service.js'
 import { createMemory, deleteMemory, resolveMemoryScope, updateMemory } from '../server/services/memory-service.js'
+import { _setSettingsPath } from '../server/services/settings-service.js'
 import { createIdleSession, createWorkspace } from '../server/services/workspace-service.js'
 import { resetDb } from './helpers/reset-db.js'
 
@@ -134,7 +138,7 @@ describe('bounded memory launch context', () => {
       engine: 'claude-code',
       omittedCount: context.omittedCount,
       estimatedTokens: context.estimatedTokens,
-      limitTokens: 6000,
+      limitTokens: 8000,
     })
     expect(records[0]?.entryStates).toEqual(
       expect.arrayContaining([
@@ -443,4 +447,13 @@ describe('bounded memory launch context', () => {
       { dispatch_id: 'dispatch-unknown', state: 'unknown' },
     ])
   })
+})
+
+let settingsDir: string
+beforeEach(() => {
+  settingsDir = mkdtempSync(join(tmpdir(), 'kobo-memory-settings-'))
+  _setSettingsPath(join(settingsDir, 'settings.json'))
+})
+afterEach(() => {
+  rmSync(settingsDir, { recursive: true, force: true })
 })

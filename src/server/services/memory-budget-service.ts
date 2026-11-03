@@ -1,6 +1,7 @@
 import { nanoid } from 'nanoid'
-import { MEMORY_CONVERSATION_BUDGET_TOKENS, type MemoryTransport } from '../../shared/memory.js'
+import type { MemoryTransport } from '../../shared/memory.js'
 import { getDb } from '../db/index.js'
+import { getMemoryLimits } from './settings-service.js'
 
 export interface MemoryBudgetReservation {
   readonly accepted: boolean
@@ -76,8 +77,6 @@ interface BudgetRow {
   delivered_json: string
 }
 
-const MEMORY_DENIAL_RESERVE_TOKENS = 500
-const MEMORY_REGULAR_OUTPUT_LIMIT = MEMORY_CONVERSATION_BUDGET_TOKENS - MEMORY_DENIAL_RESERVE_TOKENS
 const BUDGET_DENIAL_MARKER = 'budget-denial'
 
 function now(): string {
@@ -136,6 +135,7 @@ export function reserveMemoryBudget(input: {
   responseLimitTokens?: number
   bootstrap?: MemoryBootstrapFingerprint
 }): MemoryBudgetReservation {
+  const limits = getMemoryLimits()
   if (!Number.isSafeInteger(input.estimatedTokens) || input.estimatedTokens < 1)
     throw new TypeError('Memory budget charge must be a positive integer')
   const responseLimitTokens = input.responseLimitTokens
@@ -170,14 +170,14 @@ export function reserveMemoryBudget(input: {
       )
       const remaining = denialAlreadyUsed
         ? 0
-        : Math.max(0, MEMORY_REGULAR_OUTPUT_LIMIT - row.cumulative_estimated_tokens)
+        : Math.max(0, limits.conversationTokens - limits.denialTokens - row.cumulative_estimated_tokens)
       if (input.estimatedTokens > remaining) {
         return {
           accepted: false,
           budgetContextId: row.id,
           estimatedTokens: input.estimatedTokens,
           remainingTokens: remaining,
-          limitTokens: MEMORY_REGULAR_OUTPUT_LIMIT,
+          limitTokens: limits.conversationTokens - limits.denialTokens,
           reason: 'conversation-limit' as const,
         }
       }
@@ -199,8 +199,8 @@ export function reserveMemoryBudget(input: {
         accepted: true,
         budgetContextId: row.id,
         estimatedTokens: input.estimatedTokens,
-        remainingTokens: MEMORY_REGULAR_OUTPUT_LIMIT - cumulative,
-        limitTokens: MEMORY_REGULAR_OUTPUT_LIMIT,
+        remainingTokens: limits.conversationTokens - limits.denialTokens - cumulative,
+        limitTokens: limits.conversationTokens - limits.denialTokens,
       }
     })
     .immediate()
@@ -208,7 +208,8 @@ export function reserveMemoryBudget(input: {
 
 /** Spend one reserved terminal receipt; later exhausted calls are suppressed without output. */
 export function reserveMemoryBudgetDenial(budgetContextId: string, estimatedTokens: number): MemoryDenialReservation {
-  if (!Number.isSafeInteger(estimatedTokens) || estimatedTokens < 1 || estimatedTokens > MEMORY_DENIAL_RESERVE_TOKENS)
+  const limits = getMemoryLimits()
+  if (!Number.isSafeInteger(estimatedTokens) || estimatedTokens < 1 || estimatedTokens > limits.denialTokens)
     throw new TypeError('Memory budget denial receipt exceeds its reserved allowance')
   const db = getDb()
   return db
@@ -228,13 +229,13 @@ export function reserveMemoryBudgetDenial(budgetContextId: string, estimatedToke
       const alreadyUsed = delivered.some(
         (item) => item && typeof item === 'object' && (item as Record<string, unknown>).kind === BUDGET_DENIAL_MARKER,
       )
-      if (alreadyUsed || row.cumulative_estimated_tokens + estimatedTokens > MEMORY_CONVERSATION_BUDGET_TOKENS) {
+      if (alreadyUsed || row.cumulative_estimated_tokens + estimatedTokens > limits.conversationTokens) {
         return {
           responseAllowed: false,
           budgetContextId: row.id,
           estimatedTokens: 0,
-          remainingTokens: Math.max(0, MEMORY_CONVERSATION_BUDGET_TOKENS - row.cumulative_estimated_tokens),
-          limitTokens: MEMORY_CONVERSATION_BUDGET_TOKENS,
+          remainingTokens: Math.max(0, limits.conversationTokens - row.cumulative_estimated_tokens),
+          limitTokens: limits.conversationTokens,
         }
       }
       delivered.push({ kind: BUDGET_DENIAL_MARKER, estimatedTokens })
@@ -250,8 +251,8 @@ export function reserveMemoryBudgetDenial(budgetContextId: string, estimatedToke
         responseAllowed: true,
         budgetContextId: row.id,
         estimatedTokens,
-        remainingTokens: MEMORY_CONVERSATION_BUDGET_TOKENS - cumulative,
-        limitTokens: MEMORY_CONVERSATION_BUDGET_TOKENS,
+        remainingTokens: limits.conversationTokens - cumulative,
+        limitTokens: limits.conversationTokens,
       }
     })
     .immediate()

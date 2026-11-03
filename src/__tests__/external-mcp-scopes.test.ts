@@ -10,6 +10,7 @@ import {
 } from '../server/services/external-mcp-credentials-service.js'
 import { executeMemoryMcpTool } from '../server/services/memory-mcp-service.js'
 import { executeProgressBarTool } from '../server/services/progress-bar-mcp-service.js'
+import { _setSettingsPath } from '../server/services/settings-service.js'
 import { executeWorkspaceDialogueTool } from '../server/services/workspace-dialogue-service.js'
 
 vi.mock('../server/services/workspace-dialogue-service.js', () => ({
@@ -36,6 +37,7 @@ beforeEach(() => {
   previous = process.env.KOBO_HOME
   home = fs.mkdtempSync(path.join(os.tmpdir(), 'kobo-mcp-scopes-'))
   process.env.KOBO_HOME = home
+  _setSettingsPath(path.join(home, 'settings.json'))
   token = createExternalMcpCredential({ name: 'reader', workspaceIds: ['allowed'] }).token
 })
 afterEach(() => {

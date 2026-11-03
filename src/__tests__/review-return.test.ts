@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { MISTRAL_CAPABILITIES } from '../server/services/agent/engines/mistral-vibe/capabilities.js'
 import type { AgentEvent, StartOptions } from '../server/services/agent/engines/types.js'
+import { DEFAULT_MEMORY_LIMITS } from '../shared/memory-limits.js'
 import { resetDb } from './helpers/reset-db.js'
 
 const nativePeer = vi.hoisted(() => ({ spawn: vi.fn(), connect: vi.fn(), request: vi.fn() }))
@@ -23,6 +24,7 @@ afterEach(() => {
 const admissionConfig = vi.hoisted(() => ({ maxConcurrentAgents: 0 }))
 
 vi.mock('../server/services/settings-service.js', () => ({
+  getMemoryLimits: () => ({ ...DEFAULT_MEMORY_LIMITS }),
   getGlobalSettings: () => ({
     autoLoopMaxRetries: 5,
     memoryMode: 'automatic',

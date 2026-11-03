@@ -1,4 +1,7 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import memoryRouter from '../server/routes/memory.js'
 import {
   allocateMemoryConversationKey,
@@ -7,6 +10,7 @@ import {
   type MemoryCapabilityDescriptor,
   revokeMemoryCapability,
 } from '../server/services/memory-agent-runtime.js'
+import { _setSettingsPath } from '../server/services/settings-service.js'
 import { resetDb } from './helpers/reset-db.js'
 
 const descriptor: MemoryCapabilityDescriptor = {
@@ -177,4 +181,13 @@ describe('memory agent capability', () => {
     expect(await response.json()).toMatchObject({ status: 'applied', budget: { chargedTokens: 0 } })
     expect(getDb().prepare('SELECT id FROM memory_entries WHERE scope_id = ?').all(scope.id)).toHaveLength(1)
   })
+})
+
+let settingsDir: string
+beforeEach(() => {
+  settingsDir = mkdtempSync(join(tmpdir(), 'kobo-memory-settings-'))
+  _setSettingsPath(join(settingsDir, 'settings.json'))
+})
+afterEach(() => {
+  rmSync(settingsDir, { recursive: true, force: true })
 })

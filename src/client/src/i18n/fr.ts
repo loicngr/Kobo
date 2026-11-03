@@ -211,6 +211,24 @@ export default {
   'memory.context.state.unknown': 'Transmission inconnue',
   'memory.settings.intro':
     'La mémoire conserve des notes explicites pour les prochaines sessions d’agent. Elle ne remplace pas l’historique du fournisseur ni celui des conversations.',
+  'memory.limits.title': 'Limites de la mémoire',
+  'memory.limits.hint':
+    'Unités estimées conservatrices (octets UTF-8, pas les tokens du modèle). Les réglages s’appliquent aux prochains appels, sans effacer la consommation. Une conversation déjà bloquée attend le compactage ou une nouvelle conversation.',
+  'memory.limits.invalid':
+    'Vérifiez les bornes : cible ≤ plafond, page par défaut ≤ maximum et injection/réponse ≤ budget total moins réserve.',
+  'memory.limits.reset': 'Restaurer les valeurs par défaut',
+  'memory.limits.bootstrapTokens': 'Injection au démarrage (unités)',
+  'memory.limits.responseTokens': 'Cible par réponse MCP (unités)',
+  'memory.limits.responseHardTokens': 'Plafond par réponse MCP (unités)',
+  'memory.limits.conversationTokens': 'Budget par conversation (unités)',
+  'memory.limits.denialTokens': 'Réserve de refus (unités)',
+  'memory.limits.fragmentChars': 'Fragment de lecture (caractères Unicode)',
+  'memory.limits.bodyChars': 'Taille maximale d’une mémoire (caractères)',
+  'memory.limits.titleChars': 'Titre maximal (caractères)',
+  'memory.limits.pageSize': 'Résultats par page par défaut',
+  'memory.limits.pageMaxSize': 'Résultats maximum par page',
+  'memory.limits.outputBytes': 'Réponse MCP maximale (octets)',
+  'memory.limits.bootstrapBytes': 'Injection maximale (octets)',
   'memory.settings.mode': 'Comportement automatique de la mémoire',
   'memory.settings.mode.manual': 'Manuel',
   'memory.settings.modeHint.manual':
@@ -2145,6 +2163,9 @@ export default {
   'settings.forceImmediateMessages': 'Forcer l’envoi immédiat des messages',
   'settings.forceImmediateMessagesHint':
     'Désactivé par défaut. Envoie les nouveaux messages pendant que l’agent travaille, comme Ctrl+Entrée, sans les mettre en file d’attente. En auto-loop, envoie maintenant et met la boucle en pause. Les messages déjà en attente restent inchangés ; les blocages de compaction et d’autorisation restent actifs.',
+  'settings.autoExitPlanMode': 'Autoriser la sortie automatique du mode Plan (Claude Code)',
+  'settings.autoExitPlanModeHint':
+    'Quand Claude appelle ExitPlanMode, passer en mode interactif avec les demandes de permission habituelles. Désactivé : refuser la sortie. Les revues en lecture seule restent protégées. Le réglage enregistré prend effet au prochain appel.',
   'settings.showProgressBars': 'Afficher les barres de progression',
   'settings.showProgressBarsHint':
     'Activé par défaut. Masquer les barres ne ferme aucune activité et ne suspend pas leur suivi. Le changement s’applique dès l’enregistrement.',
@@ -2631,6 +2652,9 @@ export default {
   'staleSessionBanner.switchToCurrent': 'Basculer sur la session active',
 
   // Network login
+  'network.login.remember': 'Se souvenir de cet appareil pendant 30 jours',
+  'network.login.rememberHint':
+    'À activer uniquement sur un appareil de confiance. Le token n’est pas enregistré dans le navigateur.',
   'network.login.title': 'Accès réseau',
   'network.login.description':
     'Ce Kōbō nécessite un token pour être piloté depuis le réseau. Colle le token affiché dans les Réglages sur la machine hôte.',

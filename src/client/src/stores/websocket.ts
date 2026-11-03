@@ -129,6 +129,8 @@ function prToastActions(workspaceId: string, prUrl?: string): Array<Record<strin
 let _ws: WebSocket | null = null
 let _connectionEpoch = 0
 let _connecting = false
+let _connectionTimer: ReturnType<typeof setTimeout> | null = null
+let _resumeTimer: ReturnType<typeof setTimeout> | null = null
 let _reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let _reconnectAttempt = 0
 let _shouldReconnect = false
@@ -545,25 +547,30 @@ export const useWebSocketStore = defineStore('websocket', {
       _shouldReconnect = true
       if (!_networkListenersBound) {
         _networkListenersBound = true
-        window.addEventListener('online', () => {
-          if (_shouldReconnect) this.connect()
+        const recover = (force = false) => {
+          if (!_shouldReconnect || !navigator.onLine) return
+          if (!force && _ws?.readyState === WebSocket.OPEN) {
+            if (_resumeTimer) return
+            // Probe the existing connection before interrupting in-flight deliveries.
+            _resumeTimer = setTimeout(() => recover(true), 10_000)
+            if (this._send({ type: 'sync:request', payload: { lastEventId: this.lastEventId ?? undefined } })) return
+          }
+          this._resetConnection()
+          _reconnectAttempt = 0
+          this.reconnecting = true
+          void this.connect()
+        }
+        window.addEventListener('online', () => recover())
+        window.addEventListener('kobo:auth-token-changed', () => recover(true))
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'visible') recover()
+        })
+        window.addEventListener('pageshow', (event) => {
+          if (event.persisted) recover()
         })
         window.addEventListener('offline', () => {
-          _connectionEpoch++
-          _connecting = false
-          this.connected = false
+          this._resetConnection()
           this.reconnecting = _shouldReconnect
-          this.pendingSyncRequests = []
-          // Abandon the corresponding connection too: its late responses
-          // cannot be paired with requests sent after we come back online.
-          chatDeliveries.disconnect(t('network.login.unreachable'))
-          const offlineSocket = _ws
-          _ws = null
-          offlineSocket?.close()
-          if (_reconnectTimer) {
-            clearTimeout(_reconnectTimer)
-            _reconnectTimer = null
-          }
         })
       }
       if (!navigator.onLine) {
@@ -575,24 +582,31 @@ export const useWebSocketStore = defineStore('websocket', {
 
       const epoch = ++_connectionEpoch
       _connecting = true
-      let url: string
+      // Covers both ticket acquisition and a WebSocket handshake that never settles.
+      _connectionTimer = setTimeout(() => {
+        if (epoch !== _connectionEpoch) return
+        this._resetConnection()
+        if (_shouldReconnect) this._scheduleReconnect()
+      }, 20_000)
+      let ws: WebSocket
       try {
-        url = await authenticatedWebSocketUrl('/ws')
+        const url = await authenticatedWebSocketUrl('/ws')
+        if (epoch !== _connectionEpoch || !_shouldReconnect || !navigator.onLine) return
+        ws = new WebSocket(url)
+        _ws = ws
+        _connecting = false
       } catch {
         if (epoch === _connectionEpoch) {
-          _connecting = false
+          this._resetConnection()
           if (_shouldReconnect) this._scheduleReconnect()
         }
         return
       }
-      if (epoch !== _connectionEpoch || !_shouldReconnect || !navigator.onLine) return
-      _connecting = false
-
-      const ws = new WebSocket(url)
-      _ws = ws
 
       ws.addEventListener('open', () => {
         if (_ws !== ws) return
+        if (_connectionTimer) clearTimeout(_connectionTimer)
+        _connectionTimer = null
         this.connected = true
         void useUpdateStore().refreshSnapshot()
         this.reconnecting = false
@@ -629,24 +643,21 @@ export const useWebSocketStore = defineStore('websocket', {
         if (_ws !== ws) return
         try {
           const msg = JSON.parse(event.data)
+          if (_resumeTimer) clearTimeout(_resumeTimer)
+          _resumeTimer = null
           this._routeMessage(msg)
         } catch {
           // Ignore unparseable messages
         }
       })
 
-      ws.addEventListener('close', () => {
+      const failed = () => {
         if (_ws !== ws) return
-        chatDeliveries.disconnect(t('network.login.unreachable'))
-        this.connected = false
-        this.pendingSyncRequests = []
-        _ws = null
+        this._resetConnection()
         if (_shouldReconnect) this._scheduleReconnect()
-      })
-
-      ws.addEventListener('error', () => {
-        // close event will fire after error, triggering reconnect
-      })
+      }
+      ws.addEventListener('close', failed)
+      ws.addEventListener('error', failed)
     },
 
     async refreshLiveState(): Promise<void> {
@@ -682,21 +693,28 @@ export const useWebSocketStore = defineStore('websocket', {
       ])
     },
 
-    disconnect() {
+    _resetConnection() {
       _connectionEpoch++
       _connecting = false
+      if (_resumeTimer) clearTimeout(_resumeTimer)
+      _resumeTimer = null
       chatDeliveries.disconnect(t('network.login.unreachable'))
-      _shouldReconnect = false
       this.pendingSyncRequests = []
-      if (_reconnectTimer) {
-        clearTimeout(_reconnectTimer)
-        _reconnectTimer = null
-      }
-      if (_ws) {
-        _ws.close()
-        _ws = null
-      }
+      if (_connectionTimer) clearTimeout(_connectionTimer)
+      _connectionTimer = null
+      if (_reconnectTimer) clearTimeout(_reconnectTimer)
+      _reconnectTimer = null
+      // Detach first: browsers can deliver old close/open events after reconnecting.
+      const previous = _ws
+      _ws = null
+      previous?.close()
       this.connected = false
+    },
+
+    disconnect() {
+      _shouldReconnect = false
+      _reconnectAttempt = 0
+      this._resetConnection()
       this.reconnecting = false
       this.reconnectAttempt = 0
     },
@@ -1043,6 +1061,7 @@ export const useWebSocketStore = defineStore('websocket', {
             const serverTimestamp = typeof msg.createdAt === 'string' ? msg.createdAt : undefined
             const timestamp = serverTimestamp ?? new Date().toISOString()
             const items = workspaceStore.activityFeeds[wid] ?? []
+            if (workspaceStore.activityFeedIds[wid]?.has(eventId)) break
             const alreadyExists =
               !source &&
               sender === 'user' &&
@@ -1050,7 +1069,7 @@ export const useWebSocketStore = defineStore('websocket', {
                 (i) =>
                   i.meta?.sender === 'user' &&
                   i.content === content &&
-                  i.meta?.pending &&
+                  (i.meta?.optimistic ?? i.meta?.pending) &&
                   (i.sessionId === sessionId ||
                     (!i.sessionId && !workspaceStore.isParallelReviewSession(wid, sessionId))),
               )
@@ -1059,7 +1078,7 @@ export const useWebSocketStore = defineStore('websocket', {
                 (i) =>
                   i.meta?.sender === 'user' &&
                   i.content === content &&
-                  i.meta?.pending &&
+                  (i.meta?.optimistic ?? i.meta?.pending) &&
                   (i.sessionId === sessionId ||
                     (!i.sessionId && !workspaceStore.isParallelReviewSession(wid, sessionId))),
               )
@@ -1070,9 +1089,14 @@ export const useWebSocketStore = defineStore('websocket', {
                 // (e.g. a WSL2 browser on Windows vs. the server in the Linux
                 // VM). Never fall back to `new Date()` here — that would just
                 // swap one arbitrary local clock reading for another.
+                const ids = workspaceStore.activityFeedIds[wid] ?? new Set<string>()
+                ids.delete(items[idx]!.id)
+                ids.add(eventId)
+                workspaceStore.activityFeedIds[wid] = ids
                 items[idx] = {
                   ...items[idx],
                   id: eventId,
+                  meta: { ...items[idx]!.meta, optimistic: false },
                   sessionId,
                   ...(serverTimestamp ? { timestamp: serverTimestamp } : {}),
                 }

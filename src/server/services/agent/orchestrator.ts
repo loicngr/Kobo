@@ -25,13 +25,19 @@ import * as autoLoopService from '../auto-loop-service.js'
 import * as cleanupScriptService from '../cleanup-script-service.js'
 import * as cronService from '../cron-service.js'
 import { resolveForge } from '../forge/resolve.js'
-import { createInternalMcpCapability, revokeInternalMcpCapability } from '../internal-mcp-capability-service.js'
+import {
+  createInternalMcpCapability,
+  resolveInternalMcpCapability,
+  revokeInternalMcpCapability,
+} from '../internal-mcp-capability-service.js'
 import * as lifecycleHookService from '../lifecycle-hook-service.js'
 import {
   advanceMemoryConversationEpoch,
   allocateMemoryConversationKey,
+  allowMemoryCapabilityWrites,
   bindMemoryNativeConversation,
   createMemoryCapability,
+  getMemoryCapability,
   revokeMemoryCapability,
 } from '../memory-agent-runtime.js'
 import {
@@ -1995,6 +2001,40 @@ export function startAgent(
   const options: StartOptions = {
     workspaceId,
     watchdogEnabled: getGlobalSettings().agentWatchdogEnabled === true,
+    onExitPlanMode: () => {
+      if (
+        engine.id !== 'claude-code' ||
+        readOnly ||
+        restricted ||
+        shuttingDown ||
+        controller.isClosed ||
+        controller.status === 'stopping' ||
+        registry.get(workspaceId) !== controller ||
+        getGlobalSettings().autoExitPlanMode !== true
+      )
+        return false
+      const current = getWs(workspaceId)
+      if (!current || current.archivedAt || current.worktreePurgedAt) return false
+      // Validate both launch tokens before changing any permission.
+      if (!getMemoryCapability(memoryCapability.token)) return false
+      const capability = resolveInternalMcpCapability(internalMcpCapability.token)
+      const updated = updateWorkspaceEngineConfiguration(
+        workspaceId,
+        current.engine,
+        current.model,
+        current.reasoningEffort,
+        'interactive',
+      )
+      allowMemoryCapabilityWrites(memoryCapability.token)
+      capability.readOnly = false
+      emitEphemeral(workspaceId, 'workspace:configuration', {
+        engine: updated.engine,
+        model: updated.model,
+        reasoningEffort: updated.reasoningEffort,
+        agentPermissionMode: updated.agentPermissionMode,
+      })
+      return true
+    },
     workingDir,
     prompt: buildAgentPrompt(
       `${ws ? renderWorkflowPolicy(ws.workflowPolicy) : ''}\n${integrationMcpPrompt(integrationServers, unavailableIntegrations)}\n${prompt}`,

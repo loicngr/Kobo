@@ -5,6 +5,7 @@ import type { ProjectColor } from 'src/utils/project-color'
 import { DEFAULT_WHIP_SHORTCUT } from 'src/utils/whip-shortcut'
 import { WORKTREES_PATH } from '../../../shared/consts'
 import type { MemoryMode } from '../../../shared/memory'
+import { DEFAULT_MEMORY_LIMITS, type MemoryLimits } from '../../../shared/memory-limits'
 import type { SkillSuite } from '../../../shared/skill-suite-prompts'
 import { MANUAL_WORKFLOW_POLICY, type WorkflowPolicy } from '../../../shared/workflow-policy'
 
@@ -69,6 +70,7 @@ interface ProjectSettings {
 interface GlobalSettings {
   workflowPolicy: WorkflowPolicy
   memoryMode: MemoryMode
+  memoryLimits?: MemoryLimits
   onboardingComplete: boolean
   /**
    * Default model id per engine. Keys are engine ids (e.g. `'claude-code'`,
@@ -119,6 +121,7 @@ interface GlobalSettings {
   autoLoopMaxRetries: number
   agentWatchdogEnabled: boolean
   forceImmediateMessages: boolean
+  autoExitPlanMode?: boolean
   showProgressBars: boolean
   serializeDevServerStarts: boolean
   maxRunningDevServers: number
@@ -252,6 +255,7 @@ export const useSettingsStore = defineStore('settings', {
     global: {
       workflowPolicy: { ...MANUAL_WORKFLOW_POLICY },
       memoryMode: 'hybrid' as MemoryMode,
+      memoryLimits: { ...DEFAULT_MEMORY_LIMITS } as MemoryLimits,
       onboardingComplete: false,
       defaultModelByEngine: { 'claude-code': 'claude-sonnet-5-5', codex: 'auto', 'mistral-vibe': 'auto' } as Record<
         string,
@@ -273,6 +277,7 @@ export const useSettingsStore = defineStore('settings', {
       autoLoopMaxRetries: 5,
       agentWatchdogEnabled: false,
       forceImmediateMessages: false,
+      autoExitPlanMode: false,
       showProgressBars: true,
       serializeDevServerStarts: true,
       maxRunningDevServers: 0,

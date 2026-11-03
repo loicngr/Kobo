@@ -31,6 +31,7 @@ import {
   upsertProject,
 } from '../server/services/settings-service.js'
 import { MASKED_SECRET } from '../shared/consts.js'
+import { DEFAULT_MEMORY_LIMITS } from '../shared/memory-limits.js'
 import { makeGlobalSettings } from './helpers/fixtures.js'
 
 let tmpDir: string
@@ -3280,4 +3281,40 @@ describe('shutdown script inheritance', () => {
       'Invalid shutdownScript',
     )
   })
+})
+
+it('migrates memory limits without changing the mode and persists customized limits across reloads', () => {
+  fs.writeFileSync(
+    settingsPath,
+    JSON.stringify({
+      schemaVersion: 69,
+      global: { ...makeGlobalSettings(), memoryMode: 'manual' },
+      projects: [],
+    }),
+  )
+  expect(getGlobalSettings()).toMatchObject({ memoryMode: 'manual', memoryLimits: DEFAULT_MEMORY_LIMITS })
+  updateGlobalSettings({ memoryLimits: { ...DEFAULT_MEMORY_LIMITS, conversationTokens: 9000 } })
+  _setSettingsPath(settingsPath)
+  expect(getGlobalSettings().memoryLimits?.conversationTokens).toBe(9000)
+})
+
+it('defaults automatic Plan exit to false and persists only explicit boolean changes', () => {
+  expect(getGlobalSettings().autoExitPlanMode).toBe(false)
+  updateGlobalSettings({ autoExitPlanMode: true })
+  expect(getGlobalSettings().autoExitPlanMode).toBe(true)
+  updateGlobalSettings({ autoExitPlanMode: 'false' } as unknown as Partial<GlobalSettings>)
+  expect(getGlobalSettings().autoExitPlanMode).toBe(true)
+  updateGlobalSettings({ autoExitPlanMode: false })
+  expect(getGlobalSettings().autoExitPlanMode).toBe(false)
+})
+
+it.each([undefined, false, true, 'true', 1])('migrates automatic Plan exit conservatively (%s)', (value) => {
+  const migrated = runSettingsMigrations({
+    schemaVersion: 70,
+    global: { autoExitPlanMode: value, editorCommand: 'keep' },
+    projects: [],
+  })
+  expect(migrated.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
+  expect(migrated.global.autoExitPlanMode).toBe(value === true)
+  expect(migrated.global.editorCommand).toBe('keep')
 })

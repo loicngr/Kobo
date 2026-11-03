@@ -24,7 +24,7 @@ import {
 } from '../server/services/memory-agent-runtime.js'
 import { executeMemoryMcpTool } from '../server/services/memory-mcp-service.js'
 import { createMemory, listMemoryProposals, readMemory, resolveMemoryScope } from '../server/services/memory-service.js'
-import { _setSettingsPath, updateGlobalSettings } from '../server/services/settings-service.js'
+import { _setSettingsPath, getMemoryLimits, updateGlobalSettings } from '../server/services/settings-service.js'
 import { createIdleSession } from '../server/services/workspace-service.js'
 import { estimateMemoryTokens } from '../server/utils/memory-token-budget.js'
 
@@ -142,7 +142,7 @@ it.each([false, true])(
     const conversationKey = allocateMemoryConversationKey({ sessionId: session.id, engine: 'claude-code' })
     getDb()
       .prepare(
-        'UPDATE memory_budget_contexts SET cumulative_estimated_tokens = 6000, delivered_json = ? WHERE conversation_key = ?',
+        'UPDATE memory_budget_contexts SET cumulative_estimated_tokens = 8000, delivered_json = ? WHERE conversation_key = ?',
       )
       .run(JSON.stringify([{ kind: 'budget-denial', estimatedTokens: 500 }]), conversationKey)
     closeDb()
@@ -187,7 +187,7 @@ it.each([false, true])(
         getDb()
           .prepare('SELECT cumulative_estimated_tokens AS total FROM memory_budget_contexts WHERE conversation_key = ?')
           .get(conversationKey),
-      ).toEqual({ total: 6000 })
+      ).toEqual({ total: 8000 })
     } finally {
       revokeMemoryCapability(capability.token)
     }
@@ -505,7 +505,7 @@ it('applies an external remember write even when the retrieval budget is fully e
     memory_context_id: string
   }
   getDb()
-    .prepare('UPDATE memory_budget_contexts SET cumulative_estimated_tokens = 6_000 WHERE external_context_id = ?')
+    .prepare('UPDATE memory_budget_contexts SET cumulative_estimated_tokens = 8_000 WHERE external_context_id = ?')
     .run(first.memory_context_id)
 
   const result = executeMemoryMcpTool(
@@ -601,6 +601,41 @@ it('exposes external memory over global stdio without workspace or engine state'
       clientName: 'Atelier ✨',
       transport: 'stdio',
     })
+
+    const entryId = (textResult(saved) as { entry: { id: string } }).entry.id
+    const firstRead = textResult(
+      await client.callTool({
+        name: 'read_memory',
+        arguments: { scope_id: global.id, entry_id: entryId },
+      }),
+    ) as { memory_context_id: string; entry: { body: string }; budget: { remainingTokens: number } }
+    expect(firstRead.entry.body).toBe('MCP stdio is connected')
+    updateGlobalSettings({ memoryLimits: { ...getMemoryLimits(), fragmentChars: 5, bodyChars: 30000 } })
+    const nextRead = textResult(
+      await client.callTool({
+        name: 'read_memory',
+        arguments: {
+          scope_id: global.id,
+          entry_id: entryId,
+          memory_context_id: firstRead.memory_context_id,
+          repeat: true,
+        },
+      }),
+    ) as typeof firstRead
+    expect(nextRead.entry.body).toBe('MCP s')
+    expect(nextRead.memory_context_id).toBe(firstRead.memory_context_id)
+    expect(nextRead.budget.remainingTokens).toBeLessThan(firstRead.budget.remainingTokens)
+    const largeSaved = await client.callTool({
+      name: 'remember',
+      arguments: {
+        scope_id: global.id,
+        expected_generation: 0,
+        key: 'large.live',
+        title: 'Large',
+        body: 'x'.repeat(20000),
+      },
+    })
+    expect(textResult(largeSaved)).toMatchObject({ status: 'applied' })
   } finally {
     await client.close()
     await new Promise<void>((resolve, reject) => listener.close((error) => (error ? reject(error) : resolve())))
@@ -614,7 +649,7 @@ it('limits exhausted-budget receipts and hides the suppression marker from exter
     const initial = await client.callTool({ name: 'list_memory_scopes', arguments: {} })
     const contextId = (textResult(initial) as { memory_context_id: string }).memory_context_id
     getDb()
-      .prepare('UPDATE memory_budget_contexts SET cumulative_estimated_tokens = 5500 WHERE external_context_id = ?')
+      .prepare('UPDATE memory_budget_contexts SET cumulative_estimated_tokens = 7500 WHERE external_context_id = ?')
       .run(contextId)
 
     const firstDenial = await client.callTool({
@@ -639,7 +674,7 @@ it('limits exhausted-budget receipts and hides the suppression marker from exter
         'SELECT cumulative_estimated_tokens, delivered_json FROM memory_budget_contexts WHERE external_context_id = ?',
       )
       .get(contextId) as { cumulative_estimated_tokens: number; delivered_json: string }
-    expect(ledger.cumulative_estimated_tokens).toBeLessThanOrEqual(6_000)
+    expect(ledger.cumulative_estimated_tokens).toBeLessThanOrEqual(8_000)
     expect(
       JSON.parse(ledger.delivered_json).filter((item: { kind?: string }) => item.kind === 'budget-denial'),
     ).toHaveLength(1)
@@ -686,7 +721,7 @@ it('returns no MCP content from the workspace bridge after its denial allowance 
   const ledger = getDb()
     .prepare('SELECT id FROM memory_budget_contexts WHERE conversation_key = ?')
     .get(conversationKey) as { id: string }
-  getDb().prepare('UPDATE memory_budget_contexts SET cumulative_estimated_tokens = 5_500 WHERE id = ?').run(ledger.id)
+  getDb().prepare('UPDATE memory_budget_contexts SET cumulative_estimated_tokens = 7_500 WHERE id = ?').run(ledger.id)
   const client = new Client({ name: 'Workspace agent', version: '1' })
   try {
     await client.connect(
@@ -718,7 +753,7 @@ it('returns no MCP content from the workspace bridge after its denial allowance 
     expect(second.isError).toBe(true)
     expect(second.content).toEqual([])
     expect(JSON.stringify(second)).not.toContain('memoryOutputSuppressed')
-    getDb().prepare('UPDATE memory_budget_contexts SET cumulative_estimated_tokens = 6000 WHERE id = ?').run(ledger.id)
+    getDb().prepare('UPDATE memory_budget_contexts SET cumulative_estimated_tokens = 8000 WHERE id = ?').run(ledger.id)
     const scopes = await client.callTool({ name: 'list_memory_scopes', arguments: {} })
     expect(scopes.isError, JSON.stringify(scopes)).not.toBe(true)
     const scope = resolveMemoryScope({ level: 'workspace', workspaceId: 'ws-1' })
@@ -746,7 +781,7 @@ it('returns no MCP content from the workspace bridge after its denial allowance 
       getDb()
         .prepare('SELECT cumulative_estimated_tokens AS total FROM memory_budget_contexts WHERE id = ?')
         .get(ledger.id),
-    ).toEqual({ total: 6000 })
+    ).toEqual({ total: 8000 })
   } finally {
     revokeMemoryCapability(capability.token)
     await client.close()
@@ -940,3 +975,63 @@ it('uses the transport-derived context and rejects caller identity or unsupporte
   expect(result).toMatchObject({ __mcpError: true, error: 'Unexpected argument: actor' })
   expect(result.memory_context_id).toBeDefined()
 })
+
+it.each([
+  ['internal', 'Short note', 0],
+  ['external', 'Short note', 0],
+  ['internal', '🙂'.repeat(65), 60],
+  ['external', '🙂'.repeat(65), 60],
+] as const)(
+  'does not resend an unchanged short or final fragment (%s, body %s, offset %s)',
+  async (transport, body, offset) => {
+    const scope = resolveMemoryScope({ level: 'workspace', workspaceId: 'ws-1' })
+    const entry = createMemory({ scopeId: scope.id, key: 'short', title: 'Short', body, actor: { kind: 'human' } })
+    const session = createIdleSession('ws-1')
+    const conversationKey = allocateMemoryConversationKey({ sessionId: session.id, engine: 'claude-code' })
+    const capability = createMemoryCapability({
+      dispatchId: 'short-fragment',
+      workspaceId: 'ws-1',
+      sessionId: session.id,
+      engine: 'claude-code',
+      conversationKey,
+      readOnly: true,
+    })
+    let contextId: string | undefined
+    const read = async (repeat = false) => {
+      const args = {
+        scope_id: scope.id,
+        entry_id: entry.id,
+        ...(offset ? { cursor: `1.${offset}` } : {}),
+        ...(repeat ? { repeat: true } : {}),
+        ...(contextId ? { memory_context_id: contextId } : {}),
+      }
+      let result: { entry: { body?: string; alreadyDelivered?: boolean }; memory_context_id?: string }
+      if (transport === 'external') {
+        result = executeMemoryMcpTool('read_memory', args, {
+          kind: 'mcp',
+          clientName: 'Short fragment',
+          transport: 'http',
+        }) as typeof result
+        contextId = result.memory_context_id
+      } else {
+        const response = await app.request('/api/memory/agent/read_memory', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Kobo-Memory-Session': capability.token },
+          body: JSON.stringify(args),
+        })
+        expect(response.status).toBe(200)
+        result = await response.json()
+      }
+      return result.entry
+    }
+    try {
+      const expectedBody = [...body].slice(offset).join('')
+      expect((await read()).body).toBe(expectedBody)
+      expect(await read()).toMatchObject({ alreadyDelivered: true })
+      expect((await read()).body).toBeUndefined()
+      expect((await read(true)).body).toBe(expectedBody)
+    } finally {
+      revokeMemoryCapability(capability.token)
+    }
+  },
+)

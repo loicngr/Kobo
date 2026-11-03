@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto'
+import type Database from 'better-sqlite3'
 import type { WebSocket } from 'ws'
 import { isLoopbackAddress, resolveProxyOrigin } from './network-access-service.js'
 
@@ -29,6 +30,7 @@ interface SocketGrant {
   count: number
   window: number
 }
+let persistence: Database.Database | undefined
 const sessions = new Map<string, Omit<BrowserSession, 'token'>>()
 const tickets = new Map<string, Ticket>()
 const sockets = new Map<WebSocket, SocketGrant>()
@@ -37,23 +39,50 @@ const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 const fingerprint = (p: NetworkPolicy) =>
   hash(JSON.stringify([p.networkAccessEnabled, !!p.networkAccessBehindProxy, p.networkAccessToken]))
 const lifetime = 12 * 60 * 60 * 1000
+const rememberedLifetime = 30 * 24 * 60 * 60 * 1000
+
+/** Called after migrations, before serving requests. Only remembered sessions survive startup. */
+export function initializeBrowserSessions(db: Database.Database | undefined): void {
+  sessions.clear()
+  tickets.clear()
+  for (const ws of sockets.keys()) terminate(ws)
+  persistence = db
+  if (!db) return
+  db.prepare('DELETE FROM browser_sessions WHERE expires_at <= ?').run(Date.now())
+  const rows = db
+    .prepare('SELECT token_hash AS id, expires_at AS expiresAt, policy_fingerprint AS policy FROM browser_sessions')
+    .all() as Array<{ id: string; expiresAt: number; policy: string }>
+  for (const { id, ...record } of rows) sessions.set(id, record)
+}
 export function isNetworkTransportAllowed(address: string | undefined, policy: NetworkPolicy): boolean {
   return policy.networkAccessEnabled || (!policy.networkAccessBehindProxy && isLoopbackAddress(address))
 }
-function prune() {
+function prune(policy?: NetworkPolicy) {
   const now = Date.now()
-  for (const [id, session] of sessions) if (session.expiresAt <= now) sessions.delete(id)
+  const currentPolicy = policy ? fingerprint(policy) : undefined
+  for (const [id, session] of sessions) {
+    if (session.expiresAt <= now || (currentPolicy && session.policy !== currentPolicy)) {
+      persistence?.prepare('DELETE FROM browser_sessions WHERE token_hash = ?').run(id)
+      sessions.delete(id)
+    }
+  }
   for (const [id, ticket] of tickets) if (ticket.expiresAt <= now) tickets.delete(id)
 }
-export function createBrowserSession(policy: NetworkPolicy): BrowserSession {
-  prune()
+export function createBrowserSession(policy: NetworkPolicy, remember = false): BrowserSession {
+  prune(policy)
   if (sessions.size >= 256) throw new Error('Session capacity reached')
   const session = {
     token: randomBytes(32).toString('base64url'),
-    expiresAt: Date.now() + lifetime,
+    expiresAt: Date.now() + (remember ? rememberedLifetime : lifetime),
     policy: fingerprint(policy),
   }
   const { token, ...record } = session
+  if (remember) {
+    if (!persistence) throw new Error('Session storage unavailable')
+    persistence
+      .prepare('INSERT INTO browser_sessions (token_hash, expires_at, policy_fingerprint) VALUES (?, ?, ?)')
+      .run(hash(token), record.expiresAt, record.policy)
+  }
   sessions.set(hash(token), record)
   return session
 }
@@ -126,7 +155,8 @@ export function registerNetworkSocket(
     terminate(ws)
     return false
   }
-  const expiresAt = session?.expiresAt ?? Date.now() + lifetime
+  // Reconnect sockets at least every 12h, avoiding Node's ~25-day timer overflow.
+  const expiresAt = Math.min(session?.expiresAt ?? Infinity, Date.now() + lifetime)
   const timer = setTimeout(() => terminate(ws), Math.max(0, expiresAt - Date.now()))
   timer.unref?.()
   sockets.set(ws, {
@@ -185,11 +215,13 @@ export function acceptNetworkSocketMessage(ws: WebSocket): boolean {
   return true
 }
 export function revokeBrowserSession(token: string) {
+  persistence?.prepare('DELETE FROM browser_sessions WHERE token_hash = ?').run(hash(token))
   sessions.delete(hash(token))
   for (const [id, ticket] of tickets) if (ticket.session?.token === token) tickets.delete(id)
   for (const [ws, grant] of sockets) if (grant.session?.token === token) terminate(ws)
 }
 export function revokeNetworkSessions() {
+  persistence?.prepare('DELETE FROM browser_sessions').run()
   sessions.clear()
   tickets.clear()
   for (const ws of sockets.keys()) terminate(ws)

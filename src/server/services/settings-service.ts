@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { MASK_CHARACTER, MASKED_SECRET, SECRET_GLOBAL_KEYS, WORKTREES_PATH } from '../../shared/consts.js'
 import { isMemoryMode, type MemoryMode } from '../../shared/memory.js'
+import { DEFAULT_MEMORY_LIMITS, type MemoryLimits, resolveMemoryLimits } from '../../shared/memory-limits.js'
 import { normalizePublicSounds } from '../../shared/notification-assets.js'
 import { isValidProjectColor, type ProjectColor } from '../../shared/project-colors.js'
 import { isValidSkillSuite, type SkillSuite } from '../../shared/skill-suite-prompts.js'
@@ -231,6 +232,7 @@ export interface ProjectSettings {
 export interface GlobalSettings {
   workflowPolicy: WorkflowPolicy
   memoryMode: MemoryMode
+  memoryLimits?: MemoryLimits
   onboardingComplete: boolean
   /**
    * Default model id per engine. Keys are engine ids (e.g. `'claude-code'`,
@@ -326,6 +328,7 @@ export interface GlobalSettings {
   /** Opt-in agent inactivity watchdogs, captured at each launch/resume. */
   agentWatchdogEnabled: boolean
   forceImmediateMessages: boolean
+  autoExitPlanMode?: boolean
   showProgressBars: boolean
   stopDevServersOnShutdown: boolean
   serializeDevServerStarts: boolean
@@ -1381,6 +1384,20 @@ const settingsMigrations: SettingsMigration[] = [
         global.maxRunningDevServers = 0
     },
   },
+  {
+    version: 70,
+    name: 'configurable-memory-limits',
+    migrate: ({ global }) => {
+      global.memoryLimits = resolveMemoryLimits(global.memoryLimits)
+    },
+  },
+  {
+    version: 71,
+    name: 'automatic-plan-exit',
+    migrate: ({ global }) => {
+      global.autoExitPlanMode = global.autoExitPlanMode === true
+    },
+  },
 ]
 
 /** Current settings schema version — always equals the highest migration version. */
@@ -1446,6 +1463,7 @@ function defaultSettings(): Settings {
     global: {
       workflowPolicy: { ...MANUAL_WORKFLOW_POLICY },
       memoryMode: 'hybrid',
+      memoryLimits: { ...DEFAULT_MEMORY_LIMITS },
       onboardingComplete: false,
       defaultModelByEngine: { ...FRESH_MODEL_BY_ENGINE },
       dangerouslySkipPermissions: true,
@@ -1473,6 +1491,7 @@ function defaultSettings(): Settings {
       autoLoopMaxRetries: 5,
       agentWatchdogEnabled: false,
       forceImmediateMessages: false,
+      autoExitPlanMode: false,
       showProgressBars: true,
       stopDevServersOnShutdown: true,
       serializeDevServerStarts: true,
@@ -1634,6 +1653,8 @@ export function runSettingsMigrations(raw: Record<string, unknown>): Settings {
   if (typeof current.global.onboardingComplete !== 'boolean') current.global.onboardingComplete = true
   current.global.workflowPolicy = resolveWorkflowPolicy(current.global.workflowPolicy as Partial<WorkflowPolicy>)
   if (!isMemoryMode(current.global.memoryMode)) current.global.memoryMode = 'hybrid'
+  current.global.autoExitPlanMode = current.global.autoExitPlanMode === true
+  current.global.memoryLimits = resolveMemoryLimits(current.global.memoryLimits)
   if (typeof current.global.forceImmediateMessages !== 'boolean') current.global.forceImmediateMessages = false
   if (typeof current.global.showProgressBars !== 'boolean') current.global.showProgressBars = true
   if (typeof current.global.stopDevServersOnShutdown !== 'boolean') current.global.stopDevServersOnShutdown = true
@@ -1890,6 +1911,7 @@ export function importConfigBundle(bundle: ConfigBundle): void {
     throw new Error('Invalid bundle: settings.projects must be an array')
   }
   const incomingGlobal = incomingSettings.global as Record<string, unknown>
+  if (incomingGlobal.memoryLimits !== undefined) resolveMemoryLimits(incomingGlobal.memoryLimits)
   if (incomingGlobal.memoryMode !== undefined && !isMemoryMode(incomingGlobal.memoryMode)) {
     throw new Error('Invalid bundle: settings.global.memoryMode must be manual, automatic, or hybrid')
   }
@@ -2062,6 +2084,9 @@ export function updateGlobalSettings(input: Partial<GlobalSettings>): GlobalSett
   if ('forceImmediateMessages' in data && typeof data.forceImmediateMessages !== 'boolean') {
     delete (data as Record<string, unknown>).forceImmediateMessages
   }
+  if ('autoExitPlanMode' in data && typeof data.autoExitPlanMode !== 'boolean') {
+    delete (data as Record<string, unknown>).autoExitPlanMode
+  }
   if ('showProgressBars' in data && typeof data.showProgressBars !== 'boolean') {
     delete (data as Record<string, unknown>).showProgressBars
   }
@@ -2101,7 +2126,10 @@ export function updateGlobalSettings(input: Partial<GlobalSettings>): GlobalSett
     data.workflowPolicy = resolveWorkflowPolicy(settings.global.workflowPolicy, data.workflowPolicy)
   }
   if ('memoryMode' in data && !isMemoryMode(data.memoryMode)) throw new Error('Invalid memoryMode')
+  if ('memoryLimits' in data)
+    data.memoryLimits = resolveMemoryLimits(data.memoryLimits, resolveMemoryLimits(settings.global.memoryLimits))
   const allowedGlobalKeys = [
+    'memoryLimits',
     'workflowPolicy',
     'memoryMode',
     'onboardingComplete',
@@ -2131,6 +2159,7 @@ export function updateGlobalSettings(input: Partial<GlobalSettings>): GlobalSett
     'autoLoopMaxRetries',
     'agentWatchdogEnabled',
     'forceImmediateMessages',
+    'autoExitPlanMode',
     'showProgressBars',
     'stopDevServersOnShutdown',
     'serializeDevServerStarts',
@@ -2483,4 +2512,9 @@ export function getEffectiveWorkflowPolicy(projectPath: string, override?: Parti
     getProjectSettings(projectPath)?.workflowPolicy,
     override,
   )
+}
+
+/** Read on every operation so changing limits never resets the persisted consumption ledger. */
+export function getMemoryLimits(): MemoryLimits {
+  return resolveMemoryLimits(getGlobalSettings().memoryLimits)
 }

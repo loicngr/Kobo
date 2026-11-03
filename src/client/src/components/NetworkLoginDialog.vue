@@ -19,6 +19,8 @@
           outlined
           @keyup.enter="submit"
         />
+        <q-checkbox v-model="remember" :label="t('network.login.remember')" :disable="loading" class="q-mt-sm" />
+        <div class="text-caption text-kobo-3">{{ t('network.login.rememberHint') }}</div>
       </q-card-section>
       <q-card-actions align="right">
         <q-btn
@@ -48,6 +50,7 @@ const open = computed({
 })
 
 const token = ref('')
+const remember = ref(false)
 const loading = ref(false)
 const hasError = ref(false)
 const errorMsg = ref('')
@@ -58,7 +61,7 @@ async function submit() {
   loading.value = true
   hasError.value = false
   try {
-    const res = await authenticateBrowser(candidate)
+    const res = await authenticateBrowser(candidate, remember.value)
     if (res.ok) {
       token.value = ''
       closeNetworkLogin()

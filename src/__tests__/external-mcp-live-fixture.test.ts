@@ -82,7 +82,7 @@ it('cleans up the external fixture even when an MCP client close rejects, preser
   } finally {
     await fixture.cleanup()
   }
-})
+}, 40_000) // Starts a real backend, like the transport test above; 5s flakes under suite load.
 
 it('selects the live smoke session before and after resume with the current SQLite schema', async () => {
   const fixture = await createLiveMcpFixture('mistral-vibe', 'auto')

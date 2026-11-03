@@ -2,6 +2,11 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { MemoryEntry } from '../../../../shared/memory'
+import { DEFAULT_MEMORY_LIMITS } from '../../../../shared/memory-limits'
+import { useSettingsStore } from '../../stores/settings'
+
+const settings = useSettingsStore()
+const limits = computed(() => settings.global.memoryLimits ?? DEFAULT_MEMORY_LIMITS)
 
 const props = withDefaults(
   defineProps<{
@@ -75,11 +80,11 @@ function rebaseDraft(): void {
     </label>
     <label>
       <span>{{ t('memory.editor.title') }}</span>
-      <input v-model="draft.title" name="title" maxlength="160" required :disabled="saving" />
+      <input v-model="draft.title" name="title" :maxlength="limits.titleChars" required :disabled="saving" />
     </label>
     <label>
       <span>{{ t('memory.editor.body') }}</span>
-      <textarea v-model="draft.body" name="body" maxlength="2000" rows="5" required :disabled="saving" />
+      <textarea v-model="draft.body" name="body" :maxlength="limits.bodyChars" rows="5" required :disabled="saving" />
     </label>
     <p v-if="error" role="alert">{{ error }}</p>
     <div v-if="conflict" class="memory-editor-conflict" role="alert">

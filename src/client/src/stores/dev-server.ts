@@ -55,11 +55,12 @@ export const useDevServerStore = defineStore('devServer', {
     },
 
     async stopDevServer(workspaceId: string) {
+      const previous = this.statuses[workspaceId]
       try {
         const res = await apiFetchResponse(`/api/dev-server/${workspaceId}/stop`, { method: 'POST' })
         if (!res.ok) throw await apiResponseError(res)
         const data = await res.json()
-        this.statuses[workspaceId] = data
+        if (this.statuses[workspaceId] === previous) this.statuses[workspaceId] = data
       } catch (err) {
         console.error('[dev-server store] stopDevServer failed:', err)
         throw err

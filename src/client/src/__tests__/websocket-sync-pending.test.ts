@@ -61,6 +61,7 @@ describe('websocket sync request loading', () => {
   afterEach(() => {
     useWebSocketStore().disconnect()
     vi.restoreAllMocks()
+    vi.useRealTimers()
     vi.unstubAllGlobals()
   })
 
@@ -260,5 +261,125 @@ describe('websocket sync request loading', () => {
     expect(FakeWebSocket.instances).toHaveLength(0)
     await store.connect()
     expect(FakeWebSocket.instances).toHaveLength(1)
+  })
+
+  it('replaces a handshake that never opens or closes and then reconnects', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(Math, 'random').mockReturnValue(0.5)
+    const store = useWebSocketStore()
+    await store.connect()
+    const stale = FakeWebSocket.instances[0]!
+    vi.spyOn(stale, 'close').mockImplementation(() => {})
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(store.reconnecting).toBe(true)
+    await vi.advanceTimersByTimeAsync(1000)
+    const replacement = FakeWebSocket.instances.at(-1)!
+    expect(replacement).not.toBe(stale)
+    replacement.open()
+    expect(store.connected).toBe(true)
+    stale.dispatchEvent(new Event('close'))
+    expect(store.connected).toBe(true)
+  })
+
+  it('recovers on Android foreground return even if the old socket still reports OPEN', async () => {
+    vi.useFakeTimers()
+    const { store, socket } = await connect()
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+    document.dispatchEvent(new Event('visibilitychange'))
+    expect(FakeWebSocket.instances).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(10_000)
+    const resumed = FakeWebSocket.instances.at(-1)!
+    expect(resumed).not.toBe(socket)
+    resumed.open()
+    expect(store.connected).toBe(true)
+    expect(store.reconnecting).toBe(false)
+    expect(authenticatedWebSocketUrl).toHaveBeenLastCalledWith('/ws')
+    socket.dispatchEvent(new Event('error'))
+    expect(store.connected).toBe(true)
+  })
+
+  it('preserves pending deliveries when a healthy socket answers the foreground probe', async () => {
+    vi.useFakeTimers()
+    const { store, socket } = await connect()
+    const delivered = store.sendChatMessageConfirmed('w1', 'Send once')
+    const settled = vi.fn()
+    void delivered.then(settled, settled)
+    const sent = JSON.parse(socket.send.mock.calls.at(-1)![0])
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+    document.dispatchEvent(new Event('visibilitychange'))
+    window.dispatchEvent(new Event('online'))
+    expect(JSON.parse(socket.send.mock.calls.at(-1)![0])).toEqual({ type: 'sync:request', payload: {} })
+    socket.respond()
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(FakeWebSocket.instances).toHaveLength(1)
+    expect(socket.readyState).toBe(FakeWebSocket.OPEN)
+    expect(settled).not.toHaveBeenCalled()
+    socket.dispatchEvent(
+      new MessageEvent('message', {
+        data: JSON.stringify({
+          type: 'chat:accepted',
+          workspaceId: 'w1',
+          payload: { clientMessageId: sent.payload.clientMessageId },
+        }),
+      }),
+    )
+    await expect(delivered).resolves.toBeUndefined()
+  })
+
+  it('cancels an outstanding foreground probe on explicit disconnect', async () => {
+    vi.useFakeTimers()
+    const { store } = await connect()
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+    document.dispatchEvent(new Event('visibilitychange'))
+    store.disconnect()
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(FakeWebSocket.instances).toHaveLength(1)
+  })
+
+  it('invalidates a suspended ticket request on resume and ignores its late result', async () => {
+    let release!: (url: string) => void
+    vi.mocked(authenticatedWebSocketUrl).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve
+        }),
+    )
+    const store = useWebSocketStore()
+    const pending = store.connect()
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+    document.dispatchEvent(new Event('visibilitychange'))
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(FakeWebSocket.instances).toHaveLength(1)
+    release('ws://localhost/ws?ticket=stale')
+    await pending
+    expect(FakeWebSocket.instances).toHaveLength(1)
+    FakeWebSocket.instances[0]!.open()
+    expect(store.connected).toBe(true)
+  })
+
+  it('recovers from an error even when no close event follows', async () => {
+    vi.useFakeTimers()
+    const { store, socket } = await connect()
+    vi.spyOn(socket, 'close').mockImplementation(() => {})
+    socket.dispatchEvent(new Event('error'))
+    expect(store.connected).toBe(false)
+    await vi.advanceTimersByTimeAsync(1500)
+    const next = FakeWebSocket.instances.at(-1)!
+    expect(next).not.toBe(socket)
+    next.open()
+    expect(store.connected).toBe(true)
+  })
+
+  it('does not restart after an explicit disconnect on foreground, online or authentication events', async () => {
+    const { store } = await connect()
+    store.disconnect()
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+    document.dispatchEvent(new Event('visibilitychange'))
+    window.dispatchEvent(new Event('online'))
+    window.dispatchEvent(new Event('kobo:auth-token-changed'))
+    await Promise.resolve()
+    expect(FakeWebSocket.instances).toHaveLength(1)
+    expect(store.connected).toBe(false)
   })
 })

@@ -1,12 +1,10 @@
 import { createHash } from 'node:crypto'
 import { nanoid } from 'nanoid'
-import {
-  MEMORY_BOOTSTRAP_MAX_TOKENS,
-  MEMORY_CONVERSATION_BUDGET_TOKENS,
-  type MemoryContextEntryState,
-  type MemoryContextViewRecord,
-  type MemoryEngineId,
-  type MemoryMode,
+import type {
+  MemoryContextEntryState,
+  MemoryContextViewRecord,
+  MemoryEngineId,
+  MemoryMode,
 } from '../../shared/memory.js'
 import {
   buildMemoryGuidance,
@@ -16,9 +14,9 @@ import {
 import { getDb } from '../db/index.js'
 import { estimateMemoryTokens } from '../utils/memory-token-budget.js'
 import { getMemoryBootstrapFingerprint, reserveMemoryBudget } from './memory-budget-service.js'
-import { listMemoryScopes } from './memory-service.js'
+import { applicableScopes } from './memory-service.js'
+import { getMemoryLimits } from './settings-service.js'
 
-const MEMORY_BOOTSTRAP_MAX_BYTES = 6_000
 const MAX_EXCERPT_CODE_POINTS = 160
 const CONTEXT_HISTORY_LIMIT = 20
 const CONTEXT_ENTRY_STATE_LIMIT = 30
@@ -97,7 +95,7 @@ function contextEntryStates(workspaceId: string, revisionsJson: string): MemoryC
     return []
   }
 
-  const applicableScopeIds = listMemoryScopes({ workspaceId, limit: 3 }).items.map((scope) => scope.id)
+  const applicableScopeIds = applicableScopes(workspaceId).map((scope) => scope.id)
   if (applicableScopeIds.length === 0) return []
   const scopeMarks = applicableScopeIds.map(() => '?').join(', ')
   const statement = getDb().prepare(`SELECT e.title, e.body, e.revision FROM memory_entries e
@@ -128,6 +126,7 @@ export function listMemoryContextRecords(
   limit = CONTEXT_HISTORY_LIMIT,
 ): MemoryContextViewRecord[] {
   if (!sessionId) return []
+  const limits = getMemoryLimits()
   const boundedLimit = Math.max(1, Math.min(CONTEXT_HISTORY_LIMIT, Math.floor(limit)))
   const rows = getDb()
     .prepare(`SELECT c.id, c.workspace_id, c.session_id, c.dispatch_id, c.budget_context_id, c.budget_epoch,
@@ -139,7 +138,7 @@ export function listMemoryContextRecords(
       ORDER BY c.rowid DESC LIMIT ?`)
     .all(workspaceId, sessionId, boundedLimit) as MemoryContextHistoryRow[]
   return rows.map((row) => {
-    const cumulativeEstimatedTokens = Math.min(MEMORY_CONVERSATION_BUDGET_TOKENS, row.cumulative_estimated_tokens)
+    const cumulativeEstimatedTokens = row.cumulative_estimated_tokens
     return {
       id: row.id,
       workspaceId: row.workspace_id,
@@ -174,8 +173,8 @@ export function listMemoryContextRecords(
       budgetContextId: row.budget_context_id,
       budgetEpoch: row.budget_epoch,
       cumulativeEstimatedTokens,
-      remainingEstimatedTokens: MEMORY_CONVERSATION_BUDGET_TOKENS - cumulativeEstimatedTokens,
-      limitTokens: MEMORY_CONVERSATION_BUDGET_TOKENS,
+      remainingEstimatedTokens: Math.max(0, limits.conversationTokens - cumulativeEstimatedTokens),
+      limitTokens: limits.conversationTokens,
       entryStates: contextEntryStates(workspaceId, row.entry_revisions_json),
     }
   })
@@ -220,8 +219,7 @@ function getApplicableScopes(workspaceId: string): {
   scopeIds: string[]
   scopes: Array<{ id: string; generation: number }>
 } {
-  const scopePage = listMemoryScopes({ workspaceId, limit: 3 })
-  const scopes = scopePage.items
+  const scopes = applicableScopes(workspaceId)
   const scopeIds = scopes.map((scope) => scope.id)
   if (scopeIds.length === 0) return { scopeIds: [], scopes: [] }
   return { scopeIds, scopes: scopes.map(({ id, generation }) => ({ id, generation })) }
@@ -245,6 +243,7 @@ function* iterateApplicableEntries(scopeIds: string[]): IterableIterator<MemoryE
 
 /** Build and persist metadata immediately before a launch is submitted to an engine. */
 export function buildMemoryContext(options: BuildMemoryContextOptions): BuiltMemoryContext {
+  const limits = getMemoryLimits()
   const mode = options.mode ?? 'hybrid'
   const guidance = buildMemoryGuidance(mode, options.readOnly === true)
   const { scopeIds, scopes } = getApplicableScopes(options.workspaceId)
@@ -310,8 +309,8 @@ export function buildMemoryContext(options: BuildMemoryContextOptions): BuiltMem
     const proposed = [...included, row]
     const prompt = promptFor(proposed)
     if (
-      estimateMemoryTokens(prompt) > MEMORY_BOOTSTRAP_MAX_TOKENS ||
-      Buffer.byteLength(prompt, 'utf8') > MEMORY_BOOTSTRAP_MAX_BYTES
+      estimateMemoryTokens(prompt) > limits.bootstrapTokens ||
+      Buffer.byteLength(prompt, 'utf8') > limits.bootstrapBytes
     )
       continue
     included.push(row)
@@ -319,8 +318,12 @@ export function buildMemoryContext(options: BuildMemoryContextOptions): BuiltMem
   let prompt = promptFor(included)
   let estimatedTokens = prompt ? estimateMemoryTokens(prompt) : 0
   let finalPayloadBytes = Buffer.byteLength(prompt, 'utf8')
-  if (estimatedTokens > MEMORY_BOOTSTRAP_MAX_TOKENS || finalPayloadBytes > MEMORY_BOOTSTRAP_MAX_BYTES) {
-    throw new Error('Memory context exceeded its configured bootstrap budget')
+  if (estimatedTokens > limits.bootstrapTokens || finalPayloadBytes > limits.bootstrapBytes) {
+    // Tiny budgets must not prevent an agent from starting; retrieval remains available.
+    prompt = ''
+    estimatedTokens = 0
+    finalPayloadBytes = 0
+    included.length = 0
   }
 
   const reservation =

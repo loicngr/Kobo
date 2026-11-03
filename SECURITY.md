@@ -19,10 +19,16 @@ projects and configure executable hooks/integrations you trust.
 
 The default listener is loopback. Network access uses an operator token; it is not
 per-user authorization. Browsers exchange it for a 12-hour HttpOnly, SameSite=Strict
-cookie (Secure behind HTTPS proxies), never persist it in localStorage, and obtain
+cookie (Secure behind HTTPS proxies), or opt into a 30-day remembered session.
+The operator token is never persisted in browser storage. Clients obtain
 60-second single-use tickets for each WebSocket path. Rotation, disabling network
 access, or changing proxy mode revokes sessions, pending tickets and active sockets,
-including terminals. Restarting Kōbō also expires sessions. A settings change may
+including terminals. Restarting Kōbō expires ordinary sessions and upgrade tickets;
+remembered sessions survive through a SQLite record containing only a session-token
+hash, absolute expiry and authentication-policy fingerprint. Logout deletes that
+record; rotation or policy revocation deletes all remembered sessions. Remembered
+sessions do not renew their 30-day expiry automatically. WebSockets reconnect at
+least every 12 hours using the still-valid browser session. A settings change may
 establish a new session for the browser that performed it using the returned token.
 
 Behind a reverse proxy, enable the corresponding setting and declare the exact

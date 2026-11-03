@@ -210,6 +210,24 @@ export default {
   'memory.context.state.unknown': 'Unknown delivery',
   'memory.settings.intro':
     'Memory stores explicit notes for future agent sessions. It does not replace provider or chat history.',
+  'memory.limits.title': 'Memory limits',
+  'memory.limits.hint':
+    'Conservative estimates (UTF-8 bytes, not model tokens). Settings apply to subsequent calls without clearing consumption. An exhausted conversation waits for compaction or a new conversation.',
+  'memory.limits.invalid':
+    'Check bounds: target ≤ ceiling, default page ≤ maximum, bootstrap/response ≤ total budget minus reserve.',
+  'memory.limits.reset': 'Restore defaults',
+  'memory.limits.bootstrapTokens': 'Startup injection (units)',
+  'memory.limits.responseTokens': 'MCP response target (units)',
+  'memory.limits.responseHardTokens': 'MCP response ceiling (units)',
+  'memory.limits.conversationTokens': 'Conversation budget (units)',
+  'memory.limits.denialTokens': 'Denial reserve (units)',
+  'memory.limits.fragmentChars': 'Read fragment (Unicode characters)',
+  'memory.limits.bodyChars': 'Maximum memory size (characters)',
+  'memory.limits.titleChars': 'Maximum title (characters)',
+  'memory.limits.pageSize': 'Default results per page',
+  'memory.limits.pageMaxSize': 'Maximum results per page',
+  'memory.limits.outputBytes': 'Maximum MCP response (bytes)',
+  'memory.limits.bootstrapBytes': 'Maximum startup injection (bytes)',
   'memory.settings.mode': 'Automatic memory behavior',
   'memory.settings.mode.manual': 'Manual',
   'memory.settings.modeHint.manual': 'Agents can read memory. Only you can create or change notes.',
@@ -2113,6 +2131,9 @@ export default {
   'settings.forceImmediateMessages': 'Force immediate message delivery',
   'settings.forceImmediateMessagesHint':
     'Off by default. Send new messages while the agent is working, like Ctrl+Enter, without queueing them. In auto-loop, send now and pause the loop. Already queued messages stay unchanged; compaction and permission blocks still apply.',
+  'settings.autoExitPlanMode': 'Allow automatic Plan mode exit (Claude Code)',
+  'settings.autoExitPlanModeHint':
+    'When Claude calls ExitPlanMode, switch to interactive mode with normal permission requests. Disabled: deny the exit. Read-only reviews remain protected. Saved changes apply to the next call.',
   'settings.showProgressBars': 'Show progress bars',
   'settings.showProgressBarsHint':
     'Enabled by default. Hiding bars does not dismiss activities or stop their tracking. Changes apply as soon as you save.',
@@ -2588,6 +2609,8 @@ export default {
   'staleSessionBanner.switchToCurrent': 'Switch to current',
 
   // Network login
+  'network.login.remember': 'Remember this device for 30 days',
+  'network.login.rememberHint': 'Enable only on a trusted device. The operator token is not stored in the browser.',
   'network.login.title': 'Network access',
   'network.login.description':
     'This Kōbō requires a token to be controlled from the network. Paste the token shown in Settings on the host machine.',

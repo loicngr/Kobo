@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3'
 import { initAutoLoopFinalReviewSchema } from './auto-loop-final-review-schema.js'
 import { initAutoLoopSchema } from './auto-loop-schema.js'
+import { initBrowserSessionSchema } from './browser-session-schema.js'
 import { initMcpMessageSchema } from './mcp-message-schema.js'
 import { initMemorySchema } from './memory-schema.js'
 import { initParallelReviewSchema } from './parallel-review-schema.js'
@@ -251,4 +252,5 @@ export function initSchema(db: Database.Database): void {
   initProgressBarSchema(db)
   initParallelReviewSchema(db)
   initPinnedMessageSchema(db)
+  initBrowserSessionSchema(db)
 }

@@ -1,4 +1,7 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { closeDb, getDb } from '../server/db/index.js'
 import { allocateMemoryConversationKey } from '../server/services/memory-agent-runtime.js'
 import {
@@ -6,6 +9,7 @@ import {
   reserveMemoryBudget,
   reserveMemoryBudgetDenial,
 } from '../server/services/memory-budget-service.js'
+import { _setSettingsPath } from '../server/services/settings-service.js'
 import { createIdleSession, createWorkspace } from '../server/services/workspace-service.js'
 import { resetDb } from './helpers/reset-db.js'
 
@@ -27,10 +31,10 @@ describe('persistent memory output budget', () => {
     }
     expect(reserveMemoryBudget({ budgetContextId: ledger.id, estimatedTokens: 1_000 })).toMatchObject({
       accepted: true,
-      remainingTokens: 4_500,
+      remainingTokens: 6_500,
     })
-    expect(reserveMemoryBudget({ budgetContextId: ledger.id, estimatedTokens: 4_501 }).accepted).toBe(false)
-    expect(reserveMemoryBudget({ budgetContextId: ledger.id, estimatedTokens: 4_500 }).accepted).toBe(true)
+    expect(reserveMemoryBudget({ budgetContextId: ledger.id, estimatedTokens: 6_501 }).accepted).toBe(false)
+    expect(reserveMemoryBudget({ budgetContextId: ledger.id, estimatedTokens: 6_500 }).accepted).toBe(true)
     expect(reserveMemoryBudget({ budgetContextId: ledger.id, estimatedTokens: 1 }).accepted).toBe(false)
     expect(reserveMemoryBudgetDenial(ledger.id, 500)).toMatchObject({ responseAllowed: true })
     expect(reserveMemoryBudgetDenial(ledger.id, 500)).toMatchObject({ responseAllowed: false })
@@ -38,7 +42,7 @@ describe('persistent memory output budget', () => {
       getDb()
         .prepare('SELECT cumulative_estimated_tokens AS total FROM memory_budget_contexts WHERE id = ?')
         .get(ledger.id),
-    ).toEqual({ total: 6_000 })
+    ).toEqual({ total: 8_000 })
   })
 
   it('only resolves external handles in the external namespace', async () => {
@@ -72,7 +76,7 @@ describe('persistent memory output budget', () => {
           end: 40,
         },
       }),
-    ).toMatchObject({ accepted: true, remainingTokens: 5_300 })
+    ).toMatchObject({ accepted: true, remainingTokens: 7_300 })
     expect(createExternalMemoryBudgetContext(created.id, 'client', 'http').cumulativeEstimatedTokens).toBe(200)
     expect(() => createExternalMemoryBudgetContext(created.id, 'another client', 'http')).toThrow(/another/)
     const ledger = getDb()
@@ -95,7 +99,7 @@ describe('persistent memory output budget', () => {
     const ledger = getDb().prepare('SELECT id FROM memory_budget_contexts WHERE conversation_key = ?').get(key) as {
       id: string
     }
-    getDb().prepare('UPDATE memory_budget_contexts SET cumulative_estimated_tokens = 5_300 WHERE id = ?').run(ledger.id)
+    getDb().prepare('UPDATE memory_budget_contexts SET cumulative_estimated_tokens = 7_300 WHERE id = ?').run(ledger.id)
     const results = await Promise.all([
       Promise.resolve().then(() => reserveMemoryBudget({ budgetContextId: ledger.id, estimatedTokens: 200 })),
       Promise.resolve().then(() => reserveMemoryBudget({ budgetContextId: ledger.id, estimatedTokens: 200 })),
@@ -105,7 +109,7 @@ describe('persistent memory output budget', () => {
       getDb()
         .prepare('SELECT cumulative_estimated_tokens AS total FROM memory_budget_contexts WHERE id = ?')
         .get(ledger.id),
-    ).toEqual({ total: 5_500 })
+    ).toEqual({ total: 7_500 })
   })
 
   it('allows only one concurrent denial and keeps the denial spent after reopening SQLite', async () => {
@@ -121,7 +125,7 @@ describe('persistent memory output budget', () => {
     const ledger = getDb().prepare('SELECT id FROM memory_budget_contexts WHERE conversation_key = ?').get(key) as {
       id: string
     }
-    getDb().prepare('UPDATE memory_budget_contexts SET cumulative_estimated_tokens = 5_500 WHERE id = ?').run(ledger.id)
+    getDb().prepare('UPDATE memory_budget_contexts SET cumulative_estimated_tokens = 7_500 WHERE id = ?').run(ledger.id)
 
     const reservations = await Promise.all([
       Promise.resolve().then(() => reserveMemoryBudgetDenial(ledger.id, 500)),
@@ -132,7 +136,7 @@ describe('persistent memory output budget', () => {
       getDb()
         .prepare('SELECT cumulative_estimated_tokens AS total FROM memory_budget_contexts WHERE id = ?')
         .get(ledger.id),
-    ).toEqual({ total: 6_000 })
+    ).toEqual({ total: 8_000 })
 
     closeDb()
     getDb(dbPath)
@@ -146,4 +150,13 @@ describe('persistent memory output budget', () => {
       JSON.parse(persisted.delivered_json).filter((item: { kind?: string }) => item.kind === 'budget-denial'),
     ).toHaveLength(1)
   })
+})
+
+let settingsDir: string
+beforeEach(() => {
+  settingsDir = mkdtempSync(join(tmpdir(), 'kobo-memory-settings-'))
+  _setSettingsPath(join(settingsDir, 'settings.json'))
+})
+afterEach(() => {
+  rmSync(settingsDir, { recursive: true, force: true })
 })

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest'
 import { MISTRAL_CAPABILITIES } from '../server/services/agent/engines/mistral-vibe/capabilities.js'
 import type { AgentEngine, AgentEvent } from '../server/services/agent/engines/types.js'
+import { DEFAULT_MEMORY_LIMITS } from '../shared/memory-limits.js'
 
 vi.mock('../server/services/websocket-service.js', () => ({ emit: vi.fn(), emitEphemeral: vi.fn() }))
 vi.mock('../server/services/lifecycle-hook-service.js', () => ({
@@ -15,6 +16,7 @@ vi.mock('../server/services/forge/resolve.js', () => ({ resolveForge: () => 'non
 vi.mock('../server/services/usage/poller.js', () => ({ refreshNow: vi.fn().mockResolvedValue(null) }))
 const admissionConfig = vi.hoisted(() => ({ maxConcurrentAgents: 0 }))
 vi.mock('../server/services/settings-service.js', () => ({
+  getMemoryLimits: () => ({ ...DEFAULT_MEMORY_LIMITS }),
   getGlobalSettings: () => ({
     autoLoopMaxRetries: 5,
     maxConcurrentAgents: admissionConfig.maxConcurrentAgents,

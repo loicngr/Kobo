@@ -1485,6 +1485,69 @@ describe('_routeMessage — user:message reconciliation', () => {
     expect(items[0]?.sessionId).toBe('session-1')
   })
 
+  it('deduplicates a confirmed message replay after the agent has responded', async () => {
+    const { useWebSocketStore } = await import('../stores/websocket.js')
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const ws = useWebSocketStore()
+    const store = useWorkspaceStore()
+    store.addActivityItem('w1', {
+      id: 'user-local',
+      type: 'text',
+      content: 'hello',
+      timestamp: '2026-08-29T15:20:00Z',
+      sessionId: 's1',
+      meta: { sender: 'user', pending: true, optimistic: true },
+    })
+    const event = {
+      id: 'persisted-id',
+      workspaceId: 'w1',
+      sessionId: 's1',
+      type: 'user:message',
+      payload: { content: 'hello', sender: 'user' },
+    }
+    ws._routeMessage(event)
+    store.addActivityItem('w1', {
+      id: 'reply',
+      type: 'text',
+      content: 'response',
+      timestamp: '2026-08-29T15:20:01Z',
+      sessionId: 's1',
+      meta: { sender: 'agent' },
+    })
+    ws._routeMessage(event)
+    expect(store.activityFeeds.w1).toHaveLength(2)
+    expect(store.activityFeedIds.w1?.has('persisted-id')).toBe(true)
+    expect(store.activityFeedIds.w1?.has('user-local')).toBe(false)
+    expect(store.activityCounts.w1?.userMessages).toBe(1)
+    // A second genuine send with the same content must remain a separate message.
+    ws._routeMessage({ ...event, id: 'second-persisted-id' })
+    expect(store.activityFeeds.w1).toHaveLength(3)
+  })
+
+  it('reconciles the local send even when pending was cleared before confirmation', async () => {
+    const { useWebSocketStore } = await import('../stores/websocket.js')
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const store = useWorkspaceStore()
+    store.addActivityItem('w1', {
+      id: 'user-local',
+      type: 'text',
+      content: 'hello',
+      timestamp: '2026-08-29T15:20:00Z',
+      sessionId: 's1',
+      meta: { sender: 'user', pending: false, optimistic: true },
+    })
+    useWebSocketStore()._routeMessage({
+      id: 'persisted-id',
+      workspaceId: 'w1',
+      sessionId: 's1',
+      type: 'user:message',
+      payload: { content: 'hello', sender: 'user' },
+    })
+    expect(store.activityFeeds.w1).toHaveLength(1)
+    expect(store.activityFeeds.w1?.[0]?.id).toBe('persisted-id')
+    expect(store.activityFeeds.w1?.[0]?.meta?.optimistic).toBe(false)
+  })
+
   it('keeps the optimistic timestamp when the server event carries no createdAt', async () => {
     const { useWebSocketStore } = await import('../stores/websocket.js')
     const { useWorkspaceStore } = await import('../stores/workspace.js')

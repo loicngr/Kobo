@@ -229,7 +229,7 @@ export const useMemoryStore = defineStore('memory', () => {
   async function loadOperations(scopeId: string, append = false): Promise<void> {
     const signal = requestFor(`operations:${scopeId}`).begin()
     const cursor = append ? operationsCursors.value[scopeId] : undefined
-    const query = new URLSearchParams({ scopeId, limit: '50' })
+    const query = new URLSearchParams({ scopeId })
     if (cursor) query.set('afterCursor', cursor)
     loadingOperations.value[scopeId] = true
     try {
@@ -260,7 +260,7 @@ export const useMemoryStore = defineStore('memory', () => {
     const requestKey = `workspace-operations:${workspaceId}`
     const signal = requestFor(requestKey).begin()
     const cursor = append ? workspaceOperationsCursors.value[workspaceId] : undefined
-    const query = new URLSearchParams({ workspaceId, limit: '50' })
+    const query = new URLSearchParams({ workspaceId })
     if (cursor) query.set('afterCursor', cursor)
     loadingWorkspaceOperations.value[workspaceId] = true
     try {

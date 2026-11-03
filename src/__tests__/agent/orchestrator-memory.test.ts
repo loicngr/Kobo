@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { MISTRAL_CAPABILITIES } from '../../server/services/agent/engines/mistral-vibe/capabilities.js'
 import type { AgentEngine, AgentEvent, EngineProcess, StartOptions } from '../../server/services/agent/engines/types.js'
+import { DEFAULT_MEMORY_LIMITS } from '../../shared/memory-limits.js'
 import { resetDb } from '../helpers/reset-db.js'
 
 const networkSettings = vi.hoisted(() => ({
   agentWatchdogEnabled: false,
+  autoExitPlanMode: false,
   networkAccessEnabled: true,
   networkAccessBehindProxy: false,
   networkAccessToken: 'test-network-token',
@@ -18,6 +20,7 @@ vi.mock('../../server/services/websocket-service.js', () => ({
   broadcastAll: vi.fn(),
 }))
 vi.mock('../../server/services/settings-service.js', () => ({
+  getMemoryLimits: () => ({ ...DEFAULT_MEMORY_LIMITS }),
   getGlobalSettings: () => ({ autoLoopMaxRetries: 5, memoryMode: 'hybrid', ...networkSettings }),
   getProjectSettings: () => ({ forge: 'none' }),
   getEffectiveFinalization: () => ({ prompt: '' }),
@@ -114,8 +117,45 @@ describe('orchestrator memory context', () => {
     vi.resetModules()
     vi.clearAllMocks()
     networkSettings.networkAccessBehindProxy = false
+    networkSettings.autoExitPlanMode = false
     networkSettings.agentWatchdogEnabled = false
     await resetDb()
+  })
+
+  it('applies the Plan-exit preference live and synchronizes workspace, MCP and memory permissions', async () => {
+    const workspace = await createWorkspace()
+    const capture = makeEngine('claude-code')
+    const { _registerEngineForTest } = await import('../../server/services/agent/engines/registry.js')
+    _registerEngineForTest(capture.engine)
+    const orchestrator = await import('../../server/services/agent/orchestrator.js')
+    const { getDb } = await import('../../server/db/index.js')
+    getDb().prepare("UPDATE workspaces SET agent_permission_mode = 'plan' WHERE id = ?").run(workspace.id)
+    const { getWorkspace } = await import('../../server/services/workspace-service.js')
+    const { resolveInternalMcpCapability } = await import('../../server/services/internal-mcp-capability-service.js')
+    const { getMemoryCapability } = await import('../../server/services/memory-agent-runtime.js')
+    orchestrator.startAgent(workspace.id, workspace.projectPath, 'Plan task')
+    await flush()
+    const options = capture.starts[0]
+    const env = options.mcpServers!.find((server) => server.name === 'kobo-tasks')!.env
+    const capability = resolveInternalMcpCapability(env.KOBO_MCP_SESSION_TOKEN)
+    const memoryToken = capability.env.KOBO_MEMORY_SESSION_TOKEN
+    try {
+      expect(capability.readOnly).toBe(true)
+      expect(getMemoryCapability(memoryToken)?.readOnly).toBe(true)
+      expect(options.onExitPlanMode!()).toBe(false)
+      networkSettings.autoExitPlanMode = true
+      expect(options.onExitPlanMode!()).toBe(true)
+      expect(getWorkspace(workspace.id)?.agentPermissionMode).toBe('interactive')
+      expect(capability.readOnly).toBe(false)
+      expect(getMemoryCapability(memoryToken)?.readOnly).toBe(false)
+      networkSettings.autoExitPlanMode = false
+      expect(options.onExitPlanMode!()).toBe(false)
+    } finally {
+      await orchestrator.stopAgentAndWait(workspace.id)
+    }
+    networkSettings.autoExitPlanMode = true
+    expect(options.onExitPlanMode!()).toBe(false)
+    expect(getMemoryCapability(memoryToken)).toBeUndefined()
   })
 
   it.each(['claude-code', 'codex', 'mistral-vibe'] as const)(
@@ -423,6 +463,8 @@ describe('orchestrator memory context', () => {
     )
     await flush()
     expect(capture.starts[0].prompt).not.toContain('<kobo-memory-context>')
+    networkSettings.autoExitPlanMode = true
+    expect(capture.starts[0].onExitPlanMode!()).toBe(false)
     await orchestrator.stopAgentAndWait(workspace.id)
 
     const failed = makeEngine('claude-code')

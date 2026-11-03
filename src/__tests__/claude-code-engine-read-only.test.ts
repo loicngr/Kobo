@@ -249,7 +249,7 @@ it.each(['plan', 'bypass', 'strict'] as const)(
     try {
       const ctx = { signal: new AbortController().signal, toolUseID: 'exit' }
       const result = await capturedCanUseTool!('ExitPlanMode', {}, ctx)
-      expect(result.behavior).toBe(mode === 'plan' ? 'deny' : 'allow')
+      expect(result.behavior).toBe('deny')
       if (mode === 'plan') expect(result.message).toContain('explicitly select permissions in Kōbō')
       expect((await capturedCanUseTool!('mcp__kobo-tasks__create_progress_bar', {}, ctx)).behavior).toBe('allow')
       expect(events.some((event) => event.kind === 'session:user-input-requested')).toBe(false)
@@ -258,3 +258,68 @@ it.each(['plan', 'bypass', 'strict'] as const)(
     }
   },
 )
+
+it('automatically exits Plan only after backend authorization and then asks for tool permissions', async () => {
+  const events: AgentEvent[] = []
+  const authorize = vi.fn(() => false)
+  await createClaudeCodeEngine().start(
+    {
+      workspaceId: 'auto-plan-exit',
+      workingDir: '/tmp',
+      prompt: 'plan',
+      agentPermissionMode: 'plan',
+      onExitPlanMode: authorize,
+      backendUrl: 'http://localhost:3000',
+      koboHome: '/tmp/kobo',
+      settings: {} as never,
+    },
+    (event) => events.push(event),
+  )
+  try {
+    const ctx = { signal: new AbortController().signal, toolUseID: 'exit' }
+    expect((await capturedCanUseTool!('ExitPlanMode', {}, ctx)).behavior).toBe('deny')
+    authorize.mockReturnValue(true)
+    expect(await capturedCanUseTool!('ExitPlanMode', {}, ctx)).toMatchObject({
+      behavior: 'allow',
+      updatedPermissions: [{ type: 'setMode', mode: 'default', destination: 'session' }],
+    })
+    const abort = new AbortController()
+    const permission = capturedCanUseTool!(
+      'Bash',
+      { command: 'echo test' },
+      { signal: abort.signal, toolUseID: 'bash' },
+    )
+    expect(events.at(-1)).toMatchObject({ kind: 'session:user-input-requested', requestKind: 'permission' })
+    abort.abort()
+    await expect(permission).rejects.toThrow('Pending user input aborted')
+  } finally {
+    releaseStream?.()
+  }
+})
+
+it('never auto-exits a read-only review or an aborted request', async () => {
+  for (const readOnly of [true, false]) {
+    const authorize = vi.fn(() => true)
+    await createClaudeCodeEngine().start(
+      {
+        workspaceId: 'restricted-exit',
+        workingDir: '/tmp',
+        prompt: 'review',
+        agentPermissionMode: 'plan',
+        readOnly,
+        onExitPlanMode: authorize,
+        backendUrl: 'http://localhost:3000',
+        koboHome: '/tmp/kobo',
+        settings: {} as never,
+      },
+      () => {},
+    )
+    try {
+      const signal = readOnly ? new AbortController().signal : AbortSignal.abort()
+      expect((await capturedCanUseTool!('ExitPlanMode', {}, { signal, toolUseID: 'exit' })).behavior).toBe('deny')
+      expect(authorize).not.toHaveBeenCalled()
+    } finally {
+      releaseStream?.()
+    }
+  }
+})

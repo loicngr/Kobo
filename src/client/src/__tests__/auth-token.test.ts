@@ -42,7 +42,8 @@ describe('browser authentication', () => {
       '/api/auth/session',
       expect.objectContaining({
         method: 'POST',
-        headers: { 'X-Kobo-Token': 'synthetic' },
+        headers: { 'X-Kobo-Token': 'synthetic', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ remember: false }),
         redirect: 'error',
         credentials: 'same-origin',
         signal: expect.any(AbortSignal),
@@ -65,4 +66,18 @@ describe('browser authentication', () => {
     vi.spyOn(window, 'fetch').mockResolvedValue(new Response('{}', { status: 401 }))
     await expect(authenticatedWebSocketUrl('/ws')).rejects.toThrow('401')
   })
+})
+
+it('requests a remembered session only explicitly and never stores the operator token', async () => {
+  const fetch = vi.spyOn(window, 'fetch').mockResolvedValue(new Response('{}'))
+  await authenticateBrowser('synthetic', true)
+  expect(fetch).toHaveBeenCalledWith(
+    '/api/auth/session',
+    expect.objectContaining({
+      body: JSON.stringify({ remember: true }),
+      credentials: 'same-origin',
+    }),
+  )
+  expect(localStorage.length).toBe(0)
+  expect(sessionStorage.length).toBe(0)
 })

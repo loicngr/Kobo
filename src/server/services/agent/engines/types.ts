@@ -91,6 +91,8 @@ export interface EngineProcess {
 export interface StartOptions {
   /** Global inactivity watchdog opt-in. Undefined/false leaves long silent work running. */
   watchdogEnabled?: boolean
+  /** Authorizes a live Claude Plan exit and synchronizes backend capabilities. */
+  onExitPlanMode?: () => boolean
   workspaceId: string
   workingDir: string
   prompt: string

@@ -177,3 +177,54 @@ it('separates external clients from human turns and from each other', () => {
   const turns = groupIntoTurns([base, { ...base, source: a }, { ...base, source: a }, { ...base, source: b }, base])
   expect(turns.map((turn) => turn.items.length)).toEqual([1, 2, 1, 1])
 })
+
+describe('stable conversation turns during streaming', () => {
+  it('retains completed turns across 100 deltas, including remapped user messages', () => {
+    const history = Array.from({ length: 100 }, (_, i) => [user(`Question ${i}`), agentText(`Answer ${i}`)]).flat()
+    const prompt = user('Next question')
+    let turns = groupIntoTurns([...history, prompt, agentText('')])
+    const completed = turns.slice(0, -1)
+    for (let i = 1; i <= 100; i++) {
+      const next = [...history, { ...prompt }, { ...agentText('live'), text: 'x'.repeat(i), streaming: true }]
+      const updated = groupIntoTurns(next, turns)
+      expect(updated).toEqual(groupIntoTurns(next))
+      completed.forEach((turn, index) => {
+        expect(updated[index]).toBe(turn)
+      })
+      expect(updated.at(-1)).not.toBe(turns.at(-1))
+      turns = updated
+    }
+  })
+
+  it('handles appends, late tool results, prepended history, deletion and source changes', () => {
+    const tool: ConversationItem = { type: 'tool', toolCallId: 't', name: 'Read', input: {} }
+    let items: ConversationItem[] = [user('one'), tool, user('two'), agentText('answer')]
+    let turns = groupIntoTurns(items)
+    const scenarios: ConversationItem[][] = [
+      [...items, agentText('continuation')],
+      [items[0], { ...tool, result: { output: 'done', isError: false } }, ...items.slice(2)],
+      [user('earlier'), agentText('earlier reply'), ...items],
+      items.slice(0, 2),
+      [
+        {
+          type: 'user',
+          content: 'one',
+          sender: 'user',
+          source: { kind: 'mcp', clientName: 'external', transport: 'http' },
+        },
+        ...items.slice(1),
+      ],
+      [],
+    ]
+    for (items of scenarios) {
+      turns = groupIntoTurns(items, turns)
+      expect(turns).toEqual(groupIntoTurns(items))
+    }
+  })
+
+  it('returns the same array when nothing displayed changed', () => {
+    const items = [user('hi'), agentText('hello')]
+    const turns = groupIntoTurns(items)
+    expect(groupIntoTurns([{ ...items[0] }, items[1]], turns)).toBe(turns)
+  })
+})

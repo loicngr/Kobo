@@ -1,6 +1,10 @@
 import { Hono } from 'hono'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { DEFAULT_MEMORY_LIMITS } from '../shared/memory-limits.js'
 
+vi.mock('../server/services/settings-service.js', () => ({
+  getMemoryLimits: () => ({ ...DEFAULT_MEMORY_LIMITS }),
+}))
 const { listContextRecords } = vi.hoisted(() => ({ listContextRecords: vi.fn(() => []) }))
 
 vi.mock('../server/services/memory-service.js', async () => {
@@ -13,6 +17,7 @@ vi.mock('../server/services/memory-service.js', async () => {
     MemoryConflictError: class MemoryConflictError extends Error {},
     resolveMemoryScope: vi.fn(),
     listMemoryScopes: vi.fn(() => ({ items: [] })),
+    applicableScopes: vi.fn(() => []),
     createMemory: vi.fn(),
     updateMemory: vi.fn(),
     listMemories: vi.fn(() => ({ items: [], totalCount: 0 })),
@@ -101,7 +106,7 @@ describe('memory HTTP routes', () => {
     const response = await app.request('/api/memory/entries', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ scopeId: 'scope-1', key: 'too-big', title: 'Too big', body: 'x'.repeat(2001) }),
+      body: JSON.stringify({ scopeId: 'scope-1', key: 'too-big', title: 'Too big', body: 'x'.repeat(3001) }),
     })
     expect(response.status).toBe(413)
     expect(memoryService.createMemory).not.toHaveBeenCalled()
@@ -220,7 +225,7 @@ describe('memory HTTP routes', () => {
   })
 
   it('rejects unknown workspaces and does not fabricate context records', async () => {
-    vi.mocked(memoryService.listMemoryScopes).mockImplementation(() => {
+    vi.mocked(memoryService.applicableScopes).mockImplementation(() => {
       throw new memoryService.MemoryNotFoundError()
     })
     const response = await app.request('/api/memory/workspaces/missing/view')
@@ -229,13 +234,11 @@ describe('memory HTTP routes', () => {
   })
 
   it('returns only applicable workspace memory and selected-session context records', async () => {
-    vi.mocked(memoryService.listMemoryScopes).mockReturnValue({
-      items: [
-        { id: 'global', level: 'global', revision: 0, generation: 0 },
-        { id: 'project', level: 'project', revision: 0, generation: 0 },
-        { id: 'workspace', level: 'workspace', revision: 0, generation: 0 },
-      ],
-    })
+    vi.mocked(memoryService.applicableScopes).mockReturnValue([
+      { id: 'global', level: 'global', revision: 0, generation: 0 },
+      { id: 'project', level: 'project', revision: 0, generation: 0 },
+      { id: 'workspace', level: 'workspace', revision: 0, generation: 0 },
+    ])
     vi.mocked(memoryService.listMemories).mockReturnValue({ items: [entry], totalCount: 1 })
     listContextRecords.mockReturnValue([
       { id: 'ctx-1', sessionId: 'session-1', state: 'initialized', entryStates: [] },
@@ -341,9 +344,9 @@ describe('memory HTTP routes', () => {
     const chargedResult = await chargedError.json()
     expect(chargedError.status).toBe(400)
     expect(chargedResult).toMatchObject({ error: expect.any(String), budget: { estimatedTokens: expect.any(Number) } })
-    expect(chargedResult.budget.remainingTokens).toBeLessThan(6000)
+    expect(chargedResult.budget.remainingTokens).toBeLessThan(8000)
 
-    getDb().prepare('UPDATE memory_budget_contexts SET cumulative_estimated_tokens = 5500 WHERE id = ?').run(ledger.id)
+    getDb().prepare('UPDATE memory_budget_contexts SET cumulative_estimated_tokens = 7500 WHERE id = ?').run(ledger.id)
 
     const exhaustedReplies: Array<Record<string, unknown>> = []
     const suppressedReplies: Array<Record<string, unknown>> = []
@@ -371,8 +374,8 @@ describe('memory HTTP routes', () => {
     const finalLedger = getDb()
       .prepare('SELECT cumulative_estimated_tokens AS total, delivered_json FROM memory_budget_contexts WHERE id = ?')
       .get(ledger.id) as { total: number; delivered_json: string }
-    expect(finalLedger.total).toBeGreaterThan(5500)
-    expect(finalLedger.total).toBeLessThanOrEqual(6000)
+    expect(finalLedger.total).toBeGreaterThan(7500)
+    expect(finalLedger.total).toBeLessThanOrEqual(8000)
     expect(
       JSON.parse(finalLedger.delivered_json).filter((item: { kind?: string }) => item.kind === 'budget-denial'),
     ).toHaveLength(1)

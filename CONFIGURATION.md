@@ -607,12 +607,20 @@ their inline conversation previews; document references include their original
 name and worktree path for the agent to read. PDF extraction/OCR is delegated to
 the agent's available tools.
 
+Each workspace keeps its unsent text and successfully uploaded attachments while
+you navigate within the same browser tab, including when the composer is recreated.
+Switching sessions within that workspace preserves the same draft. Drafts are
+client-side only: they are not sent to the agent or synchronized across browser
+tabs, and do not survive a reload. Closing or reloading the tab still warns about
+unsent drafts, including drafts in workspaces you are not currently viewing.
+
 Files are kept once the message is sent or queued. A failed send restores the
-draft and its attachment badges while that conversation is still selected.
-Switching workspaces or sessions discards unsent attachments; an upload that
-finishes after the switch is cleaned up in its original workspace. Queued and
-sent attachments are preserved. Documents stored in `.ai/attachments/` are added
-to the worktree's `.gitignore`, including workspaces created before this feature.
+draft and its attachment badges in the original workspace without replacing
+another workspace's draft. Navigation during an unfinished upload requires
+confirmation; leaving cancels that draft attachment and cleans up any late upload
+receipt in its original workspace. Ready, queued and sent attachments are preserved.
+Documents stored in `.ai/attachments/` are added to the worktree's `.gitignore`,
+including workspaces created before this feature.
 
 ## Comparing two engines on one task
 
@@ -1063,17 +1071,33 @@ Hybrid changes to project/global memory are proposals until a human approves the
 
 The workspace creation prompt explicitly introduces the memory tools and their scope/mode restrictions. Unchanged resumes send neither repeated guidance nor an empty memory section and consume no bootstrap budget. Content-free fingerprints track guidance and scope/revision changes; a mode/permission change refreshes guidance, and confirmed compaction opens a new epoch. A new user message alone does **not** reset the budget. Previously consumed budget is not refunded. Empty tool errors receive a UI-only explanation without adding repeated text to the model's context.
 
-At launch, Kōbō adds a compact ranked index/excerpt within a **1,000 estimated-token** bootstrap target. Individual memory tool responses target **1,000 estimated tokens**, hard-cap at **1,500**, and a native conversation/context epoch has a **6,000 estimated-token** cumulative retrieval-output ceiling. These are conservative memory budgets, not provider context-window sizes or a measurement of total conversation occupancy. Serialized output—including JSON escaping, structured MCP content and framing—is also guarded by byte limits.
+**Settings → Memory → Memory limits** controls the global retrieval budgets, startup injection, fragment size, note/title size and pagination. Save with the settings page's existing Save action; Restore defaults only updates the draft until saved. Existing installations retain the defaults below.
+
+| Setting | Default |
+|---|---:|
+| Startup injection target / byte ceiling | 1,000 estimated units / 6,000 bytes |
+| MCP response target / hard ceiling | 1,000 / 1,500 estimated units |
+| Conversation retrieval budget / denial reserve | 8,000 / 500 estimated units |
+| Read fragment | 60 Unicode code points |
+| Note body / title maximum | 3,000 / 160 characters |
+| Default / maximum page size | 50 / 100 results |
+| Serialized MCP response ceiling | 12,000 bytes |
+
+These are volume limits: **there is no separate maximum number of reads**. Limits apply to subsequent operations in both native sessions and external MCP, without restarting Kōbō or resetting consumed volume. Lowering a budget can immediately prevent further reads. Once a terminal denial has been issued, raising the budget does not reopen that exhausted ledger: use a new conversation or a confirmed native compaction. If a startup limit cannot fit the minimal memory guidance, that launch omits the injection and leaves memories available through MCP instead of preventing the agent from starting. Existing notes are never truncated or deleted when size limits shrink; subsequent writes must satisfy the new limits. Byte and estimated-unit ceilings both apply, so increasing one alone may not increase output.
+
+Settings reject fractional, out-of-range or inconsistent limits (response target above its ceiling, default page above its maximum, or a startup/response target exceeding the conversation budget minus the denial reserve). Protocol framing headroom and the 1,000-unit body-free control reply cap remain safety constants. Larger budgets consume more model context; the estimates are conservative UTF-8 accounting, not actual provider tokens.
+
+By default, at launch, Kōbō adds a compact ranked index/excerpt within a **1,000 estimated-token** bootstrap target. Individual memory tool responses target **1,000 estimated tokens**, hard-cap at **1,500**, and a native conversation/context epoch has a **8,000 estimated-token** cumulative retrieval-output ceiling. These are conservative memory budgets, not provider context-window sizes or a measurement of total conversation occupancy. Serialized output—including JSON escaping, structured MCP content and framing—is also guarded by byte limits.
 
 Saving is independent of retrieval: `remember` and `list_memory_scopes` remain available even in an existing conversation whose retrieval budget is exhausted. Their responses contain only compact receipts/scope metadata, never saved bodies, are capped at 1,000 estimated tokens per call, and report `budget.chargedTokens: 0`. They do not spend or reset the retrieval ledger. This also applies to their validation errors and to external MCP. Manual/read-only restrictions, Hybrid proposals, scope permissions, revocation and revision/generation checks still apply. These control replies are **not** covered by the cumulative retrieval ceiling; repeated calls still add small messages to the model context, so agents should not poll or repeat unchanged writes.
 
 The index may omit entries; it reports omission counts and agents can retrieve relevant notes with bounded search/read tools. Large note bodies use explicit character-range fragments and stable cursors. Listing/search returns compact metadata for unchanged entries; explicit full reads/fragments consume budget. Resume does not blindly resend unchanged notes: only new/changed material and a compact reminder may be added within the remaining allowance. A confirmed compaction starts a new memory epoch. Unknown or failed dispatches are charged conservatively; Kōbō does not automatically replay them.
 
-The native conversation ledger allows up to **5,500 tokens of regular retrieval output** and retains a **500-token terminal-receipt reserve**, for a hard **6,000-token cumulative retrieval** ceiling. One bounded exhaustion/denial response may use that reserve; later exhausted MCP reads return `isError: true` with an empty `content` array instead of repeating a free error indefinitely. Internal `/api/memory/agent` callers receive a small suppression marker so the workspace bridge can emit the same empty MCP error response. Each final serialized envelope also has a separate **12,000-byte hard ceiling** and includes **96 bytes of framing headroom** in its charge.
+With the default settings, the native conversation ledger allows up to **7,500 tokens of regular retrieval output** and retains a **500-token terminal-receipt reserve**, for a hard **8,000-token cumulative retrieval** ceiling. One bounded exhaustion/denial response may use that reserve; later exhausted MCP reads return `isError: true` with an empty `content` array instead of repeating a free error indefinitely. Internal `/api/memory/agent` callers receive a small suppression marker so the workspace bridge can emit the same empty MCP error response. Each final serialized envelope also has a separate **12,000-byte hard ceiling** and includes **96 bytes of framing headroom** in its charge.
 
 An external MCP client uses the same memory tools and current database via `/api/mcp` HTTP or the global stdio server. `list_memory_scopes` returns each selectable scope's ID, level, generation and revision; use the current generation in `remember` and rediscover after a clear/conflict. External clients choose their target explicitly and do not need a bound workspace or native engine session. In Manual mode external writes are denied; Hybrid applies workspace writes and proposes broader changes; Automatic applies the requested scope. External provenance records a display client name and HTTP/stdio transport, not an authenticated identity. No delete, approve or clear tool is exposed to MCP clients.
 
-Because `/api/mcp` is stateless, an external client should reuse the opaque `memory_context_id` returned by memory calls to carry its cumulative retrieval allowance across tool calls. External retrieval responses share the 5,500-token allowance and a single bounded 500-token denial reserve; after the one terminal denial, later reads return `isError: true` and empty `content`. Scope discovery and saving remain available with bounded control replies. The handle is budget bookkeeping, not authentication; it cannot reference an internal native-conversation ledger. Kōbō cannot observe an external model's full context or compaction, so it cannot infer that a new ID means an empty LLM context. Keep the same ID for one external conversation and start a new one only when appropriate. Mutation calls are not retried automatically; after an uncertain result, inspect the receipt/state before deciding whether to retry.
+Because `/api/mcp` is stateless, an external client should reuse the opaque `memory_context_id` returned by memory calls to carry its cumulative retrieval allowance across tool calls. By default, external retrieval responses share the 7,500-token allowance and a single bounded 500-token denial reserve; after the one terminal denial, later reads return `isError: true` and empty `content`. Scope discovery and saving remain available with bounded control replies. The handle is budget bookkeeping, not authentication; it cannot reference an internal native-conversation ledger. Kōbō cannot observe an external model's full context or compaction, so it cannot infer that a new ID means an empty LLM context. Keep the same ID for one external conversation and start a new one only when appropriate. Mutation calls are not retried automatically; after an uncertain result, inspect the receipt/state before deciding whether to retry.
 
 The workspace-scoped MCP capability is read-only for plan/review/report launches and is revoked as soon as stopping begins. Its token limits attribution and scope within Kōbō; it is not an operating-system sandbox for an agent with broader tools. See the [MCP memory tool guide](./src/mcp-server/README.md#persistent-memory-tools) for arguments and result details.
 
@@ -1157,8 +1181,30 @@ trusted devices; do not publish or bookmark a credential-bearing link.
 1. Copy one of the LAN URLs shown in the Settings panel (format
    `http://<lan-ip>:<port>/`).
 2. Open it on the remote device.
-3. A login dialog appears: paste the token from the Settings panel and confirm.
+3. A login dialog appears: paste the token from the Settings panel. On a trusted
+   device, optionally select **Remember this device for 30 days**, then confirm.
 4. The HttpOnly session cookie authenticates subsequent visits until expiry or revocation.
+
+Without the checkbox, sessions last 12 hours and end when Kōbō restarts. With it,
+the session lasts 30 days from login and survives browser and Kōbō restarts,
+including updates, provided the same Kōbō home/database and authentication policy
+are retained. Clearing site cookies or using private browsing can remove it.
+The operator token is never saved in localStorage or sessionStorage: the browser
+holds only a host-only HttpOnly session cookie. Kōbō stores its hash, expiry and
+policy fingerprint in SQLite, not the session secret. Logging out revokes that
+session; rotating the operator token, disabling network access or changing proxy
+mode revokes all sessions. WebSocket connections renew at least every 12 hours
+without asking for the token while the remembered cookie remains valid.
+
+On mobile/PWA foreground return, network recovery or authentication renewal,
+Kōbō replaces stale connections, obtains a fresh one-use WebSocket ticket and
+resynchronizes the conversation. Ticket acquisition plus the socket handshake
+has a 20-second deadline; failures retry with bounded backoff. Late events from
+an older connection are ignored. User messages are never resent automatically;
+uncertain deliveries retain the existing error/reconciliation behavior.
+
+QR/bootstrap logins keep the default 12-hour duration; remembering a device
+requires the explicit checkbox in the login dialog.
 
 **Host machine (localhost)**: connect to `http://localhost:<port>` as usual.
 No token is needed unless **Behind a reverse proxy** is enabled.
@@ -1611,6 +1657,21 @@ still apply. Failed or rejected sends restore the draft; they do not silently
 queue it. MCP messages already use direct delivery and do not depend on this
 interface setting. Explicit next-iteration scheduling remains available through
 its dedicated auto-loop API.
+
+#### Automatic Plan exit (Claude Code)
+
+**Settings → Agents → Allow automatic Plan mode exit** controls `autoExitPlanMode`,
+which defaults to **false**. When enabled, a normal Claude session calling
+`ExitPlanMode` switches to **Interactive** permissions without a separate plan
+approval. Other tool permission requests still apply; this is not bypass mode.
+Kōbō updates the workspace configuration and its managed MCP/memory capabilities
+for that same launch. Memory mode and budgets remain unchanged.
+
+The setting is checked at each exit request, including existing sessions, without
+restarting MCP. When disabled, `ExitPlanMode` is denied; select permissions in
+Kōbō and relaunch manually instead. Disabling it does not put an already writable
+session back into Plan. Read-only reviews, handoff reports and stopped/replaced
+launches cannot use this setting to gain write access. Codex and Vibe are unaffected.
 
 #### Session watchdogs
 
@@ -2591,7 +2652,8 @@ Dismissed agent error banners stay dismissed after a reload in the same browser;
 the conversation history is preserved and new errors still appear. The Help menu
 can mark all current tour steps as seen at once, without hiding future additions.
 Queued messages are shared with split panes through the host client, so they
-remain visible and cancellable across view changes. Unsent drafts are guarded.
+remain visible and cancellable across view changes. Unsent drafts are retained per
+workspace within the tab; closing or reloading the tab still warns before losing them.
 
 While the agent compacts its context, the workspace shows **Compacting** in its
 status indicators. Sending a chat message is temporarily disabled, including
@@ -2761,7 +2823,7 @@ as failures, with safe diagnostics; authentication/permission errors never justi
 modifying credentials or Kōbō storage to bypass the tools. Ambiguous mutation
 outcomes require checking available status/receipts before retrying.
 
-Plan launches remain conversation-only and request no status/task mutation. Writable manual launches call `set_workspace_status({status: "executing"})` after planning and before implementation, under the configured Git policy. Writable auto-loop launches prepare the plan and task list, successfully call `mark_auto_loop_ready`, then request the same status transition and end naturally without implementation. The loop starts its next iteration only after the native session closes; the status change itself does not switch models. The old `[BRAINSTORM_COMPLETE]` marker remains supported for historical conversations. Custom brainstorming, Notion and Sentry templates are preserved; they cannot expand launch permissions or authorize commits automatically. Returning and parallel Claude Code/Codex reviewers and handoff reports remain in read-only Plan mode. Vibe reviewers use native permissions (Interactive by default, fixed Interactive for automatic final reviews), which may require human approval and do not guarantee filesystem read-only access. These restricted review/report launches restrict Kōbō grants to reads, scoped reports and operational progress; review instructions forbid modifications. Plan approval does not change permissions; explicitly select an execution mode in Kōbō and start a new launch to implement.
+Plan launches remain conversation-only and request no status/task mutation. Writable manual launches call `set_workspace_status({status: "executing"})` after planning and before implementation, under the configured Git policy. Writable auto-loop launches prepare the plan and task list, successfully call `mark_auto_loop_ready`, then request the same status transition and end naturally without implementation. The loop starts its next iteration only after the native session closes; the status change itself does not switch models. The old `[BRAINSTORM_COMPLETE]` marker remains supported for historical conversations. Custom brainstorming, Notion and Sentry templates are preserved; they cannot expand launch permissions or authorize commits automatically. Returning and parallel Claude Code/Codex reviewers and handoff reports remain in read-only Plan mode. Vibe reviewers use native permissions (Interactive by default, fixed Interactive for automatic final reviews), which may require human approval and do not guarantee filesystem read-only access. These restricted review/report launches restrict Kōbō grants to reads, scoped reports and operational progress; review instructions forbid modifications. By default, plan approval does not change permissions; select an execution mode in Kōbō and start a new launch to implement. The opt-in Claude automatic Plan exit setting above permits an in-session transition to Interactive for ordinary launches only.
 
 The expandable **Kōbō instructions** chat entry records the application-owned text prepared by the engine builder for the initial launch or a pending initial-prompt retry, including progress guidance, continuation rules, workflow policy and managed integration notices. The pending initial mission is retained until this entry is durably recorded, so a failure during asynchronous launch preparation remains retryable. A later replacement mission is never cleared by an earlier launch. Preparation is not proof of provider delivery. The provider's own system preset is not included. Retrieved memory bodies and capability tokens are not copied to chat; memory usage remains visible separately in the Memory panel. Existing historical prompt entries retain their original content. Ordinary resumes receive current instructions without creating another initial-prompt entry.
 

@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3'
 import { initAutoLoopFinalReviewSchema } from './auto-loop-final-review-schema.js'
 import { initAutoLoopSchema } from './auto-loop-schema.js'
+import { initBrowserSessionSchema } from './browser-session-schema.js'
 import { initMcpMessageSchema } from './mcp-message-schema.js'
 import { migrateMemorySchema } from './memory-schema.js'
 import { migrateMistralMemoryEngine } from './mistral-memory-migration.js'
@@ -844,6 +845,7 @@ export const migrations: Migration[] = [
   { version: 55, name: 'mistral-vibe-memory-engine', migrate: migrateMistralMemoryEngine },
   { version: 56, name: 'parallel-workspace-reviews', migrate: migrateParallelReviews },
   { version: 57, name: 'pinned-messages', migrate: initPinnedMessageSchema },
+  { version: 58, name: 'remembered-browser-sessions', migrate: initBrowserSessionSchema },
 ]
 
 /** Current schema version — always equals the highest migration version. */

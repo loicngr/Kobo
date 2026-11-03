@@ -59,3 +59,36 @@ it('does not replace a live start transition with a late queued HTTP response', 
   await pending
   expect(store.getStatus('w')?.status).toBe('running')
 })
+
+it.each([false, true])('handles a stop response after a newer restart=%s', async (restarted) => {
+  setActivePinia(createPinia())
+  const store = useDevServerStore()
+  let respond!: (value: Response) => void
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          respond = resolve
+        }),
+    ),
+  )
+  const live: DevServerStatus = {
+    status: 'running',
+    instanceName: 'w',
+    projectName: 'p',
+    httpPort: '8080',
+    url: 'http://localhost:8080',
+    containers: [],
+  }
+  store.updateFromWsEvent('w', live)
+  const pending = store.stopDevServer('w')
+  if (restarted) {
+    store.updateFromWsEvent('w', { ...live, status: 'stopped' })
+    store.updateFromWsEvent('w', { ...live, status: 'starting' })
+    store.updateFromWsEvent('w', { ...live })
+  }
+  respond(new Response(JSON.stringify({ ...live, status: 'stopped' })))
+  await pending
+  expect(store.getStatus('w')?.status).toBe(restarted ? 'running' : 'stopped')
+})

@@ -213,6 +213,24 @@ export default {
   'memory.context.state.unknown': 'Consegna sconosciuta',
   'memory.settings.intro':
     'La memoria conserva note esplicite per le future sessioni degli agenti. Non sostituisce la cronologia del provider né quella della chat.',
+  'memory.limits.title': 'Limiti della memoria',
+  'memory.limits.hint':
+    'Stime conservative (byte UTF-8, non token del modello). Si applicano alle chiamate successive senza azzerare il consumo. Una conversazione esaurita attende la compattazione o una nuova conversazione.',
+  'memory.limits.invalid':
+    'Verifica: obiettivo ≤ limite, pagina predefinita ≤ massimo e avvio/risposta ≤ budget totale meno riserva.',
+  'memory.limits.reset': 'Ripristina valori predefiniti',
+  'memory.limits.bootstrapTokens': 'Contesto iniziale (unità)',
+  'memory.limits.responseTokens': 'Obiettivo risposta MCP (unità)',
+  'memory.limits.responseHardTokens': 'Limite risposta MCP (unità)',
+  'memory.limits.conversationTokens': 'Budget conversazione (unità)',
+  'memory.limits.denialTokens': 'Riserva di rifiuto (unità)',
+  'memory.limits.fragmentChars': 'Frammento di lettura (caratteri Unicode)',
+  'memory.limits.bodyChars': 'Dimensione massima memoria (caratteri)',
+  'memory.limits.titleChars': 'Titolo massimo (caratteri)',
+  'memory.limits.pageSize': 'Risultati per pagina predefiniti',
+  'memory.limits.pageMaxSize': 'Risultati massimi per pagina',
+  'memory.limits.outputBytes': 'Risposta MCP massima (byte)',
+  'memory.limits.bootstrapBytes': 'Contesto iniziale massimo (byte)',
   'memory.settings.mode': 'Comportamento automatico della memoria',
   'memory.settings.mode.manual': 'Manuale',
   'memory.settings.modeHint.manual': 'Gli agenti possono leggere la memoria. Solo tu puoi creare o modificare le note.',
@@ -2132,6 +2150,9 @@ export default {
   'settings.forceImmediateMessages': 'Forza l’invio immediato dei messaggi',
   'settings.forceImmediateMessagesHint':
     'Disattivato per impostazione predefinita. Invia nuovi messaggi mentre l’agente lavora, come Ctrl+Invio, senza metterli in coda. In auto-loop, invia subito e sospende il ciclo. I messaggi già in coda restano invariati; i blocchi di compattazione e autorizzazione rimangono attivi.',
+  'settings.autoExitPlanMode': 'Consentire l’uscita automatica dalla modalità Plan (Claude Code)',
+  'settings.autoExitPlanModeHint':
+    'Quando Claude chiama ExitPlanMode, passare alla modalità interattiva con le normali richieste di autorizzazione. Disattivato: negare l’uscita. Le revisioni in sola lettura restano protette. Le modifiche salvate valgono dalla chiamata successiva.',
   'settings.showProgressBars': 'Mostra le barre di avanzamento',
   'settings.showProgressBarsHint':
     'Attivo per impostazione predefinita. Nascondere le barre non chiude le attività né interrompe il monitoraggio. Le modifiche si applicano al salvataggio.',
@@ -2619,6 +2640,8 @@ export default {
   'staleSessionBanner.switchToCurrent': 'Passa a quella corrente',
 
   // Network login
+  'network.login.remember': 'Ricorda questo dispositivo per 30 giorni',
+  'network.login.rememberHint': 'Attivare solo su un dispositivo fidato. Il token non viene salvato nel browser.',
   'network.login.title': 'Accesso di rete',
   'network.login.description':
     'Questo Kōbō richiede un token per essere controllato dalla rete. Incolla il token mostrato nelle Impostazioni sulla macchina host.',

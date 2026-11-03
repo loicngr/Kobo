@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { AgentEvent, StartOptions } from '../server/services/agent/engines/types.js'
+import { DEFAULT_MEMORY_LIMITS } from '../shared/memory-limits.js'
 import { resetDb } from './helpers/reset-db.js'
 
 const admissionSettings = vi.hoisted(() => ({ memoryMode: 'manual', maxConcurrentAgents: 0 }))
 vi.mock('../server/services/settings-service.js', () => ({
+  getMemoryLimits: () => ({ ...DEFAULT_MEMORY_LIMITS }),
   getGlobalSettings: () => admissionSettings,
   getEffectiveSettings: () => ({ gitConventions: '', prPromptTemplate: '', cleanupScript: '' }),
 }))

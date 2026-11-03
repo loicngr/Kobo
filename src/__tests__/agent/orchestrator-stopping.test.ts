@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentEngine, AgentEvent } from '../../server/services/agent/engines/types.js'
+import { DEFAULT_MEMORY_LIMITS } from '../../shared/memory-limits.js'
 import { resetDb } from '../helpers/reset-db.js'
 
 vi.mock('../../server/services/websocket-service.js', () => ({
@@ -10,6 +11,7 @@ vi.mock('../../server/services/websocket-service.js', () => ({
 }))
 
 vi.mock('../../server/services/settings-service.js', () => ({
+  getMemoryLimits: () => ({ ...DEFAULT_MEMORY_LIMITS }),
   getGlobalSettings: () => ({ autoLoopMaxRetries: 5 }),
   getProjectSettings: () => ({ forge: 'none' }),
   getEffectiveFinalization: () => ({ prompt: '' }),

@@ -3291,3 +3291,53 @@ describe('bounded session reads', () => {
     await vi.advanceTimersByTimeAsync(30_001)
   })
 })
+
+it('keeps a new user message pending when an older agent reply is replayed', () => {
+  setActivePinia(createPinia())
+  const store = useWorkspaceStore()
+  const reply = {
+    id: 'old-agent',
+    type: 'text' as const,
+    content: 'Previous answer',
+    sessionId: 's',
+    timestamp: '2026-01-01T00:00:00Z',
+  }
+  store.addActivityItem('ws-1', reply)
+  store.addActivityItem('ws-1', {
+    id: 'new-user',
+    type: 'text',
+    content: 'Next question',
+    sessionId: 's',
+    timestamp: '2026-01-01T00:01:00Z',
+    meta: { sender: 'user', pending: true },
+  })
+  store.addActivityItem('ws-1', reply)
+  expect(store.activityFeeds['ws-1']).toHaveLength(2)
+  expect(store.activityFeeds['ws-1']![1]!.meta?.pending).toBe(true)
+  store.addActivityItem('ws-1', { ...reply, id: 'new-agent', timestamp: '2026-01-01T00:02:00Z' })
+  expect(store.activityFeeds['ws-1']![1]!.meta?.pending).toBe(false)
+})
+
+it.each(['setup', 'cleanup', 'archive', 'user', 'system-prompt'])(
+  'does not treat %s output as an agent reply',
+  (sender) => {
+    setActivePinia(createPinia())
+    const store = useWorkspaceStore()
+    store.addActivityItem('ws-1', {
+      id: 'user-pending',
+      type: 'text',
+      content: 'Question',
+      sessionId: 's',
+      timestamp: '2026-01-01T00:01:00Z',
+      meta: { sender: 'user', pending: true },
+    })
+    store.addActivityItem('ws-1', {
+      id: 'script-output',
+      type: 'text',
+      content: 'Output',
+      timestamp: '2026-01-01T00:02:00Z',
+      meta: { sender },
+    })
+    expect(store.activityFeeds['ws-1']![0]!.meta?.pending).toBe(true)
+  },
+)

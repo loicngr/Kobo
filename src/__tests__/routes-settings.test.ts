@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { DEFAULT_MEMORY_LIMITS } from '../shared/memory-limits.js'
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
 
@@ -8,6 +9,7 @@ vi.mock('../server/services/settings-service.js', async (importOriginal) => ({
   // stubbing it would make the assertions below vacuous.
   redactGlobalSecrets: (await importOriginal<typeof import('../server/services/settings-service.js')>())
     .redactGlobalSecrets,
+  getMemoryLimits: () => ({ ...DEFAULT_MEMORY_LIMITS }),
   getSettings: vi.fn(),
   getGlobalSettings: vi.fn(),
   updateGlobalSettings: vi.fn(),
@@ -635,4 +637,14 @@ describe('development server admission settings', () => {
       )
     },
   )
+})
+
+it('rejects inconsistent memory limits before persisting global settings', async () => {
+  const response = await app.request('/api/settings/global', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ memoryLimits: { pageSize: 101 } }),
+  })
+  expect(response.status).toBe(400)
+  expect(settingsService.updateGlobalSettings).not.toHaveBeenCalled()
 })

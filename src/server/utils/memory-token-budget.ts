@@ -1,4 +1,5 @@
-import { MEMORY_MCP_RESPONSE_HARD_MAX_TOKENS, MEMORY_MCP_RESPONSE_MAX_TOKENS } from '../../shared/memory.js'
+import type { MemoryLimits } from '../../shared/memory-limits.js'
+import { getMemoryLimits } from '../services/settings-service.js'
 
 export const MEMORY_OUTPUT_FRAMING_HEADROOM_BYTES = 96
 export const MEMORY_OUTPUT_HARD_BYTES = 12_000
@@ -56,7 +57,7 @@ export function sliceMemoryBodyFragment(input: {
   if (input.alreadyDelivered && !input.repeat) {
     return { offset, totalCodePoints: points.length, truncated: offset < points.length, alreadyDelivered: true }
   }
-  const end = Math.min(points.length, offset + 40)
+  const end = Math.min(points.length, offset + getMemoryLimits().fragmentChars)
   return {
     text: points.slice(offset, end).join(''),
     offset,
@@ -76,9 +77,9 @@ function clipUnicode(value: string, maxCodePoints: number): { value: string; tru
   return { value: `${points.slice(0, maxCodePoints).join('')}…`, truncated: true }
 }
 
-function compactValue(value: unknown): { value: unknown; truncated: boolean } {
+function compactValue(value: unknown, limits: MemoryLimits): { value: unknown; truncated: boolean } {
   if (Array.isArray(value)) {
-    const mapped = value.slice(0, 100).map(compactValue)
+    const mapped = value.slice(0, 1_000).map((item) => compactValue(item, limits))
     return {
       value: mapped.map((item) => item.value),
       truncated: value.length > mapped.length || mapped.some((item) => item.truncated),
@@ -94,13 +95,16 @@ function compactValue(value: unknown): { value: unknown; truncated: boolean } {
   for (const [key, child] of Object.entries(value)) {
     if (key === 'body' || key === 'text' || key === 'excerpt') {
       if (typeof child === 'string') {
-        const clipped = clipUnicode(child, MAX_EXCERPT_CODE_POINTS)
+        const clipped = clipUnicode(
+          child,
+          key === 'body' ? Math.max(MAX_EXCERPT_CODE_POINTS, limits.fragmentChars) : MAX_EXCERPT_CODE_POINTS,
+        )
         result[key] = clipped.value
         truncated ||= clipped.truncated
         continue
       }
     }
-    const nested = compactValue(child)
+    const nested = compactValue(child, limits)
     result[key] = nested.value
     truncated ||= nested.truncated
   }
@@ -120,10 +124,10 @@ function envelope(data: Record<string, unknown>, transport: 'internal' | 'extern
   })
 }
 
-function withinLimits(serialized: string, targetTokens: number): boolean {
+function withinLimits(serialized: string, targetTokens: number, limits: MemoryLimits): boolean {
   return (
-    Buffer.byteLength(serialized, 'utf8') <= MEMORY_OUTPUT_HARD_BYTES &&
-    estimateMemoryTokens(serialized) <= Math.min(targetTokens, MEMORY_MCP_RESPONSE_HARD_MAX_TOKENS)
+    Buffer.byteLength(serialized, 'utf8') <= limits.outputBytes &&
+    estimateMemoryTokens(serialized) <= Math.min(targetTokens, limits.responseHardTokens)
   )
 }
 
@@ -136,14 +140,12 @@ export function prepareMemoryToolEnvelope(
   input: unknown,
   options: { targetTokens?: number; transport?: 'internal' | 'external'; pageOffset?: number } = {},
 ): BoundedMemoryOutput {
+  const limits = getMemoryLimits()
   const transport = options.transport ?? 'external'
-  const targetTokens = Math.max(
-    128,
-    Math.min(options.targetTokens ?? MEMORY_MCP_RESPONSE_MAX_TOKENS, MEMORY_MCP_RESPONSE_HARD_MAX_TOKENS),
-  )
+  const targetTokens = Math.max(128, Math.min(options.targetTokens ?? limits.responseTokens, limits.responseHardTokens))
   const original =
     input && typeof input === 'object' && !Array.isArray(input) ? (input as Record<string, unknown>) : { result: input }
-  const compacted = compactValue(original)
+  const compacted = compactValue(original, limits)
   let data: Record<string, unknown> = {
     ...(compacted.value as Record<string, unknown>),
     ...(compacted.truncated ? { truncated: true } : {}),
@@ -151,7 +153,7 @@ export function prepareMemoryToolEnvelope(
   let serialized = envelope(data, transport)
   let truncated = compacted.truncated
 
-  if (!withinLimits(serialized, targetTokens)) {
+  if (!withinLimits(serialized, targetTokens, limits)) {
     const rawEntry = data.entry
     const entry =
       rawEntry && typeof rawEntry === 'object' && !Array.isArray(rawEntry)
@@ -171,11 +173,11 @@ export function prepareMemoryToolEnvelope(
       data = { ...data, entry: compactEntry, truncated: true }
       truncated = true
       serialized = envelope(data, transport)
-      // UTF-8/JSON framing can still make forty code points too large. Shorten
+      // UTF-8/JSON framing can still make a fragment too large. Shorten
       // only with an exact continuation so no body characters are skipped.
       if (typeof compactEntry.revision === 'number') {
         let bodyPoints = [...entry.body]
-        while (bodyPoints.length > 1 && !withinLimits(serialized, targetTokens)) {
+        while (bodyPoints.length > 1 && !withinLimits(serialized, targetTokens, limits)) {
           bodyPoints = bodyPoints.slice(0, Math.floor(bodyPoints.length / 2))
           compactEntry.body = bodyPoints.join('')
           compactEntry.truncated = true
@@ -186,7 +188,7 @@ export function prepareMemoryToolEnvelope(
     }
   }
 
-  if (!withinLimits(serialized, targetTokens)) {
+  if (!withinLimits(serialized, targetTokens, limits)) {
     truncated = true
     let items = Array.isArray(data.items) ? data.items : undefined
     if (items) {
@@ -210,7 +212,7 @@ export function prepareMemoryToolEnvelope(
         data = { ...data, items: slimItems, truncated: true }
         serialized = envelope(data, transport)
       }
-      while (kept > 0 && !withinLimits(serialized, targetTokens)) {
+      while (kept > 0 && !withinLimits(serialized, targetTokens, limits)) {
         const first: unknown = items[0]
         if (
           kept === 1 &&
@@ -261,7 +263,7 @@ export function prepareMemoryToolEnvelope(
     }
   }
 
-  if (!withinLimits(serialized, targetTokens)) {
+  if (!withinLimits(serialized, targetTokens, limits)) {
     data = {
       truncated: true,
       budgetExhausted: true,
@@ -271,6 +273,6 @@ export function prepareMemoryToolEnvelope(
   }
   const payloadBytes = Buffer.byteLength(serialized, 'utf8')
   const estimatedTokens = estimateMemoryTokens(serialized)
-  if (!withinLimits(serialized, targetTokens)) throw new Error('Unable to construct a bounded memory result')
+  if (!withinLimits(serialized, targetTokens, limits)) throw new Error('Unable to construct a bounded memory result')
   return { data, serializedEnvelope: serialized, payloadBytes, estimatedTokens, truncated }
 }

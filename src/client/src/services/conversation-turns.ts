@@ -41,12 +41,24 @@ function speakerOf(item: ConversationItem): TurnSpeaker {
  * Each turn carries the timestamp of its first item. `session` and
  * `system-prompt` turns always contain exactly one item (they don't merge).
  */
-export function groupIntoTurns(items: ConversationItem[]): Turn[] {
-  const turns: Turn[] = []
+export function groupIntoTurns(items: ConversationItem[], previous: Turn[] = []): Turn[] {
+  let offset = 0
+  let kept = 0
+  for (const turn of previous) {
+    if (turn.items.some((item, index) => !sameTurnItem(item, items[offset + index]))) break
+    offset += turn.items.length
+    kept++
+  }
+  if (offset === items.length && kept === previous.length) return previous
+  // The new tail can extend the last retained turn; rebuild that boundary too.
+  if (offset < items.length && kept > 0 && speakerOf(items[offset]) === previous[kept - 1].speaker)
+    offset -= previous[--kept].items.length
+  const turns: Turn[] = previous.slice(0, kept)
   let current: Turn | null = null
   let currentKey: string | null = null
 
-  for (const item of items) {
+  for (let index = offset; index < items.length; index++) {
+    const item = items[index]
     const speaker = speakerOf(item)
     // Session + system-prompt items are standalone: each gets its own turn.
     const standalone = speaker === 'session' || speaker === 'system-prompt'
@@ -70,6 +82,23 @@ export function groupIntoTurns(items: ConversationItem[]): Turn[] {
   }
 
   return turns
+}
+
+// Agent items are copy-on-write; user items are remapped from the activity feed.
+function sameTurnItem(a: ConversationItem, b: ConversationItem | undefined): boolean {
+  if (a === b) return true
+  return (
+    a.type === 'user' &&
+    b?.type === 'user' &&
+    a.content === b.content &&
+    a.sender === b.sender &&
+    a.ts === b.ts &&
+    a.source?.kind === b.source?.kind &&
+    a.source?.clientName === b.source?.clientName &&
+    a.source?.transport === b.source?.transport &&
+    a.eventIds?.length === b.eventIds?.length &&
+    (a.eventIds ?? []).every((id, index) => id === b.eventIds?.[index])
+  )
 }
 
 /**
