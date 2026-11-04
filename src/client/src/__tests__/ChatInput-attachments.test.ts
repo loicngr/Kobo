@@ -55,6 +55,7 @@ async function setup(status: Workspace['status'] = 'idle') {
       engine: 'claude-code',
       tags: [],
       worktreePath: '/tmp/a',
+      sprintId: null,
       projectPath: '/',
       sourceBranch: 'main',
       workingBranch: 'b',

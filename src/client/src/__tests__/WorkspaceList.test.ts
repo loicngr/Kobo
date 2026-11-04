@@ -5,17 +5,24 @@ import { createI18n } from 'vue-i18n'
 import WorkspaceList from '../components/WorkspaceList.vue'
 import en from '../i18n/en'
 import { useSettingsStore } from '../stores/settings'
+import { ALL_SPRINTS, useSprintStore } from '../stores/sprints'
 import { useWorkspaceStore, type Workspace } from '../stores/workspace'
 
 vi.mock('quasar', async (importOriginal) => ({
   ...(await importOriginal<typeof import('quasar')>()),
   useQuasar: () => ({ screen: { lt: { sm: false, md: false } }, notify: vi.fn() }),
 }))
-vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }) }))
+const { push, replace, currentRoute } = vi.hoisted(() => ({
+  push: vi.fn(),
+  replace: vi.fn(),
+  currentRoute: { value: { name: 'workspace', params: {} as { id?: string }, query: {} as Record<string, string> } },
+}))
+vi.mock('vue-router', () => ({ useRouter: () => ({ push, replace, currentRoute }) }))
 
 const makeWorkspace = (over: Partial<Workspace> = {}): Workspace => ({
   id: 'ws-1',
   name: 'Test',
+  sprintId: null,
   projectPath: '/tmp/project',
   sourceBranch: 'main',
   workingBranch: 'feature/test',
@@ -54,6 +61,11 @@ const makeWorkspace = (over: Partial<Workspace> = {}): Workspace => ({
 let wrapper: VueWrapper | undefined
 beforeEach(() => {
   setActivePinia(createPinia())
+  push.mockReset().mockResolvedValue(undefined)
+  replace.mockReset().mockResolvedValue(undefined)
+  currentRoute.value = { name: 'workspace', params: {}, query: {} }
+  sessionStorage.removeItem('kobo:active-sprint')
+  vi.spyOn(useSprintStore(), 'fetchSprints').mockResolvedValue(undefined)
   const store = useWorkspaceStore()
   for (const method of [
     'fetchWorkspaces',
@@ -79,6 +91,8 @@ function mountList() {
       plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })],
       renderStubDefaultSlot: true,
       stubs: {
+        'q-tabs': { name: 'QTabs', template: '<div><slot /></div>' },
+        'q-tab': { name: 'QTab', template: '<div />' },
         'q-badge': { name: 'QBadge', template: '<div><slot /></div>' },
         'q-btn': { name: 'QBtn', template: '<div><slot /></div>' },
         'q-card': { name: 'QCard', template: '<div><slot /></div>' },
@@ -252,4 +266,100 @@ it('does not resume initialization or install polling after unmount during loadi
   resolveWorkspaces()
   await flushPromises()
   expect(store.fetchWorkspacesInfo).not.toHaveBeenCalled()
+})
+
+it('filters the drawer by sprint without changing the global workspace list', async () => {
+  const store = useWorkspaceStore()
+  const sprints = useSprintStore()
+  store.workspaces = [makeWorkspace({ id: 'one', sprintId: 's1' }), makeWorkspace({ id: 'two', sprintId: 's2' })]
+  sprints.active = 's1'
+  wrapper = mountList()
+  await flushPromises()
+  expect(wrapper.findAllComponents({ name: 'WorkspaceCard' }).map((card) => card.props('workspace').id)).toEqual([
+    'one',
+  ])
+  expect(store.workspaces.map((workspace) => workspace.id)).toEqual(['one', 'two'])
+})
+
+it('changes the sprint only after the router accepts returning home', async () => {
+  const sprints = useSprintStore()
+  wrapper = mountList()
+  await flushPromises()
+  push.mockResolvedValueOnce({ type: 4 })
+  wrapper.findComponent({ name: 'QTabs' }).vm.$emit('update:modelValue', 's1')
+  await flushPromises()
+  expect(sprints.active).toBe(ALL_SPRINTS)
+  push.mockResolvedValueOnce(undefined)
+  wrapper.findComponent({ name: 'QTabs' }).vm.$emit('update:modelValue', 's1')
+  await flushPromises()
+  expect(sprints.active).toBe('s1')
+  expect(push).toHaveBeenLastCalledWith({ name: 'workspace', query: { sprint: 's1' } })
+})
+
+it('proposes the new sprint when the viewed workspace is reassigned remotely', async () => {
+  const store = useWorkspaceStore()
+  const sprints = useSprintStore()
+  store.workspaces = [makeWorkspace({ id: 'one', sprintId: 's1' })]
+  store.selectedWorkspaceId = 'one'
+  sprints.active = 's1'
+  currentRoute.value = { name: 'workspace', params: { id: 'one' }, query: { sprint: 's1' } }
+  wrapper = mountList()
+  await flushPromises()
+  store.workspaces[0]!.sprintId = 's2'
+  await flushPromises()
+  expect(replace).toHaveBeenCalledWith({
+    name: 'workspace',
+    state: { koboSprintContext: true },
+    params: { id: 'one' },
+    query: { sprint: 's2' },
+  })
+  expect(store.selectedWorkspaceId).toBe('one')
+})
+
+it('keeps the deleted sprint selected when the dirty guard rejects the fallback', async () => {
+  const sprints = useSprintStore()
+  sprints.active = 's1'
+  sprints.sprints = [{ id: 's1', name: 'Sprint', sortOrder: 0, createdAt: '', updatedAt: '' }]
+  sprints.loaded = true
+  currentRoute.value = { name: 'workspace', params: {}, query: { sprint: 's1' } }
+  push.mockResolvedValue({ type: 4 })
+  wrapper = mountList()
+  await flushPromises()
+  sprints.sprints = []
+  await flushPromises()
+  expect(push).toHaveBeenCalledWith({ name: 'workspace', query: { sprint: '__none__' } })
+  expect(sprints.active).toBe('s1')
+})
+
+it('reconciles membership on first hydration of the targeted workspace', async () => {
+  const store = useWorkspaceStore()
+  const sprints = useSprintStore()
+  sprints.active = 's1'
+  store.selectedWorkspaceId = 'one'
+  currentRoute.value = { name: 'workspace', params: { id: 'one' }, query: { sprint: 's1' } }
+  wrapper = mountList()
+  await flushPromises()
+  store.workspaces = [makeWorkspace({ id: 'one', sprintId: 's2' })]
+  await flushPromises()
+  expect(replace).toHaveBeenCalledWith(expect.objectContaining({ query: { sprint: 's2' } }))
+})
+
+it('confirms a missing sprint with a fresh catalogue before falling back', async () => {
+  const sprints = useSprintStore()
+  let finish!: () => void
+  vi.mocked(sprints.fetchSprints).mockImplementation(
+    () =>
+      new Promise<void>((resolve) => {
+        finish = resolve
+      }),
+  )
+  sprints.loaded = true
+  currentRoute.value = { name: 'workspace', params: {}, query: { sprint: 'new' } }
+  wrapper = mountList()
+  await flushPromises()
+  expect(push).not.toHaveBeenCalled()
+  sprints.sprints = [{ id: 'new', name: 'New', sortOrder: 0, createdAt: '', updatedAt: '' }]
+  finish()
+  await flushPromises()
+  expect(push).not.toHaveBeenCalled()
 })

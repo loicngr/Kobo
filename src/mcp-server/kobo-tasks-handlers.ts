@@ -77,6 +77,7 @@ export interface WorkspaceListItemDto {
   title: string
   status: string
   tags: string[]
+  sprintId: string | null
   createdAt: string
 }
 
@@ -85,6 +86,7 @@ interface WorkspaceListRow {
   name: string
   status: string
   tags: string
+  sprint_id: string | null
   created_at: string
 }
 
@@ -104,12 +106,12 @@ function parseWorkspaceTags(raw: string): string[] {
  */
 export function listWorkspacesHandler(
   db: Database.Database,
-  opts: { includeArchived?: boolean; tag?: string },
+  opts: { includeArchived?: boolean; tag?: string; sprintId?: string },
 ): WorkspaceListItemDto[] {
   // updated_at can collide at second resolution (e.g. bulk-seeded test data); rowid DESC breaks ties, most-recently-inserted first.
   const sql = opts.includeArchived
-    ? 'SELECT id, name, status, tags, created_at FROM workspaces ORDER BY updated_at DESC, rowid DESC'
-    : 'SELECT id, name, status, tags, created_at FROM workspaces WHERE archived_at IS NULL ORDER BY updated_at DESC, rowid DESC'
+    ? 'SELECT id, name, status, tags, sprint_id, created_at FROM workspaces ORDER BY updated_at DESC, rowid DESC'
+    : 'SELECT id, name, status, tags, sprint_id, created_at FROM workspaces WHERE archived_at IS NULL ORDER BY updated_at DESC, rowid DESC'
   const rows = db.prepare(sql).all() as WorkspaceListRow[]
   const tag = opts.tag?.trim()
   return rows
@@ -118,9 +120,13 @@ export function listWorkspacesHandler(
       title: row.name,
       status: row.status,
       tags: parseWorkspaceTags(row.tags),
+      sprintId: row.sprint_id ?? null,
       createdAt: row.created_at,
     }))
-    .filter((workspace) => !tag || workspace.tags.includes(tag))
+    .filter(
+      (workspace) =>
+        (!tag || workspace.tags.includes(tag)) && (opts.sprintId === undefined || workspace.sprintId === opts.sprintId),
+    )
 }
 
 /**
@@ -312,6 +318,7 @@ export interface WorkspaceInfoDto {
   hasUnread: boolean
   autoLoop: boolean
   autoLoopReady: boolean
+  sprintId: string | null
   createdAt: string
   updatedAt: string
 }
@@ -333,6 +340,7 @@ interface WorkspaceRow {
   has_unread: number
   auto_loop: number
   auto_loop_ready: number
+  sprint_id: string | null
   created_at: string
   updated_at: string
 }
@@ -341,7 +349,7 @@ interface WorkspaceRow {
 export function getWorkspaceInfoHandler(db: Database.Database, workspaceId: string): WorkspaceInfoDto {
   const row = db
     .prepare(
-      'SELECT id, name, project_path, source_branch, working_branch, worktree_path, status, notion_url, notion_page_id, description, agent_description, model, dev_server_status, has_unread, auto_loop, auto_loop_ready, created_at, updated_at FROM workspaces WHERE id = ?',
+      'SELECT id, name, project_path, source_branch, working_branch, worktree_path, status, notion_url, notion_page_id, description, agent_description, model, dev_server_status, has_unread, auto_loop, auto_loop_ready, sprint_id, created_at, updated_at FROM workspaces WHERE id = ?',
     )
     .get(workspaceId) as WorkspaceRow | undefined
 
@@ -373,6 +381,7 @@ export function getWorkspaceInfoHandler(db: Database.Database, workspaceId: stri
     hasUnread: row.has_unread === 1,
     autoLoop: row.auto_loop === 1,
     autoLoopReady: row.auto_loop_ready === 1,
+    sprintId: row.sprint_id ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }

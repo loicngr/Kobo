@@ -44,6 +44,18 @@ const response = (body: unknown, status = 200) => new Response(JSON.stringify(bo
 describe('MCP workspace creation', () => {
   afterEach(() => releaseUpdateMaintenance('mcp-create-test'))
 
+  it.each(['sprint-one', null])('forwards sprint assignment %s when creating a workspace', async (sprintId) => {
+    const dispatch = vi.fn(async (_path: string, init: RequestInit) => {
+      const body = JSON.parse(init.body as string)
+      expect(body.sprintId).toBe(sprintId)
+      return response({ id: 'new', sprintId: body.sprintId })
+    })
+    expect(
+      await executeWorkspaceCreationTool('create_workspace', { ...base, sprint_id: sprintId }, dispatch),
+    ).toMatchObject({ id: 'new', sprintId })
+    expect(dispatch).toHaveBeenCalledTimes(1)
+  })
+
   it('rejects creation before PR diagnosis and checkout during update maintenance', async () => {
     const dispatch = vi.fn()
     expect(acquireUpdateMaintenance('mcp-create-test', () => true)).toBe('acquired')

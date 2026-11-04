@@ -9,6 +9,7 @@ export const createTour: TourDefinition = {
   steps: [
     { id: 'create-template', anchor: 'create-template', i18nKey: 'tours.create.template' },
     { id: 'create-mission', anchor: 'create-mission', i18nKey: 'tours.create.mission' },
+    { id: 'create-sprint', anchor: 'create-sprint', i18nKey: 'tours.create.sprint' },
     { id: 'create-project', anchor: 'create-project', i18nKey: 'tours.create.project' },
     { id: 'create-engine', anchor: 'create-engine', i18nKey: 'tours.create.engine' },
     { id: 'create-autoloop', anchor: 'create-autoloop', i18nKey: 'tours.create.autoloop' },

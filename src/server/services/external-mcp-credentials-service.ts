@@ -4,6 +4,7 @@ import path from 'node:path'
 import { START_CODE_REVIEW_TOOL } from '../../shared/code-review-tools.js'
 import { EXTERNAL_MEMORY_TOOL_DEFINITIONS } from '../../shared/memory-tools.js'
 import { PROGRESS_BAR_TOOLS } from '../../shared/progress-bar-tools.js'
+import { SPRINT_TOOLS } from '../../shared/sprint-tools.js'
 import { WORKSPACE_CREATION_TOOLS } from '../../shared/workspace-creation-tools.js'
 import { EXTERNAL_MCP_TOOLS } from '../../shared/workspace-dialogue-tools.js'
 import { WORKSPACE_GROUP_MESSAGE_TOOLS } from '../../shared/workspace-group-message-tools.js'
@@ -12,6 +13,7 @@ import { WORKSPACE_OBSERVATION_TOOLS } from '../../shared/workspace-observation-
 import { ensureKoboHome, getKoboHome } from '../utils/paths.js'
 
 export const EXTERNAL_TOOL_CATALOGUE = [
+  ...SPRINT_TOOLS,
   START_CODE_REVIEW_TOOL,
   ...WORKSPACE_OBSERVATION_TOOLS,
   ...EXTERNAL_MCP_TOOLS,

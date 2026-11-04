@@ -550,6 +550,14 @@ Two consequences worth knowing:
 - However far behind the loop falls (a laptop waking from sleep, say), it sends
   **one** reminder per pass, not one per missed interval.
 
+## Sprints
+
+Browser notifications remain independent of the selected sprint. Clicking a notification opens its workspace and, when known, the exact session. Existing application windows use the normal navigation confirmation for unsaved edits; cancelling stays in place. On supported PWA installations notifications use the service worker. They still require an open Kōbō application to receive events; this does not enable Web Push delivery while the application is closed.
+
+A workspace belongs to at most one sprint, or to no sprint. Sprint assignment survives archive and worktree purge. Deleting a sprint clears its assignments without deleting workspaces. Sprint names and ordering are shared across clients; changes are broadcast live and reloaded on reconnect.
+
+Managed agent sessions can list sprint IDs and names and inspect their own assignment. A writable session can change only its own assignment; plan and review sessions cannot. Writable managed sessions can also create, rename, reorder and delete sprints. External credentials require the corresponding tool grants and access to all workspaces. `create_workspace` accepts `sprint_id` (or null for no sprint). The creation form also offers a + button to create and immediately select a sprint. External scoped credentials cannot gain workspace access through sprint membership. See the [MCP guide](./src/mcp-server/README.md#sprints).
+
 ## Group workspace messages
 
 Use **Group message** in the workspace drawer to send the same instruction to several workspaces. Combine tags and workspace statuses, review the named recipient list, and deselect individual workspaces before sending. Selected tags match any tag; selected statuses match any status; both filter groups must match. Enable **Only workspaces with a running development server** to further restrict the list to server status `running`; starting, stopping, stopped, unknown and failed servers are excluded. This filter updates with received server status changes. Empty filters include all non-archived, non-purged workspaces. Both the group-message tag selector and the sidebar tag filter include the saved global tag catalogue plus tags already assigned to workspaces. Unused catalogue tags remain visible (with a zero count in the sidebar); assign a tag through a workspace menu before using it to target that workspace.
@@ -2881,3 +2889,7 @@ Automatic retry limits are under **Agents**; awaiting-user reminders are under
 contains Bitbucket credentials; GitHub/GitLab reuse authenticated local CLIs and
 the provider is selected per project. These moves do not change stored settings
 or inheritance. The main save action and unsaved-edit protection still apply.
+
+### Sprints de workspaces
+
+Le tiroir permet de regrouper les workspaces par sprint, ou d’afficher tous les workspaces et ceux sans sprint. Le choix d’onglet est propre à l’onglet du navigateur. Un changement d’onglet revient à l’accueil ; les brouillons de chat sont conservés. Les sprints se créent, se renomment, se réordonnent et se suppriment depuis leur menu. Supprimer un sprint désaffecte ses workspaces sans les supprimer. L’affectation est disponible à la création et dans le menu contextuel d’un workspace. Les messages groupés et suppressions d’archives utilisent le périmètre affiché et présentent leur sélection avant confirmation.

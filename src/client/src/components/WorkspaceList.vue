@@ -146,14 +146,13 @@
       >
         <q-tooltip>{{ $t('workspace.searchArchivedToggle') }}</q-tooltip>
       </q-btn>
+      <q-btn flat dense round size="sm" icon="campaign" color="kobo-3"
+        :aria-label="$t('groupMessage.title')" data-tour="group-message" @click="openGroupMessage">
+        <q-tooltip>{{ $t('groupMessage.title') }}</q-tooltip>
+      </q-btn>
     </div>
 
     <q-separator dark />
-
-    <div class="q-px-md q-py-xs">
-      <q-btn flat dense no-caps icon="campaign" class="full-width" color="kobo-2"
-        :label="$t('groupMessage.title')" :aria-label="$t('groupMessage.title')" data-tour="group-message" @click="groupMessageOpen = true" />
-    </div>
 
     <!-- Scrollable groups -->
     <div
@@ -193,7 +192,7 @@
           />
         </div>
 
-        <div v-show="attentionExpanded">
+        <div v-show="attentionExpanded || filteredNeedsAttention.some(w => w.id === store.selectedWorkspaceId)">
           <template v-if="!flatten">
             <div v-for="group in groupedNeedsAttention" :key="group.projectPath" class="wl-project-group">
               <div class="wl-project-label q-px-md q-pt-xs">
@@ -289,7 +288,7 @@
           />
         </div>
 
-        <div v-show="runningExpanded">
+        <div v-show="runningExpanded || filteredRunning.some(w => w.id === store.selectedWorkspaceId)">
           <template v-if="!flatten">
             <div v-for="group in groupedRunning" :key="group.projectPath" class="wl-project-group">
               <div class="wl-project-label q-px-md q-pt-xs">
@@ -385,7 +384,7 @@
           />
         </div>
 
-        <div v-show="idleExpanded">
+        <div v-show="idleExpanded || filteredIdle.some(w => w.id === store.selectedWorkspaceId)">
           <template v-if="!flatten">
             <div v-for="group in groupedIdle" :key="group.projectPath" class="wl-project-group">
               <div class="wl-project-label q-px-md q-pt-xs">
@@ -557,6 +556,56 @@
 
     <ActivityDigest v-if="!isWorkspacePane" />
 
+    <div class="wl-sprint-bar row items-center no-wrap" data-tour="sprint-tabs">
+      <q-btn flat dense round icon="settings" class="q-mx-xs" color="kobo-3" :aria-label="$t('sprints.manage')">
+        <q-tooltip>{{ $t('sprints.manage') }}</q-tooltip>
+        <q-menu dark anchor="top left" self="bottom left" :offset="[0, 8]" class="wl-sprint-menu">
+          <div class="q-px-md q-pt-md q-pb-sm text-subtitle2">{{ $t('sprints.manage') }}</div>
+          <div class="q-px-sm q-pb-sm">
+            <q-btn flat no-caps icon="add" color="primary" class="full-width" align="left"
+              :label="$t('sprints.create')" v-close-popup @click="manageSprints" />
+          </div>
+          <q-separator v-if="sprints.sprints.length" dark />
+          <q-list class="wl-sprint-menu-list q-pa-sm">
+            <q-item v-for="(sprint, index) in sprints.sprints" :key="sprint.id"
+              class="wl-sprint-menu-item q-pa-sm" :class="{ 'wl-sprint-menu-item--active': sprints.active === sprint.id }">
+              <q-item-section>
+                <div class="row items-start no-wrap q-gutter-sm q-px-xs q-py-xs">
+                  <span class="wl-sprint-menu-name col text-weight-medium">{{ sprint.name }}</span>
+                  <q-icon v-if="sprints.active === sprint.id" name="check" color="primary" size="18px" aria-hidden="true" />
+                </div>
+                <div class="row items-center no-wrap">
+                  <q-btn flat no-caps size="sm" icon="edit" :label="$t('sprints.rename')"
+                    @click="renameSprint(sprint.id, sprint.name)" />
+                  <q-space />
+                  <q-btn flat round dense icon="arrow_upward" class="wl-sprint-menu-action" :disable="index === 0"
+                    :aria-label="$t('sprints.moveUp')" @click="moveSprint(index, -1)">
+                    <q-tooltip>{{ $t('sprints.moveUp') }}</q-tooltip>
+                  </q-btn>
+                  <q-btn flat round dense icon="arrow_downward" class="wl-sprint-menu-action" :disable="index === sprints.sprints.length - 1"
+                    :aria-label="$t('sprints.moveDown')" @click="moveSprint(index, 1)">
+                    <q-tooltip>{{ $t('sprints.moveDown') }}</q-tooltip>
+                  </q-btn>
+                  <q-btn flat round dense icon="delete_outline" color="negative" class="wl-sprint-menu-action q-ml-xs"
+                    :aria-label="$t('sprints.delete')" @click="deleteSprint(sprint.id, sprint.name)">
+                    <q-tooltip>{{ $t('sprints.delete') }}</q-tooltip>
+                  </q-btn>
+                </div>
+              </q-item-section>
+            </q-item>
+          </q-list>
+        </q-menu>
+      </q-btn>
+      <q-separator dark vertical inset />
+      <q-tabs :model-value="sprints.active" dense no-caps align="left" mobile-arrows outside-arrows class="wl-sprint-tabs"
+        @update:model-value="selectSprint">
+        <q-tab :name="ALL_SPRINTS" :label="tabLabel(ALL_SPRINTS, $t('sprints.all'))" />
+        <q-tab :name="NO_SPRINT" :label="tabLabel(NO_SPRINT, $t('sprints.none'))" />
+        <q-tab v-for="sprint in sprints.sprints" :key="sprint.id" :name="sprint.id" :label="tabLabel(sprint.id, sprint.name)" />
+      </q-tabs>
+    </div>
+    <q-separator dark />
+
     <!-- Footer counter -->
     <div class="q-px-md q-py-xs text-caption text-kobo-3">
       {{ $t('workspaceList.footer', { count: totalCount }, totalCount) }} &middot; {{ $t('workspaceList.footerRunning', { count: runningCount }) }}
@@ -641,9 +690,10 @@
 
       <q-card-section class="q-pt-none">
         <div class="text-body2 q-mb-md text-kobo-3">
-          {{ $t('workspaceList.deleteArchivedDialog.message', { count: store.archived.length }) }}
+          {{ $t('workspaceList.deleteArchivedDialog.message', { count: bulkDeleteTargets.length }) }}
         </div>
 
+        <ul><li v-for="workspace in bulkDeleteTargets" :key="workspace.id">{{ workspace.name }}</li></ul>
         <div class="column q-gutter-xs">
           <q-checkbox
             v-model="bulkDeleteLocalBranch"
@@ -674,7 +724,7 @@
           outlined
           autofocus
           class="q-mt-md"
-          :label="$t('workspaceList.deleteArchivedDialog.typeCount', { count: store.archived.length })"
+          :label="$t('workspaceList.deleteArchivedDialog.typeCount', { count: bulkDeleteTargets.length })"
           @keyup.enter="bulkDeleteConfirmMatches && confirmBulkDeleteArchived()"
         />
       </q-card-section>
@@ -699,7 +749,7 @@
     </q-card>
   </q-dialog>
 
-  <WorkspaceGroupMessageDialog v-model="groupMessageOpen" :workspaces="store.workspaces" />
+  <WorkspaceGroupMessageDialog v-model="groupMessageOpen" :workspaces="groupMessageTargets" :scope="groupMessageScope" />
 
   <ManageTagsDialog
     v-if="tagsDialogWorkspace"
@@ -722,6 +772,7 @@ import { useWorktreeRestore } from 'src/composables/use-worktree-restore'
 import { useDevServerStore } from 'src/stores/dev-server'
 import { useLayoutStore } from 'src/stores/layout'
 import { useSettingsStore } from 'src/stores/settings'
+import { ALL_SPRINTS, NO_SPRINT, useSprintStore } from 'src/stores/sprints'
 import { useWebSocketStore } from 'src/stores/websocket'
 import type { Workspace } from 'src/stores/workspace'
 import { useWorkspaceStore } from 'src/stores/workspace'
@@ -730,6 +781,7 @@ import { DEFAULT_TOAST_TIMEOUT_MS } from 'src/utils/notification-timeout'
 import type { ProjectColor } from 'src/utils/project-color'
 import { projectNameForPath } from 'src/utils/project-color'
 import { isWorkspacePane } from 'src/utils/split-workspace'
+import { markInternalSprintTarget } from 'src/utils/sprint-navigation'
 import { getAttentionReasons } from 'src/utils/workspace-attention'
 import { parseWorkspaceSort, sortWorkspaces, WORKSPACE_SORT_KEY } from 'src/utils/workspace-sort'
 import { isBusyStatus } from 'src/utils/workspace-status'
@@ -741,6 +793,7 @@ import { useRouter } from 'vue-router'
 const { t, locale } = useI18n()
 const $q = useQuasar()
 const store = useWorkspaceStore()
+const sprints = useSprintStore()
 const { restoreWorktree } = useWorktreeRestore()
 const wsStore = useWebSocketStore()
 const devServerStore = useDevServerStore()
@@ -748,6 +801,124 @@ const settingsStore = useSettingsStore()
 const router = useRouter()
 const layout = useLayoutStore()
 const { isDrawerCollapsed } = useIsMobile()
+
+async function selectSprint(id: string) {
+  const failure = await router.push({ name: 'workspace', query: { sprint: id } })
+  if (!failure) sprints.setActive(id)
+}
+
+function manageSprints() {
+  $q.dialog({
+    title: t('sprints.create'),
+    dark: true,
+    prompt: { model: '', type: 'text', isValid: (v: string) => !!v.trim() && v.trim().length <= 100 },
+    cancel: true,
+  }).onOk((name: string) => {
+    void sprints.mutate('', 'POST', { name: name.trim() }).catch((err) => notifyActionError(err, 'sprints.error'))
+  })
+}
+
+function renameSprint(id: string, name: string) {
+  $q.dialog({
+    title: t('sprints.rename'),
+    dark: true,
+    prompt: { model: name, type: 'text', isValid: (v: string) => !!v.trim() && v.trim().length <= 100 },
+    cancel: true,
+  }).onOk((value: string) => {
+    void sprints
+      .mutate(`/${encodeURIComponent(id)}`, 'PATCH', { name: value.trim() })
+      .catch((err) => notifyActionError(err, 'sprints.error'))
+  })
+}
+function deleteSprint(id: string, name: string) {
+  $q.dialog({
+    title: t('sprints.delete'),
+    message: t('sprints.deleteConfirm', { name }),
+    dark: true,
+    cancel: true,
+  }).onOk(() => {
+    void sprints.mutate(`/${encodeURIComponent(id)}`, 'DELETE').catch((err) => notifyActionError(err, 'sprints.error'))
+  })
+}
+function moveSprint(index: number, delta: number) {
+  const ids = sprints.sprints.map((s) => s.id)
+  const other = index + delta
+  ;[ids[index], ids[other]] = [ids[other]!, ids[index]!]
+  void sprints.mutate('/reorder', 'POST', { ids }).catch((err) => notifyActionError(err, 'sprints.error'))
+}
+
+watch(
+  () => router.currentRoute?.value.query.sprint,
+  (id) => {
+    if (typeof id === 'string') sprints.setActive(id)
+  },
+  { immediate: true },
+)
+watch(
+  () => store.selectedWorkspace?.sprintId,
+  (current, previous) => {
+    if (
+      current === undefined ||
+      current === previous ||
+      sprints.active === ALL_SPRINTS ||
+      router.currentRoute?.value.name !== 'workspace' ||
+      router.currentRoute.value.params.id !== store.selectedWorkspaceId ||
+      (previous === undefined && (current ?? NO_SPRINT) === sprints.active)
+    )
+      return
+    const clearMarker = markInternalSprintTarget(store.selectedWorkspaceId!, current ?? NO_SPRINT)
+    void router
+      .replace({
+        name: 'workspace',
+        state: { koboSprintContext: true },
+        params: { id: store.selectedWorkspaceId! },
+        query: { ...router.currentRoute.value.query, sprint: current ?? NO_SPRINT },
+      })
+      .finally(clearMarker)
+  },
+  { immediate: true },
+)
+const checkingMissingSprints = new Set<string>()
+watch(
+  () => [sprints.loaded, sprints.sprints.map((s) => s.id).join(','), sprints.active] as const,
+  ([loaded]) => {
+    if (
+      loaded &&
+      !checkingMissingSprints.has(sprints.active) &&
+      sprints.active !== ALL_SPRINTS &&
+      sprints.active !== NO_SPRINT &&
+      !sprints.sprints.some((s) => s.id === sprints.active)
+    ) {
+      const missing = sprints.active
+      checkingMissingSprints.add(missing)
+      void sprints
+        .fetchSprints()
+        .then(() => {
+          if (sprints.loaded && sprints.active === missing && !sprints.sprints.some((s) => s.id === missing)) {
+            void selectSprint(NO_SPRINT)
+          }
+        })
+        .catch((err) => console.error('[sprints]', err))
+        .finally(() => {
+          checkingMissingSprints.delete(missing)
+        })
+    }
+  },
+)
+void sprints.fetchSprints().catch((err) => console.error('[sprints]', err))
+
+function tabLabel(id: string, name: string) {
+  const count = store.workspaces.filter(
+    (workspace) =>
+      (id === ALL_SPRINTS || (workspace.sprintId ?? NO_SPRINT) === id) &&
+      getAttentionReasons(
+        workspace,
+        store.prSnapshots[workspace.id],
+        store.pendingQuotaBackoffs[workspace.id]?.reason === 'transient' ? 'transient' : 'quota',
+      ).length > 0,
+  ).length
+  return count ? `${name} (${count})` : name
+}
 
 function attentionBorderColor(ws: Workspace): string {
   const reasons = getAttentionReasons(
@@ -777,7 +948,7 @@ watch(workspaceSort, (value) => {
   }
 })
 function sorted(workspaces: Workspace[], query = searchQuery.value): Workspace[] {
-  return sortWorkspaces(workspaces, workspaceSort.value, {
+  const result = sortWorkspaces(workspaces, workspaceSort.value, {
     liveness: store.agentLiveness,
     snapshots: store.prSnapshots,
     quotaBackoffReasons: Object.fromEntries(
@@ -789,6 +960,9 @@ function sorted(workspaces: Workspace[], query = searchQuery.value): Workspace[]
     locale: locale.value,
     query,
   })
+  const selected = workspaces.find((workspace) => workspace.id === store.selectedWorkspaceId)
+  if (selected && !result.some((workspace) => workspace.id === selected.id)) result.push(selected)
+  return result
 }
 
 const SEARCH_QUERY_KEY = 'kobo:workspace-search'
@@ -820,8 +994,11 @@ watch(
   },
   { immediate: true },
 )
+const inSprint = (w: Workspace) => sprints.active === ALL_SPRINTS || (w.sprintId ?? NO_SPRINT) === sprints.active
 const passesFilters = (w: Workspace) =>
-  (!favoritesOnly.value || w.favoritedAt !== null) && matchesTags(w, tagFilter.value)
+  inSprint(w) &&
+  (w.id === store.selectedWorkspaceId ||
+    ((!favoritesOnly.value || w.favoritedAt !== null) && matchesTags(w, tagFilter.value)))
 
 // When ON and a search query is active, the archived section is filtered by
 // the same substring match as the live groups and auto-expands to surface
@@ -831,6 +1008,18 @@ const searchArchived = ref<boolean>(localStorage.getItem('kobo:search-archived')
 watch(searchArchived, (v) => localStorage.setItem('kobo:search-archived', v ? '1' : '0'))
 
 const groupMessageOpen = ref(false)
+const groupMessageTargets = ref<Workspace[]>([])
+const groupMessageScope = ref('')
+function openGroupMessage() {
+  groupMessageScope.value =
+    sprints.active === ALL_SPRINTS
+      ? t('sprints.all')
+      : sprints.active === NO_SPRINT
+        ? t('sprints.none')
+        : (sprints.sprints.find((s) => s.id === sprints.active)?.name ?? t('sprints.none'))
+  groupMessageTargets.value = store.workspaces.filter(inSprint).map((workspace) => ({ ...workspace }))
+  groupMessageOpen.value = true
+}
 const tagsDialogOpen = ref(false)
 const tagsDialogWorkspace = ref<Workspace | null>(null)
 function onManageTags(ws: Workspace) {
@@ -903,11 +1092,13 @@ const filteredArchived = computed(() => {
 // without a manual click. Empty query or zero matches → no auto-expand
 // (header stays collapsed unless the user clicks it).
 const archivedAutoExpanded = computed(
-  () => searchArchived.value && searchQuery.value.length > 0 && filteredArchived.value.length > 0,
+  () =>
+    (searchArchived.value && searchQuery.value.length > 0 && filteredArchived.value.length > 0) ||
+    filteredArchived.value.some((w) => w.id === store.selectedWorkspaceId),
 )
 
-const totalCount = computed(() => store.workspaces.length)
-const runningCount = computed(() => store.running.length)
+const totalCount = computed(() => store.workspaces.filter(inSprint).length)
+const runningCount = computed(() => store.running.filter(inSprint).length)
 
 const attentionExpanded = ref(true)
 const runningExpanded = ref(true)
@@ -941,12 +1132,15 @@ const deleteConfirmMatches = computed(
   () => !!deleteTarget.value && deleteConfirmBranch.value.trim() === deleteTarget.value.workingBranch,
 )
 const bulkDeleteConfirmCount = ref('')
-const bulkDeleteConfirmMatches = computed(() => bulkDeleteConfirmCount.value.trim() === String(store.archived.length))
+const bulkDeleteConfirmMatches = computed(
+  () => bulkDeleteConfirmCount.value.trim() === String(bulkDeleteTargets.value.length),
+)
 const deleteTarget = ref<Workspace | null>(null)
 const deleteLocalBranch = ref(false)
 const deleteRemoteBranch = ref(false)
 const deleting = ref(false)
 
+const bulkDeleteTargets = ref<Workspace[]>([])
 const bulkDeleteArchivedDialog = ref(false)
 const bulkDeleteLocalBranch = ref(false)
 const bulkDeleteRemoteBranch = ref(false)
@@ -1023,6 +1217,24 @@ async function confirmDelete() {
 function openBulkDeleteArchivedDialog() {
   // The button is only rendered when filteredArchived is non-empty, so the
   // archived list is already loaded here — no extra fetch needed.
+  bulkDeleteTargets.value = sortWorkspaces(
+    store.archived.filter(
+      (w) => inSprint(w) && (!favoritesOnly.value || w.favoritedAt !== null) && matchesTags(w, tagFilter.value),
+    ),
+    workspaceSort.value,
+    {
+      liveness: store.agentLiveness,
+      snapshots: store.prSnapshots,
+      quotaBackoffReasons: Object.fromEntries(
+        Object.entries(store.pendingQuotaBackoffs).map(([id, backoff]) => [
+          id,
+          backoff.reason === 'transient' ? 'transient' : 'quota',
+        ]),
+      ),
+      locale: locale.value,
+      query: searchArchived.value ? searchQuery.value : '',
+    },
+  ).map((workspace) => ({ ...workspace }))
   bulkDeleteLocalBranch.value = false
   bulkDeleteRemoteBranch.value = false
   bulkDeleteConfirmCount.value = ''
@@ -1033,12 +1245,43 @@ async function confirmBulkDeleteArchived() {
   if (!bulkDeleteConfirmMatches.value) return
   bulkDeleting.value = true
   try {
-    const { warnings, ids } = await store.deleteAllArchived({
+    await store.fetchArchivedWorkspaces()
+    const current = new Map(store.archived.map((workspace) => [workspace.id, workspace]))
+    if (
+      bulkDeleteTargets.value.some((workspace) => {
+        const fresh = current.get(workspace.id)
+        return !fresh || fresh.archivedAt !== workspace.archivedAt || fresh.sprintId !== workspace.sprintId
+      })
+    ) {
+      bulkDeleteTargets.value = bulkDeleteTargets.value.flatMap((workspace) => {
+        const fresh = current.get(workspace.id)
+        return fresh && inSprint(fresh) ? [{ ...fresh }] : []
+      })
+      bulkDeleteConfirmCount.value = ''
+      $q.notify({ type: 'warning', message: t('sprints.stale'), position: 'top' })
+      return
+    }
+    const { warnings, ids } = await store.deleteArchivedSnapshots({
+      snapshots: bulkDeleteTargets.value.map((w) => ({
+        id: w.id,
+        archivedAt: w.archivedAt!,
+        sprintId: w.sprintId ?? null,
+      })),
       deleteLocalBranch: bulkDeleteLocalBranch.value,
       deleteRemoteBranch: bulkDeleteRemoteBranch.value,
     })
     for (const id of ids) wsStore.unsubscribe(id)
-    bulkDeleteArchivedDialog.value = false
+    if (warnings.length > 0) {
+      const remaining = new Map(store.archived.map((workspace) => [workspace.id, workspace]))
+      bulkDeleteTargets.value = bulkDeleteTargets.value.flatMap((workspace) => {
+        const fresh = remaining.get(workspace.id)
+        return fresh && inSprint(fresh) ? [{ ...fresh }] : []
+      })
+      bulkDeleteConfirmCount.value = ''
+      if (bulkDeleteTargets.value.length === 0) bulkDeleteArchivedDialog.value = false
+    } else {
+      bulkDeleteArchivedDialog.value = false
+    }
     // If we were viewing one of the deleted workspaces, navigate away.
     if (store.selectedWorkspaceId === null) {
       router.push({ name: 'workspace' })
@@ -1188,8 +1431,15 @@ async function onUnarchiveClick(ws: Workspace, event: Event) {
 }
 
 function selectWorkspace(id: string) {
-  store.selectWorkspace(id)
-  router.push({ name: 'workspace', params: { id } })
+  const clearMarker = markInternalSprintTarget(id, sprints.active)
+  void router
+    .push({
+      name: 'workspace',
+      params: { id },
+      query: { sprint: sprints.active },
+      state: { koboSprintContext: true },
+    })
+    .finally(clearMarker)
   // Sous DRAWER_BREAKPOINT (1024 px) le tiroir gauche est une SURIMPRESSION :
   // il recouvre le workspace que ce clic vient précisément d'ouvrir. Le
   // refermer est le geste attendu, pas une commodité. Au-dessus du seuil le
@@ -1401,6 +1651,22 @@ onBeforeUnmount(() => {
 </script>
 
 <style lang="scss" scoped>
+.wl-sprint-bar { flex-shrink: 0; width: 100%; min-width: 0; }
+.wl-sprint-tabs { flex: 1; min-width: 0; }
+.wl-sprint-menu {
+  width: 340px;
+  max-width: calc(100vw - 16px);
+  background: var(--kobo-surface);
+  border: 1px solid var(--kobo-border);
+  border-radius: 8px;
+}
+.wl-sprint-menu-list { max-height: 50vh; overflow-y: auto; }
+.wl-sprint-menu-item { border-radius: 4px; }
+.wl-sprint-menu-item + .wl-sprint-menu-item { margin-top: 4px; }
+.wl-sprint-menu-item--active { background: var(--kobo-bg-deep); }
+.wl-sprint-menu-name { overflow-wrap: anywhere; min-width: 0; }
+.wl-sprint-menu-action { min-width: 40px; min-height: 40px; }
+
 .workspace-list {
   background-color: var(--kobo-bg-deep);
   overflow-x: hidden;

@@ -23,6 +23,7 @@ export interface Workspace {
   workflowPolicy?: WorkflowPolicy
   id: string
   name: string
+  sprintId: string | null
   projectPath: string
   sourceBranch: string
   workingBranch: string
@@ -119,6 +120,7 @@ export interface ActivityItem {
 }
 
 export interface CreateWorkspaceInput {
+  sprintId?: string | null
   name: string
   projectPath: string
   sourceBranch: string
@@ -792,6 +794,7 @@ export const useWorkspaceStore = defineStore('workspace', {
             ? (current.get(workspace.id) ?? workspace)
             : workspace,
         )
+        useWebSocketStore().reconcileWorkspaceSubscriptions()
         this.listLoadError = null
         this.activeListLoadFailed = false
         this.listPollFailureStreak = 0
@@ -1191,6 +1194,34 @@ export const useWorkspaceStore = defineStore('workspace', {
       }
     },
 
+    async deleteArchivedSnapshots(options: {
+      snapshots: Array<{ id: string; archivedAt: string; sprintId: string | null }>
+      deleteLocalBranch?: boolean
+      deleteRemoteBranch?: boolean
+    }): Promise<{ deleted: number; warnings: string[]; ids: string[] }> {
+      const res = await apiFetchResponse('/api/workspaces/archived', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(options),
+      })
+      if (!res.ok) throw await apiResponseError(res)
+      const body = (await res.json()) as { deleted: number; warnings: string[]; deletedIds?: string[] }
+      const requestedIds = new Set(options.snapshots.map((snapshot) => snapshot.id))
+      const ids = Array.isArray(body.deletedIds)
+        ? [...new Set(body.deletedIds.filter((id) => typeof id === 'string' && requestedIds.has(id)))]
+        : []
+      await Promise.all([this.fetchArchivedWorkspaces(), this.fetchWorkspaces()])
+      for (const id of ids) {
+        this.clearWorkspaceLocalState(id)
+        disposeTerminalEntry(id)
+        if (this.selectedWorkspaceId === id) {
+          this.selectedWorkspaceId = null
+          this.tasks = []
+        }
+      }
+      return { ...body, ids }
+    },
+
     async updateModel(id: string, model: string) {
       try {
         const res = await apiFetchResponse(`/api/workspaces/${id}`, {
@@ -1532,7 +1563,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       }
     },
 
-    selectWorkspace(id: string) {
+    async selectWorkspace(id: string, sessionId?: string) {
       this.cancelSessionReads()
       this.selectedWorkspaceId = id
       this.selectedSessionId = null
@@ -1544,7 +1575,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       void useParallelReviewStore()
         .fetchStatus(id)
         .catch(() => {})
-      this.fetchSessions(id)
+      const sessionsLoaded = this.fetchSessions(id, sessionId)
       void this.fetchPendingQuotaBackoff(id)
       // Pre-fetch git stats so template expansion has them available immediately
       // when the user selects a template — without this, variables like
@@ -1558,6 +1589,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       if (!this.activityFeeds[id]?.length) {
         useWebSocketStore().subscribe(id)
       }
+      await sessionsLoaded
     },
 
     async fetchSessions(workspaceId: string, forceSelectId?: string | null) {

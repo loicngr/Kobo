@@ -39,6 +39,7 @@ import searchRouter from './routes/search.js'
 import sentryRouter from './routes/sentry.js'
 import settingsRouter from './routes/settings.js'
 import soundsRouter from './routes/sounds.js'
+import sprintsRouter from './routes/sprints.js'
 import templatesRouter from './routes/templates.js'
 import usageRoutes from './routes/usage.js'
 import voiceRouter from './routes/voice.js'
@@ -233,6 +234,7 @@ app.use('/api/*', operatorDispatchAuthMiddleware)
 app.get('/api/health', (c) => c.json({ status: 'ok', version: getPackageVersion() }))
 
 // Mount route sub-routers
+app.route('/api/sprints', sprintsRouter)
 app.route('/api/workspaces', workspacesRouter)
 app.route('/api/workspace-messages', workspaceMessagesRouter)
 app.route('/api/auth', authRouter)

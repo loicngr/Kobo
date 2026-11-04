@@ -6,6 +6,7 @@ import { bodyLimit } from 'hono/body-limit'
 import { MAX_MCP_ATTACHMENT_REQUEST_BYTES } from '../../shared/mcp-attachments.js'
 import { isMemoryToolName } from '../../shared/memory-tools.js'
 import { isProgressBarTool } from '../../shared/progress-bar-tools.js'
+import { isSprintTool } from '../../shared/sprint-tools.js'
 import { isWorkspaceCreationTool } from '../../shared/workspace-creation-tools.js'
 import { isWorkspaceGroupMessageTool } from '../../shared/workspace-group-message-tools.js'
 import { isWorkspaceLifecycleTool } from '../../shared/workspace-lifecycle-tools.js'
@@ -23,6 +24,7 @@ import { executeMemoryMcpTool } from '../services/memory-mcp-service.js'
 import { resolveWorkspaceMemoryScope } from '../services/memory-service.js'
 import { executeProgressBarTool, progressErrorData } from '../services/progress-bar-mcp-service.js'
 import { ProgressBarError } from '../services/progress-bar-service.js'
+import { executeSprintTool } from '../services/sprint-mcp-service.js'
 import { executeWorkspaceCreationTool, WorkspaceCreationMcpError } from '../services/workspace-creation-mcp-service.js'
 import { executeWorkspaceDialogueTool } from '../services/workspace-dialogue-service.js'
 import {
@@ -148,26 +150,28 @@ export async function executeExternalMcpTool(
   const isMemory = isMemoryToolName(name)
   try {
     if (principal) args = authorizeExternalMcpCall(principal, name, args)
-    let data = isWorkspaceObservationTool(name)
-      ? await executeWorkspaceObservationTool(name, args, dispatchWorkspaceRequest)
-      : name === 'start_code_review'
-        ? await executeCodeReviewTool(args, dispatchWorkspaceRequest)
-        : isProgressBarTool(name)
-          ? executeProgressBarTool(name, args)
-          : isMemory
-            ? executeMemoryMcpTool(
-                name,
-                args,
-                source,
-                principal && !principal.allWorkspaces ? principal.workspaceIds : undefined,
-              )
-            : isWorkspaceCreationTool(name)
-              ? await executeWorkspaceCreationTool(name, args, dispatchWorkspaceRequest)
-              : isWorkspaceLifecycleTool(name)
-                ? await executeWorkspaceLifecycleTool(name, args, dispatchWorkspaceRequest)
-                : isWorkspaceGroupMessageTool(name)
-                  ? executeWorkspaceGroupMessageTool(name, args, source)
-                  : await executeWorkspaceDialogueTool(name, args, source)
+    let data = isSprintTool(name)
+      ? await executeSprintTool(name, args)
+      : isWorkspaceObservationTool(name)
+        ? await executeWorkspaceObservationTool(name, args, dispatchWorkspaceRequest)
+        : name === 'start_code_review'
+          ? await executeCodeReviewTool(args, dispatchWorkspaceRequest)
+          : isProgressBarTool(name)
+            ? executeProgressBarTool(name, args)
+            : isMemory
+              ? executeMemoryMcpTool(
+                  name,
+                  args,
+                  source,
+                  principal && !principal.allWorkspaces ? principal.workspaceIds : undefined,
+                )
+              : isWorkspaceCreationTool(name)
+                ? await executeWorkspaceCreationTool(name, args, dispatchWorkspaceRequest)
+                : isWorkspaceLifecycleTool(name)
+                  ? await executeWorkspaceLifecycleTool(name, args, dispatchWorkspaceRequest)
+                  : isWorkspaceGroupMessageTool(name)
+                    ? executeWorkspaceGroupMessageTool(name, args, source)
+                    : await executeWorkspaceDialogueTool(name, args, source)
     if (principal && !principal.allWorkspaces && name === 'list_workspaces' && Array.isArray(data)) {
       data = data.filter((workspace) => principal.workspaceIds.includes(workspace.id))
     }
@@ -224,6 +228,10 @@ export async function executeExternalMcpTool(
 export default app
 
 const allWorkspaceOnly = new Set([
+  'create_sprint',
+  'rename_sprint',
+  'reorder_sprints',
+  'delete_sprint',
   'create_workspace',
   'diagnose_workspace_pr',
   'preview_workspace_group_message',
@@ -246,7 +254,7 @@ export function authorizeExternalMcpCall(
   const definition = EXTERNAL_TOOL_CATALOGUE.find((tool) => tool.name === name)
   if (!definition || Object.keys(args).some((key) => !Object.hasOwn(definition.inputSchema.properties ?? {}, key)))
     return deny()
-  if (name === 'list_workspaces') return args
+  if (name === 'list_workspaces' || name === 'list_sprints') return args
   if (name === 'send_workspace_group_message') {
     if (
       !Array.isArray(args.workspace_ids) ||

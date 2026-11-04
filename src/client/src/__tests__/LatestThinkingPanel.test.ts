@@ -26,6 +26,7 @@ describe('LatestThinkingPanel', () => {
       {
         id: 'w',
         name: 'Test',
+        sprintId: null,
         projectPath: '/tmp/project',
         sourceBranch: 'main',
         workingBranch: 'feature',

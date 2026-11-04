@@ -58,7 +58,7 @@ Worktrees isolate checkouts. They do **not** isolate processes, credentials, por
 
 ### Follow several missions
 
-Create a workspace from a prompt, a Notion page, a Sentry issue or an existing pull/merge request. Add screenshots, text files or PDFs to the mission or chat. Organize workspaces with tags and status filters, send group instructions, or compare two workspaces side by side.
+Create a workspace from a prompt, a Notion page, a Sentry issue or an existing pull/merge request. Add screenshots, text files or PDFs to the mission or chat. Organize workspaces into sprints, use tags and status filters, send group instructions, or compare two workspaces side by side. Each workspace belongs to at most one sprint.
 
 The interface surfaces pending questions, CI failures, requested changes and merge readiness. Live output, reasoning, tool activity and agent-reported progress help you see what each session is doing. Search conversations globally, pin useful messages, and use the command palette to navigate.
 

@@ -1,4 +1,26 @@
 export default {
+  'tours.home.sprints.title': 'Organize workspaces by sprint',
+  'tours.home.sprints.description':
+    'The bottom tabs filter workspaces: All, No sprint or a specific sprint. Switching sprints returns to the home screen without stopping agents. Use the gear to create, rename, reorder or delete sprints; deleting a sprint keeps its workspaces.',
+  'tours.create.sprint.title': 'Choose or create a sprint',
+  'tours.create.sprint.description':
+    'The active sprint is preselected. Choose another sprint or No sprint, or use + to create and immediately select a sprint.',
+
+  'sprints.scope': 'Scope: {name}',
+  'sprints.stale': 'The archive selection changed. Review and confirm again.',
+  'sprints.workspaceMissing': 'The requested workspace is unavailable.',
+  'sprints.sessionMissing': 'The requested session was not found in this workspace.',
+  'sprints.moveUp': 'Move up',
+  'sprints.moveDown': 'Move down',
+  'sprints.rename': 'Rename sprint',
+  'sprints.delete': 'Delete sprint',
+  'sprints.deleteConfirm': 'Delete {name}? Workspaces will be unassigned.',
+  'sprints.all': 'All',
+  'sprints.none': 'No sprint',
+  'sprints.manage': 'Manage sprints',
+  'sprints.create': 'Create sprint',
+  'sprints.error': 'Sprint operation failed',
+  'sprints.label': 'Sprint',
   'preview.title': 'Preview',
   'preview.chat': 'Chat',
   'preview.split': 'Chat + preview',
@@ -123,7 +145,7 @@ export default {
   'groupMessage.state.not_sent': 'Not sent',
   'tours.home.groupMessage.title': 'Message several workspaces',
   'tours.home.groupMessage.description':
-    'Filter by tags, workspace statuses and running development servers, check the recipient list, and send one instruction. Auto-loops receive it next iteration. Each workspace has its own delivery result.',
+    'The megaphone beside the filters opens a group message for the displayed sprint (or all workspaces in All). Filter and check recipients before sending. Auto-loops receive the instruction on their next iteration.',
   'autoLoop.finalReview.title': 'Final review settings',
   'autoLoop.finalReview.description':
     'After all tasks and final checks, a separate reviewer checks the changes. The final working session fixes the findings, then a fresh review runs until no findings remain.',

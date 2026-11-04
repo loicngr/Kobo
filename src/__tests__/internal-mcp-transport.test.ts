@@ -14,6 +14,7 @@ import {
   revokeInternalMcpCapability,
 } from '../server/services/internal-mcp-capability-service.js'
 import { createProgressCapability } from '../server/services/progress-bar-runtime.js'
+import { createSprint } from '../server/services/sprint-service.js'
 import { createIdleSession } from '../server/services/workspace-service.js'
 
 let directory: string
@@ -36,6 +37,13 @@ afterEach(() => {
 it.each([true, false])(
   'enforces backend permissions and revocation through real stdio (readOnly=%s)',
   async (readOnly) => {
+    const sprint = createSprint('Sprint')
+    getDb().prepare("UPDATE workspaces SET sprint_id = ? WHERE id = 'own'").run(sprint.id)
+    getDb()
+      .prepare(
+        "INSERT INTO workspaces(id,name,project_path,source_branch,working_branch,created_at,updated_at) VALUES ('other','other','/tmp','main','other',datetime('now'),datetime('now'))",
+      )
+      .run()
     const session = createIdleSession('own')
     const progress = createProgressCapability('own', session.id)
     const cap = createInternalMcpCapability({
@@ -63,7 +71,19 @@ it.each([true, false])(
           stderr: 'pipe',
         }),
       )
-      const names = (await client.listTools()).tools.map((tool) => tool.name)
+      const tools = (await client.listTools()).tools
+      const names = tools.map((tool) => tool.name)
+      expect(tools.find((tool) => tool.name === 'list_workspaces')?.inputSchema.properties?.sprint_id).toMatchObject({
+        type: 'string',
+      })
+      if (!readOnly)
+        expect(tools.find((tool) => tool.name === 'log_thought')?.inputSchema.properties).not.toHaveProperty(
+          'sprint_id',
+        )
+      const filtered = await client.callTool({ name: 'list_workspaces', arguments: { sprint_id: sprint.id } })
+      expect(JSON.parse((filtered.content as { text: string }[])[0].text)).toEqual([
+        expect.objectContaining({ id: 'own', sprintId: sprint.id }),
+      ])
       expect(names.filter((name) => name === 'set_workspace_status')).toHaveLength(readOnly ? 0 : 1)
       const changed = await client.callTool({ name: 'set_workspace_status', arguments: { status: 'brainstorming' } })
       expect(changed.isError === true).toBe(readOnly)
@@ -88,6 +108,39 @@ it.each([true, false])(
           ).isError,
         ).toBe(true)
       }
+      expect(names).toContain('list_sprints')
+      expect(names).toContain('get_workspace_sprint')
+      expect(names.includes('assign_workspace_sprint')).toBe(!readOnly)
+      for (const name of ['create_sprint', 'rename_sprint', 'reorder_sprints', 'delete_sprint'])
+        expect(names.includes(name)).toBe(!readOnly)
+      const list = await client.callTool({ name: 'list_sprints', arguments: {} })
+      expect(JSON.parse((list.content as { text: string }[])[0].text)).toEqual({
+        sprints: [{ id: sprint.id, name: sprint.name }],
+      })
+      const assigned = await client.callTool({ name: 'assign_workspace_sprint', arguments: { sprint_id: sprint.id } })
+      expect(assigned.isError === true).toBe(readOnly)
+      expect(
+        (
+          await client.callTool({
+            name: 'assign_workspace_sprint',
+            arguments: { workspace_id: 'other', sprint_id: sprint.id },
+          })
+        ).isError,
+      ).toBe(true)
+      const createdSprint = await client.callTool({ name: 'create_sprint', arguments: { name: 'New sprint' } })
+      expect(createdSprint.isError === true).toBe(readOnly)
+      const createdSprintId = readOnly
+        ? sprint.id
+        : JSON.parse((createdSprint.content as { text: string }[])[0].text).sprint.id
+      for (const [name, args] of [
+        ['rename_sprint', { sprint_id: createdSprintId, name: 'Renamed' }],
+        ['reorder_sprints', { ids: readOnly ? [sprint.id] : [createdSprintId, sprint.id] }],
+        ['delete_sprint', { sprint_id: createdSprintId }],
+      ] as const) {
+        const result = await client.callTool({ name, arguments: args })
+        expect(result.isError === true).toBe(readOnly)
+      }
+      expect(getDb().prepare('SELECT name FROM sprints ORDER BY sort_order').all()).toEqual([{ name: 'Sprint' }])
       expect(names.includes('create_task')).toBe(!readOnly)
       expect(names).toContain('list_tasks')
       const created = await client.callTool({
@@ -104,6 +157,7 @@ it.each([true, false])(
       revokeInternalMcpCapability(cap.token)
       expect((await client.callTool({ name: 'create_task', arguments: { title: 'After stop' } })).isError).toBe(true)
       expect((await client.callTool({ name: 'list_tasks', arguments: {} })).isError).toBe(true)
+      expect((await client.callTool({ name: 'list_sprints', arguments: {} })).isError).toBe(true)
       expect(
         (
           await client.callTool({

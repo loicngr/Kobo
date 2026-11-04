@@ -1,4 +1,26 @@
 export default {
+  'tours.home.sprints.title': 'Workspaces nach Sprint organisieren',
+  'tours.home.sprints.description':
+    'Die unteren Tabs filtern Workspaces: Alle, Ohne Sprint oder ein bestimmter Sprint. Ein Wechsel führt zur Startseite, ohne Agenten zu stoppen. Über das Zahnrad können Sie Sprints erstellen, umbenennen, umordnen oder löschen; die Workspaces bleiben beim Löschen erhalten.',
+  'tours.create.sprint.title': 'Sprint auswählen oder erstellen',
+  'tours.create.sprint.description':
+    'Der aktive Sprint ist vorausgewählt. Wählen Sie einen anderen Sprint oder Ohne Sprint, oder erstellen und wählen Sie mit + direkt einen neuen Sprint.',
+
+  'sprints.scope': 'Bereich: {name}',
+  'sprints.stale': 'Die Archivauswahl hat sich geändert. Bitte erneut prüfen und bestätigen.',
+  'sprints.workspaceMissing': 'Der angeforderte Workspace ist nicht verfügbar.',
+  'sprints.sessionMissing': 'Die angeforderte Sitzung wurde in diesem Workspace nicht gefunden.',
+  'sprints.moveUp': 'Nach oben',
+  'sprints.moveDown': 'Nach unten',
+  'sprints.rename': 'Sprint umbenennen',
+  'sprints.delete': 'Sprint löschen',
+  'sprints.deleteConfirm': '{name} löschen? Workspaces werden freigegeben.',
+  'sprints.all': 'Alle',
+  'sprints.none': 'Kein Sprint',
+  'sprints.manage': 'Sprints verwalten',
+  'sprints.create': 'Sprint erstellen',
+  'sprints.error': 'Sprint-Aktion fehlgeschlagen',
+  'sprints.label': 'Sprint',
   'preview.title': 'Vorschau',
   'preview.chat': 'Chat',
   'preview.split': 'Chat + Vorschau',
@@ -125,7 +147,7 @@ export default {
   'groupMessage.state.not_sent': 'Nicht gesendet',
   'tours.home.groupMessage.title': 'Mehrere Workspaces anschreiben',
   'tours.home.groupMessage.description':
-    'Filtere nach Tags, Workspace-Status und laufenden Entwicklungsservern, prüfe die Empfänger und sende eine Anweisung. Auto-Loops erhalten sie in der nächsten Iteration. Jeder Workspace zeigt sein eigenes Zustellergebnis.',
+    'Das Megafon neben den Filtern öffnet eine Gruppennachricht für den angezeigten Sprint (oder alle Workspaces unter Alle). Filtern und prüfen Sie die Empfänger vor dem Senden. Auto-Loops erhalten die Anweisung bei der nächsten Iteration.',
   'autoLoop.finalReview.title': 'Abschließende Review konfigurieren',
   'autoLoop.finalReview.description':
     'Nach allen Aufgaben und Abschlussprüfungen prüft eine separate Sitzung die Änderungen. Die letzte Arbeitssitzung behebt die Befunde; neue Reviews folgen, bis keine Befunde mehr vorliegen.',

@@ -60,13 +60,16 @@ export async function executeWorkspaceDialogueTool(
 ): Promise<unknown> {
   const args = validateDialogueArguments(name, input)
   if (name === 'list_workspaces')
-    return listWorkspaces(args.include_archived === true).map((ws) => ({
-      id: ws.id,
-      name: ws.name,
-      status: ws.status,
-      projectPath: ws.projectPath,
-      archivedAt: ws.archivedAt,
-    }))
+    return listWorkspaces(args.include_archived === true)
+      .filter((ws) => args.sprint_id === undefined || ws.sprintId === args.sprint_id)
+      .map((ws) => ({
+        id: ws.id,
+        name: ws.name,
+        status: ws.status,
+        projectPath: ws.projectPath,
+        archivedAt: ws.archivedAt,
+        sprintId: ws.sprintId,
+      }))
   const workspaceId = args.workspace_id as string
   const workspace = getWorkspace(workspaceId)
   if (!workspace) throw new Error(`Workspace '${workspaceId}' not found`)

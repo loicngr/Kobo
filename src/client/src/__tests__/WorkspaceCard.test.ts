@@ -28,6 +28,7 @@ const stubs = {
 const makeWorkspace = (over: Partial<Workspace> = {}): Workspace => ({
   id: 'ws-1',
   name: 'Test',
+  sprintId: null,
   projectPath: '/tmp/project',
   sourceBranch: 'main',
   workingBranch: 'feature/test',

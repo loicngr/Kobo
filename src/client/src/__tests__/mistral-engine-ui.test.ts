@@ -16,16 +16,20 @@ import SettingsPage from '../pages/SettingsPage.vue'
 import WorkspacePage from '../pages/WorkspacePage.vue'
 import { useSessionHandoffStore } from '../stores/session-handoff'
 import { useSettingsStore } from '../stores/settings'
+import { ALL_SPRINTS, NO_SPRINT, useSprintStore } from '../stores/sprints'
 import { useWorkspaceStore, type Workspace } from '../stores/workspace'
 import { useWorkspaceTemplatesStore } from '../stores/workspace-templates'
 
-const { routeQuery } = vi.hoisted(() => ({ routeQuery: { engine: 'mistral-vibe' } }))
+const { routeQuery, routeParams } = vi.hoisted(() => ({
+  routeQuery: { engine: 'mistral-vibe' },
+  routeParams: { id: undefined as string | undefined },
+}))
 vi.mock('quasar', async (original) => ({
   ...(await original<typeof import('quasar')>()),
   useQuasar: () => ({ screen: { lt: { sm: false, md: false } }, notify: vi.fn() }),
 }))
 vi.mock('vue-router', () => ({
-  useRoute: () => ({ query: routeQuery, params: {} }),
+  useRoute: () => ({ query: routeQuery, params: routeParams }),
   useRouter: () => ({ push: vi.fn() }),
 }))
 vi.mock('../composables/use-tours', () => ({ useTours: () => ({ scheduleAutoRun: vi.fn() }) }))
@@ -94,6 +98,7 @@ const workspace = {
 beforeEach(() => {
   setActivePinia(createPinia())
   routeQuery.engine = 'mistral-vibe'
+  routeParams.id = undefined
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ available: false, accounts: [] })))
 })
 afterEach(() => {
@@ -415,6 +420,7 @@ it('validates native text bounds and never treats a native value as synthetic Ot
 })
 
 it('labels current and historical Mistral sessions without a Claude fallback', async () => {
+  routeParams.id = 'w'
   const store = useWorkspaceStore()
   store.workspaces = [{ ...workspace, name: 'Vibe workspace', status: 'idle' }]
   store.selectedWorkspaceId = 'w'
@@ -1045,4 +1051,28 @@ it('shows native model and effort loading until discovery settles without changi
     view.unmount()
     localStorage.removeItem('kobo:create-page-prefs')
   }
+})
+
+it.each([
+  [ALL_SPRINTS, null],
+  [NO_SPRINT, null],
+  ['s1', 's1'],
+])('initializes creation from sprint %s', async (active, expected) => {
+  useSprintStore().active = active
+  const view = await setupCreatePage()
+  const select = view.findAllComponents({ name: 'QSelect' }).find((x) => x.props('label') === en['sprints.label'])!
+  expect(select.props('modelValue')).toBe(expected)
+  view.unmount()
+})
+
+it('prefers the duplicated workspace sprint over the active sprint', async () => {
+  useSprintStore().active = 's1'
+  useWorkspaceStore().workspaces = [{ ...workspace, name: 'Source', sprintId: 's2' }]
+  const view = await setupCreatePage()
+  vi.mocked(fetch).mockResolvedValue(Response.json({ preset: {} }))
+  await (view.vm as unknown as { loadDuplicateSource(id: string): Promise<void> }).loadDuplicateSource('w')
+  await flushPromises()
+  const select = view.findAllComponents({ name: 'QSelect' }).find((x) => x.props('label') === en['sprints.label'])!
+  expect(select.props('modelValue')).toBe('s2')
+  view.unmount()
 })

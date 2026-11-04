@@ -1,7 +1,9 @@
 import { Notify } from 'quasar'
 import { useSettingsStore } from 'src/stores/settings'
 import { DEFAULT_NOTIFICATION_SOUND, resolveSoundId, soundUrl } from 'src/utils/notification-sounds'
+import { openNotificationTarget, workspaceTargetUrl } from './notification-navigation'
 import { isWorkspacePane } from './split-workspace'
+import type { WorkspaceTarget } from './sprint-navigation'
 
 const audioCache = new Map<string, HTMLAudioElement>()
 
@@ -106,6 +108,32 @@ export function playNotificationSound(soundId: string, volume?: number | null): 
   })
 }
 
+export async function showBrowserNotification(title: string, body?: string, target?: WorkspaceTarget): Promise<void> {
+  const options = { body, icon: '/favicon.ico', data: target ? { target, url: workspaceTargetUrl(target) } : undefined }
+  if ('serviceWorker' in navigator) {
+    try {
+      const registration = await navigator.serviceWorker.getRegistration()
+      if (registration?.active) {
+        await registration.showNotification(title, options)
+        return
+      }
+    } catch {
+      /* fall back to the browser API */
+    }
+  }
+  try {
+    const notification = new Notification(title, options)
+    if (target)
+      notification.onclick = () => {
+        window.focus()
+        openNotificationTarget(target)
+        notification.close()
+      }
+  } catch {
+    /* unsupported platform */
+  }
+}
+
 /** Send a browser notification and/or play a sound based on global settings. */
 export function notify(
   title: string,
@@ -114,6 +142,7 @@ export function notify(
   soundOverride?: string | null,
   volumeOverride?: number,
   audioEnabled?: boolean,
+  target?: WorkspaceTarget,
 ): void {
   if (isWorkspacePane) return
   const settings = useSettingsStore()
@@ -125,17 +154,8 @@ export function notify(
     'Notification' in window &&
     Notification.permission === 'granted'
   ) {
-    const n = new Notification(title, {
-      body,
-      icon: '/favicon.ico',
-    })
-    if (workspaceId) {
-      n.onclick = () => {
-        window.focus()
-        window.location.hash = `#/workspace/${workspaceId}`
-        n.close()
-      }
-    }
+    const destination = target ?? (workspaceId ? { workspaceId } : undefined)
+    void showBrowserNotification(title, body, destination)
   }
 
   // Sound plays regardless of focus. `undefined` or an empty override inherits

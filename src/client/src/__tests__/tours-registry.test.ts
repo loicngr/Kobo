@@ -119,6 +119,7 @@ describe('create tour', () => {
     expect(createTour.steps.map((s) => s.id)).toEqual([
       'create-template',
       'create-mission',
+      'create-sprint',
       'create-project',
       'create-engine',
       'create-autoloop',

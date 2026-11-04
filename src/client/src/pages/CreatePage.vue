@@ -105,6 +105,14 @@
           <q-separator dark />
 
           <q-card-section class="column q-gutter-y-md">
+            <q-select data-tour="create-sprint" v-model="sprintId" :options="sprintOptions" :disable="creatingSprint || submitting" :label="$t('sprints.label')" dark dense outlined emit-value map-options>
+              <template #append>
+                <q-btn flat round dense icon="add" :loading="creatingSprint" :disable="submitting" :aria-label="$t('sprints.create')"
+                  @click.stop="createSprint">
+                  <q-tooltip>{{ $t('sprints.create') }}</q-tooltip>
+                </q-btn>
+              </template>
+            </q-select>
             <q-input
               ref="nameFieldRef"
               v-model="workspaceName"
@@ -983,7 +991,7 @@
                 icon-right="arrow_forward"
                 :label="$t('createPage.createWorkspace')"
                 :loading="submitting"
-                :disable="submitting || !permissionModeSupported || (useExistingWorktree && !selectedWorktreePath)"
+                :disable="submitting || creatingSprint || !permissionModeSupported || (useExistingWorktree && !selectedWorktreePath)"
                 @click="handleCreate"
               />
             </div>
@@ -1029,6 +1037,7 @@ import { supportsSkills } from 'src/constants/engineFeatures'
 import { MODEL_OPTION_DEFS, MODEL_OPTION_DEFS_BY_ENGINE } from 'src/constants/models'
 import { PERMISSION_MODES_BY_ENGINE } from 'src/constants/permissionModes'
 import { useSettingsStore } from 'src/stores/settings'
+import { ALL_SPRINTS, NO_SPRINT, useSprintStore } from 'src/stores/sprints'
 import { useTemplatesStore } from 'src/stores/templates'
 import { useWebSocketStore } from 'src/stores/websocket'
 import { useWorkspaceStore } from 'src/stores/workspace'
@@ -1870,6 +1879,36 @@ async function saveAsTemplate(): Promise<void> {
 
 // ── Duplication ───────────────────────────────────────────────────────────────
 /** Name of the workspace this form was prefilled from, for the banner. */
+const sprintStore = useSprintStore()
+const sprintId = ref<string | null>(
+  sprintStore.active === ALL_SPRINTS || sprintStore.active === NO_SPRINT ? null : sprintStore.active,
+)
+const creatingSprint = ref(false)
+function createSprint() {
+  if (creatingSprint.value || submitting.value) return
+  $q.dialog({
+    title: t('sprints.create'),
+    dark: true,
+    prompt: { model: '', type: 'text', isValid: (name: string) => !!name.trim() && name.trim().length <= 100 },
+    cancel: true,
+  }).onOk(async (name: string) => {
+    creatingSprint.value = true
+    try {
+      const sprint = await sprintStore.create(name.trim())
+      if (sprint) sprintId.value = sprint.id
+      else $q.notify({ type: 'warning', message: t('sprints.error') })
+    } catch (error) {
+      $q.notify({ type: 'negative', message: error instanceof Error ? error.message : t('sprints.error') })
+    } finally {
+      creatingSprint.value = false
+    }
+  })
+}
+const sprintOptions = computed(() => [
+  { label: t('sprints.none'), value: null },
+  ...sprintStore.sprints.map((s) => ({ label: s.name, value: s.id })),
+])
+void sprintStore.fetchSprints().catch((err) => console.error('[sprints]', err))
 const duplicatedFrom = ref<string | null>(null)
 
 /** Last `?from=` id applied, so the same query is not replayed twice in a row. */
@@ -1893,6 +1932,7 @@ async function loadDuplicateSource(workspaceId: string): Promise<void> {
     await applyPresetToForm(preset)
     const source =
       store.workspaces.find((w) => w.id === workspaceId) ?? store.archived.find((w) => w.id === workspaceId)
+    sprintId.value = source?.sprintId ?? null
     const sourceName = source?.name ?? workspaceId
     duplicatedFrom.value = sourceName
     workspaceName.value = `${sourceName} ${t('createPage.copySuffix')}`.slice(0, 80)
@@ -2512,7 +2552,7 @@ async function handleCreate() {
   // button's `:disable="submitting"` — guard here too, or a key-repeat /
   // fast double-press fires two concurrent POST /api/workspaces calls,
   // creating two duplicate workspaces from one user action.
-  if (submitting.value || !permissionModeSupported.value) return
+  if (submitting.value || creatingSprint.value || !permissionModeSupported.value) return
 
   const error = validate()
   if (error) {
@@ -2641,7 +2681,6 @@ async function handleCreate() {
     reasoningEffortByModel: { ...reasoningEffortByModel.value, [model.value]: reasoningEffort.value },
   })
 
-  store.selectWorkspace(first.id)
   // The form has nothing left to save: the workspace exists. Drop the scope
   // BEFORE navigating — the `finally` above resets `submitting` synchronously,
   // so by the time the router guard runs (a microtask later) the predicate
@@ -2707,6 +2746,7 @@ async function createOneWorkspace(
   try {
     const payload = {
       name: plan.name,
+      sprintId: sprintId.value,
       projectPath: projectPath.value.trim(),
       sourceBranch: branch.value as string,
       creationId: newCreationId,

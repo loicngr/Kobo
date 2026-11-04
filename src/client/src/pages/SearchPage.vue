@@ -95,6 +95,7 @@ import { useSearchIndexStatus } from 'src/composables/use-search-index-status'
 import { useTours } from 'src/composables/use-tours'
 import { type SearchResult, useSearchStore } from 'src/stores/search'
 import { useTimeAgo } from 'src/utils/formatters'
+import { navigateToWorkspaceTarget } from 'src/utils/sprint-navigation'
 import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
@@ -135,14 +136,11 @@ watch(
 )
 
 function openResult(result: SearchResult): void {
-  router.push({
-    name: 'workspace',
-    params: { id: result.workspaceId },
-    query: {
-      eventId: result.eventId,
-      ...(result.sessionId ? { session: result.sessionId } : {}),
-    },
-  })
+  void navigateToWorkspaceTarget(
+    router,
+    { workspaceId: result.workspaceId, ...(result.sessionId ? { sessionId: result.sessionId } : {}) },
+    { eventId: result.eventId },
+  )
 }
 
 function typeLabel(type: string): string {

@@ -46,6 +46,7 @@ import { turnKey } from 'src/services/conversation-turns'
 import { pinnedMessageTurns } from 'src/services/pinned-messages'
 import { usePinnedMessagesStore } from 'src/stores/pinned-messages'
 import { useWorkspaceStore } from 'src/stores/workspace'
+import { navigateToWorkspaceTarget } from 'src/utils/sprint-navigation'
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
@@ -127,12 +128,12 @@ async function open(pin: PinnedMessage, savedCopy = false) {
         }),
       )
     } else {
-      await router.push({
-        name: 'workspace',
-        params: { id: pin.workspaceId },
-        query: { ...(pin.sessionId ? { session: pin.sessionId } : {}), eventId: pin.eventId },
-      })
-      if (current()) emit('update:modelValue', false)
+      const navigated = await navigateToWorkspaceTarget(
+        router,
+        { workspaceId: pin.workspaceId, ...(pin.sessionId ? { sessionId: pin.sessionId } : {}) },
+        { eventId: pin.eventId },
+      )
+      if (current() && navigated) emit('update:modelValue', false)
     }
   } catch (error) {
     if (current()) report(error)

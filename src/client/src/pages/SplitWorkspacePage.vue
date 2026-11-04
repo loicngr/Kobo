@@ -5,7 +5,7 @@
       <strong>{{ $t('split.title') }}</strong>
       <q-space />
       <q-btn flat dense no-caps :label="$t('split.close')"
-        @click="router.push({ name: 'workspace', params: { id: selected[active] || undefined } })" />
+        @click="closeSplit" />
     </header>
     <q-splitter v-model="ratio" :limits="[25, 75]" :horizontal="$q.screen.lt.md" class="split-body"
       @update:model-value="saveRatio" >
@@ -32,6 +32,7 @@
 <script setup lang="ts">
 import { useTours } from 'src/composables/use-tours'
 import { useLayoutStore } from 'src/stores/layout'
+import { useSprintStore } from 'src/stores/sprints'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import {
   embeddedWorkspaceUrl,
@@ -39,6 +40,7 @@ import {
   syncSplitLocation,
   type WorkspacePaneWindow,
 } from 'src/utils/split-workspace'
+import { markInternalSprintTarget } from 'src/utils/sprint-navigation'
 import { registerUnsavedScope, unregisterUnsavedScope } from 'src/utils/unsaved-guard'
 import { workspacePageStyle } from 'src/utils/workspace-page-layout'
 import { type ComponentPublicInstance, computed, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -46,6 +48,7 @@ import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 
 const store = useWorkspaceStore()
+const sprintStore = useSprintStore()
 const layout = useLayoutStore()
 const route = useRoute()
 const router = useRouter()
@@ -65,6 +68,18 @@ const ratio = ref(normalizeSplitRatio(savedRatio))
 const options = computed(() =>
   [...store.workspaces, ...store.archivedWorkspaces].map((ws) => ({ label: ws.name, value: ws.id })),
 )
+function closeSplit() {
+  const id = selected.value[active.value] || undefined
+  const clearMarker = id ? markInternalSprintTarget(id, sprintStore.active) : () => {}
+  void router
+    .push({
+      name: 'workspace',
+      params: { id },
+      query: { sprint: sprintStore.active },
+      state: { koboSprintContext: true },
+    })
+    .finally(clearMarker)
+}
 function paneName(index: number) {
   return (
     options.value.find((option) => option.value === selected.value[index])?.label ||

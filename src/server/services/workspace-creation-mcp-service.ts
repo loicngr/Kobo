@@ -84,6 +84,7 @@ function mapInput(input: Record<string, unknown>): Record<string, unknown> {
     pr_url: 'prUrl',
     worktree_path: 'worktreePath',
     comparison_id: 'comparisonId',
+    sprint_id: 'sprintId',
     creation_id: 'creationId',
   }
   const body: Record<string, unknown> = {}

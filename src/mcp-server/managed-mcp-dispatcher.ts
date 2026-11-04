@@ -1,8 +1,10 @@
 import type { Tool } from '@modelcontextprotocol/sdk/types.js'
 import type Database from 'better-sqlite3'
+import { executeSprintTool } from '../server/services/sprint-mcp-service.js'
 import { INTERNAL_START_CODE_REVIEW_TOOL, START_CODE_REVIEW_TOOL } from '../shared/code-review-tools.js'
 import { EXTERNAL_MEMORY_TOOL_DEFINITIONS, isMemoryToolName, MEMORY_TOOL_DEFINITIONS } from '../shared/memory-tools.js'
 import { INTERNAL_PROGRESS_BAR_TOOLS, isProgressBarTool, PROGRESS_BAR_TOOLS } from '../shared/progress-bar-tools.js'
+import { isSprintTool, MANAGED_SPRINT_TOOLS, SPRINT_TOOLS } from '../shared/sprint-tools.js'
 import { isWorkspaceCreationTool, WORKSPACE_CREATION_TOOLS } from '../shared/workspace-creation-tools.js'
 import { WORKSPACE_DIALOGUE_TOOLS } from '../shared/workspace-dialogue-tools.js'
 import { isWorkspaceGroupMessageTool, WORKSPACE_GROUP_MESSAGE_TOOLS } from '../shared/workspace-group-message-tools.js'
@@ -152,6 +154,7 @@ export function createManagedMcpDispatcher(context: ManagedMcpContext) {
   }
 
   const WORKSPACE_SCOPED_TOOLS: Tool[] = [
+    ...MANAGED_SPRINT_TOOLS,
     {
       name: 'submit_final_review',
       description:
@@ -594,6 +597,7 @@ export function createManagedMcpDispatcher(context: ManagedMcpContext) {
   ]
 
   const GLOBAL_TOOLS: typeof WORKSPACE_SCOPED_TOOLS = [
+    ...SPRINT_TOOLS,
     START_CODE_REVIEW_TOOL,
     ...WORKSPACE_OBSERVATION_TOOLS,
     ...WORKSPACE_DIALOGUE_TOOLS,
@@ -612,6 +616,12 @@ export function createManagedMcpDispatcher(context: ManagedMcpContext) {
           include_archived: {
             type: 'boolean',
             description: 'Include archived workspaces (default false).',
+          },
+          sprint_id: {
+            type: 'string',
+            minLength: 1,
+            maxLength: 64,
+            description: 'Return workspaces assigned to this sprint.',
           },
           tag: {
             type: 'string',
@@ -654,6 +664,7 @@ export function createManagedMcpDispatcher(context: ManagedMcpContext) {
           ...WORKSPACE_SCOPED_TOOLS,
           ...GLOBAL_TOOLS.filter(
             (tool) =>
+              !isSprintTool(tool.name) &&
               !isMemoryToolName(tool.name) &&
               !isProgressBarTool(tool.name) &&
               tool.name !== 'set_workspace_status' &&
@@ -734,6 +745,22 @@ export function createManagedMcpDispatcher(context: ManagedMcpContext) {
           await backendRequest('POST', `/api/workspaces/${workspaceId}/session-handoffs/${handoffId}/report`, {
             token: handoffToken,
             report: a.report,
+          }),
+        )
+      }
+      if (isSprintTool(name)) {
+        if (!workspaceId)
+          return await dialogueTool(backendUrl, name, a, undefined, env.KOBO_MCP_CLIENT_NAME ?? undefined)
+        if (!MANAGED_SPRINT_TOOLS.some((tool) => tool.name === name))
+          return fail('Sprint catalogue mutation is unavailable')
+        if (a.workspace_id !== undefined && a.workspace_id !== workspaceId)
+          return fail('Tool is bound to its launch workspace')
+        return ok(
+          await executeSprintTool(name, {
+            ...a,
+            ...(['get_workspace_sprint', 'assign_workspace_sprint'].includes(name)
+              ? { workspace_id: workspaceId }
+              : {}),
           }),
         )
       }
@@ -1081,7 +1108,13 @@ export function createManagedMcpDispatcher(context: ManagedMcpContext) {
       if (name === 'list_workspaces') {
         const includeArchived = a.include_archived === true
         const tag = typeof a.tag === 'string' ? a.tag : undefined
-        return ok(listWorkspacesHandler(db, { includeArchived, tag }))
+        return ok(
+          listWorkspacesHandler(db, {
+            includeArchived,
+            tag,
+            sprintId: typeof a.sprint_id === 'string' ? a.sprint_id : undefined,
+          }),
+        )
       }
 
       if (name === 'stop_workspace') {

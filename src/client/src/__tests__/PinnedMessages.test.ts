@@ -166,17 +166,27 @@ describe('pinned message list', () => {
     },
   )
   it('navigates global pins, including archived workspaces, using the original session and event', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce(new Response(JSON.stringify({ sprintId: 'sprint' })))
+        .mockResolvedValueOnce(new Response(JSON.stringify([{ id: 's1', workspaceId: 'w1' }])))
+        .mockResolvedValueOnce(new Response(JSON.stringify({ sprintId: 'sprint' }))),
+    )
     vi.spyOn(usePinnedMessagesStore(), 'detail').mockResolvedValue({ pin, events: [] })
     const wrapper = dialog()
     await wrapper.get('.pinned-open').trigger('click')
     await flushPromises()
     expect(push).toHaveBeenCalledWith({
       name: 'workspace',
+      state: { koboSprintContext: true },
       params: { id: 'w1' },
-      query: { session: 's1', eventId: 'e1' },
+      query: { session: 's1', eventId: 'e1', sprint: 'sprint' },
     })
     expect(wrapper.find('script').exists()).toBe(false)
     wrapper.unmount()
+    vi.unstubAllGlobals()
   })
   it('loads saved content lazily when the original disappeared and disables nested pin menus', async () => {
     const detail = vi.spyOn(usePinnedMessagesStore(), 'detail').mockResolvedValue({

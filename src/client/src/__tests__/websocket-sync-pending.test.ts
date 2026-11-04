@@ -5,8 +5,14 @@ vi.mock('../utils/auth-token', () => ({
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { computed } from 'vue'
+import { useAutoLoopReviewStore } from '../stores/auto-loop-review'
 import { useDevServerStore } from '../stores/dev-server'
+import { useMemoryStore } from '../stores/memory'
+import { useParallelReviewStore } from '../stores/parallel-review'
+import { usePinnedMessagesStore } from '../stores/pinned-messages'
+import { useProgressBarsStore } from '../stores/progress-bars'
 import { useSessionHandoffStore } from '../stores/session-handoff'
+import { useSprintStore } from '../stores/sprints'
 import { useUpdateStore } from '../stores/update'
 import { useWebSocketStore } from '../stores/websocket'
 import { useWorkspaceStore, type Workspace } from '../stores/workspace'
@@ -51,6 +57,13 @@ describe('websocket sync request loading', () => {
     vi.stubGlobal('WebSocket', FakeWebSocket)
     vi.spyOn(useUpdateStore(), 'refreshSnapshot').mockResolvedValue()
     vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true)
+    vi.spyOn(useWorkspaceStore(), 'fetchWorkspaces').mockResolvedValue()
+    vi.spyOn(useSprintStore(), 'fetchSprints').mockResolvedValue()
+    vi.spyOn(useMemoryStore(), 'refreshVisibleData').mockResolvedValue()
+    vi.spyOn(useProgressBarsStore(), 'refresh').mockResolvedValue()
+    vi.spyOn(usePinnedMessagesStore(), 'refresh').mockResolvedValue([])
+    vi.spyOn(useAutoLoopReviewStore(), 'refreshKnown').mockResolvedValue()
+    vi.spyOn(useParallelReviewStore(), 'refreshKnown').mockResolvedValue()
     vi.spyOn(useWorkspaceStore(), 'fetchWorkspacesInfo').mockResolvedValue()
     vi.spyOn(useWorkspaceStore(), 'fetchAutoLoopStates').mockResolvedValue()
     vi.spyOn(useWorkspaceStore(), 'fetchAutoLoopMessages').mockResolvedValue()
@@ -72,6 +85,69 @@ describe('websocket sync request loading', () => {
     socket.open()
     return { store, socket }
   }
+
+  it('subscribes workspaces discovered by the reconnect list before live refresh finishes', async () => {
+    const workspaces = useWorkspaceStore()
+    workspaces.workspaces = [{ id: 'old' } as Workspace]
+    vi.spyOn(workspaces, 'fetchWorkspaces').mockImplementation(async () => {
+      workspaces.workspaces = [{ id: 'old' } as Workspace, { id: 'new' } as Workspace]
+    })
+    vi.mocked(workspaces.fetchWorkspacesInfo).mockImplementation(() => new Promise<void>(() => {}))
+    const { socket } = await connect()
+    await vi.waitFor(() =>
+      expect(socket.send).toHaveBeenCalledWith(JSON.stringify({ type: 'subscribe', payload: { workspaceId: 'new' } })),
+    )
+  })
+
+  it('subscribes after the winning list applies when a sprint refresh invalidates the reconnect list', async () => {
+    const workspaces = useWorkspaceStore()
+    const oldWorkspace = { id: 'old', status: 'executing' } as Workspace
+    const newWorkspace = { id: 'new', status: 'executing' } as Workspace
+    workspaces.workspaces = [oldWorkspace]
+    vi.mocked(workspaces.fetchWorkspaces).mockRestore()
+    const reads: Array<(response: Response) => void> = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: string) => {
+        if (String(input) === '/api/workspaces') return new Promise<Response>((resolve) => reads.push(resolve))
+        return Promise.reject(new Error(`Unexpected request: ${String(input)}`))
+      }),
+    )
+    const { store, socket } = await connect()
+    await vi.waitFor(() => expect(reads).toHaveLength(1))
+    store._routeMessage({ type: 'sprint:changed', payload: {} })
+    await vi.waitFor(() => expect(reads).toHaveLength(2))
+    reads[0]!(Response.json([oldWorkspace, newWorkspace]))
+    await vi.waitFor(() => expect(workspaces.listRequestVersion).toBe(2))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(socket.send).not.toHaveBeenCalledWith(JSON.stringify({ type: 'subscribe', payload: { workspaceId: 'new' } }))
+    reads[1]!(Response.json([oldWorkspace, newWorkspace]))
+    await vi.waitFor(() =>
+      expect(socket.send).toHaveBeenCalledWith(JSON.stringify({ type: 'subscribe', payload: { workspaceId: 'new' } })),
+    )
+    expect(
+      socket.send.mock.calls.filter(
+        ([message]) => message === JSON.stringify({ type: 'subscribe', payload: { workspaceId: 'new' } }),
+      ),
+    ).toHaveLength(1)
+  })
+
+  it('does not subscribe from a stale connection when a list finishes late', async () => {
+    const workspaces = useWorkspaceStore()
+    let finish!: () => void
+    vi.spyOn(workspaces, 'fetchWorkspaces').mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve
+        }),
+    )
+    const { store, socket } = await connect()
+    store.disconnect()
+    workspaces.workspaces = [{ id: 'new' } as Workspace]
+    finish()
+    await Promise.resolve()
+    expect(socket.send).not.toHaveBeenCalledWith(JSON.stringify({ type: 'subscribe', payload: { workspaceId: 'new' } }))
+  })
 
   it('retrieves release availability on initial connection and reconnect', async () => {
     const { store } = await connect()

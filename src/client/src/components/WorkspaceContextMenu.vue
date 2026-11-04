@@ -1,5 +1,5 @@
 <template>
-  <q-menu dark context-menu>
+  <q-menu dark context-menu self="center middle" max-height="calc(100dvh - 16px)" max-width="calc(100vw - 16px)">
     <q-list dense style="min-width: 180px;">
       <q-item v-if="!isWorkspacePane" clickable v-close-popup
         @click="router.push({ name: 'split', query: splitWorkspaceQuery(workspaceStore.selectedWorkspaceId, workspace.id) })">
@@ -53,6 +53,10 @@
         <q-item-section>
           {{ workspace.prWatchDisabledAt ? $t('contextMenu.resumePrWatch') : $t('contextMenu.ignorePrWatch') }}
         </q-item-section>
+      </q-item>
+      <q-item clickable v-close-popup @click="assignSprint">
+        <q-item-section side><q-icon name="view_kanban" size="xs" /></q-item-section>
+        <q-item-section>{{ $t('sprints.label') }}</q-item-section>
       </q-item>
       <q-item clickable v-close-popup @click="emit('manageTags', workspace)">
         <q-item-section side><q-icon name="label" size="xs" /></q-item-section>
@@ -171,6 +175,7 @@
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
 import { useSettingsStore } from 'src/stores/settings'
+import { useSprintStore } from 'src/stores/sprints'
 import { useWorkspaceStore, type Workspace } from 'src/stores/workspace'
 import { apiFetchResponse, apiResponseError } from 'src/utils/api'
 import { DEFAULT_TOAST_TIMEOUT_MS } from 'src/utils/notification-timeout'
@@ -253,6 +258,34 @@ async function exportEvents() {
 
 const settingsStore = useSettingsStore()
 const workspaceStore = useWorkspaceStore()
+const sprintStore = useSprintStore()
+function assignSprint() {
+  $q.dialog({
+    title: t('sprints.label'),
+    dark: true,
+    options: {
+      type: 'radio',
+      model: props.workspace.sprintId ?? '',
+      items: [
+        { label: t('sprints.none'), value: '' },
+        ...sprintStore.sprints.map((s) => ({ label: s.name, value: s.id })),
+      ],
+    },
+    cancel: true,
+  }).onOk(async (id: string) => {
+    try {
+      const response = await apiFetchResponse(`/api/workspaces/${encodeURIComponent(props.workspace.id)}/sprint`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sprintId: id || null }),
+      })
+      if (!response.ok) throw await apiResponseError(response)
+      await Promise.all([workspaceStore.fetchWorkspaces(), workspaceStore.fetchArchivedWorkspaces()])
+    } catch (err) {
+      $q.notify({ type: 'negative', message: err instanceof Error ? err.message : t('sprints.error') })
+    }
+  })
+}
 const restoringWorktree = computed(() => workspaceStore.restoringWorktreeIds.includes(props.workspace.id))
 
 // PR url comes from the cached git-stats (populated when the workspace is

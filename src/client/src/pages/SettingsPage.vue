@@ -2906,7 +2906,7 @@ import {
   type PrNotificationAudioSettings as PrNotificationSoundSettingsModel,
   resolveSoundIdForForm,
 } from 'src/utils/notification-sounds'
-import { playNotificationSound } from 'src/utils/notifications'
+import { playNotificationSound, showBrowserNotification } from 'src/utils/notifications'
 import { PROJECT_COLOR_PALETTE, type ProjectColor } from 'src/utils/project-color'
 import { registerUnsavedScope, unregisterUnsavedScope } from 'src/utils/unsaved-guard'
 import { getWhipVolumeAvailability } from 'src/utils/whip-settings'
@@ -3221,10 +3221,7 @@ async function testBrowserNotification() {
     $q.notify({ type: 'warning', message: t('settings.browserNotificationPermissionNeeded'), position: 'top' })
     return
   }
-  new Notification(t('settings.browserNotificationTestTitle'), {
-    body: t('settings.browserNotificationTestBody'),
-    icon: '/favicon.ico',
-  })
+  await showBrowserNotification(t('settings.browserNotificationTestTitle'), t('settings.browserNotificationTestBody'))
 }
 type IntegrationKey = 'notion' | 'sentry'
 interface IntegrationTestResult {

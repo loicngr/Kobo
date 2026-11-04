@@ -19,13 +19,10 @@ import {
   createInternalMcpCapability,
   revokeInternalMcpCapability,
 } from '../server/services/internal-mcp-capability-service.js'
-import { emitEphemeral } from '../server/services/websocket-service.js'
+import * as websocket from '../server/services/websocket-service.js'
 import { getWorkspace, setWorkspaceTags } from '../server/services/workspace-service.js'
 
-vi.mock('../server/services/websocket-service.js', async (original) => ({
-  ...(await original<typeof import('../server/services/websocket-service.js')>()),
-  emitEphemeral: vi.fn(),
-}))
+const emitEphemeral = vi.spyOn(websocket, 'emitEphemeral')
 const app = new Hono().route('/api/mcp', mcp).route('/api/internal-mcp', internalMcp)
 const tools = ['add_workspace_tags', 'remove_workspace_tags']
 let directory: string

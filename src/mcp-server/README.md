@@ -524,6 +524,12 @@ List all images uploaded to the current workspace via Kōbō's chat paste/upload
 
 ---
 
+### Sprints
+
+`list_sprints` returns only sprint IDs and names. `get_workspace_sprint` returns `{workspaceId, sprintId}`; `assign_workspace_sprint` accepts `sprint_id` (an ID or null) and returns the same shape. Managed sessions are bound to their own workspace and omit `workspace_id`. Writable managed sessions can also create, rename, reorder and delete sprints. Plan, review and handoff sessions cannot mutate assignments or the catalogue. `create_workspace` accepts `sprint_id` from `list_sprints` or `create_sprint`, or null for no sprint.
+
+External HTTP and global stdio credentials need a grant for each tool. Scoped credentials pass an authorized `workspace_id` to inspect or change its assignment; membership never grants additional workspace access. `create_sprint`, `rename_sprint`, `reorder_sprints` and `delete_sprint` additionally require an all-workspace credential. `list_workspaces` accepts `sprint_id` and returns `sprintId`, with results still restricted to the credential's workspace grants. `create_workspace` accepts optional `sprint_id` (ID or null).
+
 ### Global tools (workspace-less mode)
 
 These management tools and the 6 [conversation tools](#conversation-tools) are registered regardless of whether `KOBO_WORKSPACE_ID` is set. Workspace-bound stdio, global stdio and external HTTP share creation, PR diagnosis, archive, purge, deletion and restoration tools. The HTTP endpoint also exposes discovery, conversation and memory; `stop_workspace` remains a managed workspace tool and is not available to external global stdio. Restricted final-review and handoff sessions cannot call creation or lifecycle mutation tools.

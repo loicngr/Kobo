@@ -16,6 +16,7 @@ import * as cronService from './cron-service.js'
 import * as quotaBackoffService from './quota-backoff-service.js'
 import { SESSION_RECENCY_ORDER } from './session-activity-service.js'
 import { recomputeSessionMetricsOn } from './session-event-metrics.js'
+import { requireSprint } from './sprint-service.js'
 import { createTaskRecord, deleteTaskRecord, type UpdateTaskMutation, updateTaskRecord } from './task-mutations.js'
 import * as wakeupService from './wakeup-service.js'
 import { emitEphemeral } from './websocket-service.js'
@@ -107,6 +108,7 @@ export interface Workspace {
   /** Groups the workspaces created to run one task on two engines. Null for
    *  a workspace created on its own, which is nearly all of them. */
   comparisonId: string | null
+  sprintId: string | null
   engine: string
   autoLoop: boolean
   autoLoopReady: boolean
@@ -158,6 +160,7 @@ export interface CreateWorkspaceInput {
   /** Set only by the engine-comparison flow, which creates one workspace per
    *  engine and needs them to find each other afterwards. */
   comparisonId?: string
+  sprintId?: string | null
 }
 
 /** Input payload for creating a new task. */
@@ -234,6 +237,7 @@ interface WorkspaceRow {
   worktree_purged_at: string | null
   worktree_purge_restore_data: string | null
   comparison_id: string | null
+  sprint_id: string | null
   created_at: string
   updated_at: string
 }
@@ -307,6 +311,7 @@ function mapWorkspace(row: WorkspaceRow): Workspace {
     worktreePurgedAt: row.worktree_purged_at,
     worktreePurgeRestoreData: row.worktree_purge_restore_data,
     comparisonId: row.comparison_id ?? null,
+    sprintId: row.sprint_id ?? null,
     engine: row.engine ?? 'claude-code',
     autoLoop: row.auto_loop === 1,
     autoLoopReady: row.auto_loop_ready === 1,
@@ -348,6 +353,7 @@ function mapTask(row: TaskRow): Task {
 /** Insert a new workspace into the database and return it. */
 export function createWorkspace(data: CreateWorkspaceInput): Workspace {
   const db = getDb()
+  if (data.sprintId !== undefined) requireSprint(data.sprintId)
   const now = new Date().toISOString()
   const id = nanoid()
 
@@ -368,8 +374,8 @@ export function createWorkspace(data: CreateWorkspaceInput): Workspace {
     INSERT INTO workspaces (
       id, name, project_path, source_branch, working_branch, status,
       notion_url, notion_page_id, sentry_url, pr_url, worktree_path, worktree_owned,
-      model, brainstorm_model, reasoning_effort, permission_mode, permission_profile, agent_permission_mode, engine, comparison_id, created_at, updated_at, workflow_policy
-    ) VALUES (?, ?, ?, ?, ?, 'created', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      model, brainstorm_model, reasoning_effort, permission_mode, permission_profile, agent_permission_mode, engine, comparison_id, sprint_id, created_at, updated_at, workflow_policy
+    ) VALUES (?, ?, ?, ?, ?, 'created', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     data.name,
@@ -392,6 +398,7 @@ export function createWorkspace(data: CreateWorkspaceInput): Workspace {
     // Empty string is not a group: it would silently gather every workspace
     // created with a blank id into one comparison.
     data.comparisonId?.trim() ? data.comparisonId : null,
+    data.sprintId ?? null,
     now,
     now,
     JSON.stringify(workflowPolicy),

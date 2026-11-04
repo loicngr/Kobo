@@ -6,7 +6,7 @@ export default defineConfig((ctx) => {
   const wsTarget = `ws://localhost:${backendPort}`
 
   return {
-    boot: ['i18n', 'network-auth', 'notify-theme'],
+    boot: ['i18n', 'network-auth', 'notification-navigation', 'notify-theme'],
 
     css: ['app.scss'],
 
@@ -42,6 +42,7 @@ export default defineConfig((ctx) => {
       extendPWAGenerateSWOptions(config) {
         config.skipWaiting = false
         config.clientsClaim = true
+        config.importScripts = ['notification-worker.js']
       },
     },
 

@@ -3,8 +3,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('quasar', () => ({ Notify: { create: vi.fn() } }))
 vi.mock('src/utils/notifications', () => ({ notify: vi.fn() }))
+vi.mock('src/utils/notification-navigation', () => ({ openNotificationTarget: vi.fn() }))
 
 import { Notify } from 'quasar'
+import { openNotificationTarget } from 'src/utils/notification-navigation'
 import { notify } from 'src/utils/notifications'
 import { type GlobalSettings, useSettingsStore } from '../stores/settings'
 import { useWebSocketStore } from '../stores/websocket'
@@ -86,7 +88,7 @@ describe('PR notification WebSocket dispatch', () => {
     expect(call.actions?.map((action) => action.label)).toEqual(['Open workspace', 'Dismiss'])
 
     call.actions?.[0]?.handler?.()
-    expect(window.location.hash).toBe('#/workspace/w1')
+    expect(openNotificationTarget).toHaveBeenCalledWith({ workspaceId: 'w1' })
   })
 
   it.each(['pr:merge-conflict', 'pr:changes-requested'] as const)(

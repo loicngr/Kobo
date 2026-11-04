@@ -194,7 +194,6 @@ function isCurrent(member: ComparisonMember): boolean {
 }
 
 function open(id: string): void {
-  store.selectWorkspace(id)
   void router.push({ name: 'workspace', params: { id } })
 }
 

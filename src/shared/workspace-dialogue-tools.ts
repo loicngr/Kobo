@@ -29,6 +29,7 @@ export const WORKSPACE_DISCOVERY_TOOL = tool(
   'Discover Kōbō workspaces and their current status.',
   {
     include_archived: { type: 'boolean' },
+    sprint_id: { type: 'string', minLength: 1, maxLength: 64 },
   },
   [],
 )

@@ -340,6 +340,7 @@ import { copyToClipboard } from 'src/utils/clipboard'
 import { isTypingTarget, type PaletteEntry, rankCommands } from 'src/utils/command-palette'
 import { useTimeAgo } from 'src/utils/formatters'
 import { isWorkspacePane } from 'src/utils/split-workspace'
+import { markInternalSprintTarget } from 'src/utils/sprint-navigation'
 import { getWhipRunningSessionId } from 'src/utils/whip-session'
 import { workspacePageStyle } from 'src/utils/workspace-page-layout'
 import { isBusyStatus, workspaceStatusKey } from 'src/utils/workspace-status'
@@ -540,7 +541,6 @@ const workspaceCommands = computed<PaletteEntry[]>(() => {
       icon: 'folder_open',
       hint: `${t('workspacePage.commandGroupWorkspaces')} · ${ws.workingBranch}`,
       run: () => {
-        store.selectWorkspace(ws.id)
         void router.push({ name: 'workspace', params: { id: ws.id } })
       },
     })
@@ -836,10 +836,13 @@ const selectedSessionId = computed({
       return
     }
     if (!val) return
-    store.selectSession(val)
     const query = { ...route.query }
     query.session = val
-    router.replace({ query })
+    const clearMarker =
+      store.selectedWorkspaceId && typeof query.sprint === 'string'
+        ? markInternalSprintTarget(store.selectedWorkspaceId, query.sprint)
+        : () => {}
+    void router.replace({ query, state: { koboSprintContext: true } }).finally(clearMarker)
   },
 })
 
@@ -942,18 +945,6 @@ async function handleCreateSession() {
 
 onMounted(() => {
   window.addEventListener('keydown', onWorkspaceShortcut)
-  const id = route.params.id as string | undefined
-  if (id) {
-    store.selectWorkspace(id)
-    // Explicit fetch — the `immediate: true` watcher on selectedWorkspaceId
-    // above also covers this, but calling it here makes the mount-time
-    // hydration independent of that watcher's timing (defense-in-depth).
-    void store.fetchPendingWakeup(id)
-  }
-  const sessionParam = route.query.session as string | undefined
-  if (sessionParam) {
-    store.selectSession(sessionParam)
-  }
 })
 
 onUnmounted(() => {
@@ -962,20 +953,32 @@ onUnmounted(() => {
 })
 
 watch(
-  () => route.params.id,
-  (newId) => {
-    if (newId && newId !== store.selectedWorkspaceId) {
-      store.selectWorkspace(newId as string)
+  () => [route.params.id, route.query.session],
+  async ([id, session]) => {
+    if (typeof id !== 'string') {
+      store.cancelSessionReads()
+      store.selectedWorkspaceId = null
+      store.selectedSessionId = null
+      store.sessions = []
+      store.tasks = []
+    } else if (id !== store.selectedWorkspaceId) {
+      await store.selectWorkspace(id, typeof session === 'string' ? session : undefined)
+      void store.fetchPendingWakeup(id)
+    } else if (typeof session === 'string') {
+      await store.fetchSessions(id, session)
+    }
+    if (
+      typeof id === 'string' &&
+      typeof session === 'string' &&
+      route.params.id === id &&
+      route.query.session === session &&
+      !store.sessionsErrors[id] &&
+      !store.sessions.some((item) => item.id === session)
+    ) {
+      $q.notify({ type: 'warning', message: t('sprints.sessionMissing'), position: 'top' })
     }
   },
-)
-
-// Activity deep links can target another session without remounting this page.
-watch(
-  () => [route.params.id, route.query.session],
-  ([id, session]) => {
-    if (typeof id === 'string' && typeof session === 'string') void store.fetchSessions(id, session)
-  },
+  { immediate: true },
 )
 
 // Redirect to the home (workspace list) when the workspace we're viewing

@@ -846,6 +846,22 @@ export const migrations: Migration[] = [
   { version: 56, name: 'parallel-workspace-reviews', migrate: migrateParallelReviews },
   { version: 57, name: 'pinned-messages', migrate: initPinnedMessageSchema },
   { version: 58, name: 'remembered-browser-sessions', migrate: initBrowserSessionSchema },
+  {
+    version: 59,
+    name: 'workspace-sprints',
+    migrate: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS sprints (id TEXT PRIMARY KEY, name TEXT NOT NULL, sort_order INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+
+      `)
+      if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'workspaces'").get()) {
+        const columns = db.pragma('table_info(workspaces)') as { name: string }[]
+        if (!columns.some((column) => column.name === 'sprint_id'))
+          db.exec('ALTER TABLE workspaces ADD COLUMN sprint_id TEXT REFERENCES sprints(id) ON DELETE SET NULL')
+        db.exec('CREATE INDEX IF NOT EXISTS idx_workspaces_sprint_id ON workspaces(sprint_id)')
+      }
+    },
+  },
 ]
 
 /** Current schema version — always equals the highest migration version. */

@@ -914,6 +914,7 @@ describe('ActivityFeed.vue', () => {
       {
         id: 'ws-1',
         name: 'Test',
+        sprintId: null,
         projectPath: '/tmp/project',
         sourceBranch: 'main',
         workingBranch: 'feature/test',
@@ -1061,6 +1062,7 @@ describe('ActivityFeed.vue', () => {
       {
         id: 'ws-1',
         name: 'Test',
+        sprintId: null,
         projectPath: '/tmp/project',
         sourceBranch: 'main',
         workingBranch: 'feature/test',
@@ -1202,6 +1204,7 @@ describe('ActivityFeed.vue', () => {
       {
         id: 'ws-1',
         name: 'Test',
+        sprintId: null,
         projectPath: '/tmp/project',
         sourceBranch: 'main',
         workingBranch: 'feature/test',

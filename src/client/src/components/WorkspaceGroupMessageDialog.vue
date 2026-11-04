@@ -4,6 +4,7 @@
       <q-card-section>
         <div class="text-h6">{{ $t('groupMessage.title') }}</div>
         <div class="text-caption text-kobo-3 q-mt-xs">{{ $t('groupMessage.description') }}</div>
+        <div v-if="scope" class="text-caption text-kobo-3">{{ $t('sprints.scope', { name: scope }) }}</div>
       </q-card-section>
       <q-separator dark />
       <q-card-section v-if="!request">
@@ -85,7 +86,7 @@ interface RecipientWorkspace {
   archivedAt: string | null
   worktreePurgedAt: string | null
 }
-const props = defineProps<{ modelValue: boolean; workspaces: RecipientWorkspace[] }>()
+const props = defineProps<{ modelValue: boolean; workspaces: RecipientWorkspace[]; scope?: string }>()
 const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>()
 const { t } = useI18n()
 const settingsStore = useSettingsStore()

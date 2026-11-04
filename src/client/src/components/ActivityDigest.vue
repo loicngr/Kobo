@@ -39,6 +39,7 @@
 <script setup lang="ts">
 import { type ActivityItem, useActivityStore } from 'src/stores/activity'
 import { useSettingsStore } from 'src/stores/settings'
+import { navigateToWorkspaceTarget } from 'src/utils/sprint-navigation'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
@@ -54,12 +55,12 @@ function formatDate(date: string) {
   return new Date(date).toLocaleString(locale.value)
 }
 async function openActivity(item: ActivityItem) {
-  const result = await router.push({
-    name: 'workspace',
-    params: { id: item.workspaceId },
-    query: item.sessionId ? { session: item.sessionId } : item.kind.startsWith('pr-') ? { panel: 'git' } : {},
-  })
-  if (!result) open.value = false
+  const result = await navigateToWorkspaceTarget(
+    router,
+    { workspaceId: item.workspaceId, ...(item.sessionId ? { sessionId: item.sessionId } : {}) },
+    !item.sessionId && item.kind.startsWith('pr-') ? { panel: 'git' } : {},
+  )
+  if (result) open.value = false
 }
 function visibilityChanged() {
   if (document.visibilityState === 'hidden') store.leaveApp()

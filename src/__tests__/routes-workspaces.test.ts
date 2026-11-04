@@ -42,7 +42,7 @@ vi.mock('../server/services/worktree-restore-service.js', () => ({
 }))
 
 import { restorePurgedWorktree, WorktreeRestoreError } from '../server/services/worktree-restore-service.js'
-import { withWorkspaceLifecycleGuard } from '../server/utils/workspace-lifecycle-guard.js'
+import { reserveWorkspaceLifecycle, withWorkspaceLifecycleGuard } from '../server/utils/workspace-lifecycle-guard.js'
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
 
@@ -3993,6 +3993,7 @@ describe('DELETE /api/workspaces/archived', () => {
     expect(res.status).toBe(200)
     const body = (await res.json()) as { deleted: number; warnings: string[] }
     expect(body.deleted).toBe(1)
+    expect(body).toMatchObject({ deletedIds: [archivedB.id] })
     expect(body.warnings.join('\n')).toContain('Archived A')
     expect(workspaceService.deleteWorkspace).toHaveBeenCalledWith('ws-arch-2')
   })
@@ -4001,9 +4002,43 @@ describe('DELETE /api/workspaces/archived', () => {
     vi.mocked(workspaceService.listArchivedWorkspaces).mockReturnValue([archivedA])
     vi.mocked(workspaceService.getWorkspace).mockReturnValue({ ...archivedA, archivedAt: null })
     const res = await app.request('/api/workspaces/archived', { method: 'DELETE' })
-    expect(await res.json()).toMatchObject({ deleted: 0 })
+    expect(await res.json()).toMatchObject({ deleted: 0, deletedIds: [] })
     expect(workspaceService.deleteWorkspace).not.toHaveBeenCalled()
     expect(worktreeService.removeWorktree).not.toHaveBeenCalled()
+  })
+
+  it('deletes only matching archived snapshots and rejects changed sprint membership', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockImplementation((id) =>
+      id === archivedA.id
+        ? { ...archivedA, sprintId: 'other' }
+        : id === archivedB.id
+          ? { ...archivedB, sprintId: null }
+          : null,
+    )
+    const res = await app.request('/api/workspaces/archived', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        snapshots: [
+          { id: archivedA.id, archivedAt: archivedA.archivedAt, sprintId: 'sprint' },
+          { id: archivedB.id, archivedAt: archivedB.archivedAt, sprintId: null },
+        ],
+      }),
+    })
+    const result = await res.json()
+    expect(result.deleted).toBe(1)
+    expect(result.deletedIds).toEqual([archivedB.id])
+    expect(result.warnings).toHaveLength(1)
+    expect(workspaceService.deleteWorkspace).not.toHaveBeenCalledWith(archivedA.id)
+    expect(workspaceService.deleteWorkspace).toHaveBeenCalledWith(archivedB.id)
+  })
+
+  it('rejects malformed snapshots and JSON instead of deleting the archive', async () => {
+    for (const body of ['{', JSON.stringify({ snapshots: [{ id: archivedA.id, archivedAt: archivedA.archivedAt }] })]) {
+      const res = await app.request('/api/workspaces/archived', { method: 'DELETE', body })
+      expect(res.status).toBe(400)
+    }
+    expect(workspaceService.deleteWorkspace).not.toHaveBeenCalled()
   })
 
   it('is not matched by DELETE /:id (route order regression)', async () => {
@@ -4752,6 +4787,17 @@ describe('POST /api/workspaces/:id/archive', () => {
 })
 
 describe('POST /api/workspaces/:id/unarchive', () => {
+  it('rejects unarchive while teardown owns the lifecycle guard', async () => {
+    const reservation = reserveWorkspaceLifecycle('ws-1')
+    try {
+      const response = await app.request('/api/workspaces/ws-1/unarchive', { method: 'POST' })
+      expect(response.status).toBe(409)
+      expect(workspaceService.unarchiveWorkspace).not.toHaveBeenCalled()
+    } finally {
+      reservation.release()
+    }
+  })
+
   it('invalidates pinned metadata for dashboards not subscribed to the archived workspace', async () => {
     const websocket = await vi.importActual<typeof import('../server/services/websocket-service.js')>(
       '../server/services/websocket-service.js',

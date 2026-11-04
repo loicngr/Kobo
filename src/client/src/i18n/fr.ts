@@ -1,4 +1,26 @@
 export default {
+  'tours.home.sprints.title': 'Organiser les workspaces par sprint',
+  'tours.home.sprints.description':
+    'Les onglets en bas filtrent les workspaces : Tous, Sans sprint ou un sprint précis. Changer de sprint revient à l’accueil sans arrêter les agents. La roue permet de créer, renommer, réordonner ou supprimer les sprints ; leur suppression conserve les workspaces.',
+  'tours.create.sprint.title': 'Choisir ou créer un sprint',
+  'tours.create.sprint.description':
+    'Le sprint actif est présélectionné. Choisissez un autre sprint ou Sans sprint, ou utilisez + pour en créer un et le sélectionner immédiatement.',
+
+  'sprints.scope': 'Périmètre : {name}',
+  'sprints.stale': 'La sélection des archives a changé. Vérifiez-la et confirmez à nouveau.',
+  'sprints.workspaceMissing': 'Le workspace demandé est indisponible.',
+  'sprints.sessionMissing': 'La session demandée est introuvable dans ce workspace.',
+  'sprints.moveUp': 'Monter',
+  'sprints.moveDown': 'Descendre',
+  'sprints.rename': 'Renommer le sprint',
+  'sprints.delete': 'Supprimer le sprint',
+  'sprints.deleteConfirm': 'Supprimer {name} ? Les workspaces seront désaffectés.',
+  'sprints.all': 'Tous',
+  'sprints.none': 'Sans sprint',
+  'sprints.manage': 'Gérer les sprints',
+  'sprints.create': 'Créer un sprint',
+  'sprints.error': 'Échec de l’opération sur le sprint',
+  'sprints.label': 'Sprint',
   'preview.title': 'Aperçu',
   'preview.chat': 'Chat',
   'preview.split': 'Chat + aperçu',
@@ -124,7 +146,7 @@ export default {
   'groupMessage.state.not_sent': 'Non envoyé',
   'tours.home.groupMessage.title': 'Écrire à plusieurs workspaces',
   'tours.home.groupMessage.description':
-    'Filtrez par tags, statuts et serveurs de développement lancés, vérifiez les destinataires, puis envoyez une même consigne. Les auto-loops la reçoivent à la prochaine itération. Chaque workspace affiche son résultat d’envoi.',
+    'L’icône mégaphone près des filtres ouvre le message groupé pour le sprint affiché (ou tous les workspaces dans Tous). Filtrez et vérifiez les destinataires avant l’envoi. Les auto-loops reçoivent la consigne à leur prochaine itération.',
   'autoLoop.finalReview.title': 'Réglages de la review finale',
   'autoLoop.finalReview.description':
     'Après toutes les tâches et les vérifications finales, une session séparée revoit les changements. La dernière session de travail corrige les findings, puis une nouvelle review démarre jusqu’à ce qu’il n’en reste aucun.',

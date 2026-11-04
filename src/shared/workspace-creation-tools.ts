@@ -5,7 +5,7 @@ import { MAX_MCP_ATTACHMENT_REQUEST_BYTES, MCP_ATTACHMENTS_SCHEMA, validateMcpAt
 export const MAX_MCP_CREATION_REQUEST_BYTES = MAX_MCP_ATTACHMENT_REQUEST_BYTES
 
 type Schema = {
-  type: 'object' | 'string' | 'boolean' | 'array' | ['object', 'null']
+  type: 'object' | 'string' | 'boolean' | 'array' | ['object', 'null'] | ['string', 'null']
   properties?: Record<string, Schema>
   required?: string[]
   additionalProperties?: false
@@ -74,6 +74,12 @@ const properties: Record<string, Schema> = {
   pr_url: url,
   worktree_path: path,
   comparison_id: string(),
+  sprint_id: {
+    ...string(64),
+    type: ['string', 'null'],
+    description:
+      'Assign the new workspace to an existing sprint ID from list_sprints or create_sprint. Omit or use null for no sprint.',
+  },
   creation_id: string(),
   attachments: MCP_ATTACHMENTS_SCHEMA,
   pr_checkout: object(
@@ -120,7 +126,7 @@ export function isWorkspaceCreationTool(name: string): boolean {
 
 function validate(schema: Schema, value: unknown, label: string): void {
   if (value === null && Array.isArray(schema.type)) return
-  if (schema.type === 'object' || Array.isArray(schema.type)) {
+  if (schema.type === 'object' || (Array.isArray(schema.type) && schema.type[0] === 'object')) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} must be an object`)
     const input = value as Record<string, unknown>
     for (const key of Object.keys(input)) {

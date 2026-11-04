@@ -3,6 +3,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { validateCodeReviewArguments } from '../shared/code-review-tools.js'
 import { isMemoryToolName, validateMemoryToolArguments } from '../shared/memory-tools.js'
 import { isProgressBarTool, validateProgressBarArguments } from '../shared/progress-bar-tools.js'
+import { isSprintTool } from '../shared/sprint-tools.js'
 import { isWorkspaceCreationTool, validateWorkspaceCreationArguments } from '../shared/workspace-creation-tools.js'
 import { validateDialogueArguments } from '../shared/workspace-dialogue-tools.js'
 import {
@@ -40,21 +41,25 @@ export async function callWorkspaceDialogueTool(
       }
     }
   }
-  const arguments_ = isWorkspaceObservationTool(name)
-    ? validateWorkspaceObservationArguments(name, args)
-    : name === 'start_code_review'
-      ? validateCodeReviewArguments(args)
-      : isMemoryToolName(name)
-        ? validateMemoryToolArguments(name, args, true)
-        : isProgressBarTool(name)
-          ? (args as Record<string, unknown>)
-          : isWorkspaceCreationTool(name)
-            ? validateWorkspaceCreationArguments(name, args)
-            : isWorkspaceLifecycleTool(name)
-              ? validateWorkspaceLifecycleArguments(name, args)
-              : isWorkspaceGroupMessageTool(name)
-                ? validateWorkspaceGroupMessageArguments(name, args)
-                : validateDialogueArguments(name, args)
+  if (isSprintTool(name) && (!args || typeof args !== 'object' || Array.isArray(args)))
+    throw new Error('Invalid sprint tool arguments')
+  const arguments_ = isSprintTool(name)
+    ? (args as Record<string, unknown>)
+    : isWorkspaceObservationTool(name)
+      ? validateWorkspaceObservationArguments(name, args)
+      : name === 'start_code_review'
+        ? validateCodeReviewArguments(args)
+        : isMemoryToolName(name)
+          ? validateMemoryToolArguments(name, args, true)
+          : isProgressBarTool(name)
+            ? (args as Record<string, unknown>)
+            : isWorkspaceCreationTool(name)
+              ? validateWorkspaceCreationArguments(name, args)
+              : isWorkspaceLifecycleTool(name)
+                ? validateWorkspaceLifecycleArguments(name, args)
+                : isWorkspaceGroupMessageTool(name)
+                  ? validateWorkspaceGroupMessageArguments(name, args)
+                  : validateDialogueArguments(name, args)
   const client = new Client({ name: 'kobo-stdio-bridge', version: '1.0.0' })
   // Creation can include forge reads, worktree setup and user setup scripts.
   // A timed-out creation is ambiguous and must never be retried automatically.

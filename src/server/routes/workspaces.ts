@@ -24,6 +24,7 @@ import {
   submitSessionHandoff,
   waitForSessionHandoff,
 } from '../services/session-handoff-service.js'
+import * as sprintService from '../services/sprint-service.js'
 import { AgentStopError, assertAgentStopped } from '../utils/agent-stop-result.js'
 import { withGitRepoLock } from '../utils/git-repo-lock.js'
 import {
@@ -164,6 +165,7 @@ app.use('/:id/*', async (c, next) => {
 // Purge/delete/restore own their guard in the service.
 for (const route of [
   '/:id/archive',
+  '/:id/unarchive',
   '/:id/run-setup-script',
   '/:id/cancel-source-change',
   '/:id/rollback-file',
@@ -499,6 +501,27 @@ app.post('/:id/engine-handoff-preview', migrationGuard, async (c) => {
   }
 })
 
+app.patch('/:id/sprint', migrationGuard, async (c) => {
+  try {
+    const body = await c.req.json<{ sprintId?: unknown }>()
+    if (
+      !body ||
+      typeof body !== 'object' ||
+      Array.isArray(body) ||
+      Object.keys(body).length !== 1 ||
+      !Object.hasOwn(body, 'sprintId')
+    )
+      return c.json({ error: 'sprintId is required' }, 400)
+    return c.json({ workspace: await sprintService.assignSprint(c.req.param('id'), body.sprintId) })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Invalid request'
+    return c.json(
+      { error: message },
+      err instanceof WorkspaceLifecycleBusyError ? 409 : message.endsWith('not found') ? 404 : 400,
+    )
+  }
+})
+
 // POST /api/workspaces/:id/switch-engine — stop the current controller and start a fresh engine session.
 app.post('/:id/switch-engine', migrationGuard, async (c) => {
   try {
@@ -617,6 +640,7 @@ interface CreateWorkspaceBody {
   worktreePath?: string
   creationId?: string
   comparisonId?: string
+  sprintId?: string | null
 }
 
 const creationBodyLimit = bodyLimit({
@@ -648,6 +672,13 @@ app.post('/', workspaceCreationMaintenance, migrationGuard, creationBodyLimit, a
   let setupScriptConfigured = false
   try {
     const { body, attachments } = await readWorkspaceCreationRequest<CreateWorkspaceBody>(c.req.raw)
+    if (body.sprintId !== undefined) {
+      try {
+        sprintService.requireSprint(body.sprintId)
+      } catch (err) {
+        return c.json({ error: err instanceof Error ? err.message : 'Invalid sprint' }, 400)
+      }
+    }
 
     if (body.autoLoopFinalReview !== undefined) {
       try {
@@ -1139,6 +1170,7 @@ app.post('/', workspaceCreationMaintenance, migrationGuard, creationBodyLimit, a
         // Set by the engine-comparison flow, which posts here once per engine
         // with the same id so the resulting workspaces can find each other.
         comparisonId: body.comparisonId,
+        sprintId: body.sprintId,
         ...(useReusedWorktree ? {} : { worktreesPath: globalSettings.worktreesPath }),
       })
       createdWorkspace = workspace
@@ -3810,6 +3842,13 @@ app.post('/:id/unarchive', migrationGuard, (c) => {
 
 type WorkspaceRow = NonNullable<ReturnType<typeof workspaceService.getWorkspace>>
 
+class WorkspaceSnapshotConflictError extends Error {
+  readonly code = 'workspace-snapshot-mismatch'
+  constructor() {
+    super('Workspace archive or sprint changed while deletion was pending')
+  }
+}
+
 class WorkspaceBranchConfirmationError extends Error {
   readonly code = 'branch-confirmation-mismatch'
   constructor() {
@@ -3832,6 +3871,8 @@ async function deleteWorkspaceWithSideEffects(
     deleteRemoteBranch?: boolean
     removeWorktree?: boolean
     confirmationBranch?: string
+    expectedArchivedAt?: string | null
+    expectedSprintId?: string | null
   },
 ): Promise<string[]> {
   return withWorkspaceLifecycleGuard(workspace.id, async () => {
@@ -3839,6 +3880,11 @@ async function deleteWorkspaceWithSideEffects(
     if (!current) throw new Error(`Workspace '${workspace.id}' not found`)
     if (opts.confirmationBranch !== undefined && opts.confirmationBranch !== current.workingBranch)
       throw new WorkspaceBranchConfirmationError()
+    if (
+      (opts.expectedArchivedAt !== undefined && opts.expectedArchivedAt !== current.archivedAt) ||
+      (opts.expectedSprintId !== undefined && opts.expectedSprintId !== current.sprintId)
+    )
+      throw new WorkspaceSnapshotConflictError()
     // A bulk deletion may have captured the list before restoration completed.
     if (workspace.archivedAt && !current.archivedAt) {
       throw new Error('Workspace was unarchived while deletion was pending. Retry from its current state.')
@@ -3951,21 +3997,57 @@ async function deleteWorkspaceWithSideEffectsUnlocked(
 // warnings list and never aborts the batch.
 app.delete('/archived', migrationGuard, async (c) => {
   try {
-    const body = await c.req
-      .json<{
-        deleteLocalBranch?: boolean
-        deleteRemoteBranch?: boolean
-      }>()
-      .catch(() => ({}) as { deleteLocalBranch?: boolean; deleteRemoteBranch?: boolean })
+    const text = await c.req.text()
+    let body: {
+      deleteLocalBranch?: boolean
+      deleteRemoteBranch?: boolean
+      snapshots?: { id: string; archivedAt: string; sprintId: string | null }[]
+    }
+    try {
+      body = text ? JSON.parse(text) : {}
+    } catch {
+      return c.json({ error: 'Invalid JSON body' }, 400)
+    }
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return c.json({ error: 'Invalid request body' }, 400)
 
-    const archived = workspaceService.listArchivedWorkspaces()
-    const warnings: string[] = []
+    if (
+      body.snapshots !== undefined &&
+      (!Array.isArray(body.snapshots) ||
+        body.snapshots.some(
+          (item) =>
+            !item ||
+            typeof item.id !== 'string' ||
+            typeof item.archivedAt !== 'string' ||
+            !item.archivedAt ||
+            !(item.sprintId === null || typeof item.sprintId === 'string'),
+        ) ||
+        new Set(body.snapshots.map((item) => item.id)).size !== body.snapshots.length)
+    )
+      return c.json({ error: 'Invalid snapshots' }, 400)
+    const archived =
+      body.snapshots === undefined
+        ? workspaceService.listArchivedWorkspaces()
+        : body.snapshots
+            .map((item) => workspaceService.getWorkspace(item.id))
+            .filter((item): item is NonNullable<typeof item> => item !== null)
+    const warnings: string[] =
+      body.snapshots
+        ?.filter((snapshot) => !archived.some((workspace) => workspace.id === snapshot.id))
+        .map((snapshot) => `Workspace '${snapshot.id}' not found`) ?? []
     let deleted = 0
+    const deletedIds: string[] = []
 
     for (const workspace of archived) {
       try {
-        warnings.push(...(await deleteWorkspaceWithSideEffects(workspace, body)))
+        const snapshot = body.snapshots?.find((item) => item.id === workspace.id)
+        warnings.push(
+          ...(await deleteWorkspaceWithSideEffects(
+            workspace,
+            snapshot ? { ...body, expectedArchivedAt: snapshot.archivedAt, expectedSprintId: snapshot.sprintId } : body,
+          )),
+        )
         deleted++
+        deletedIds.push(workspace.id)
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         console.error(`[workspaces] Failed to delete archived workspace '${workspace.id}': ${message}`)
@@ -3973,7 +4055,7 @@ app.delete('/archived', migrationGuard, async (c) => {
       }
     }
 
-    return c.json({ ok: true, deleted, warnings }, 200)
+    return c.json({ ok: true, deleted, deletedIds, warnings }, 200)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, workspaceErrorStatus(err))
@@ -3990,14 +4072,32 @@ app.delete('/:id', migrationGuard, async (c) => {
       return c.json({ error: `Workspace '${id}' not found` }, 404)
     }
 
-    // Parse optional body for branch deletion options
-    const body = await c.req
-      .json<{
-        deleteLocalBranch?: boolean
-        deleteRemoteBranch?: boolean
-        confirmationBranch?: string
-      }>()
-      .catch(() => ({}) as { deleteLocalBranch?: boolean; deleteRemoteBranch?: boolean })
+    // An invalid snapshot body must never turn into an unguarded deletion.
+    const text = await c.req.text()
+    let body: {
+      deleteLocalBranch?: boolean
+      deleteRemoteBranch?: boolean
+      confirmationBranch?: string
+      expectedArchivedAt?: string | null
+      expectedSprintId?: string | null
+    }
+    try {
+      body = text ? JSON.parse(text) : {}
+    } catch {
+      return c.json({ error: 'Invalid JSON body' }, 400)
+    }
+    if (
+      !body ||
+      typeof body !== 'object' ||
+      Array.isArray(body) ||
+      (body.expectedArchivedAt !== undefined &&
+        body.expectedArchivedAt !== null &&
+        typeof body.expectedArchivedAt !== 'string') ||
+      (body.expectedSprintId !== undefined &&
+        body.expectedSprintId !== null &&
+        typeof body.expectedSprintId !== 'string')
+    )
+      return c.json({ error: 'Invalid request body' }, 400)
 
     const warnings = await deleteWorkspaceWithSideEffects(workspace, body)
 
@@ -4009,7 +4109,11 @@ app.delete('/:id', migrationGuard, async (c) => {
     }
     return c.json({ ok: true, warnings }, 200)
   } catch (err) {
-    if (err instanceof WorkspaceLifecycleBusyError || err instanceof WorkspaceBranchConfirmationError)
+    if (
+      err instanceof WorkspaceLifecycleBusyError ||
+      err instanceof WorkspaceBranchConfirmationError ||
+      err instanceof WorkspaceSnapshotConflictError
+    )
       return c.json({ code: err.code, error: err.message }, 409)
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, workspaceErrorStatus(err))

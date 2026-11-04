@@ -1,4 +1,26 @@
 export default {
+  'tours.home.sprints.title': 'Organizzare i workspace per sprint',
+  'tours.home.sprints.description':
+    'Le schede in basso filtrano i workspace: Tutti, Senza sprint o uno sprint specifico. Cambiare sprint riporta alla home senza fermare gli agenti. La rotella consente di creare, rinominare, riordinare o eliminare gli sprint; i workspace vengono conservati.',
+  'tours.create.sprint.title': 'Scegliere o creare uno sprint',
+  'tours.create.sprint.description':
+    'Lo sprint attivo è preselezionato. Scegli un altro sprint o Senza sprint, oppure usa + per creare e selezionare subito uno sprint.',
+
+  'sprints.scope': 'Ambito: {name}',
+  'sprints.stale': 'La selezione degli archivi è cambiata. Controlla e conferma di nuovo.',
+  'sprints.workspaceMissing': 'Lo workspace richiesto non è disponibile.',
+  'sprints.sessionMissing': 'La sessione richiesta non è stata trovata in questo workspace.',
+  'sprints.moveUp': 'Sposta su',
+  'sprints.moveDown': 'Sposta giù',
+  'sprints.rename': 'Rinomina sprint',
+  'sprints.delete': 'Elimina sprint',
+  'sprints.deleteConfirm': 'Eliminare {name}? Gli workspace saranno rimossi dal sprint.',
+  'sprints.all': 'Tutti',
+  'sprints.none': 'Nessuno sprint',
+  'sprints.manage': 'Gestisci sprint',
+  'sprints.create': 'Crea sprint',
+  'sprints.error': 'Operazione sullo sprint non riuscita',
+  'sprints.label': 'Sprint',
   'preview.title': 'Anteprima',
   'preview.chat': 'Chat',
   'preview.split': 'Chat + anteprima',
@@ -125,7 +147,7 @@ export default {
   'groupMessage.state.not_sent': 'Non inviato',
   'tours.home.groupMessage.title': 'Scrivi a più workspace',
   'tours.home.groupMessage.description':
-    'Filtra per tag, stati e server di sviluppo in esecuzione, verifica i destinatari e invia una sola istruzione. Gli auto-loop la ricevono alla prossima iterazione. Ogni workspace mostra il proprio esito di invio.',
+    'Il megafono accanto ai filtri apre un messaggio di gruppo per lo sprint visualizzato (o tutti i workspace in Tutti). Filtra e verifica i destinatari prima di inviare. Gli auto-loop ricevono le istruzioni alla prossima iterazione.',
   'autoLoop.finalReview.title': 'Configurazione della review finale',
   'autoLoop.finalReview.description':
     'Dopo tutte le attività e le verifiche finali, una sessione separata rivede le modifiche. L’ultima sessione di lavoro corregge i problemi e la review si ripete finché non ne restano.',

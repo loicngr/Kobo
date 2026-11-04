@@ -17,6 +17,7 @@ function makeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
   return {
     id: 'w1',
     name: 'w1',
+    sprintId: null,
     projectPath: '/',
     sourceBranch: 'main',
     workingBranch: 'b',
@@ -1033,6 +1034,7 @@ describe('workspace store', () => {
     const baseWorkspace: Workspace = {
       id: 'ws-1',
       name: 'Test',
+      sprintId: null,
       projectPath: '/tmp/test',
       sourceBranch: 'main',
       workingBranch: 'feature/test',
@@ -1102,6 +1104,84 @@ describe('workspace store', () => {
 
       expect(store.workspaces[0].favoritedAt).toBeNull()
     })
+  })
+
+  describe('deleteArchivedSnapshots confirmations', () => {
+    it.each([false, true])('preserves refused drafts when a list refresh fails (partial=%s)', async (partial) => {
+      const store = useWorkspaceStore()
+      store.chatComposerDrafts.a1 = { text: 'keep', attachments: [] }
+      store.chatComposerDrafts.a2 = { text: 'delete', attachments: [] }
+      store.selectedWorkspaceId = 'a1'
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (url, options) => {
+          if (options?.method === 'DELETE')
+            return Response.json({
+              deleted: partial ? 1 : 0,
+              deletedIds: partial ? ['a2'] : [],
+              warnings: ['a1 changed'],
+            })
+          if (url === '/api/workspaces/archived') return Response.json([])
+          return new Response('{}', { status: 503 })
+        }),
+      )
+      const result = await store.deleteArchivedSnapshots({
+        snapshots: [
+          { id: 'a1', archivedAt: 'date', sprintId: null },
+          { id: 'a2', archivedAt: 'date', sprintId: null },
+        ],
+      })
+      expect(store.archivedLoaded).toBe(true)
+      expect(store.activeListLoadFailed).toBe(true)
+      expect(result.ids).toEqual(partial ? ['a2'] : [])
+      expect(store.chatComposerDrafts.a1?.text).toBe('keep')
+      expect(store.selectedWorkspaceId).toBe('a1')
+      expect(store.chatComposerDrafts.a2?.text).toBe(partial ? undefined : 'delete')
+    })
+
+    it('does not infer deletion from missing rows with an older server response', async () => {
+      const store = useWorkspaceStore()
+      store.chatComposerDrafts.a1 = { text: 'keep', attachments: [] }
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (_url, options) => Response.json(options?.method === 'DELETE' ? { deleted: 1, warnings: [] } : [])),
+      )
+      const result = await store.deleteArchivedSnapshots({
+        snapshots: [{ id: 'a1', archivedAt: 'date', sprintId: null }],
+      })
+      expect(result.ids).toEqual([])
+      expect(store.chatComposerDrafts.a1?.text).toBe('keep')
+    })
+  })
+
+  it.each(['sprint-b', null])('keeps the sprint event over an older info response (%s)', async (sprintId) => {
+    const store = useWorkspaceStore()
+    const old = makeWorkspace({ sprintId: 'sprint-a' })
+    store.workspaces = [old]
+    store.archivedWorkspaces = [makeWorkspace({ id: 'archived', sprintId: 'sprint-a', archivedAt: 'date' })]
+    let finish!: (response: Response) => void
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url) => {
+        if (url === '/api/workspaces/info')
+          return new Promise<Response>((resolve) => {
+            finish = resolve
+          })
+        if (url === '/api/sprints') return Promise.resolve(Response.json([]))
+        return Promise.resolve(Response.json([{ ...old, sprintId }]))
+      }),
+    )
+    const pending = store.fetchWorkspacesInfo()
+    useWebSocketStore()._routeMessage({
+      type: 'workspace:sprint-updated',
+      payload: { workspaceIds: ['w1', 'archived'], sprintId },
+    })
+    expect(store.workspaces[0]?.sprintId).toBe(sprintId)
+    expect(store.archivedWorkspaces[0]?.sprintId).toBe(sprintId)
+    await vi.waitFor(() => expect(store.loading).toBe(false))
+    finish(Response.json({ workspaces: [old], prSnapshots: {}, gitStats: {} }))
+    await pending
+    expect(store.workspaces[0]?.sprintId).toBe(sprintId)
   })
 
   describe('deleteAllArchived', () => {

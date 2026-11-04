@@ -16,6 +16,7 @@ import type { AgentEvent } from 'src/types/agent-event'
 import type { ProviderId, UsageSnapshot } from 'src/types/usage'
 import { authenticatedWebSocketUrl } from 'src/utils/auth-token'
 import { hookSender, parseHookEventType } from 'src/utils/hook-events'
+import { openNotificationTarget } from 'src/utils/notification-navigation'
 import { resolveNotificationSoundOverride } from 'src/utils/notification-sounds'
 import { DEFAULT_TOAST_TIMEOUT_MS } from 'src/utils/notification-timeout'
 import { notify } from 'src/utils/notifications'
@@ -30,6 +31,7 @@ import { useDevServerStore } from './dev-server'
 import { useMemoryStore } from './memory'
 import type { MigrationStatus } from './migration'
 import { useMigrationStore } from './migration'
+import { useSprintStore } from './sprints'
 import type { PendingCron, Workspace } from './workspace'
 import { useWorkspaceStore } from './workspace'
 
@@ -118,7 +120,7 @@ function prToastActions(workspaceId: string, prUrl?: string): Array<Record<strin
     color: 'white',
     noDismiss: true,
     handler: () => {
-      window.location.hash = `#/workspace/${workspaceId}`
+      openNotificationTarget({ workspaceId })
     },
   })
   actions.push({ label: t('pr.dismiss'), color: 'white' })
@@ -128,6 +130,7 @@ function prToastActions(workspaceId: string, prUrl?: string): Array<Record<strin
 // Module-level variables — must NOT be reactive (Vue Proxy breaks WebSocket)
 let _ws: WebSocket | null = null
 let _connectionEpoch = 0
+const _subscribedWorkspaces = new Set<string>()
 let _connecting = false
 let _connectionTimer: ReturnType<typeof setTimeout> | null = null
 let _resumeTimer: ReturnType<typeof setTimeout> | null = null
@@ -341,7 +344,10 @@ export function dispatchAgentEvent(
       const settings = useSettingsStore().global
       const soundOverride = event.requestKind === 'question' ? settings.audioQuestionSound : undefined
       const volumeOverride = event.requestKind === 'question' ? settings.audioQuestionVolume : undefined
-      notify(title, undefined, workspaceId, soundOverride, volumeOverride, settings.audioQuestionNotifications)
+      notify(title, undefined, workspaceId, soundOverride, volumeOverride, settings.audioQuestionNotifications, {
+        workspaceId,
+        ...(sessionId ? { sessionId } : {}),
+      })
     }
     return
   }
@@ -494,7 +500,15 @@ export function dispatchAgentEvent(
       const autoLoopActive = workspaceStore.autoLoopStates[workspaceId]?.auto_loop === true
       if (!autoLoopActive) {
         const wsName = workspaceStore.workspaces.find((w) => w.id === workspaceId)?.name ?? ''
-        notify(t('notification.agentFinished', { name: wsName }), undefined, workspaceId)
+        notify(
+          t('notification.agentFinished', { name: wsName }),
+          undefined,
+          workspaceId,
+          undefined,
+          undefined,
+          undefined,
+          { workspaceId, ...(sessionId ? { sessionId } : {}) },
+        )
       }
     }
     return
@@ -515,6 +529,7 @@ export function dispatchAgentEvent(
         settings.audioAgentErrorSound,
         settings.audioAgentErrorVolume,
         settings.audioAgentErrorNotifications,
+        { workspaceId, ...(sessionId ? { sessionId } : {}) },
       )
     }
   }
@@ -615,9 +630,17 @@ export const useWebSocketStore = defineStore('websocket', {
 
         // Re-subscribe to all known workspaces (subscriptions are lost on reconnect)
         const workspaceStore = useWorkspaceStore()
+        void useSprintStore()
+          .fetchSprints()
+          .catch((err) => console.error('[sprints]', err))
         const allIds = workspaceStore.workspaces.map((w) => w.id)
+        void workspaceStore.fetchWorkspaces().then(() => {
+          if (_ws !== ws || epoch !== _connectionEpoch) return
+          this.reconcileWorkspaceSubscriptions()
+        })
+        if (workspaceStore.archivedLoaded) void workspaceStore.fetchArchivedWorkspaces()
         for (const wid of allIds) {
-          this._send({ type: 'subscribe', payload: { workspaceId: wid } })
+          if (this._send({ type: 'subscribe', payload: { workspaceId: wid } })) _subscribedWorkspaces.add(wid)
         }
 
         void useMemoryStore()
@@ -695,6 +718,7 @@ export const useWebSocketStore = defineStore('websocket', {
 
     _resetConnection() {
       _connectionEpoch++
+      _subscribedWorkspaces.clear()
       _connecting = false
       if (_resumeTimer) clearTimeout(_resumeTimer)
       _resumeTimer = null
@@ -719,6 +743,13 @@ export const useWebSocketStore = defineStore('websocket', {
       this.reconnectAttempt = 0
     },
 
+    reconcileWorkspaceSubscriptions() {
+      if (!this.connected || !_ws || _ws.readyState !== WebSocket.OPEN) return
+      for (const workspace of useWorkspaceStore().workspaces) {
+        if (!_subscribedWorkspaces.has(workspace.id)) this.subscribe(workspace.id)
+      }
+    },
+
     subscribe(workspaceId: string) {
       // A global drain is in progress: a later drain-round response could
       // still carry stale events for this workspace and merge() them in
@@ -727,10 +758,13 @@ export const useWebSocketStore = defineStore('websocket', {
       if (this._drainInProgress) {
         this._workspacesToRefreshAfterDrain.add(workspaceId)
       }
-      this._send({
-        type: 'subscribe',
-        payload: { workspaceId },
-      })
+      if (
+        this._send({
+          type: 'subscribe',
+          payload: { workspaceId },
+        })
+      )
+        _subscribedWorkspaces.add(workspaceId)
       // Request all past events for this workspace to restore activity feed
       this._send({
         type: 'sync:request',
@@ -739,10 +773,13 @@ export const useWebSocketStore = defineStore('websocket', {
     },
 
     unsubscribe(workspaceId: string) {
-      this._send({
-        type: 'unsubscribe',
-        payload: { workspaceId },
-      })
+      if (
+        this._send({
+          type: 'unsubscribe',
+          payload: { workspaceId },
+        })
+      )
+        _subscribedWorkspaces.delete(workspaceId)
     },
 
     /**
@@ -1513,7 +1550,7 @@ export const useWebSocketStore = defineStore('websocket', {
                   label: t('common.open'),
                   color: 'white',
                   handler: () => {
-                    window.location.hash = `#/workspace/${targetId}`
+                    openNotificationTarget({ workspaceId: targetId })
                   },
                 },
               ],
@@ -1612,6 +1649,29 @@ export const useWebSocketStore = defineStore('websocket', {
           break
         }
 
+        case 'sprint:changed':
+        case 'workspace:sprint-updated': {
+          const { workspaceIds, sprintId } = payload
+          if (
+            msg.type === 'workspace:sprint-updated' &&
+            Array.isArray(workspaceIds) &&
+            workspaceIds.every((id) => typeof id === 'string') &&
+            (sprintId === null || typeof sprintId === 'string')
+          ) {
+            for (const id of workspaceIds) workspaceStore.updateWorkspaceFromEvent(id, { sprintId })
+            const affected = new Set(workspaceIds)
+            workspaceStore.archivedWorkspaces = workspaceStore.archivedWorkspaces.map((workspace) =>
+              affected.has(workspace.id) ? { ...workspace, sprintId } : workspace,
+            )
+          }
+          void useSprintStore()
+            .fetchSprints()
+            .catch((err) => console.error('[sprints]', err))
+          void workspaceStore.fetchWorkspaces()
+          if (workspaceStore.archivedLoaded) void workspaceStore.fetchArchivedWorkspaces()
+          break
+        }
+
         case 'workspace:archived':
         case 'workspace:unarchived':
         case 'workspace:worktree-restored':
@@ -1625,12 +1685,6 @@ export const useWebSocketStore = defineStore('websocket', {
           }
           if ((msg.type === 'workspace:archived' || msg.type === 'workspace:worktree-purged') && wid) {
             disposeTerminalEntry(wid)
-          }
-          // WorkspacePage redirects home when its selectedWorkspaceId goes null,
-          // so this drops the user off the page when their workspace gets archived
-          // from any source (manual, auto-archive on PR merge, another tab).
-          if (msg.type === 'workspace:archived' && wid && workspaceStore.selectedWorkspaceId === wid) {
-            workspaceStore.selectedWorkspaceId = null
           }
           workspaceStore.fetchWorkspaces()
           if (workspaceStore.archivedLoaded) {

@@ -15,6 +15,14 @@ import { initWorkspaceMessageBatchSchema } from './workspace-message-batch-schem
 /** Create all tables and indexes for a fresh install. Not used for upgrades -- see migrations.ts. */
 export function initSchema(db: Database.Database): void {
   db.exec(`
+    CREATE TABLE IF NOT EXISTS sprints (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      sort_order INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS workspaces (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -55,8 +63,11 @@ export function initSchema(db: Database.Database): void {
       worktree_purge_restore_data TEXT,
       comparison_id TEXT,
       created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
+      updated_at TEXT NOT NULL,
+      sprint_id TEXT REFERENCES sprints(id) ON DELETE SET NULL
     );
+
+    CREATE INDEX IF NOT EXISTS idx_workspaces_sprint_id ON workspaces(sprint_id);
 
     CREATE TABLE IF NOT EXISTS tasks (
       id TEXT PRIMARY KEY,

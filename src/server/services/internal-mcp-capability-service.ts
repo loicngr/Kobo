@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import { isProgressBarTool } from '../../shared/progress-bar-tools.js'
+import { MANAGED_SPRINT_TOOLS } from '../../shared/sprint-tools.js'
 import { WORKSPACE_CREATION_TOOLS } from '../../shared/workspace-creation-tools.js'
 import { EXTERNAL_MCP_TOOLS } from '../../shared/workspace-dialogue-tools.js'
 import { WORKSPACE_GROUP_MESSAGE_TOOLS } from '../../shared/workspace-group-message-tools.js'
@@ -15,6 +16,7 @@ export interface InternalMcpCapability {
 }
 const capabilities = new Map<string, InternalMcpCapability>()
 const readTools = new Set([
+  ...MANAGED_SPRINT_TOOLS.filter((t) => t.annotations?.readOnlyHint).map((t) => t.name),
   ...WORKSPACE_OBSERVATION_TOOLS.filter((t) => t.annotations?.readOnlyHint).map((t) => t.name),
   'list_tasks',
   'get_settings',
@@ -42,6 +44,7 @@ const readTools = new Set([
   ...WORKSPACE_CREATION_TOOLS.filter((t) => t.annotations?.readOnlyHint).map((t) => t.name),
 ])
 const writeTools = new Set([
+  ...MANAGED_SPRINT_TOOLS.filter((t) => !t.annotations?.readOnlyHint).map((t) => t.name),
   ...WORKSPACE_OBSERVATION_TOOLS.filter((t) => !t.annotations?.readOnlyHint).map((t) => t.name),
   'start_code_review',
   'mark_task_done',

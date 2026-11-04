@@ -29,6 +29,7 @@ function workspaceFixture(status = 'executing'): Workspace {
   return {
     id: 'w1',
     name: 'Replacement workspace',
+    sprintId: null,
     projectPath: '/tmp/project',
     sourceBranch: 'main',
     workingBranch: 'feature/replacement',
@@ -243,6 +244,7 @@ describe('websocket dispatch — AgentEvent side-effects to workspace store', ()
       {
         id: 'w1',
         name: 'Quota workspace',
+        sprintId: null,
         projectPath: '/tmp/project',
         sourceBranch: 'main',
         workingBranch: 'feature/quota',
@@ -289,6 +291,32 @@ describe('websocket dispatch — AgentEvent side-effects to workspace store', ()
     }
 
     expect(ws.workspaces[0]?.status).toBe('quota')
+  })
+
+  it('targets the session carried by an agent question', async () => {
+    const { dispatchAgentEvent } = await import('../stores/websocket.js')
+    dispatchAgentEvent(
+      'w1',
+      {
+        kind: 'session:user-input-requested',
+        requestKind: 'question',
+        toolCallId: 'q1',
+        toolName: 'AskUserQuestion',
+        payload: {},
+      },
+      undefined,
+      undefined,
+      'session-exact',
+    )
+    expect(notify).toHaveBeenCalledWith(
+      expect.any(String),
+      undefined,
+      'w1',
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      { workspaceId: 'w1', sessionId: 'session-exact' },
+    )
   })
 
   it('routes subagent:progress events to workspaceStore.upsertSubagent', async () => {
