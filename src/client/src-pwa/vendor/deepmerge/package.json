@@ -1,0 +1,8 @@
+{
+  "name": "@kobo/deepmerge-patched",
+  "version": "4.3.1-kobo.1",
+  "private": true,
+  "description": "Local security-patched deepmerge 4.3.1 for the Workbox build dependency",
+  "license": "MIT",
+  "main": "index.cjs"
+}

@@ -17,11 +17,12 @@
     "workbox-expiration": "^7.4.1",
     "workbox-precaching": "^7.4.1",
     "workbox-routing": "^7.4.1",
-    "workbox-strategies": "^7.4.1"
+    "workbox-strategies": "^7.4.1",
+    "deepmerge": "file:vendor/deepmerge"
   },
   "overrides": {
-    "workbox-build": {
-      "glob": "^13.0.6"
-    }
+    "minimatch": "^11.0.4",
+    "glob": "^14.0.3",
+    "deepmerge": "$deepmerge"
   }
 }
