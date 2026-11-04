@@ -4,6 +4,10 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads released version sections.
 
+## 2.1.38
+
+- feat(mcp): add workspace review, setup and tag controls
+
 ## 2.1.37
 
 - feat(kobo): improve memory controls and chat session reliability
