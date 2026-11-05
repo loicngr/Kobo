@@ -1569,8 +1569,8 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.selectedSessionId = null
       this.sessions = []
       this.tasks = []
-      // Mark as read before fetching details so the API response already reflects the read state
-      this.markRead(id)
+      // Acknowledge the visit independently of loading session details.
+      void this.markRead(id)
       this.fetchWorkspaceDetails(id)
       void useParallelReviewStore()
         .fetchStatus(id)
@@ -2698,11 +2698,12 @@ export const useWorkspaceStore = defineStore('workspace', {
 
     /** Mark a workspace as read by calling the backend and updating local state. */
     async markRead(workspaceId: string) {
+      const eventVersion = _workspaceEventVersions.get(workspaceId) ?? 0
       try {
         await apiFetchOk(`/api/workspaces/${workspaceId}/mark-read`, { method: 'POST' })
-        const idx = this.workspaces.findIndex((w) => w.id === workspaceId)
-        if (idx >= 0) {
-          this.workspaces[idx] = { ...this.workspaces[idx], hasUnread: false }
+        // Preserve newer events; version this acknowledgement against older HTTP snapshots.
+        if ((_workspaceEventVersions.get(workspaceId) ?? 0) === eventVersion) {
+          this.updateWorkspaceFromEvent(workspaceId, { hasUnread: false })
         }
       } catch (err) {
         console.error('[workspace store] markRead failed:', err)

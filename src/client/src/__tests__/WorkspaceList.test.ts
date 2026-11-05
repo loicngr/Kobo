@@ -17,7 +17,10 @@ const { push, replace, currentRoute } = vi.hoisted(() => ({
   replace: vi.fn(),
   currentRoute: { value: { name: 'workspace', params: {} as { id?: string }, query: {} as Record<string, string> } },
 }))
-vi.mock('vue-router', () => ({ useRouter: () => ({ push, replace, currentRoute }) }))
+vi.mock('vue-router', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('vue-router')>()),
+  useRouter: () => ({ push, replace, currentRoute }),
+}))
 
 const makeWorkspace = (over: Partial<Workspace> = {}): Workspace => ({
   id: 'ws-1',
@@ -362,4 +365,36 @@ it('confirms a missing sprint with a fresh catalogue before falling back', async
   finish()
   await flushPromises()
   expect(push).not.toHaveBeenCalled()
+})
+
+it('acknowledges an unread workspace when clicking its already open card', async () => {
+  const store = useWorkspaceStore()
+  store.workspaces = [makeWorkspace({ hasUnread: true })]
+  store.selectedWorkspaceId = 'ws-1'
+  currentRoute.value = { name: 'workspace', params: { id: 'ws-1' }, query: { sprint: ALL_SPRINTS } }
+  const markRead = vi.spyOn(store, 'markRead').mockResolvedValue(undefined)
+  // A real router supplies a duplicated-navigation failure for an unchanged URL.
+  const { createRouter, createMemoryHistory } = await import('vue-router')
+  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: {} }] })
+  await router.push('/')
+  push.mockResolvedValueOnce(await router.push('/'))
+  wrapper = mountList()
+  await flushPromises()
+  wrapper.findComponent({ name: 'WorkspaceCard' }).vm.$emit('select', 'ws-1')
+  await flushPromises()
+  expect(markRead).toHaveBeenCalledExactlyOnceWith('ws-1')
+})
+
+it('does not acknowledge a workspace when navigation is refused', async () => {
+  const store = useWorkspaceStore()
+  store.workspaces = [makeWorkspace({ hasUnread: true })]
+  store.selectedWorkspaceId = 'ws-1'
+  currentRoute.value = { name: 'workspace', params: { id: 'ws-1' }, query: {} }
+  const markRead = vi.spyOn(store, 'markRead').mockResolvedValue(undefined)
+  push.mockResolvedValueOnce({ type: 4 })
+  wrapper = mountList()
+  await flushPromises()
+  wrapper.findComponent({ name: 'WorkspaceCard' }).vm.$emit('select', 'ws-1')
+  await flushPromises()
+  expect(markRead).not.toHaveBeenCalled()
 })

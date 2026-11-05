@@ -788,7 +788,7 @@ import { isBusyStatus } from 'src/utils/workspace-status'
 import { collectTags, matchesTags, parseTagFilter } from 'src/utils/workspace-tag-filter'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRouter } from 'vue-router'
+import { isNavigationFailure, NavigationFailureType, useRouter } from 'vue-router'
 
 const { t, locale } = useI18n()
 const $q = useQuasar()
@@ -1431,6 +1431,7 @@ async function onUnarchiveClick(ws: Workspace, event: Event) {
 }
 
 function selectWorkspace(id: string) {
+  const alreadySelected = store.selectedWorkspaceId === id
   const clearMarker = markInternalSprintTarget(id, sprints.active)
   void router
     .push({
@@ -1438,6 +1439,15 @@ function selectWorkspace(id: string) {
       params: { id },
       query: { sprint: sprints.active },
       state: { koboSprintContext: true },
+    })
+    .then((failure) => {
+      if (
+        alreadySelected &&
+        (!failure || isNavigationFailure(failure, NavigationFailureType.duplicated)) &&
+        router.currentRoute.value.params.id === id &&
+        store.selectedWorkspaceId === id
+      )
+        void store.markRead(id)
     })
     .finally(clearMarker)
   // Sous DRAWER_BREAKPOINT (1024 px) le tiroir gauche est une SURIMPRESSION :

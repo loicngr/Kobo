@@ -3421,3 +3421,53 @@ it.each(['setup', 'cleanup', 'archive', 'user', 'system-prompt'])(
     expect(store.activityFeeds['ws-1']![0]!.meta?.pending).toBe(true)
   },
 )
+
+describe('read acknowledgement races', () => {
+  beforeEach(() => setActivePinia(createPinia()))
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('does not let an older details response restore the unread indicator', async () => {
+    const store = useWorkspaceStore()
+    const unread = makeWorkspace({ id: 'read-race', hasUnread: true })
+    store.workspaces = [unread]
+    store.selectedWorkspaceId = unread.id
+    let reply!: (response: Response) => void
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) =>
+        url.endsWith('/mark-read')
+          ? Promise.resolve(Response.json({ success: true }))
+          : new Promise<Response>((resolve) => {
+              reply = resolve
+            }),
+      ),
+    )
+    const details = store.fetchWorkspaceDetails(unread.id)
+    await store.markRead(unread.id)
+    expect(store.workspaces[0]?.hasUnread).toBe(false)
+    reply(Response.json({ workspace: unread, tasks: [] }))
+    await details
+    expect(store.workspaces[0]?.hasUnread).toBe(false)
+  })
+
+  it('preserves a newer unread event arriving before the acknowledgement response', async () => {
+    const store = useWorkspaceStore()
+    store.workspaces = [makeWorkspace({ id: 'read-event-race', hasUnread: true })]
+    let reply!: (response: Response) => void
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        () =>
+          new Promise<Response>((resolve) => {
+            reply = resolve
+          }),
+      ),
+    )
+    const read = store.markRead('read-event-race')
+    store.updateWorkspaceFromEvent('read-event-race', { hasUnread: false })
+    store.updateWorkspaceFromEvent('read-event-race', { hasUnread: true })
+    reply(Response.json({ success: true }))
+    await read
+    expect(store.workspaces[0]?.hasUnread).toBe(true)
+  })
+})
