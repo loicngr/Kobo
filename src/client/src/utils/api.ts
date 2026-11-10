@@ -61,6 +61,7 @@ export function apiTimeoutForPath(path: string, method = 'GET'): number {
     )
   )
     return 180_000
+  if (verb === 'GET' && /^\/api\/workspaces\/[^/]+\/ci-job-logs$/.test(pathname)) return 120_000
   if (/\/(attachments|sounds|events\.csv|diagnostic\.json)$/.test(pathname)) return 90_000
   return DEFAULT_API_TIMEOUT_MS
 }

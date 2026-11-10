@@ -17,7 +17,11 @@ async function peer(scenario: string, handlers = {}) {
   ])
   children.push(child)
   await once(child.stderr, 'data')
-  return { child, connection: connectVibeAcp(child, handlers) }
+  const connection = connectVibeAcp(child, handlers)
+  if (!['callbacks', 'initialize-pending', 'invalid-initialize'].includes(scenario)) {
+    await requestVibeAcp(connection, 'initialize', { protocolVersion: 1, clientCapabilities: {} })
+  }
+  return { child, connection }
 }
 afterEach(async () => {
   vi.useRealTimers()

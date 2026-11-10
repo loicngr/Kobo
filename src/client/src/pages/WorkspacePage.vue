@@ -47,7 +47,7 @@
           <span v-if="!isMobile" class="q-ml-xs">{{ $t('workspacePage.configure') }}</span>
           <q-icon v-if="pendingSpawnChanges.size" name="schedule" size="12px" color="orange-6" class="q-ml-xs" />
           <q-tooltip>{{ $t('workspacePage.configure') }}</q-tooltip>
-          <q-menu v-model="nativeConfigurationOpen"><q-list class="wp-toolbar-menu">
+          <q-menu v-model="nativeConfigurationOpen"><q-list class="wp-toolbar-menu wp-configuration-menu">
             <q-item><q-item-section>
               <q-item-label caption>{{ $t('engine.select') }}</q-item-label>
               <q-item-label>{{ currentEngineId === 'codex' ? $t('workspacePage.engineCodex') : currentEngineId === 'claude-code' ? $t('workspacePage.engineClaude') : currentEngineId === 'mistral-vibe' ? $t('workspacePage.engineMistral') : currentEngineId }}</q-item-label>
@@ -210,6 +210,18 @@
         @click="handleStart"
       />
     </div>
+
+    <section v-if="!selectedId" class="wp-empty col" aria-labelledby="workspace-empty-title">
+      <div class="wp-empty__content">
+        <q-icon name="workspaces" size="32px" class="text-kobo-3" aria-hidden="true" />
+        <h1 id="workspace-empty-title">{{ $t('workspacePage.emptyTitle') }}</h1>
+        <p>{{ $t('workspacePage.emptyHint') }}</p>
+        <div class="wp-empty__actions">
+          <q-btn unelevated no-caps color="primary" icon="add" :label="$t('createPage.title')" :to="{ name: 'create' }" />
+          <q-btn outline no-caps color="kobo-2" icon="view_sidebar" :label="$t('workspacePage.browseWorkspaces')" @click="layout.setLeft(true)" />
+        </div>
+      </div>
+    </section>
 
     <WorkspacePreview ref="previewRef" v-if="selectedId" :key="selectedId" :workspace-id="selectedId">
     <AgentErrorBanner v-if="selectedId" :workspace-id="selectedId" />
@@ -962,8 +974,13 @@ watch(
       store.sessions = []
       store.tasks = []
     } else if (id !== store.selectedWorkspaceId) {
-      await store.selectWorkspace(id, typeof session === 'string' ? session : undefined)
-      void store.fetchPendingWakeup(id)
+      const details = await store.selectWorkspace(id, typeof session === 'string' ? session : undefined)
+      if (details === false && route.params.id === id && store.selectedWorkspaceId === id) {
+        $q.notify({ type: 'warning', message: t('sprints.workspaceMissing') })
+        await router.replace({ name: 'workspace', query: { sprint: route.query.sprint } })
+        return
+      }
+      if (route.params.id === id) void store.fetchPendingWakeup(id)
     } else if (typeof session === 'string') {
       await store.fetchSessions(id, session)
     }
@@ -996,6 +1013,28 @@ watch(
 </script>
 
 <style lang="scss" scoped>
+.wp-empty {
+  display: grid;
+  place-items: center;
+  padding: var(--kobo-space-3xl) var(--kobo-space-lg);
+  overflow: auto;
+}
+.wp-empty__content {
+  width: 100%;
+  max-width: 560px;
+  padding: var(--kobo-space-2xl);
+  background: var(--kobo-surface);
+  border: 1px solid var(--kobo-border);
+  border-radius: var(--kobo-radius-sm);
+}
+.wp-empty h1 { margin: var(--kobo-space-lg) 0 var(--kobo-space-sm); font-size: 24px; font-weight: 600; line-height: 1.3; }
+.wp-empty p { margin: 0 0 var(--kobo-space-2xl); color: var(--kobo-text-3); font-size: 14px; line-height: 1.6; }
+.wp-empty__actions { display: flex; flex-wrap: wrap; gap: var(--kobo-space-sm); }
+.wp-empty__actions :deep(.q-btn) { min-height: 40px; flex: 1 1 210px; }
+@media (max-width: 599px) {
+  .wp-empty__content { padding: var(--kobo-space-lg); }
+  .wp-empty__actions :deep(.q-btn) { flex-basis: 100%; }
+}
 .wp-title {
   flex: 1 1 0;
   min-width: 0;
@@ -1005,7 +1044,11 @@ watch(
 .wp-status, .wp-configure { flex-shrink: 0; white-space: nowrap; }
 .wp-status, .wp-active-model { font-size: 10px; }
 .wp-active-model { max-width: 180px; min-width: 0; }
-.wp-toolbar-menu { width: 300px; max-width: calc(100vw - 24px); }
+.wp-toolbar-menu { width: 320px; max-width: calc(100vw - 24px); }
+.wp-configuration-menu { padding: var(--kobo-space-sm) 0; }
+.wp-configuration-menu :deep(.q-item) { padding: var(--kobo-space-xs) var(--kobo-space-lg); }
+.wp-configuration-menu :deep(.q-field) { font-size: 13px; }
+.wp-configuration-menu :deep(.q-field__label) { color: var(--kobo-text-3); }
 .wp-header > .q-btn { flex-shrink: 0; }
 .wp-header > .wp-title { flex-shrink: 1; }
 

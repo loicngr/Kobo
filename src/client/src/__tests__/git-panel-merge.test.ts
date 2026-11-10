@@ -18,6 +18,7 @@ vi.mock('src/utils/api', async (original) => ({
   apiFetchResponseForStatus: mocks.deleteApi,
 }))
 
+const expected = { number: 42, headSha: 'a'.repeat(40) }
 const workspace = {
   id: 'ws-a',
   projectPath: '/repo',
@@ -105,8 +106,8 @@ beforeEach(() => {
   vi.clearAllMocks()
   setActivePinia(createPinia())
   store = useWorkspaceStore()
-  store.prSnapshots['ws-a'] = { readyToMerge: true, state: 'OPEN' } as never
-  store.prSnapshots['ws-b'] = { readyToMerge: true, state: 'OPEN' } as never
+  store.prSnapshots['ws-a'] = { ...expected, readyToMerge: true, state: 'OPEN' } as never
+  store.prSnapshots['ws-b'] = { ...expected, readyToMerge: true, state: 'OPEN' } as never
   vi.spyOn(store, 'fetchGitStats').mockResolvedValue(stats)
   vi.spyOn(store, 'refreshPrSnapshot').mockResolvedValue(null)
   mocks.dialog.mockImplementation(() => ({
@@ -120,7 +121,7 @@ beforeEach(() => {
 afterEach(() => wrapper?.unmount())
 
 describe('GitPanel cached workspace stats', () => {
-  it('preserves the PR panel across refreshes while keeping cached actions disabled', async () => {
+  it('preserves the PR panel and keeps actions available during refreshes', async () => {
     mountPanel()
     await flushPromises()
     const prPanel = wrapper.getComponent(PrPanel).vm
@@ -132,8 +133,11 @@ describe('GitPanel cached workspace stats', () => {
         }),
     )
     await wrapper.get('button[data-icon="refresh"]').trigger('click')
-    expect(wrapper.get('[data-testid="git-content"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="git-content"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.get('[data-testid="git-content"]').attributes('aria-busy')).toBe('true')
     expect(wrapper.getComponent(PrPanel).vm).toBe(prPanel)
+    await wrapper.get('button[data-icon="merge"]').trigger('click')
+    expect(mocks.dialog).toHaveBeenCalledOnce()
     finish(stats)
     await flushPromises()
     expect(wrapper.get('[data-testid="git-content"]').attributes('disabled')).toBeUndefined()
@@ -158,7 +162,7 @@ describe('GitPanel cached workspace stats', () => {
       await vi.advanceTimersByTimeAsync(3000)
       expect(store.fetchGitStats).toHaveBeenCalledOnce()
       expect(original.signal!.aborted).toBe(false)
-      expect(wrapper.get('[data-testid="git-content"]').attributes('disabled')).toBeDefined()
+      expect(wrapper.get('[data-testid="git-content"]').attributes('disabled')).toBeUndefined()
       finish({ ...stats, commitCount: 7 })
       await vi.advanceTimersByTimeAsync(0)
       expect(wrapper.text()).toContain('7 commits')
@@ -197,7 +201,7 @@ describe('GitPanel cached workspace stats', () => {
     }
   })
 
-  it('shows only the target workspace cache and blocks actions until its fresh read completes', async () => {
+  it('shows only the target workspace cache and keeps it interactive during its fresh read', async () => {
     store.gitStatsCache['ws-a'] = { ...stats, commitCount: 4 }
     store.gitStatsCache['ws-b'] = { ...stats, commitCount: 9 }
     let finish!: (value: GitStats) => void
@@ -209,15 +213,12 @@ describe('GitPanel cached workspace stats', () => {
     )
     mountPanel()
     expect(wrapper.text()).toContain('4 commits')
-    expect(wrapper.get('[data-testid="git-content"]').attributes('disabled')).toBeDefined()
-    expect(wrapper.get('[role="status"]').text()).toContain('read-only')
-    await wrapper.get('.commit-toggle').trigger('click')
-    expect(mocks.api).not.toHaveBeenCalled()
+    expect(wrapper.get('[data-testid="git-content"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.get('[role="status"]').text()).toContain('Refreshing Git')
+    expect(wrapper.get('[role="status"]').text()).not.toContain('read-only')
     const enter = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
     wrapper.get('.commit-toggle').element.dispatchEvent(enter)
-    expect(enter.defaultPrevented).toBe(true)
-    await wrapper.get('button[data-icon="merge"]').trigger('click')
-    expect(mocks.dialog).not.toHaveBeenCalled()
+    expect(enter.defaultPrevented).toBe(false)
     await wrapper.setProps({ workspace: { ...workspace, id: 'ws-b', workingBranch: 'feature/b' } })
     expect(wrapper.text()).toContain('9 commits')
     expect(wrapper.text()).not.toContain('4 commits')
@@ -273,7 +274,7 @@ describe('GitPanel cached workspace stats', () => {
     await flushPromises()
     expect(wrapper.text()).not.toContain('old failure')
     expect(wrapper.text()).toContain('9 commits')
-    expect(wrapper.get('[data-testid="git-content"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="git-content"]').attributes('disabled')).toBeUndefined()
     finishNew(stats)
     await flushPromises()
     expect(wrapper.get('[data-testid="git-content"]').attributes('disabled')).toBeUndefined()
@@ -298,7 +299,7 @@ describe('GitPanel PR merge confirmation', () => {
     expect(mocks.api).toHaveBeenCalledExactlyOnceWith('/api/workspaces/ws-a/merge-pr', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ method }),
+      body: JSON.stringify({ method, expected }),
     })
   })
 
@@ -306,7 +307,11 @@ describe('GitPanel PR merge confirmation', () => {
     await openDialog(false)
     expect(mocks.dialog.mock.calls[0]![0].options).toBeUndefined()
     await confirm()
-    expect(mocks.api).toHaveBeenCalledExactlyOnceWith('/api/workspaces/ws-a/merge-pr', { method: 'POST' })
+    expect(mocks.api).toHaveBeenCalledExactlyOnceWith('/api/workspaces/ws-a/merge-pr', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expected }),
+    })
   })
 
   it('does not merge a different workspace after navigation', async () => {
@@ -334,7 +339,7 @@ describe('GitPanel PR merge confirmation', () => {
     expect(mocks.api).toHaveBeenLastCalledWith('/api/workspaces/ws-a/merge-pr', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ method: 'squash', admin: true }),
+      body: JSON.stringify({ method: 'squash', admin: true, expected }),
     })
   })
 
@@ -471,5 +476,58 @@ describe('GitPanel PR merge confirmation', () => {
     await confirm('squash')
     expect(mocks.notify).toHaveBeenCalledWith(expect.objectContaining({ type: 'negative', message: 'Squash disabled' }))
     expect(mocks.dialog).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('GitHub direct bypass', () => {
+  it('allows an explicitly confirmed bypass when checks are not ready', async () => {
+    store.prSnapshots['ws-a'] = { ...expected, readyToMerge: false, state: 'OPEN', mergeable: 'MERGEABLE' } as never
+    mountPanel()
+    await flushPromises()
+    expect(wrapper.find('button[data-icon="merge"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="merge-bypass"]').trigger('click')
+    expect(mocks.api).not.toHaveBeenCalled()
+    expect(mocks.dialog).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        title: 'Force merge the PR',
+        focus: 'cancel',
+        ok: expect.objectContaining({ color: 'negative' }),
+      }),
+    )
+    await confirm('squash')
+    expect(mocks.api).toHaveBeenCalledExactlyOnceWith('/api/workspaces/ws-a/merge-pr', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ method: 'squash', admin: true, expected }),
+    })
+  })
+  it('does not submit if a push changes the confirmed revision', async () => {
+    mountPanel()
+    await flushPromises()
+    await wrapper.get('[data-testid="merge-bypass"]').trigger('click')
+    store.prSnapshots['ws-a'] = { ...store.prSnapshots['ws-a']!, headSha: 'b'.repeat(40) }
+    await confirm('squash')
+    expect(mocks.api).not.toHaveBeenCalled()
+    expect(mocks.notify).toHaveBeenCalledWith(expect.objectContaining({ message: en['git.mergeRevisionChanged'] }))
+  })
+  it('does not offer bypass for merge conflicts', async () => {
+    store.prSnapshots['ws-a'] = { ...expected, readyToMerge: false, state: 'OPEN', mergeable: 'CONFLICTING' } as never
+    mountPanel()
+    await flushPromises()
+    expect(wrapper.find('[data-testid="merge-bypass"]').exists()).toBe(false)
+  })
+  it('revalidates conflicts before submitting an already open confirmation', async () => {
+    mountPanel()
+    await flushPromises()
+    await wrapper.get('[data-testid="merge-bypass"]').trigger('click')
+    store.prSnapshots['ws-a'] = { ...expected, readyToMerge: false, state: 'OPEN', mergeable: 'CONFLICTING' } as never
+    await confirm('merge')
+    expect(mocks.api).not.toHaveBeenCalled()
+  })
+  it('does not offer bypass for another forge', async () => {
+    vi.mocked(store.fetchGitStats).mockResolvedValue({ ...stats, forge: { ...stats.forge!, id: 'gitlab' } })
+    mountPanel()
+    await flushPromises()
+    expect(wrapper.find('[data-testid="merge-bypass"]').exists()).toBe(false)
   })
 })

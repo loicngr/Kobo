@@ -19,16 +19,62 @@
       <template v-else>
       <AutoLoopPanel class="q-mb-md" />
 
+      <section class="tools-group">
+        <h3 class="tools-group__title">{{ $t('tools.group.session') }}</h3>
       <ActionAvailability :reason="isArchived ? $t('blockers.archived') : null">
         <EngineSwitchButton :workspace="workspace" @started="revealHandoff" />
       </ActionAvailability>
 
+      <div ref="handoffSection" data-tour="ws-session-handoff" class="handoff-section q-mt-sm" :class="{ 'handoff-section--highlighted': handoffHighlighted }">
+        <EngineSwitchButton :workspace="workspace" mode="fresh" @started="revealHandoff" />
+        <SessionHandoffStatus :workspace-id="workspace.id" @started="revealHandoff" />
+      </div>
+      </section>
+      <section class="tools-group">
+        <h3 class="tools-group__title">{{ $t('tools.group.quality') }}</h3>
+      <ActionAvailability :reason="reviewBlocker ? $t(`blockers.${reviewBlocker}`) : null">
+      <q-btn
+        no-caps
+        dense
+        outline
+        color="kobo-2"
+        icon="rate_review"
+        :label="$t('tools.review')"
+        :loading="startingReview"
+        :disable="!!reviewBlocker"
+        class="full-width q-mb-xs"
+        @click="reviewDialogOpen = true"
+      >
+        <q-tooltip>{{ $t('tools.reviewTooltip') }}</q-tooltip>
+      </q-btn>
+      </ActionAvailability>
+
+      <ActionAvailability v-if="hasCiFailure" :reason="ciBlocker ? $t(`blockers.${ciBlocker}`) : null">
+      <q-btn
+        no-caps
+        dense
+        outline
+        color="kobo-danger"
+        icon="build_circle"
+        :label="$t('tools.fixCi')"
+        :loading="fixingCi"
+        :disable="!!ciBlocker"
+        class="full-width q-mb-xs"
+        @click="startCiFix"
+      >
+        <q-tooltip>{{ $t('tools.fixCiTooltip') }}</q-tooltip>
+      </q-btn>
+      </ActionAvailability>
+
+      </section>
+      <section class="tools-group">
+        <h3 class="tools-group__title">{{ $t('tools.group.project') }}</h3>
       <ActionAvailability data-tour="action-availability" :reason="setupBlocker ? $t(setupBlocker === 'configuration' ? 'blockers.setupConfiguration' : `blockers.${setupBlocker}`) : null" :settings="setupBlocker === 'configuration'" settings-tab="scripts">
       <q-btn
         no-caps
         dense
         outline
-        color="primary"
+        color="kobo-2"
         icon="replay"
         :label="$t('tools.runSetupScript')"
         :loading="running"
@@ -47,7 +93,7 @@
         no-caps
         dense
         outline
-        color="primary"
+        color="kobo-2"
         icon="open_in_new"
         :label="$t('git.openEditor')"
         :loading="openingEditor"
@@ -60,7 +106,7 @@
         no-caps
         dense
         outline
-        color="primary"
+        color="kobo-2"
         icon="folder_open"
         :label="$t('tools.openFileManager')"
         :loading="openingFileManager"
@@ -75,7 +121,7 @@
         no-caps
         dense
         outline
-        color="primary"
+        color="kobo-2"
         icon="terminal"
         :label="$t('tools.openTerminal')"
         :loading="openingTerminal"
@@ -85,46 +131,12 @@
         <q-tooltip>{{ $t('tools.openTerminalTooltip') }}</q-tooltip>
       </q-btn>
 
-      <ActionAvailability :reason="reviewBlocker ? $t(`blockers.${reviewBlocker}`) : null">
-      <q-btn
-        no-caps
-        dense
-        outline
-        color="primary"
-        icon="rate_review"
-        :label="$t('tools.review')"
-        :loading="startingReview"
-        :disable="!!reviewBlocker"
-        class="full-width q-mb-xs"
-        @click="reviewDialogOpen = true"
-      >
-        <q-tooltip>{{ $t('tools.reviewTooltip') }}</q-tooltip>
-      </q-btn>
-      </ActionAvailability>
-
-      <ActionAvailability v-if="hasCiFailure" :reason="ciBlocker ? $t(`blockers.${ciBlocker}`) : null">
-      <q-btn
-        no-caps
-        dense
-        unelevated
-        color="red-7"
-        icon="build_circle"
-        :label="$t('tools.fixCi')"
-        :loading="fixingCi"
-        :disable="!!ciBlocker"
-        class="full-width q-mb-xs"
-        @click="startCiFix"
-      >
-        <q-tooltip>{{ $t('tools.fixCiTooltip') }}</q-tooltip>
-      </q-btn>
-      </ActionAvailability>
-
       <q-btn
         v-if="workspace?.notionUrl"
         no-caps
         dense
         outline
-        color="primary"
+        color="kobo-2"
         icon="open_in_new"
         :label="$t('tools.openNotion')"
         class="full-width q-mb-xs"
@@ -135,17 +147,14 @@
         no-caps
         dense
         outline
-        color="primary"
+        color="kobo-2"
         icon="open_in_new"
         :label="$t('tools.openSentry')"
         class="full-width q-mb-xs"
         @click="openExternal(workspace.sentryUrl)"
       />
 
-      <div ref="handoffSection" data-tour="ws-session-handoff" class="handoff-section q-mt-sm" :class="{ 'handoff-section--highlighted': handoffHighlighted }">
-        <EngineSwitchButton :workspace="workspace" mode="fresh" @started="revealHandoff" />
-        <SessionHandoffStatus :workspace-id="workspace.id" @started="revealHandoff" />
-      </div>
+      </section>
       </template>
     </div>
 
@@ -474,9 +483,13 @@ async function startReview(payload: StartReviewRequest) {
 </script>
 
 <style lang="scss" scoped>
-.tools-panel {
-  min-height: 48px;
-}
+.tools-panel { min-height: 48px; }
+.tools-group { padding: var(--kobo-space-md) 0; border-top: 1px solid var(--kobo-border-subtle); }
+.tools-group__title { margin: 0 0 var(--kobo-space-sm); font-size: 13px; font-weight: 600; color: var(--kobo-text-2); }
+.tools-group :deep(.q-btn) { min-height: 32px; font-size: 13px; }
+.tools-group :deep(.q-btn__content) { justify-content: flex-start; text-align: left; flex-wrap: nowrap; }
+.tools-group :deep(.q-btn .q-icon) { font-size: 18px; flex-shrink: 0; }
+@media (pointer: coarse) { .tools-group :deep(.q-btn) { min-height: 40px; } }
 
 .handoff-section {
   border-radius: var(--kobo-radius-sm);

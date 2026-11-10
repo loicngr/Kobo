@@ -92,6 +92,12 @@ export default defineRouter(() => {
     if (isWorkspacePane || to.name !== 'workspace' || typeof to.params.id !== 'string') return true
     const internal = internalForNavigation && typeof to.query.sprint === 'string'
     const sessionId = typeof to.query.session === 'string' ? to.query.session : undefined
+    // Sidebar targets are already loaded; details can refresh after the route opens.
+    if (internal && !sessionId) {
+      const store = useWorkspaceStore()
+      if ([...store.workspaces, ...store.archivedWorkspaces].some((workspace) => workspace.id === to.params.id))
+        return true
+    }
     try {
       const decision = await resolveWorkspaceRoute(
         { workspaceId: to.params.id, ...(sessionId ? { sessionId } : {}) },

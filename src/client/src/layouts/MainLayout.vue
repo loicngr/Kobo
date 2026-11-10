@@ -408,7 +408,7 @@ watch(
   { immediate: true },
 )
 
-const showRightDrawer = computed(() => route.name === 'workspace')
+const showRightDrawer = computed(() => route.name === 'workspace' && !!route.params.id)
 
 provide('openDrawerTab', (tab: string) => {
   layout.setRight(true)

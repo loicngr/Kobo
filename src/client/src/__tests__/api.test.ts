@@ -244,6 +244,7 @@ describe('Response transport', () => {
   })
 
   it('allows server-bounded slow operations enough time to finish', () => {
+    expect(apiTimeoutForPath('/api/workspaces/w1/ci-job-logs?url=encoded')).toBe(120_000)
     expect(apiTimeoutForPath('/api/workspaces/w1/sessions')).toBe(30_000)
     expect(apiTimeoutForPath('/api/workspaces/w1/fetch?force=true', 'POST')).toBe(180_000)
     expect(apiTimeoutForPath('/api/dev-server/w1/start', 'POST')).toBe(180_000)

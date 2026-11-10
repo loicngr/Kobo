@@ -7691,14 +7691,44 @@ describe('POST /api/workspaces/:id/merge-pr', () => {
     expect(mergeRequestMock).toHaveBeenCalledTimes(1)
   })
 
-  it('forwards an explicit admin override even when checks are not ready', async () => {
-    getPrStatusMock.mockResolvedValueOnce({ number: 42, state: 'OPEN', readyToMerge: false })
+  it.each([
+    { number: 43, headSha: 'a'.repeat(40) },
+    { number: 42, headSha: 'b'.repeat(40) },
+  ])('rejects a changed PR or head before an admin merge: %j', async (revision) => {
+    getPrStatusMock.mockResolvedValueOnce({ ...revision, state: 'OPEN', readyToMerge: false })
     const res = await app.request('/api/workspaces/ws-1/merge-pr', {
       method: 'POST',
-      body: JSON.stringify({ method: 'squash', admin: true }),
+      body: JSON.stringify({ admin: true, expected: { number: 42, headSha: 'a'.repeat(40) } }),
+    })
+    expect(res.status).toBe(409)
+    expect(await res.json()).toMatchObject({ code: 'merge_revision_changed' })
+    expect(mergeRequestMock).not.toHaveBeenCalled()
+  })
+  it('requires an explicit revision for admin merging', async () => {
+    const res = await app.request('/api/workspaces/ws-1/merge-pr', { method: 'POST', body: '{"admin":true}' })
+    expect(res.status).toBe(409)
+    expect(mergeRequestMock).not.toHaveBeenCalled()
+  })
+  it('rejects malformed expected revisions', async () => {
+    const res = await app.request('/api/workspaces/ws-1/merge-pr', {
+      method: 'POST',
+      body: '{"expected":{"number":42,"headSha":"--admin"}}',
+    })
+    expect(res.status).toBe(400)
+    expect(mergeRequestMock).not.toHaveBeenCalled()
+  })
+
+  it('forwards an explicit admin override even when checks are not ready', async () => {
+    getPrStatusMock.mockResolvedValueOnce({ number: 42, headSha: 'a'.repeat(40), state: 'OPEN', readyToMerge: false })
+    const res = await app.request('/api/workspaces/ws-1/merge-pr', {
+      method: 'POST',
+      body: JSON.stringify({ method: 'squash', admin: true, expected: { number: 42, headSha: 'a'.repeat(40) } }),
     })
     expect(res.status).toBe(200)
-    expect(mergeRequestMock).toHaveBeenCalledExactlyOnceWith(expect.any(String), 42, 'squash', { admin: true })
+    expect(mergeRequestMock).toHaveBeenCalledExactlyOnceWith(expect.any(String), 42, 'squash', {
+      admin: true,
+      expectedHeadSha: 'a'.repeat(40),
+    })
   })
 
   it('does not override protections when admin is false', async () => {
@@ -7720,7 +7750,10 @@ describe('POST /api/workspaces/:id/merge-pr', () => {
   it('rejects admin for other forges instead of silently ignoring it', async () => {
     const provider = getForgeProvider('github')
     vi.mocked(getForgeProvider).mockReturnValueOnce({ ...provider, id: 'gitlab' })
-    const res = await app.request('/api/workspaces/ws-1/merge-pr', { method: 'POST', body: '{"admin":true}' })
+    const res = await app.request('/api/workspaces/ws-1/merge-pr', {
+      method: 'POST',
+      body: JSON.stringify({ admin: true, expected: { number: 42, headSha: 'a'.repeat(40) } }),
+    })
     expect(res.status).toBe(409)
     expect(await res.json()).toMatchObject({ code: 'merge_admin_unsupported' })
     expect(mergeRequestMock).not.toHaveBeenCalled()
@@ -7730,8 +7763,11 @@ describe('POST /api/workspaces/:id/merge-pr', () => {
     { number: 42, state: 'CLOSED', readyToMerge: false },
     { number: 42, state: 'OPEN', readyToMerge: false, mergeable: 'CONFLICTING' },
   ])('does not override an unmergeable PR: %j', async (snapshot) => {
-    getPrStatusMock.mockResolvedValueOnce(snapshot)
-    const res = await app.request('/api/workspaces/ws-1/merge-pr', { method: 'POST', body: '{"admin":true}' })
+    getPrStatusMock.mockResolvedValueOnce({ ...snapshot, headSha: 'a'.repeat(40) })
+    const res = await app.request('/api/workspaces/ws-1/merge-pr', {
+      method: 'POST',
+      body: JSON.stringify({ admin: true, expected: { number: 42, headSha: 'a'.repeat(40) } }),
+    })
     expect(res.status).toBe(409)
     expect(mergeRequestMock).not.toHaveBeenCalled()
   })

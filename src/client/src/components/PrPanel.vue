@@ -113,34 +113,28 @@
 
       <!-- Failed checks: always visible -->
       <div v-if="ciGroups.failed.length > 0" class="pr-panel__ci-list q-mt-sm">
-        <component
-          :is="c.detailsUrl ? 'a' : 'div'"
-          v-for="c in ciGroups.failed"
-          :key="`f-${c.name}-${c.detailsUrl ?? ''}`"
-          :href="c.detailsUrl ?? undefined"
-          target="_blank"
-          rel="noopener"
-          class="pr-panel__ci-item pr-panel__ci-item--failed"
-        >
-          <q-icon name="cancel" size="14px" />
-          <span class="ellipsis">{{ c.name }}</span>
-        </component>
+        <div v-for="c in ciGroups.failed" :key="`f-${c.name}-${c.detailsUrl ?? ''}`" class="pr-panel__ci-item pr-panel__ci-item--failed">
+            <component :is="c.detailsUrl ? 'a' : 'span'" :href="c.detailsUrl ?? undefined" target="_blank" rel="noopener noreferrer" class="col row items-center no-wrap q-gutter-xs" style="color: inherit; text-decoration: none; min-width: 0;">
+              <q-icon name="cancel" size="14px" />
+              <span class="ellipsis">{{ c.name }}</span>
+            </component>
+            <q-btn v-if="workspaceId && c.detailsUrl && githubJobTarget(c.detailsUrl)" flat dense round size="sm" icon="article" :aria-label="t('git.ciLogs.open', { name: c.name })" @click="selectedJob = c">
+              <q-tooltip>{{ t('git.ciLogs.open', { name: c.name }) }}</q-tooltip>
+            </q-btn>
+          </div>
       </div>
 
       <!-- Pending checks: always visible -->
       <div v-if="ciGroups.pending.length > 0" class="pr-panel__ci-list q-mt-xs">
-        <component
-          :is="c.detailsUrl ? 'a' : 'div'"
-          v-for="c in ciGroups.pending"
-          :key="`p-${c.name}-${c.detailsUrl ?? ''}`"
-          :href="c.detailsUrl ?? undefined"
-          target="_blank"
-          rel="noopener"
-          class="pr-panel__ci-item pr-panel__ci-item--pending"
-        >
-          <q-icon name="hourglass_top" size="14px" />
-          <span class="ellipsis">{{ c.name }}</span>
-        </component>
+        <div v-for="c in ciGroups.pending" :key="`p-${c.name}-${c.detailsUrl ?? ''}`" class="pr-panel__ci-item pr-panel__ci-item--pending">
+            <component :is="c.detailsUrl ? 'a' : 'span'" :href="c.detailsUrl ?? undefined" target="_blank" rel="noopener noreferrer" class="col row items-center no-wrap q-gutter-xs" style="color: inherit; text-decoration: none; min-width: 0;">
+              <q-icon name="hourglass_top" size="14px" />
+              <span class="ellipsis">{{ c.name }}</span>
+            </component>
+            <q-btn v-if="workspaceId && c.detailsUrl && githubJobTarget(c.detailsUrl)" flat dense round size="sm" icon="article" :aria-label="t('git.ciLogs.open', { name: c.name })" @click="selectedJob = c">
+              <q-tooltip>{{ t('git.ciLogs.open', { name: c.name }) }}</q-tooltip>
+            </q-btn>
+          </div>
       </div>
 
       <!-- Passed/skipped checks: collapsed by default -->
@@ -153,33 +147,28 @@
           @click="showPassed = !showPassed"
         />
         <div v-if="showPassed" class="pr-panel__ci-list q-mt-xs">
-          <component
-            :is="c.detailsUrl ? 'a' : 'div'"
-            v-for="c in ciGroups.passed"
-            :key="`s-${c.name}-${c.detailsUrl ?? ''}`"
-            :href="c.detailsUrl ?? undefined"
-            target="_blank"
-            rel="noopener"
-            class="pr-panel__ci-item pr-panel__ci-item--passed"
-          >
-            <q-icon name="check_circle" size="14px" />
-            <span class="ellipsis">{{ c.name }}</span>
-          </component>
-          <component
-            :is="c.detailsUrl ? 'a' : 'div'"
-            v-for="c in ciGroups.skipped"
-            :key="`k-${c.name}-${c.detailsUrl ?? ''}`"
-            :href="c.detailsUrl ?? undefined"
-            target="_blank"
-            rel="noopener"
-            class="pr-panel__ci-item pr-panel__ci-item--skipped"
-          >
-            <q-icon name="remove_circle_outline" size="14px" />
-            <span class="ellipsis">{{ c.name }}</span>
-          </component>
+          <div v-for="c in ciGroups.passed" :key="`s-${c.name}-${c.detailsUrl ?? ''}`" class="pr-panel__ci-item pr-panel__ci-item--passed">
+            <component :is="c.detailsUrl ? 'a' : 'span'" :href="c.detailsUrl ?? undefined" target="_blank" rel="noopener noreferrer" class="col row items-center no-wrap q-gutter-xs" style="color: inherit; text-decoration: none; min-width: 0;">
+              <q-icon name="check_circle" size="14px" />
+              <span class="ellipsis">{{ c.name }}</span>
+            </component>
+            <q-btn v-if="workspaceId && c.detailsUrl && githubJobTarget(c.detailsUrl)" flat dense round size="sm" icon="article" :aria-label="t('git.ciLogs.open', { name: c.name })" @click="selectedJob = c">
+              <q-tooltip>{{ t('git.ciLogs.open', { name: c.name }) }}</q-tooltip>
+            </q-btn>
+          </div>
+          <div v-for="c in ciGroups.skipped" :key="`k-${c.name}-${c.detailsUrl ?? ''}`" class="pr-panel__ci-item pr-panel__ci-item--skipped">
+            <component :is="c.detailsUrl ? 'a' : 'span'" :href="c.detailsUrl ?? undefined" target="_blank" rel="noopener noreferrer" class="col row items-center no-wrap q-gutter-xs" style="color: inherit; text-decoration: none; min-width: 0;">
+              <q-icon name="remove_circle_outline" size="14px" />
+              <span class="ellipsis">{{ c.name }}</span>
+            </component>
+            <q-btn v-if="workspaceId && c.detailsUrl && githubJobTarget(c.detailsUrl)" flat dense round size="sm" icon="article" :aria-label="t('git.ciLogs.open', { name: c.name })" @click="selectedJob = c">
+              <q-tooltip>{{ t('git.ciLogs.open', { name: c.name }) }}</q-tooltip>
+            </q-btn>
+          </div>
         </div>
       </div>
     </div>
+    <CiJobLogsDialog v-if="selectedJob?.detailsUrl && workspaceId" :workspace-id="workspaceId" :url="selectedJob.detailsUrl" :job-name="selectedJob.name" @close="selectedJob = null" />
   </div>
 </template>
 
@@ -188,14 +177,20 @@ import type { PrSnapshot } from 'src/stores/workspace'
 import { summarizeCiChecks } from 'src/utils/ci-summary'
 import { pickReadableForeground } from 'src/utils/color'
 import { isChangesRequestedBlocking, isMergeabilityPending } from 'src/utils/pr-status'
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { githubJobTarget } from '../../../shared/ci-job-logs'
+import CiJobLogsDialog from './CiJobLogsDialog.vue'
 
 type Check = PrSnapshot['ci']['checks'][number]
 
-const props = defineProps<{ snapshot: PrSnapshot }>()
+const props = defineProps<{ snapshot: PrSnapshot; workspaceId?: string }>()
 const { t } = useI18n()
 const showPassed = ref(false)
+const selectedJob = ref<Check | null>(null)
+watch([() => props.workspaceId, () => props.snapshot.url], () => {
+  selectedJob.value = null
+})
 
 function reviewerColor(state: PrSnapshot['reviewers'][number]['state']): string {
   switch (state) {

@@ -1,5 +1,5 @@
 <template>
-  <div class="column q-gutter-sm q-pa-sm">
+  <div class="column q-gutter-sm q-py-sm">
     <AutoLoopFinalReviewSettings
       data-tour="ws-final-review"
       v-if="ws" :model-value="finalReview?.configuration ?? null" :workspace="ws"
@@ -40,7 +40,7 @@
       dense
       no-caps
       outline
-      color="primary"
+      color="kobo-2"
       icon="build"
       :label="isReady ? t('autoLoop.reprepare') : t('autoLoop.prepare')"
       :disable="isAgentBusy || isArchived"

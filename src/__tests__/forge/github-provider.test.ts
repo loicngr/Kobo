@@ -237,3 +237,17 @@ describe('github forge provider', () => {
     expect(snap?.readyToMerge).toBe(false)
   })
 })
+
+it('atomically pins a GitHub merge to the confirmed head', async () => {
+  execFileMock.mockResolvedValueOnce('')
+  await githubProvider.mergeRequest('/repo', 42, 'squash', { admin: true, expectedHeadSha: 'a'.repeat(40) })
+  expect(execFileMock).toHaveBeenLastCalledWith('gh', [
+    'pr',
+    'merge',
+    '42',
+    '--squash',
+    '--admin',
+    '--match-head-commit',
+    'a'.repeat(40),
+  ])
+})

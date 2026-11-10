@@ -1,4 +1,24 @@
 export default {
+  'tools.group.session': 'Sitzung',
+  'tools.group.quality': 'Review und Qualität',
+  'tools.group.project': 'Projektumgebung',
+
+  'git.mergeRevisionChanged':
+    'Der PR oder seine Commits haben sich geändert. Aktualisieren und Merge erneut bestätigen.',
+  'git.mergeBypassRequirements': 'PR-Merge erzwingen',
+  'git.ciLogs.retryStopped':
+    'Automatische Aktualisierung nach mehreren Versuchen pausiert. Zum erneuten Versuch auf Aktualisieren klicken.',
+  'git.ciLogs.open': 'Logs für {name} anzeigen',
+  'git.ciLogs.external': 'Live-Logs auf GitHub öffnen',
+  'git.ciLogs.notice':
+    'Aktualisierung alle 10 Sekunden. Logs erscheinen, sobald GitHub sie veröffentlicht; Live-Streaming ist auf GitHub verfügbar.',
+  'git.ciLogs.step': 'Schritt',
+  'git.ciLogs.error': 'Logs konnten nicht geladen werden. GitHub-Zugriff des Servers prüfen und erneut versuchen.',
+  'git.ciLogs.truncated': 'Begrenzte Anzeige: Einige Logs werden ausgelassen.',
+  'git.ciLogs.follow': 'Neuen Logs folgen',
+  'git.ciLogs.all': 'Alle Schritte',
+  'git.ciLogs.unavailable': 'GitHub stellt für diese Auswahl noch keine Logs bereit.',
+
   'tours.home.sprints.title': 'Workspaces nach Sprint organisieren',
   'tours.home.sprints.description':
     'Die unteren Tabs filtern Workspaces: Alle, Ohne Sprint oder ein bestimmter Sprint. Ein Wechsel führt zur Startseite, ohne Agenten zu stoppen. Über das Zahnrad können Sie Sprints erstellen, umbenennen, umordnen oder löschen; die Workspaces bleiben beim Löschen erhalten.',
@@ -540,6 +560,10 @@ export default {
   'model.gpt6solDescription': 'Vielseitiges Modell der vorherigen Generation',
   'model.gpt6luna': 'GPT-6 Luna',
   'model.gpt6lunaDescription': 'Schnelles Modell für einfache Aufgaben',
+  'model.fable52': 'Fable 5.2',
+  'model.fable52Description': 'Fortgeschrittenes Denken und langlaufende Agentenaufgaben, 1M Kontext',
+  'model.mythos52': 'Mythos 5.2',
+  'model.mythos52Description': 'Zugang nur für von Anthropic verifizierte Organisationen',
   'model.fable51': 'Fable 5.1',
   'model.fable5': 'Fable 5',
   'model.fable5Description': 'Für anspruchsvolle, lang laufende Aufgaben',
@@ -654,6 +678,10 @@ export default {
   // Workspace Page
   'workspacePage.configure': 'Konfigurieren',
   'workspacePage.permissions': 'Berechtigungen',
+  'workspacePage.emptyTitle': 'Ihr nächster Workspace',
+  'workspacePage.emptyHint':
+    'Setzen Sie eine Aufgabe aus der Workspace-Liste fort oder erstellen Sie einen neuen Workspace für die Arbeit mit Ihrem Agenten.',
+  'workspacePage.browseWorkspaces': 'Workspaces durchsuchen',
   'workspacePage.selectWorkspace': 'Arbeitsbereich auswählen, um zu beginnen',
   'workspacePage.commandPalettePlaceholder': 'Befehle suchen…',
   'workspacePage.commandPaletteEmpty': 'Kein passender Befehl',
@@ -1678,7 +1706,7 @@ export default {
   'git.title': 'Git',
   'git.outputDialogTitle': 'Git hat einen Fehler gemeldet',
   'git.statsFailed': 'Der Git-Status konnte nicht gelesen werden',
-  'git.refreshingCached': 'Git-Status wird aktualisiert — letzte bekannte Werte, schreibgeschützt.',
+  'git.refreshingCached': 'Git-Status wird aktualisiert — letzte bekannte Werte werden angezeigt.',
   'git.cachedReadOnly': 'Letzte bekannte Werte — schreibgeschützt, bis der Git-Status aktualisiert wurde.',
   'git.section.repository': 'Repository',
   'git.section.changes': 'Änderungen',

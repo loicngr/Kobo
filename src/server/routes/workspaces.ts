@@ -26,6 +26,7 @@ import {
 } from '../services/session-handoff-service.js'
 import * as sprintService from '../services/sprint-service.js'
 import { AgentStopError, assertAgentStopped } from '../utils/agent-stop-result.js'
+import { commitWebUrl } from '../utils/commit-url.js'
 import { withGitRepoLock } from '../utils/git-repo-lock.js'
 import {
   assertWorkspaceLifecycleAvailable,
@@ -33,6 +34,7 @@ import {
   workspaceLifecycleReason,
 } from '../utils/workspace-lifecycle-guard.js'
 import autoLoopMessagesRoutes from './auto-loop-messages.js'
+import ciJobLogsRoutes from './ci-job-logs.js'
 import parallelReviewRoutes from './parallel-reviews.js'
 
 const execFileAsync = promisify(execFileCb)
@@ -188,6 +190,7 @@ for (const route of [
 }
 
 app.route('/', parallelReviewRoutes)
+app.route('/', ciJobLogsRoutes)
 
 // User prompt actions must reject before cancelling timers, stopping engines,
 // creating a PR or persisting input. The orchestrator also checks at delivery.
@@ -4496,6 +4499,26 @@ app.post('/:id/rollback-file', async (c) => {
 // (`ahead`) and commits on `origin/<sourceBranch>` not yet on the working
 // branch (`behind`). Awaits refreshing `origin/<sourceBranch>` so the
 // counts and lists are never computed against a stale local source ref.
+app.get('/:id/commits/:sha/open', async (c) => {
+  const workspace = workspaceService.getWorkspace(c.req.param('id'))
+  if (!workspace) return c.json({ error: 'Workspace not found' }, 404)
+  const sha = c.req.param('sha')
+  if (!/^[a-f0-9]{40}$/i.test(sha)) return c.json({ error: 'Invalid commit SHA' }, 400)
+  try {
+    const { stdout } = await execFileAsync('git', ['remote', 'get-url', 'origin'], {
+      cwd: workspace.projectPath,
+      encoding: 'utf8',
+      timeout: 5000,
+      maxBuffer: 16_384,
+    })
+    const url = commitWebUrl(stdout.trim(), resolveForge(workspace.projectPath), sha)
+    if (!url) return c.json({ error: 'No supported remote repository for this commit' }, 404)
+    return c.redirect(url, 302)
+  } catch {
+    return c.json({ error: 'Unable to resolve the remote repository' }, 502)
+  }
+})
+
 app.get('/:id/branch-divergence', async (c) => {
   try {
     const id = c.req.param('id')
@@ -5145,6 +5168,24 @@ app.post('/:id/merge-pr', async (c) => {
       return c.json({ error: 'admin must be a boolean' }, 400)
     }
     const admin = body.admin === true
+    const expected = body.expected
+    if (
+      expected !== undefined &&
+      (expected === null ||
+        typeof expected !== 'object' ||
+        !Number.isSafeInteger((expected as { number?: unknown }).number) ||
+        Number((expected as { number?: unknown }).number) < 1 ||
+        typeof (expected as { headSha?: unknown }).headSha !== 'string' ||
+        !/^[a-f0-9]{40}$/i.test((expected as { headSha: string }).headSha))
+    ) {
+      return c.json({ error: 'Invalid expected PR revision' }, 400)
+    }
+    if (admin && expected === undefined)
+      return c.json(
+        { error: 'Confirm the current PR revision before overriding requirements', code: 'merge_revision_changed' },
+        409,
+      )
+    const expectedRevision = expected as { number: number; headSha: string } | undefined
     const method = body.method
     if (method !== undefined && !isMergeMethod(method)) {
       return c.json({ error: 'method must be merge, squash or rebase' }, 400)
@@ -5179,6 +5220,11 @@ app.post('/:id/merge-pr', async (c) => {
     if (snapshot?.state !== 'OPEN') {
       return c.json({ error: 'No open PR found for this workspace', code: 'pr_not_open' }, 409)
     }
+    if (
+      expectedRevision &&
+      (snapshot.number !== expectedRevision.number || snapshot.headSha !== expectedRevision.headSha)
+    )
+      return c.json({ error: 'The PR changed. Refresh and confirm again.', code: 'merge_revision_changed' }, 409)
     if (admin && snapshot.mergeable === 'CONFLICTING') {
       return c.json({ error: 'Resolve merge conflicts before merging', code: 'pr_not_ready' }, 409)
     }
@@ -5186,8 +5232,11 @@ app.post('/:id/merge-pr', async (c) => {
       return c.json({ error: 'This PR is not ready to merge', code: 'pr_not_ready' }, 409)
     }
 
-    if (admin) {
-      await provider.mergeRequest(workspace.worktreePath, snapshot.number, method, { admin: true })
+    if (admin || (expectedRevision && provider.id === 'github')) {
+      await provider.mergeRequest(workspace.worktreePath, snapshot.number, method, {
+        ...(admin ? { admin: true } : {}),
+        ...(expectedRevision ? { expectedHeadSha: expectedRevision.headSha } : {}),
+      })
     } else if (method === undefined) {
       await provider.mergeRequest(workspace.worktreePath, snapshot.number)
     } else {

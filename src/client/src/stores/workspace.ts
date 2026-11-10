@@ -3,7 +3,14 @@ import { is } from 'quasar'
 import type { PendingAttachment } from 'src/composables/use-chat-attachments'
 import { disposeTerminalEntry } from 'src/services/terminal-registry'
 import { getWorkspaceQueueHost } from 'src/services/workspace-queue-bridge'
-import { apiFetch, apiFetchOk, apiFetchResponse, apiFetchResponseForStatus, apiResponseError } from 'src/utils/api'
+import {
+  ApiError,
+  apiFetch,
+  apiFetchOk,
+  apiFetchResponse,
+  apiFetchResponseForStatus,
+  apiResponseError,
+} from 'src/utils/api'
 import { isAbortError } from 'src/utils/latest-request'
 import type { AutoLoopFinalReviewStatus, AutoLoopReviewConfiguration } from '../../../shared/auto-loop-review'
 import type { AutoLoopRuntime, QueuedAutoLoopMessage } from '../../../shared/auto-loop-types'
@@ -362,6 +369,7 @@ export interface PrCiCheck {
 }
 
 export interface PrSnapshot {
+  headSha?: string
   number: number
   title: string
   url: string
@@ -911,6 +919,17 @@ export const useWorkspaceStore = defineStore('workspace', {
           this.applyAgentLiveness(id, data.agentLiveness as AgentLiveness | null)
         }
       } catch (err) {
+        if (
+          err instanceof ApiError &&
+          err.status === 404 &&
+          this.selectedWorkspaceId === id &&
+          _workspaceDetailsRequestVersions.get(id) === requestVersion &&
+          lifecycleVersion === (this.workspaceLifecycleVersions[id] ?? 0)
+        ) {
+          this.workspaces = this.workspaces.filter((workspace) => workspace.id !== id)
+          this.archivedWorkspaces = this.archivedWorkspaces.filter((workspace) => workspace.id !== id)
+          return false
+        }
         console.error('[workspace store] fetchWorkspaceDetails failed:', err)
       }
     },
@@ -1571,7 +1590,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.tasks = []
       // Acknowledge the visit independently of loading session details.
       void this.markRead(id)
-      this.fetchWorkspaceDetails(id)
+      const detailsLoaded = this.fetchWorkspaceDetails(id)
       void useParallelReviewStore()
         .fetchStatus(id)
         .catch(() => {})
@@ -1589,7 +1608,8 @@ export const useWorkspaceStore = defineStore('workspace', {
       if (!this.activityFeeds[id]?.length) {
         useWebSocketStore().subscribe(id)
       }
-      await sessionsLoaded
+      const [details] = await Promise.all([detailsLoaded, sessionsLoaded])
+      return details
     },
 
     async fetchSessions(workspaceId: string, forceSelectId?: string | null) {

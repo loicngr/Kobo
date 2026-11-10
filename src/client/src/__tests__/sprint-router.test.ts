@@ -2,6 +2,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { Dialog, Notify } from 'quasar'
 import { afterEach, expect, it, vi } from 'vitest'
 import createKoboRouter from '../router'
+import { useWorkspaceStore, type Workspace } from '../stores/workspace'
 import { markInternalSprintTarget } from '../utils/sprint-navigation'
 import { _clearUnsavedScopesForTest, registerUnsavedScope } from '../utils/unsaved-guard'
 
@@ -14,6 +15,37 @@ vi.mock('quasar', async (original) => ({
 vi.mock('../router/routes', () => ({
   default: [{ path: '/workspace/:id?', name: 'workspace', component: { template: '<div />' } }],
 }))
+
+it.each(['workspaces', 'archivedWorkspaces'] as const)(
+  'opens a loaded internal target without waiting for the network (%s)',
+  async (list) => {
+    setActivePinia(createPinia())
+    useWorkspaceStore()[list] = [{ id: 'loaded' } as Workspace]
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => new Promise<Response>(() => {})),
+    )
+    const router = await createKoboRouter({} as never)
+    markInternalSprintTarget('loaded', '__all__')
+    await router.push('/workspace/loaded?sprint=__all__')
+    expect(router.currentRoute.value.params.id).toBe('loaded')
+    expect(fetch).not.toHaveBeenCalled()
+  },
+)
+
+it.each(['external', 'session', 'unknown'])('still validates %s targets over the network', async (kind) => {
+  setActivePinia(createPinia())
+  if (kind !== 'unknown') useWorkspaceStore().workspaces = [{ id: 'loaded' } as Workspace]
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(() => Promise.resolve(new Response(null, { status: 404 }))),
+  )
+  const router = await createKoboRouter({} as never)
+  if (kind !== 'external') markInternalSprintTarget('loaded', '__all__')
+  await router.push(`/workspace/loaded?sprint=__all__${kind === 'session' ? '&session=s1' : ''}`)
+  expect(fetch).toHaveBeenCalled()
+  expect(router.currentRoute.value.params.id).toBeUndefined()
+})
 
 it('attend la validation de session et relit le sprint avant de valider un lien brut', async () => {
   setActivePinia(createPinia())

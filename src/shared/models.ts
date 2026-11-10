@@ -31,6 +31,18 @@ export const CLAUDE_MODELS: readonly AgentModel[] = [
     i18nDescriptionKey: 'model.autoDescription',
   },
   {
+    id: 'claude-fable-5-2',
+    label: 'Fable 5.2',
+    i18nLabelKey: 'model.fable52',
+    i18nDescriptionKey: 'model.fable52Description',
+  },
+  {
+    id: 'claude-mythos-5-2',
+    label: 'Mythos 5.2',
+    i18nLabelKey: 'model.mythos52',
+    i18nDescriptionKey: 'model.mythos52Description',
+  },
+  {
     id: 'claude-fable-5-1',
     label: 'Fable 5.1',
     i18nLabelKey: 'model.fable51',

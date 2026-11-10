@@ -1,9 +1,5 @@
 <template>
-  <q-item v-if="section !== 'session'">
-    <q-item-section @click.stop>
-      <AutoLoopChip />
-    </q-item-section>
-  </q-item>
+  <AutoLoopChip v-if="section !== 'session'" />
   <q-item v-if="section === 'session'">
     <q-item-section @click.stop>
       <q-select
@@ -18,7 +14,7 @@
         options-dense
         :loading="creatingSession"
         :disable="creatingSession"
-        style="min-width: 160px; font-size: 11px;"
+        class="toolbar-selector"
       >
         <template #option="scope">
           <q-separator v-if="!scope.opt.isSession" spaced />
@@ -79,7 +75,7 @@
         dark
         borderless
         options-dense
-        style="min-width: 160px; font-size: 11px;"
+        class="toolbar-selector"
       >
         <template #selected>
           <span class="row items-center no-wrap text-caption text-kobo-2">
@@ -106,8 +102,7 @@
         dark
         borderless
         options-dense
-        class="model-select"
-        style="min-width: 160px; font-size: 11px;"
+        class="model-select toolbar-selector"
       >
         <template #selected>
           <span class="row items-center no-wrap text-caption text-kobo-2">
@@ -118,38 +113,6 @@
             </q-icon>
           </span>
         </template>
-      </q-select>
-    </q-item-section>
-  </q-item>
-  <q-item v-for="action in WORKFLOW_ACTIONS" v-if="section !== 'session'" :key="action">
-    <q-item-section @click.stop>
-      <q-select
-        :label="$t(`workflow.${action}`)"
-        :model-value="workflowPolicy[action]"
-        :options="workflowOptions"
-        :disable="workflowLocked"
-        :data-test="`workflow-${action}`"
-        emit-value
-        map-options
-        dense
-        dark
-        borderless
-        options-dense
-        style="min-width: 160px; font-size: 11px;"
-        @update:model-value="(mode: WorkflowMode) => emit('updateWorkflow', action, mode)"
-      >
-        <template #selected>
-          <span class="row items-center no-wrap text-caption text-kobo-2">
-            <q-icon
-              :name="workflowPolicy[action] === 'automatic' ? 'bolt' : 'back_hand'"
-              :color="workflowPolicy[action] === 'automatic' ? 'amber-6' : 'kobo-3'"
-              size="12px"
-              class="q-mr-xs"
-            />
-            {{ $t(`workflow.${workflowPolicy[action]}`) }}
-          </span>
-        </template>
-        <q-tooltip>{{ workflowLocked ? $t('workflow.locked') : $t('workflow.hint') }}</q-tooltip>
       </q-select>
     </q-item-section>
   </q-item>
@@ -166,7 +129,7 @@
         dark
         borderless
         options-dense
-        style="min-width: 160px; font-size: 11px;"
+        class="toolbar-selector"
       >
         <template #selected>
           <span class="row items-center no-wrap text-caption text-kobo-2">
@@ -177,6 +140,39 @@
             </q-icon>
           </span>
         </template>
+      </q-select>
+    </q-item-section>
+  </q-item>
+  <q-separator v-if="section !== 'session'" class="q-my-sm" />
+  <q-item v-for="action in WORKFLOW_ACTIONS" v-if="section !== 'session'" :key="action">
+    <q-item-section @click.stop>
+      <q-select
+        :label="$t(`workflow.${action}`)"
+        :model-value="workflowPolicy[action]"
+        :options="workflowOptions"
+        :disable="workflowLocked"
+        :data-test="`workflow-${action}`"
+        emit-value
+        map-options
+        dense
+        dark
+        borderless
+        options-dense
+        class="toolbar-selector"
+        @update:model-value="(mode: WorkflowMode) => emit('updateWorkflow', action, mode)"
+      >
+        <template #selected>
+          <span class="row items-center no-wrap text-caption text-kobo-2">
+            <q-icon
+              :name="workflowPolicy[action] === 'automatic' ? 'bolt' : 'back_hand'"
+              :color="workflowPolicy[action] === 'automatic' ? 'amber-6' : 'kobo-3'"
+              size="12px"
+              class="q-mr-xs"
+            />
+            {{ $t(`workflow.${workflowPolicy[action]}`) }}
+          </span>
+        </template>
+        <q-tooltip>{{ workflowLocked ? $t('workflow.locked') : $t('workflow.hint') }}</q-tooltip>
       </q-select>
     </q-item-section>
   </q-item>
@@ -259,3 +255,9 @@ const reasoningLabel = computed(
   () => props.reasoningOptions.find((r) => r.value === reasoningEffort.value)?.label ?? reasoningEffort.value,
 )
 </script>
+
+<style scoped>
+.toolbar-selector { min-width: 160px; font-size: 13px; }
+.toolbar-selector :deep(.q-field__label) { color: var(--kobo-text-3); }
+.toolbar-selector :deep(.q-field__native) { color: var(--kobo-text-2); }
+</style>

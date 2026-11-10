@@ -4,7 +4,7 @@
     <div class="create-inner q-mx-auto">
       <header class="q-mb-lg">
         <div class="row items-center">
-          <div class="create-title text-weight-bold text-kobo-1">{{ $t('createPage.title') }}</div>
+          <h1 class="create-title text-weight-bold text-kobo-1">{{ $t('createPage.title') }}</h1>
           <q-space />
           <TourReplayButton tour-id="create" />
         </div>
@@ -95,7 +95,7 @@
       <div class="create-sections column">
         <q-card flat bordered class="create-section-card" data-tour="create-mission">
           <q-card-section class="row items-start no-wrap q-gutter-md">
-            <q-avatar color="primary" text-color="white" icon="assignment" size="42px" />
+            <q-icon name="assignment" size="24px" class="text-kobo-3" />
             <div>
               <div class="text-subtitle1 text-weight-medium text-kobo-1">{{ $t('createPage.sectionMission') }}</div>
               <div class="text-body2 text-kobo-3">{{ $t('createPage.sectionMissionHint') }}</div>
@@ -439,7 +439,7 @@
 
         <q-card flat bordered class="create-section-card" data-tour="create-project">
           <q-card-section class="row items-start no-wrap q-gutter-md">
-            <q-avatar color="blue-grey-9" text-color="blue-grey-2" icon="account_tree" size="42px" />
+            <q-icon name="account_tree" size="24px" class="text-kobo-3" />
             <div>
               <div class="text-subtitle1 text-weight-medium text-kobo-1">{{ $t('createPage.sectionGit') }}</div>
               <div class="text-body2 text-kobo-3">{{ $t('createPage.sectionGitHint') }}</div>
@@ -637,7 +637,7 @@
 
         <q-card flat bordered class="create-section-card" data-tour="create-engine">
           <q-card-section class="row items-start no-wrap q-gutter-md">
-            <q-avatar color="primary" text-color="white" icon="smart_toy" size="42px" />
+            <q-icon name="smart_toy" size="24px" class="text-kobo-3" />
             <div class="col">
               <div class="text-subtitle1 text-weight-medium text-kobo-1">{{ $t('createPage.sectionAgent') }}</div>
               <div class="text-body2 text-kobo-3">{{ $t('createPage.sectionAgentHint') }}</div>
@@ -2835,7 +2835,7 @@ async function createOneWorkspace(
 .create-page {
   position: relative;
   min-height: 100%;
-  padding: 48px 24px 80px;
+  padding: var(--kobo-space-3xl) var(--kobo-space-xl) var(--kobo-space-4xl);
   background: var(--kobo-bg);
 }
 
@@ -2881,17 +2881,18 @@ async function createOneWorkspace(
 
 .create-inner {
   width: 100%;
-  max-width: 960px;
+  max-width: 800px;
 }
 
 .create-title {
-  font-size: 30px;
+  margin: 0;
+  font-size: 24px;
   line-height: 1.2;
   letter-spacing: -0.02em;
 }
 
 .create-sections {
-  gap: 24px;
+  gap: var(--kobo-space-2xl);
 }
 
 .responsive-fields {
@@ -2905,8 +2906,10 @@ async function createOneWorkspace(
 .create-section-card,
 .create-actions-card {
   background: var(--kobo-surface);
-  border-color: rgba(255, 255, 255, 0.12);
+  border-color: var(--kobo-border);
 }
+.create-section-card > :deep(.q-separator) { background: var(--kobo-border-subtle); }
+.create-page :deep(.q-field--outlined .q-field__control::before) { border-color: var(--kobo-border-strong); }
 
 .card-textarea-wrap {
   position: relative;
@@ -2914,11 +2917,11 @@ async function createOneWorkspace(
 
 .create-textarea {
   :deep(.q-field__control) {
-    min-height: 220px;
+    min-height: 160px;
   }
 
   :deep(textarea) {
-    min-height: 180px !important;
+    min-height: 120px !important;
     line-height: 1.6;
     resize: vertical;
   }
@@ -3024,10 +3027,8 @@ async function createOneWorkspace(
 }
 
 .create-actions-card {
-  position: sticky;
-  bottom: 16px;
-  z-index: 10;
-  box-shadow: 0 10px 36px rgba(0, 0, 0, 0.38);
+  margin-top: var(--kobo-space-sm);
+  box-shadow: none;
 }
 
 .voice-btn--recording {
@@ -3073,12 +3074,10 @@ async function createOneWorkspace(
   }
 
   .create-title {
-    font-size: 26px;
+    font-size: 24px;
   }
 
   .create-actions-card {
-    bottom: 8px;
-
     :deep(.q-card__section) {
       align-items: stretch;
     }

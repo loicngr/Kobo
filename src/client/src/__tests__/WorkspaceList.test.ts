@@ -398,3 +398,26 @@ it('does not acknowledge a workspace when navigation is refused', async () => {
   await flushPromises()
   expect(markRead).not.toHaveBeenCalled()
 })
+
+it('does not restart an in-flight selection on repeated clicks and permits retry after refusal', async () => {
+  useWorkspaceStore().workspaces = [makeWorkspace()]
+  let finish!: (value: unknown) => void
+  push.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve
+      }),
+  )
+  wrapper = mountList()
+  await flushPromises()
+  const card = wrapper.findComponent({ name: 'WorkspaceCard' })
+  card.vm.$emit('select', 'ws-1')
+  card.vm.$emit('select', 'ws-1')
+  card.vm.$emit('select', 'ws-1')
+  expect(push).toHaveBeenCalledTimes(1)
+  finish({ type: 4 })
+  await flushPromises()
+  card.vm.$emit('select', 'ws-1')
+  await flushPromises()
+  expect(push).toHaveBeenCalledTimes(2)
+})

@@ -90,33 +90,33 @@
     "security:scan": "node scripts/scan-secrets.mjs"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "2.0.1",
-    "@anthropic-ai/claude-agent-sdk": "^0.3.311",
+    "@agentclientprotocol/sdk": "2.5.0",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.322",
     "@emnapi/core": "^1.11.3",
     "@emnapi/runtime": "^1.11.3",
-    "@hono/node-server": "^2.1.5",
+    "@hono/node-server": "^2.1.6",
     "@modelcontextprotocol/sdk": "^1.32.2",
-    "@openai/codex": "^0.164.0",
+    "@openai/codex": "^0.167.0",
     "better-sqlite3": "^13.0.3",
-    "cron-parser": "^5.10.2",
-    "hono": "^4.13.14",
+    "cron-parser": "^5.10.4",
+    "hono": "^4.13.17",
     "nanoid": "^6.0.2",
     "node-pty": "^1.1.0",
-    "ws": "^8.22.0"
+    "ws": "^8.22.2"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.14",
+    "@biomejs/biome": "2.6.6",
     "@types/better-sqlite3": "^9.6.0",
-    "@types/node": "^26.6.5",
+    "@types/node": "^26.6.6",
     "@types/ws": "^8.18.2",
     "@vitest/runner": "^4.1.11",
-    "concurrently": "^10.0.6",
+    "concurrently": "^10.0.7",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.5"
+    "vitest": "^5.1.0"
   },
   "overrides": {
-    "@hono/node-server": "^2.1.5",
+    "@hono/node-server": "^2.1.6",
     "shell-quote": "^1.12.0"
   },
   "allowScripts": {

@@ -1904,6 +1904,44 @@ describe('workspace store', () => {
   })
 
   describe('fetchWorkspaceDetails ordering', () => {
+    it('removes a missing workspace from stale lists and reports its disappearance', async () => {
+      const store = useWorkspaceStore()
+      store.selectedWorkspaceId = 'w1'
+      store.workspaces = [makeWorkspace(), makeWorkspace({ id: 'w2' })]
+      store.archivedWorkspaces = [makeWorkspace()]
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => new Response('{"error":"Workspace not found"}', { status: 404 })),
+      )
+      expect(await store.fetchWorkspaceDetails('w1')).toBe(false)
+      expect(store.workspaces.map((workspace) => workspace.id)).toEqual(['w2'])
+      expect(store.archivedWorkspaces).toEqual([])
+      vi.unstubAllGlobals()
+    })
+
+    it('ignores a missing response after switching to another workspace', async () => {
+      const store = useWorkspaceStore()
+      store.selectedWorkspaceId = 'w1'
+      store.workspaces = [makeWorkspace(), makeWorkspace({ id: 'w2' })]
+      let finish!: (response: Response) => void
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(
+          () =>
+            new Promise<Response>((resolve) => {
+              finish = resolve
+            }),
+        ),
+      )
+      const pending = store.fetchWorkspaceDetails('w1')
+      store.selectedWorkspaceId = 'w2'
+      finish(new Response('{"error":"Workspace not found"}', { status: 404 }))
+      expect(await pending).toBeUndefined()
+      expect(store.selectedWorkspaceId).toBe('w2')
+      expect(store.workspaces).toHaveLength(2)
+      vi.unstubAllGlobals()
+    })
+
     it('ignores an older overlapping response for the selected workspace', async () => {
       const store = useWorkspaceStore()
       store.selectedWorkspaceId = 'w1'

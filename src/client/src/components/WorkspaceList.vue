@@ -1430,7 +1430,11 @@ async function onUnarchiveClick(ws: Workspace, event: Event) {
   }
 }
 
+let pendingSelection: { id: string; sprint: string } | null = null
 function selectWorkspace(id: string) {
+  if (pendingSelection?.id === id && pendingSelection.sprint === sprints.active) return
+  const selection = { id, sprint: sprints.active }
+  pendingSelection = selection
   const alreadySelected = store.selectedWorkspaceId === id
   const clearMarker = markInternalSprintTarget(id, sprints.active)
   void router
@@ -1449,7 +1453,13 @@ function selectWorkspace(id: string) {
       )
         void store.markRead(id)
     })
-    .finally(clearMarker)
+    .catch(() => {
+      $q.notify({ type: 'negative', message: t('sprints.error'), position: 'top' })
+    })
+    .finally(() => {
+      clearMarker()
+      if (pendingSelection === selection) pendingSelection = null
+    })
   // Sous DRAWER_BREAKPOINT (1024 px) le tiroir gauche est une SURIMPRESSION :
   // il recouvre le workspace que ce clic vient précisément d'ouvrir. Le
   // refermer est le geste attendu, pas une commodité. Au-dessus du seuil le

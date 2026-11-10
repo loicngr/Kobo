@@ -594,7 +594,7 @@ Disabling the setting does not revert an already completed permission transition
 ### Agent engines
 
 **Mistral Vibe** (`mistral-vibe/`, engine id `mistral-vibe`) uses ACP v1 through
-SDK 2.0.1 and the server user's PATH-resolved `vibe-acp`. Native setup/authentication
+SDK 2.5.0 and the server user's PATH-resolved `vibe-acp`. Native setup/authentication
 belongs to that same user/environment, including Docker; Kōbō stores no Vibe key.
 Model/thinking choices come from validated native ACP `configOptions`, including
 model-specific thinking levels. `auto` omits setters; explicit launch selections

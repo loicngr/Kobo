@@ -27,11 +27,12 @@
             {{ $t('git.divergence.empty.ahead') }}
           </div>
           <div v-else>
-            <div
+            <a
               v-for="commit in ahead"
               :key="commit.sha"
               class="commit-item row no-wrap items-center cursor-pointer q-py-xs"
-              @click="onCommitClick(commit.sha)"
+              :href="`/api/workspaces/${encodeURIComponent(workspaceId)}/commits/${commit.sha}/open`"
+              target="_blank" rel="noopener noreferrer"
             >
               <q-icon
                 :name="commit.isPushed ? 'cloud_done' : 'cloud_upload'"
@@ -47,7 +48,7 @@
                   <div class="text-kobo-2 q-mt-xs">{{ commit.author }} · {{ formatDate(commit.date) }}</div>
                 </div>
               </q-tooltip>
-            </div>
+            </a>
           </div>
         </q-tab-panel>
 
@@ -63,11 +64,12 @@
             {{ $t('git.divergence.empty.behind') }}
           </div>
           <div v-else>
-            <div
+            <a
               v-for="commit in behind"
               :key="commit.sha"
               class="commit-item row no-wrap items-center cursor-pointer q-py-xs"
-              @click="onCommitClick(commit.sha)"
+              :href="`/api/workspaces/${encodeURIComponent(workspaceId)}/commits/${commit.sha}/open`"
+              target="_blank" rel="noopener noreferrer"
             >
               <span class="commit-sha text-kobo-2">{{ commit.shortSha }}</span>
               <span class="commit-subject text-kobo-2 ellipsis q-ml-sm">{{ commit.subject }}</span>
@@ -77,7 +79,7 @@
                   <div class="text-kobo-2 q-mt-xs">{{ commit.author }} · {{ formatDate(commit.date) }}</div>
                 </div>
               </q-tooltip>
-            </div>
+            </a>
           </div>
         </q-tab-panel>
       </q-tab-panels>
@@ -105,10 +107,7 @@ const props = defineProps<{
   workingBranch: string
 }>()
 
-const emit = defineEmits<{
-  (e: 'update:modelValue', v: boolean): void
-  (e: 'append-sha', sha: string): void
-}>()
+const emit = defineEmits<(e: 'update:modelValue', v: boolean) => void>()
 
 const { t } = useI18n()
 const store = useWorkspaceStore()
@@ -164,10 +163,6 @@ watch(
   },
 )
 
-function onCommitClick(sha: string) {
-  emit('append-sha', sha)
-}
-
 function close() {
   emit('update:modelValue', false)
 }
@@ -186,6 +181,7 @@ onBeforeUnmount(() => {
 </script>
 
 <style lang="scss" scoped>
+.commit-item { text-decoration: none; }
 .commit-item:hover {
   background: rgba(255, 255, 255, 0.04);
 }

@@ -102,6 +102,25 @@ afterEach(() => {
   for (const wrapper of wrappers.splice(0)) wrapper.unmount()
 })
 describe('QuotaFooter', () => {
+  it('keeps account discovery in flight when websocket updates replace the same workspace', async () => {
+    const pending = deferred<ProviderAccounts>()
+    vi.mocked(apiFetch).mockReturnValueOnce(pending.promise)
+    const wrapper = panel()
+    const signal = vi.mocked(apiFetch).mock.calls[0]?.[1]?.signal
+    store.selectedWorkspace = { ...store.selectedWorkspace }
+    store.sessions = store.sessions.map((session) => ({ ...session }))
+    await flushPromises()
+    expect(apiFetch).toHaveBeenCalledTimes(1)
+    expect(signal?.aborted).toBe(false)
+    pending.resolve(accounts)
+    await flushPromises()
+    await open(wrapper)
+    store.selectedWorkspace = { ...store.selectedWorkspace }
+    await flushPromises()
+    expect(wrapper.find('[data-menu]').exists()).toBe(true)
+    expect(apiFetch).toHaveBeenCalledTimes(2)
+  })
+
   it('keeps compact quota progress bars large enough to read in the footer', () => {
     const source = readFileSync(join(process.cwd(), 'src/components/QuotaFooter.vue'), 'utf-8')
     expect(source).toMatch(/\.quota-bar\s*\{[\s\S]*?width:\s*48px;[\s\S]*?height:\s*7px;/)

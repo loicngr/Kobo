@@ -21,7 +21,7 @@
     </div>
 
     <template v-if="workspace">
-      <div v-if="gitStats && statsReadOnly" role="status" class="row items-center q-mb-sm text-caption text-kobo-3" data-testid="git-cache-status">
+      <div v-if="gitStats && (loadingStats || statsReadOnly)" role="status" class="row items-center q-mb-sm text-caption text-kobo-3" data-testid="git-cache-status">
         <q-spinner v-if="loadingStats" size="14px" class="q-mr-xs" />
         {{ $t(loadingStats ? 'git.refreshingCached' : 'git.cachedReadOnly') }}
       </div>
@@ -162,7 +162,8 @@
               v-for="commit in commits"
               :key="commit.sha"
               class="commit-item row no-wrap items-center cursor-pointer"
-              @click="appendCommitToChat(commit.sha)"
+              @click="openCommitInForge(commit.sha)"
+              role="link" tabindex="0" @keydown.enter="openCommitInForge(commit.sha)"
             >
               <q-icon
                 :name="commit.isPushed ? 'cloud_done' : 'cloud_upload'"
@@ -222,13 +223,13 @@
       <div v-if="workspace && gitStats" class="git-subcard" data-tour="git-actions">
         <div class="git-subcard-title">{{ $t('git.section.actions') }}</div>
 
-        <!-- Primary action: View PR/MR (green) when PR open, else Create PR/MR (indigo).
+        <!-- View the existing PR/MR, or create one when none is open.
              Hidden entirely when no supported forge is detected. -->
         <template v-if="forge.id !== 'none'">
           <q-btn
             v-if="gitStats?.prUrl && gitStats.prState === 'OPEN'"
-            no-caps unelevated dense size="sm"
-            color="green-7"
+            no-caps outline dense size="sm"
+            color="kobo-2"
             icon="open_in_new"
             :label="$t('git.viewRequest', { request: forge.capabilities.requestTermShort })"
             class="full-width q-mb-xs"
@@ -256,13 +257,23 @@
           unelevated
           dense
           size="sm"
-          color="deep-orange-7"
+          color="primary"
           icon="merge"
           :label="$t('git.mergeRequest', { request: forge.capabilities.requestTermShort })"
           class="full-width q-mb-xs"
           :loading="mergingRequest"
           :disable="isArchived"
-          @click="handleMergeRequest"
+          @click="handleMergeRequest()"
+        />
+
+        <q-btn
+          v-if="canBypassMerge"
+          outline dense no-caps size="sm" color="kobo-danger" icon="policy"
+          :label="$t('git.mergeBypassRequirements')"
+          class="full-width q-mb-xs git-btn"
+          :disable="isArchived || mergingRequest"
+          data-testid="merge-bypass"
+          @click="handleMergeRequest(true)"
         />
 
         <q-btn
@@ -271,7 +282,7 @@
           unelevated
           dense
           size="sm"
-          color="green-7"
+          color="primary"
           icon="commit"
           :label="$t('git.commitChanges')"
           class="full-width q-mb-xs"
@@ -448,7 +459,7 @@
       <!-- Pull request sub-card — placed AFTER Actions per UX request. -->
       <div v-if="prSnapshot && prSnapshot.state === 'OPEN'" class="git-subcard" data-tour="git-pr-panel">
         <div class="git-subcard-title">{{ $t('git.section.pullRequest') }}</div>
-        <PrPanel :snapshot="prSnapshot" />
+        <PrPanel :snapshot="prSnapshot" :workspace-id="workspace.id" />
       </div>
       </fieldset>
     </template>
@@ -760,7 +771,6 @@
       :behind-count="gitStats.behindCount"
       :source-branch="workspace.sourceBranch"
       :working-branch="workspace.workingBranch"
-      @append-sha="appendCommitToChat"
     />
   </div>
 </template>
@@ -908,10 +918,13 @@ async function toggleCommits() {
   await fetchCommits()
 }
 
-function appendCommitToChat(sha: string) {
-  // Reuse the existing `chatDraft` mechanism — ChatInput.vue watches it and
-  // appends to the textarea (preserving existing content). Reset happens there.
-  store.chatDraft = sha
+function openCommitInForge(sha: string) {
+  if (!props.workspace) return
+  window.open(
+    `/api/workspaces/${encodeURIComponent(props.workspace.id)}/commits/${sha}/open`,
+    '_blank',
+    'noopener,noreferrer',
+  )
 }
 
 function formatCommitDate(iso: string): string {
@@ -1014,7 +1027,7 @@ const { showWorkingTreeFiles, loadingWorkingTreeFiles, workingTreeFiles, toggleW
 )
 const loadingStats = ref(false)
 const statsError = ref<string | null>(null)
-const statsReadOnly = computed(() => loadingStats.value || statsError.value !== null)
+const statsReadOnly = computed(() => statsError.value !== null)
 
 function blockCachedAction(event: Event) {
   if (!statsReadOnly.value) return
@@ -1117,6 +1130,19 @@ const canMergeRequest = computed(
       gitStats.value?.prUrl &&
       gitStats.value.prState === 'OPEN' &&
       prSnapshot.value?.readyToMerge &&
+      forge.value.capabilities.canMergeRequest &&
+      forge.value.availability.available
+    ),
+)
+
+const canBypassMerge = computed(
+  () =>
+    !!(
+      gitStats.value?.prUrl &&
+      gitStats.value.prState === 'OPEN' &&
+      prSnapshot.value?.state === 'OPEN' &&
+      prSnapshot.value.mergeable !== 'CONFLICTING' &&
+      forge.value.id === 'github' &&
       forge.value.capabilities.canMergeRequest &&
       forge.value.availability.available
     ),
@@ -1266,7 +1292,7 @@ watch(
       clearTimeout(gitRefreshTimeout)
       gitRefreshTimeout = null
     }
-    // Cached values belong to the target workspace; actions wait for its fresh read.
+    // Keep the target workspace visible and usable while refreshing its cached values.
     if (newId !== oldId) {
       gitStats.value = newId ? (store.gitStatsCache[newId] ?? null) : null
       statsError.value = null
@@ -1305,7 +1331,7 @@ watch(
   },
   (cached) => {
     if (!cached) return
-    if (statsReadOnly.value) return
+    if (loadingStats.value || statsReadOnly.value) return
     gitStats.value = cached
   },
 )
@@ -1901,15 +1927,26 @@ function handleChangePrBase() {
   })
 }
 
-function handleMergeRequest() {
-  if (statsReadOnly.value || !props.workspace || !canMergeRequest.value || mergingRequest.value) return
+function handleMergeRequest(bypass = false) {
+  const allowed = () => (bypass ? canBypassMerge.value : canMergeRequest.value)
+  if (statsReadOnly.value || isArchived.value || !props.workspace || !allowed() || mergingRequest.value) return
   const workspace = props.workspace
+  const expected =
+    forge.value.id === 'github' && prSnapshot.value?.headSha
+      ? { number: prSnapshot.value.number, headSha: prSnapshot.value.headSha }
+      : undefined
+  if (forge.value.id === 'github' && !expected) {
+    $q.notify({ type: 'warning', message: t('git.mergeRevisionChanged') })
+    void store.refreshPrSnapshot(workspace.id)
+    return
+  }
   const methods = forge.value.capabilities.mergeMethods
   const canDeleteBranch = forge.value.capabilities.canDeleteRemoteBranch
   const request = forge.value.capabilities.requestTermShort
   $q.dialog({
-    title: t('git.mergeRequestConfirmTitle', { request }),
-    message: t('git.mergeRequestConfirmMessage', { request }),
+    title: t(bypass ? 'git.mergeBypassRequirements' : 'git.mergeRequestConfirmTitle', { request }),
+    message: t(bypass ? 'git.mergePolicyMessage' : 'git.mergeRequestConfirmMessage', { request }),
+    ...(bypass ? { focus: 'cancel' as const } : {}),
     ...(methods?.length
       ? {
           options: {
@@ -1921,28 +1958,52 @@ function handleMergeRequest() {
       : {}),
     dark: true,
     cancel: { flat: true, label: t('common.cancel'), color: 'kobo-2' },
-    ok: { flat: true, label: t('git.mergeRequest', { request }), color: 'deep-orange-5' },
+    ok: {
+      flat: true,
+      label: t(bypass ? 'git.mergeAsAdmin' : 'git.mergeRequest', { request }),
+      color: bypass ? 'negative' : 'deep-orange-5',
+    },
   }).onOk(async (method: unknown) => {
-    if (props.workspace?.id !== workspace.id || !canMergeRequest.value) return
+    if (props.workspace?.id !== workspace.id || !allowed()) return
     if (methods?.length && (!isMergeMethod(method) || !methods.includes(method))) return
-    await performMerge(method)
+    await performMerge(method, bypass)
   })
 
   async function performMerge(method: unknown, admin = false) {
-    if (statsReadOnly.value || panelUnmounted || props.workspace?.id !== workspace.id || mergingRequest.value) return
+    if (
+      statsReadOnly.value ||
+      isArchived.value ||
+      panelUnmounted ||
+      props.workspace?.id !== workspace.id ||
+      mergingRequest.value ||
+      (admin ? !canBypassMerge.value : !canMergeRequest.value)
+    )
+      return
+    if (expected && (prSnapshot.value?.number !== expected.number || prSnapshot.value?.headSha !== expected.headSha)) {
+      $q.notify({ type: 'warning', message: t('git.mergeRevisionChanged') })
+      return
+    }
     mergingRequest.value = true
     try {
       const res = await apiFetchResponse(`/api/workspaces/${workspace.id}/merge-pr`, {
         method: 'POST',
-        ...(methods?.length || admin
+        ...(methods?.length || admin || expected
           ? {
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ ...(methods?.length ? { method } : {}), ...(admin ? { admin: true } : {}) }),
+              body: JSON.stringify({
+                ...(methods?.length ? { method } : {}),
+                ...(admin ? { admin: true } : {}),
+                ...(expected ? { expected } : {}),
+              }),
             }
           : {}),
       })
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
+        if (data.code === 'merge_revision_changed') {
+          void store.refreshPrSnapshot(workspace.id)
+          throw new Error(t('git.mergeRevisionChanged'))
+        }
         if (data.code === 'merge_policy_blocked') {
           if (!panelUnmounted && !admin && forge.value.id === 'github' && props.workspace?.id === workspace.id) {
             $q.dialog({
@@ -2156,7 +2217,8 @@ async function handleOpenPr() {
 <style lang="scss" scoped>
 .git-content { border: 0; margin: 0; padding: 0; min-width: 0; }
 .git-btn {
-  font-size: 11px;
+  font-size: 12px;
+  min-height: 30px;
 }
 // Commit list — compact rows, clickable, hoverable.
 .commit-toggle:hover {
@@ -2248,4 +2310,9 @@ async function handleOpenPr() {
   // a single line and only breaks when the container would otherwise overflow.
   overflow-wrap: anywhere;
 }
+</style>
+
+<style scoped>
+.git-subcard > .q-btn { min-height: 30px; font-size: 12px; }
+@media (pointer: coarse) { .git-btn, .git-subcard > .q-btn { min-height: 40px; } }
 </style>

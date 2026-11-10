@@ -191,7 +191,7 @@ async function switchAccount(): Promise<void> {
 }
 
 watch(
-  () => [store.selectedWorkspace?.id, store.selectedSessionId, providerId.value],
+  [() => store.selectedWorkspace?.id, () => store.selectedSessionId, providerId],
   () => {
     generation++
     readSequence++

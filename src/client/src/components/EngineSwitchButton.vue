@@ -1,7 +1,7 @@
 <template>
   <q-btn
     v-bind="$attrs"
-    no-caps dense outline color="primary" :icon="mode === 'fresh' ? 'restart_alt' : 'swap_horiz'"
+    no-caps dense outline color="kobo-2" :icon="mode === 'fresh' ? 'restart_alt' : 'swap_horiz'"
     :label="$t(mode === 'fresh' ? 'handoff.freshTitle' : 'handoff.switchTitle')"
     :disable="blocked" class="full-width q-mb-xs" @click="isOpen = true"
   />

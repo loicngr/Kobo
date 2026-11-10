@@ -36,6 +36,8 @@ describe('Claude model catalogue', () => {
     const ids = CLAUDE_MODELS.map((m) => m.id)
     expect(ids).toEqual([
       'auto',
+      'claude-fable-5-2',
+      'claude-mythos-5-2',
       'claude-fable-5-1',
       'claude-mythos-5-1',
       'claude-mythos-5',

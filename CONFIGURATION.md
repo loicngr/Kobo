@@ -1753,7 +1753,7 @@ The selector reads [`src/shared/codex-models.ts`](./src/shared/codex-models.ts).
 
 ### Mistral Vibe
 
-> Experimental. Target version: **Vibe 3.0.1**, ACP v1 with SDK 2.0.1.
+> Experimental. Target version: **Vibe 3.0.1**, ACP v1 with SDK 2.5.0.
 
 Follow the official [native Vibe setup](https://docs.mistral.ai/vibe/code/cli/install-setup)
 and [Vibe 3.0.1 ACP instructions](https://github.com/mistralai/mistral-vibe/blob/v3.0.1/docs/acp-setup.md).

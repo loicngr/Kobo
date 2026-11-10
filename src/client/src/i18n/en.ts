@@ -1,4 +1,22 @@
 export default {
+  'tools.group.session': 'Session',
+  'tools.group.quality': 'Review and quality',
+  'tools.group.project': 'Project environment',
+
+  'git.mergeRevisionChanged': 'The PR or its commits changed. Refresh and confirm the merge again.',
+  'git.mergeBypassRequirements': 'Force merge the PR',
+  'git.ciLogs.retryStopped': 'Automatic updates paused after several attempts. Click Refresh to try again.',
+  'git.ciLogs.open': 'View logs for {name}',
+  'git.ciLogs.external': 'Open live logs on GitHub',
+  'git.ciLogs.notice':
+    'Updates every 10 seconds. Logs appear when GitHub publishes them; live streaming remains available on GitHub.',
+  'git.ciLogs.step': 'Step',
+  'git.ciLogs.error': 'Unable to load logs. Check the server’s GitHub access and retry.',
+  'git.ciLogs.truncated': 'Limited display: some logs are omitted.',
+  'git.ciLogs.follow': 'Follow new logs',
+  'git.ciLogs.all': 'All steps',
+  'git.ciLogs.unavailable': 'GitHub has not provided logs for this selection yet.',
+
   'tours.home.sprints.title': 'Organize workspaces by sprint',
   'tours.home.sprints.description':
     'The bottom tabs filter workspaces: All, No sprint or a specific sprint. Switching sprints returns to the home screen without stopping agents. Use the gear to create, rename, reorder or delete sprints; deleting a sprint keeps its workspaces.',
@@ -533,6 +551,10 @@ export default {
   'model.gpt6solDescription': 'Previous-generation workhorse model',
   'model.gpt6luna': 'GPT-6 Luna',
   'model.gpt6lunaDescription': 'Fast model for easier tasks',
+  'model.fable52': 'Fable 5.2',
+  'model.fable52Description': 'Advanced reasoning and long-running agent tasks, 1M context',
+  'model.mythos52': 'Mythos 5.2',
+  'model.mythos52Description': 'Access restricted to organizations verified by Anthropic',
   'model.fable51': 'Fable 5.1',
   'model.fable5': 'Fable 5',
   'model.fable5Description': 'For demanding, long-running tasks',
@@ -647,6 +669,9 @@ export default {
   // Workspace Page
   'workspacePage.configure': 'Configure',
   'workspacePage.permissions': 'Permissions',
+  'workspacePage.emptyTitle': 'Your next workspace',
+  'workspacePage.emptyHint': 'Resume a mission from the workspace list, or create a new space to work with your agent.',
+  'workspacePage.browseWorkspaces': 'Browse workspaces',
   'workspacePage.selectWorkspace': 'Select a workspace to begin',
   'workspacePage.commandPalettePlaceholder': 'Search commands…',
   'workspacePage.commandPaletteEmpty': 'No matching command',
@@ -1652,7 +1677,7 @@ export default {
   'git.title': 'Git',
   'git.outputDialogTitle': 'Git reported an error',
   'git.statsFailed': 'Git status could not be read',
-  'git.refreshingCached': 'Refreshing Git status — last known values, read-only.',
+  'git.refreshingCached': 'Refreshing Git status — showing last known values.',
   'git.cachedReadOnly': 'Last known values — read-only until Git status is refreshed.',
   'git.section.repository': 'Repository',
   'git.section.changes': 'Changes',

@@ -20,6 +20,7 @@ export interface PrCiCheck {
 
 /** Rich snapshot of a pull/merge request, normalised across forges. */
 export interface PrSnapshot {
+  headSha?: string
   number: number
   title: string
   url: string
@@ -170,7 +171,12 @@ export interface ForgeProvider {
   getPrStatus(repoPath: string, branch: string): Promise<PrSnapshot | null>
   createPr(repoPath: string, opts: CreatePrOptions): Promise<{ url: string; number: number }>
   changePrBase(repoPath: string, base: string): Promise<void>
-  mergeRequest(repoPath: string, number: number, method?: MergeMethod, options?: { admin?: boolean }): Promise<void>
+  mergeRequest(
+    repoPath: string,
+    number: number,
+    method?: MergeMethod,
+    options?: { admin?: boolean; expectedHeadSha?: string },
+  ): Promise<void>
   deleteRemoteBranch(repoPath: string, branch: string): Promise<void>
   /** List open PRs/MRs, newest first. The cursor is provider-defined and opaque. */
   listPullRequests(repoPath: string, opts: ListPullRequestsOptions): Promise<ListPullRequestsResult>

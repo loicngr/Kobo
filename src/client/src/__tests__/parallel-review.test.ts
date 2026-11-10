@@ -43,7 +43,7 @@ beforeEach(() => {
   ws.activeAgentSessionIds.w = 'main'
   vi.spyOn(ws, 'fetchSessions').mockResolvedValue()
   vi.spyOn(ws, 'fetchWorkspaces').mockResolvedValue()
-  vi.spyOn(ws, 'fetchWorkspaceDetails').mockResolvedValue()
+  vi.spyOn(ws, 'fetchWorkspaceDetails').mockResolvedValue(undefined)
   vi.spyOn(useParallelReviewStore(), 'fetchStatus').mockResolvedValue()
 })
 afterEach(() => {

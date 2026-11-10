@@ -208,6 +208,7 @@ describe('Vibe runtime ownership', () => {
     try {
       await once(runtime.child.stderr!, 'data')
       const connection = connectVibeAcp(runtime.child, {})
+      await requestVibeAcp(connection, 'initialize', { protocolVersion: 1, clientCapabilities: {} })
       const prompt = requestVibeAcp(connection, 'session/prompt', { sessionId: 'fixture-session', prompt: [] })
       let closed = false
       void runtime.closed.then(() => {

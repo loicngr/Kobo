@@ -34,6 +34,7 @@ const GH_PR_FIELDS = [
   'url',
   'state',
   'baseRefName',
+  'headRefOid',
   'reviewDecision',
   'author',
   'assignees',
@@ -50,6 +51,7 @@ interface RawGhPr {
   title: string
   url: string
   state: string
+  headRefOid?: string
   baseRefName?: string
   reviewDecision?: string | null
   author?: { login?: string } | null
@@ -98,6 +100,7 @@ function mapGhPrToSnapshot(raw: RawGhPr): PrSnapshot {
       : null
   return {
     number: raw.number,
+    headSha: raw.headRefOid,
     title: raw.title,
     url: raw.url,
     state,
@@ -237,10 +240,11 @@ export const githubProvider: ForgeProvider = {
     repoPath: string,
     number: number,
     method: MergeMethod = 'merge',
-    options?: { admin?: boolean },
+    options?: { admin?: boolean; expectedHeadSha?: string },
   ): Promise<void> {
     const args = ['pr', 'merge', String(number), `--${method}`]
     if (options?.admin === true) args.push('--admin')
+    if (options?.expectedHeadSha) args.push('--match-head-commit', options.expectedHeadSha)
     try {
       await execFileAsync('gh', args, cliOptions(repoPath))
     } catch (error) {
