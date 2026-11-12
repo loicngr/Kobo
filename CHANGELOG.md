@@ -4,6 +4,12 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads released version sections.
 
+## 2.1.42
+
+- fix(update): make the skip-backup copy portable across tar flavours
+- fix: remediate audit findings and extend operator controls
+- refactor: remove engine comparison and harmonize Git actions
+
 ## 2.1.41
 
 - feat(workspaces): improve navigation, git tools and interface
