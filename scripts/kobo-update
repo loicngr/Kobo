@@ -296,14 +296,18 @@ class Updater:
         db_files = {f'./.config/kobo/{name}' for name in ('kobo.db','kobo.db-wal','kobo.db-shm')}
         # --skip-backup: no archive; a transient tar of the SQLite files still feeds the migration test.
         archive = self.job / ('migration-check.tar' if skip else 'kobo.tar.gz')
-        # Sidecars are normally absent after a clean stop: tolerate them, the kobo.db check below remains.
-        tar_args = ['--ignore-failed-read', '-cf', '-', *sorted(db_files)] if skip else ['-czf', '-', './.config/kobo']
+        # Sidecars are normally absent after a clean stop: only existing files reach tar (portable, no GNU-only
+        # flag); an empty list still yields a valid empty archive and the kobo.db check below remains.
+        script = ('cd /data && set -- && for f in ' + ' '.join(sorted(db_files)) +
+                  '; do if [ -e "$f" ] || [ -L "$f" ]; then set -- "$@" "$f"; fi; done'
+                  ' && exec tar -cf - -T /dev/null "$@"')
+        command = ['sh', self.old_image, '-c', script] if skip else ['tar', self.old_image, '-C', '/data', '-czf', '-', './.config/kobo']
         label = 'database copy' if skip else 'backup'
         with archive.open('xb') as f, self.log.open('ab') as err:
             try:
                 subprocess.run(['docker', 'run', '--rm', '--network', 'none', '--read-only',
                     '--mount', f'type=volume,src={self.volume},dst=/data,readonly',
-                    '--entrypoint', 'tar', self.old_image, '-C', '/data', *tar_args],
+                    '--entrypoint', *command],
                     stdout=f, stderr=err, check=True, timeout=3600)
                 f.flush()
                 os.fsync(f.fileno())

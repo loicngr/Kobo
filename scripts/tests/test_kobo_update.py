@@ -380,7 +380,11 @@ class BackupTests(unittest.TestCase):
             self.assertIn('--read-only', args)
             self.assertIn('type=volume,src=home-volume,dst=/data,readonly', args)
             # Run the exact tar arguments against a temporary fixture, not Docker.
+            entrypoint = args[args.index('--entrypoint') + 1]
             tar_args = args[args.index(self.u.old_image) + 1:]
+            if entrypoint == 'sh':
+                # --skip-backup: the same shell script, pointed at the fixture instead of /data.
+                return real_run(['sh', '-c', tar_args[1].replace('/data', str(self.home))], **kwargs)
             tar_args[tar_args.index('/data')] = str(self.home)
             return real_run(['tar', *tar_args], **kwargs)
         patcher = patch.object(m.subprocess, 'run', side_effect=local_tar)
