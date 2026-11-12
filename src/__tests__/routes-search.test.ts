@@ -57,6 +57,17 @@ describe('GET /api/search', () => {
     expect(body).toEqual(fakeResults)
   })
 
+  it('passes the workspace filter to the service so the limit applies inside that workspace', async () => {
+    vi.mocked(searchService.searchEvents).mockResolvedValue([])
+
+    await app.request('/api/search?q=test&limit=10&workspaceId=ws-1')
+    expect(searchService.searchEvents).toHaveBeenCalledWith(
+      'test',
+      { limit: 10, includeArchived: false, workspaceId: 'ws-1' },
+      expect.any(AbortSignal),
+    )
+  })
+
   it('passes custom limit when provided', async () => {
     vi.mocked(searchService.searchEvents).mockResolvedValue([])
 

@@ -17,6 +17,9 @@ import type {
 import { deriveReadyToMerge, MergePolicyError, truncatePrBody } from '../types.js'
 
 const execFileAsync = promisify(execFile)
+
+/** Last logged `getPrStatus` failure per repository/branch, to log changes only. */
+const prStatusFailures = new Map<string, string>()
 const CLI_TIMEOUT_MS = 30_000
 
 function cliOptions(repoPath: string) {
@@ -214,9 +217,19 @@ export const githubProvider: ForgeProvider = {
     try {
       const { stdout } = await execFileAsync('gh', ['pr', 'view', branch, '--json', GH_PR_FIELDS], cliOptions(repoPath))
       const raw = stdout.trim()
+      prStatusFailures.delete(`${repoPath}\0${branch}`)
       if (!raw) return null
       return mapGhPrToSnapshot(parseCliJson<RawGhPr>(raw, 'gh pr view'))
-    } catch {
+    } catch (err) {
+      // Callers read null as "no PR": leave a trace when it actually means the lookup failed.
+      const detail = `${(err as { stderr?: unknown }).stderr ?? ''} ${err instanceof Error ? err.message : String(err)}`
+      const key = `${repoPath}\0${branch}`
+      if (/no pull requests found/i.test(detail)) prStatusFailures.delete(key)
+      else if (prStatusFailures.get(key) !== detail) {
+        // The watcher polls every 30 s: log a given failure once, not on every tick.
+        prStatusFailures.set(key, detail)
+        console.warn(`[forge:github] PR lookup failed for '${branch}' in ${repoPath}: ${detail.trim()}`)
+      }
       return null
     }
   },

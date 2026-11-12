@@ -251,3 +251,39 @@ it('atomically pins a GitHub merge to the confirmed head', async () => {
     'a'.repeat(40),
   ])
 })
+
+describe('github getPrStatus failure reporting', () => {
+  it('stays quiet when the branch simply has no PR', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      execFileMock.mockRejectedValueOnce(
+        Object.assign(new Error('Command failed: gh pr view'), {
+          stderr: 'no pull requests found for branch "feat/none"',
+        }),
+      )
+      expect(await githubProvider.getPrStatus('/repo', 'feat/none')).toBeNull()
+      expect(warn).not.toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('logs a real lookup failure once, not on every poll, and again after it changes', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const failure = () =>
+        Object.assign(new Error('Command failed: gh pr view'), { stderr: 'HTTP 401: Bad credentials' })
+      execFileMock.mockRejectedValueOnce(failure()).mockRejectedValueOnce(failure())
+      expect(await githubProvider.getPrStatus('/repo', 'feat/broken')).toBeNull()
+      expect(await githubProvider.getPrStatus('/repo', 'feat/broken')).toBeNull()
+      expect(warn).toHaveBeenCalledOnce()
+      expect(String(warn.mock.calls[0]?.[0])).toMatch(/feat\/broken.*Bad credentials/)
+
+      execFileMock.mockRejectedValueOnce(new Error('spawn gh ENOENT'))
+      expect(await githubProvider.getPrStatus('/repo', 'feat/broken')).toBeNull()
+      expect(warn).toHaveBeenCalledTimes(2)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+})

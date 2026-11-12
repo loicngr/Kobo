@@ -452,7 +452,7 @@ function onWorkspaceShortcut(event: KeyboardEvent) {
     event.preventDefault()
     commandPaletteQuery.value = ''
     commandPaletteOpen.value = true
-    void nextTick(() => commandPaletteInput.value?.focus())
+    void nextTick().then(() => commandPaletteInput.value?.focus())
   } else if (key === 'f') {
     // ⌘F était intercepté MÊME pendant la rédaction d'un message : la
     // recherche du navigateur disparaissait sans explication.
@@ -468,7 +468,7 @@ const workspaceCommands = computed<PaletteEntry[]>(() => {
       id: 'focus-chat',
       label: t('workspacePage.commandFocusChat'),
       icon: 'chat',
-      run: () => void nextTick(() => chatInputRef.value?.focus()),
+      run: () => void nextTick().then(() => chatInputRef.value?.focus()),
     },
     {
       id: 'search-history',

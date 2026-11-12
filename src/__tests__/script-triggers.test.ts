@@ -12,18 +12,18 @@ vi.mock('../server/utils/script-runner.js', () => ({
   SCRIPT_TIMEOUT_MS: 300_000,
 }))
 
-// Mock only `worktreeHasChanges` so the "only on changes" gate is controllable
+// Mock only `worktreeHasChangesStrict` so the "only on changes" gate is controllable
 // without a real git repo; keep every other git-ops function intact.
 vi.mock('../server/utils/git-ops.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../server/utils/git-ops.js')>()),
-  worktreeHasChanges: vi.fn(() => true),
+  worktreeHasChangesStrict: vi.fn(() => true),
 }))
 
 import * as archiveScriptService from '../server/services/archive-script-service.js'
 import * as cleanupScriptService from '../server/services/cleanup-script-service.js'
 import { _setSettingsPath, getSettings, updateGlobalSettings } from '../server/services/settings-service.js'
 import { createTask, createWorkspace } from '../server/services/workspace-service.js'
-import { worktreeHasChanges } from '../server/utils/git-ops.js'
+import { worktreeHasChangesStrict } from '../server/utils/git-ops.js'
 import { runScript } from '../server/utils/script-runner.js'
 
 let tmpDir: string
@@ -143,7 +143,7 @@ describe('cleanup-script-service triggers', () => {
       cleanupScriptMode: 'idle',
       cleanupScriptOnlyOnChanges: true,
     })
-    vi.mocked(worktreeHasChanges).mockReturnValue(false)
+    vi.mocked(worktreeHasChangesStrict).mockReturnValue(false)
     const id = makeWorkspace()
 
     cleanupScriptService.onSessionEnded(id, 'completed', { wasAutoLoop: false })
@@ -157,12 +157,36 @@ describe('cleanup-script-service triggers', () => {
       cleanupScriptMode: 'idle',
       cleanupScriptOnlyOnChanges: true,
     })
-    vi.mocked(worktreeHasChanges).mockReturnValue(true)
+    vi.mocked(worktreeHasChangesStrict).mockReturnValue(true)
     const id = makeWorkspace()
 
     cleanupScriptService.onSessionEnded(id, 'completed', { wasAutoLoop: false })
 
     expect(runScript).toHaveBeenCalledTimes(1)
+  })
+
+  it('onlyOnChanges logs an unreadable worktree instead of silently reading it as clean', () => {
+    updateGlobalSettings({
+      cleanupScript: 'echo done',
+      cleanupScriptMode: 'idle',
+      cleanupScriptOnlyOnChanges: true,
+    })
+    vi.mocked(worktreeHasChangesStrict).mockImplementationOnce(() => {
+      throw new Error('fatal: index file corrupt')
+    })
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const id = makeWorkspace()
+
+    try {
+      expect(() => cleanupScriptService.onSessionEnded(id, 'completed', { wasAutoLoop: false })).not.toThrow()
+      expect(runScript).not.toHaveBeenCalled()
+      expect(error).toHaveBeenCalledWith(
+        '[cleanup-script-service] trigger failed:',
+        expect.objectContaining({ message: 'fatal: index file corrupt' }),
+      )
+    } finally {
+      error.mockRestore()
+    }
   })
 })
 

@@ -26,6 +26,7 @@ export function useFileMention(
   const selectedFileIndex = ref(0)
   let lastFetchPath = ''
   let lastFetch = 0
+  let inFlightPath = ''
 
   async function fetchFiles(): Promise<void> {
     const wt = getWorktreePath()
@@ -33,16 +34,27 @@ export function useFileMention(
     const now = Date.now()
     // Re-fetch when the worktree changed, or after a 5s throttle window.
     if (wt === lastFetchPath && now - lastFetch < 5000 && files.value.length > 0) return
-    lastFetchPath = wt
-    lastFetch = now
+    if (wt === inFlightPath) return
+    // Never offer another worktree's files while this one loads or fails.
+    if (wt !== lastFetchPath) {
+      files.value = []
+      lastFetchPath = ''
+    }
+    inFlightPath = wt
     try {
       const res = await apiFetchResponse(`/api/git/files?path=${encodeURIComponent(wt)}`)
       if (res.ok) {
         const body = (await res.json()) as { files?: string[] }
+        // A late response for a worktree the user already left is dropped.
+        if (getWorktreePath() !== wt) return
         files.value = Array.isArray(body.files) ? body.files : []
+        lastFetchPath = wt
+        lastFetch = now
       }
     } catch {
       /* network errors are not fatal — popup just stays empty */
+    } finally {
+      if (inFlightPath === wt) inFlightPath = ''
     }
   }
 

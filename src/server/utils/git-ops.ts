@@ -1385,6 +1385,21 @@ export function isValidBranchName(name: string): boolean {
 }
 
 /**
+ * Looser check for names a forge reports on the PR import paths. Existing
+ * branches may legitimately contain `#`, `+`, `@` or non-ASCII letters, which
+ * `isValidBranchName` (the alphabet Kōbō creates) refuses. This only rejects
+ * what git would read as an option or what `git check-ref-format --branch`
+ * refuses outright.
+ */
+export function isSafeGitRefName(name: string): boolean {
+  if (typeof name !== 'string' || !name || name.startsWith('-') || name === '@') return false
+  if (/[\s\p{Cc}~^:?*[\\]/u.test(name)) return false
+  if (name.includes('..') || name.includes('//') || name.includes('@{')) return false
+  if (/(^|\/)\./.test(name) || /(\.lock|\.)(\/|$)/.test(name)) return false
+  return !name.startsWith('/') && !name.endsWith('/')
+}
+
+/**
  * Turn an arbitrary string into a git-ref-safe segment, capped to `maxLen`.
  * Strips accents (é→e), collapses every run of non-alphanumeric characters
  * (backslashes, colons, spaces, dots… — all unsafe or awkward in a ref/path)
@@ -1536,11 +1551,22 @@ export async function listWorktreeFilesAsync(worktreePath: string, limit = 5_000
 /** Non-blocking review-template commit list, preferring the remote base. */
 export async function getCommitsBetweenAsync(repoPath: string, base: string, head: string): Promise<string> {
   try {
-    const ref = await resolveBaseAsync(repoPath, base)
-    return await gitAsync(repoPath, ['log', `${ref}..${head}`, '--pretty=format:- %s (%h)', '--no-merges'])
+    return await getCommitsBetweenStrictAsync(repoPath, base, head)
   } catch {
     return ''
   }
+}
+
+/** Strict variants: a failed Git read must propagate instead of reading as "no commits" / "clean". */
+export async function getCommitsBetweenStrictAsync(repoPath: string, base: string, head: string): Promise<string> {
+  const ref = await resolveBaseAsync(repoPath, base)
+  return gitAsync(repoPath, ['log', `${ref}..${head}`, '--pretty=format:- %s (%h)', '--no-merges'])
+}
+
+/** Prefers the remote base like the commit list: the local source branch may not exist in this repository. */
+export async function getDiffStatsBetweenStrictAsync(repoPath: string, base: string, head: string): Promise<string> {
+  const ref = await resolveBaseAsync(repoPath, base)
+  return gitAsync(repoPath, ['diff', '--shortstat', `${ref}...${head}`])
 }
 
 /** Keep the existing raw three-dot ref semantics of the shortstat helper. */
@@ -1597,10 +1623,14 @@ export async function listCommitsBehindAsync(
 
 export async function getWorkingTreeFilesAsync(repoPath: string): Promise<WorkingTreeFile[]> {
   try {
-    return parseWorkingTreeFiles(await gitAsync(repoPath, ['status', '--porcelain', '-z']))
+    return await getWorkingTreeFilesStrictAsync(repoPath)
   } catch {
     return []
   }
+}
+
+export async function getWorkingTreeFilesStrictAsync(repoPath: string): Promise<WorkingTreeFile[]> {
+  return parseWorkingTreeFiles(await gitAsync(repoPath, ['status', '--porcelain', '-z']))
 }
 
 /** Non-blocking commit count for request and polling hot paths. */
@@ -1643,10 +1673,14 @@ export async function getStructuredDiffStatsBetweenAsync(
 /** Non-blocking working-tree summary for request and polling hot paths. */
 export async function getWorkingTreeStatusAsync(repoPath: string): Promise<WorkingTreeStatus> {
   try {
-    return parseWorkingTreeStatus(await gitAsync(repoPath, ['status', '--porcelain', '-z']))
+    return await getWorkingTreeStatusStrictAsync(repoPath)
   } catch {
     return { staged: 0, modified: 0, untracked: 0 }
   }
+}
+
+export async function getWorkingTreeStatusStrictAsync(repoPath: string): Promise<WorkingTreeStatus> {
+  return parseWorkingTreeStatus(await gitAsync(repoPath, ['status', '--porcelain', '-z']))
 }
 
 /** Raw handoff state. Failures must not be presented as a clean checkout. */
@@ -1690,9 +1724,62 @@ export async function getChangedFilesBetweenAsync(
   toRef: string,
 ): Promise<DiffFile[]> {
   try {
-    return parseNameStatus(await gitAsync(repoPath, ['diff', '--name-status', '-z', `${fromRef}..${toRef}`]))
+    return await getChangedFilesBetweenStrictAsync(repoPath, fromRef, toRef)
   } catch {
     return []
+  }
+}
+
+export async function getChangedFilesBetweenStrictAsync(
+  repoPath: string,
+  fromRef: string,
+  toRef: string,
+): Promise<DiffFile[]> {
+  return parseNameStatus(await gitAsync(repoPath, ['diff', '--name-status', '-z', `${fromRef}..${toRef}`]))
+}
+
+/** Tree id of `ref`, `null` when the ref does not exist; any other Git failure propagates. */
+async function resolveTreeStrictAsync(repoPath: string, ref: string): Promise<string | null> {
+  try {
+    return await gitAsync(repoPath, ['rev-parse', '--verify', '--quiet', '--end-of-options', `${ref}^{tree}`])
+  } catch (err) {
+    // `--verify --quiet` exits 1 for an unknown ref; an unreadable repository exits 128.
+    if ((err as { code?: unknown }).code === 1) return null
+    throw err
+  }
+}
+
+/**
+ * Like `getFileAtRefAsync`, but real Git failures (unreadable repository, timeout)
+ * propagate. `null` covers the expected cases: ref gone (source branch deleted after
+ * merge), path absent, submodule/directory entry, blob too large to buffer.
+ */
+export async function getFileAtRefStrictAsync(
+  repoPath: string,
+  ref: string,
+  filePath: string,
+  maxBuffer = GIT_MAX_BUFFER_BYTES,
+): Promise<string | null> {
+  const tree = await resolveTreeStrictAsync(repoPath, await resolveBaseAsync(repoPath, ref))
+  if (!tree) return null
+  // Literal pathspec: a path starting with `:` or holding `*` must not be read as pathspec magic.
+  const entry = await gitAsync(repoPath, ['--literal-pathspecs', 'ls-tree', '-z', tree, '--', filePath])
+  const [, type, sha] = entry.split('\t')[0].split(' ')
+  // Gitlinks (mode 160000, type `commit`) and directories have no file content.
+  if (type !== 'blob') return null
+  try {
+    // By object id: no `<ref>:<path>` parsing, and contents keep their whitespace verbatim.
+    const { stdout } = await execFileAsync('git', ['cat-file', 'blob', sha], {
+      cwd: repoPath,
+      encoding: 'utf-8',
+      timeout: READ_ONLY_GIT_TIMEOUT_MS,
+      maxBuffer,
+      env: NON_INTERACTIVE_GIT_ENV,
+    })
+    return stdout
+  } catch (err) {
+    if ((err as { code?: unknown }).code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') return null
+    throw err
   }
 }
 
@@ -1726,16 +1813,31 @@ export async function getUnpushedChangedFilesAsync(
   return withUntrackedFiles(parseNameStatus(changes), untracked)
 }
 
+/** Like `getChangedFilesAsync`, but a failed read propagates, except a committed diff against a base that no longer exists. */
+export function getChangedFilesStrictAsync(
+  repoPath: string,
+  base: string,
+  includeUntracked = false,
+): Promise<DiffFile[]> {
+  return getChangedFilesAsync(repoPath, base, includeUntracked, true)
+}
+
 export async function getChangedFilesAsync(
   repoPath: string,
   base: string,
   includeUntracked = false,
+  strict = false,
 ): Promise<DiffFile[]> {
   const ref = await resolveBaseAsync(repoPath, base)
   const [committed, working] = await Promise.allSettled([
     gitAsync(repoPath, ['diff', '--name-status', '-z', `${ref}...HEAD`]),
     gitAsync(repoPath, ['status', '--porcelain', '-z', includeUntracked ? '-uall' : '-uno']),
   ])
+  if (strict) {
+    if (working.status === 'rejected') throw working.reason
+    // A source branch deleted locally and on origin is an expected state: keep the working-tree list.
+    if (committed.status === 'rejected' && (await resolveTreeStrictAsync(repoPath, ref))) throw committed.reason
+  }
   const files = committed.status === 'fulfilled' ? parseNameStatus(committed.value) : []
   const seen = new Set(files.map((file) => file.path))
   if (working.status === 'fulfilled') {
@@ -1808,7 +1910,7 @@ export async function fetchSourceBranchOrThrowAsync(
   remote = 'origin',
 ): Promise<void> {
   try {
-    await gitNetworkAsync(repoPath, ['fetch', remote, sourceBranch])
+    await gitNetworkAsync(repoPath, ['fetch', '--end-of-options', remote, sourceBranch])
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     throw new Error(`Failed to fetch '${sourceBranch}' from '${remote}': ${message}`)

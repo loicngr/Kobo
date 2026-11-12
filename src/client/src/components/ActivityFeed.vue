@@ -990,7 +990,7 @@ watch(switching, async (isSwitching) => {
   // is remounted every time the spinner reappears/disappears (v-if), so its
   // scroll target must be re-resolved on the same transition.
   if (!isSwitching) {
-    void nextTick(() => {
+    void nextTick().then(() => {
       scrollTargetEl.value = scrollRef.value?.getScrollTarget() ?? null
       queueLatestUserTurnVisibilityCheck()
     })
@@ -1007,7 +1007,7 @@ onMounted(() => {
   window.addEventListener('kobo:focus-history-event', focusHistoryEvent)
   // QVirtualScroll needs the QScrollArea's inner scroller; it only exists once
   // the scroll area is mounted.
-  void nextTick(() => {
+  void nextTick().then(() => {
     scrollTargetEl.value = scrollRef.value?.getScrollTarget() ?? null
     queueLatestUserTurnVisibilityCheck()
   })
@@ -1038,7 +1038,7 @@ watch([eventCount, () => userMessages.value.length, () => rawLines.value.length]
   }
 })
 watch([latestUserTurnIndex, () => turns.value.length], () => {
-  void nextTick(queueLatestUserTurnVisibilityCheck)
+  void nextTick().then(queueLatestUserTurnVisibilityCheck)
 })
 const liveAppendCount = computed(() => stream.liveAppendCountFor(props.workspaceId, sessionMatches))
 // Both counters are per workspace/session: a switch changes them without any

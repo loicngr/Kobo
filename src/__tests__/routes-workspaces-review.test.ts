@@ -118,7 +118,9 @@ vi.mock('../server/utils/git-ops.js', async (importOriginal) => ({
     .buildNonInteractiveGitEnv,
   fetchSourceBranchOrThrowAsync: vi.fn().mockResolvedValue(undefined),
   getCommitsBetweenAsync: vi.fn().mockResolvedValue(''),
+  getCommitsBetweenStrictAsync: vi.fn().mockResolvedValue(''),
   getDiffStatsBetweenAsync: vi.fn().mockResolvedValue(''),
+  getDiffStatsBetweenStrictAsync: vi.fn().mockResolvedValue(''),
   getWorkingTreeDiffStatsAsync: vi.fn().mockResolvedValue(''),
   fetchSourceBranch: vi.fn(),
   deleteLocalBranch: vi.fn(),
@@ -292,8 +294,10 @@ beforeEach(() => {
   vi.mocked(workspaceService.getActiveSession).mockReturnValue(fakeSession as never)
 
   vi.mocked(gitOps.getCommitsBetween).mockReturnValue('feat: do thing\nfix: bug')
-  vi.mocked(gitOps.getCommitsBetweenAsync).mockResolvedValue('feat: do thing\nfix: bug')
-  vi.mocked(gitOps.getDiffStatsBetweenAsync).mockResolvedValue(' 2 files changed, 10 insertions(+), 3 deletions(-)')
+  vi.mocked(gitOps.getCommitsBetweenStrictAsync).mockResolvedValue('feat: do thing\nfix: bug')
+  vi.mocked(gitOps.getDiffStatsBetweenStrictAsync).mockResolvedValue(
+    ' 2 files changed, 10 insertions(+), 3 deletions(-)',
+  )
   vi.mocked(gitOps.getWorkingTreeDiffStatsAsync).mockResolvedValue('')
   vi.mocked(gitOps.getDiffStatsBetween).mockReturnValue(' 2 files changed, 10 insertions(+), 3 deletions(-)')
   vi.mocked(gitOps.getWorkingTreeDiffStatsAsync).mockResolvedValue('')
@@ -617,8 +621,8 @@ describe('POST /api/workspaces/:id/start-review', () => {
     })
     expect(res.status).toBe(200)
     expect(gitOps.fetchSourceBranchOrThrowAsync).toHaveBeenCalledWith(fakeWorkspace.worktreePath, 'main')
-    expect(gitOps.getCommitsBetweenAsync).toHaveBeenCalled()
-    expect(gitOps.getDiffStatsBetweenAsync).toHaveBeenCalled()
+    expect(gitOps.getCommitsBetweenStrictAsync).toHaveBeenCalled()
+    expect(gitOps.getDiffStatsBetweenStrictAsync).toHaveBeenCalled()
     expect(gitOps.getWorkingTreeDiffStatsAsync).toHaveBeenCalled()
     expect(execFilePromiseMock).toHaveBeenCalledWith(
       'git',
@@ -1249,4 +1253,20 @@ it('allows a parallel review while the primary compacts', async () => {
   })
   expect(res.status).toBe(200)
   expect(await res.json()).toMatchObject({ parallel: true })
+})
+
+it.each([
+  ['commit list', gitOps.getCommitsBetweenStrictAsync],
+  ['diff stats', gitOps.getDiffStatsBetweenStrictAsync],
+] as const)('does not start a review on an empty change summary when the %s read fails', async (_label, read) => {
+  vi.mocked(read).mockRejectedValueOnce(new Error('fatal: bad revision'))
+  const res = await app.request('/api/workspaces/ws-1/start-review', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  })
+  expect(res.status).toBeGreaterThanOrEqual(400)
+  expect((await res.json()).error).toContain('bad revision')
+  expect(agentManager.startAgent).not.toHaveBeenCalled()
+  expect(agentManager.sendMessageForFallback).not.toHaveBeenCalled()
 })

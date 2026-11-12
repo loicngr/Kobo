@@ -20,9 +20,18 @@ async function managedRequest(body: Record<string, unknown>) {
     body: JSON.stringify({ ...body, clientName: process.env.KOBO_MCP_CLIENT_NAME ?? server.getClientVersion()?.name }),
     signal: AbortSignal.timeout(15 * 60_000),
   })
-  const result = await response.json()
-  if (!response.ok && body.method === 'list') throw new Error('Managed MCP capability rejected')
-  return result
+  if (response.ok) return response.json()
+  if (body.method === 'list') throw new Error('Managed MCP capability rejected')
+  // A bare `{ error }` (400, 413…) would read as an empty success to the MCP client.
+  const failure = (await response.json().catch(() => null)) as {
+    isError?: unknown
+    content?: unknown
+    error?: unknown
+  } | null
+  if (failure?.isError === true && Array.isArray(failure.content)) return failure
+  throw new Error(
+    typeof failure?.error === 'string' ? failure.error : `Managed MCP request failed (HTTP ${response.status})`,
+  )
 }
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   if (workspaceId) return managedRequest({ method: 'list' })

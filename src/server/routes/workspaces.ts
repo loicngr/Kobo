@@ -149,6 +149,9 @@ app.use('/:id/*', async (c, next) => {
       'deferred-tool-use/answer',
       'deferred-tool-use/cancel',
       'deferred-permission/decision',
+      // Conflict recovery must stay reachable: an unfinished rebase/merge can always be aborted or continued.
+      'git/abort',
+      'git/continue',
     ].includes(route)
   ) {
     return c.json(
@@ -399,11 +402,12 @@ async function deliverAgentPrompt(
 /**
  * Resolve the unified permission mode for a new workspace.
  *
- * Cascade: explicit body field → global default (validated) → 'bypass'.
+ * Cascade: explicit body field → global default (validated) → 'plan'.
  *
  * The per-engine default lives in `defaultPermissionModeByEngine[engineId]`
  * (added in settings v20). If the engine id is missing or its entry is invalid,
- * we fall back to 'bypass' (the safest non-plan default).
+ * we fall back to the public default, Plan ('interactive' for Mistral Vibe,
+ * which rejects Plan).
  */
 function resolveCreateAgentPermissionMode(
   bodyValue: unknown,
@@ -414,7 +418,7 @@ function resolveCreateAgentPermissionMode(
   if (isAgentPermissionMode(bodyValue)) return bodyValue
   const global = globalSettings.defaultPermissionModeByEngine?.[engineId]
   if (isAgentPermissionMode(global)) return global
-  return engineId === 'mistral-vibe' ? 'interactive' : 'bypass'
+  return engineId === 'mistral-vibe' ? 'interactive' : 'plan'
 }
 
 /**
@@ -2281,6 +2285,8 @@ app.delete('/:id/crons/:cronId', (c) => {
     const cronId = c.req.param('cronId')
     const workspace = workspaceService.getWorkspace(id)
     if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    const cron = cronService.getCron(cronId)
+    if (cron && cron.workspaceId !== id) return c.json({ error: `Cron '${cronId}' not found` }, 404)
     cronService.cancel(cronId, 'user')
     return new Response(null, { status: 204 })
   } catch (err) {
@@ -2396,12 +2402,13 @@ app.patch('/:id/sessions/:sessionId', async (c) => {
       return c.json({ error: `Workspace '${id}' not found` }, 404)
     }
 
-    const body = await c.req.json<{ name?: string }>().catch(() => ({}) as { name?: string })
-    if (!body.name?.trim()) {
+    const body = await c.req.json<{ name?: unknown } | null>().catch(() => null)
+    const name = typeof body?.name === 'string' ? body.name.trim() : ''
+    if (!name) {
       return c.json({ error: 'name is required and must not be empty' }, 400)
     }
 
-    const updated = workspaceService.renameSession(sessionId, id, body.name.trim())
+    const updated = workspaceService.renameSession(sessionId, id, name)
     if (!updated) {
       return c.json({ error: `Session '${sessionId}' not found` }, 404)
     }
@@ -3016,7 +3023,7 @@ app.get('/:id/events', (c) => {
         .all(id, ...scopedParams, targetRow.rowid - halfWindow, targetRow.rowid + halfWindow) as typeof rows
     } else if (before) {
       // Get the rowid of the cursor event
-      const cursorRow = db.prepare('SELECT rowid FROM ws_events WHERE id = ?').get(before) as
+      const cursorRow = db.prepare('SELECT rowid FROM ws_events WHERE id = ? AND workspace_id = ?').get(before, id) as
         | { rowid: number }
         | undefined
       if (!cursorRow) {
@@ -3332,7 +3339,7 @@ app.patch('/:id', migrationGuard, async (c) => {
     return c.json({ error: 'A session transfer is pending', code: 'workspace-busy' }, 409)
   try {
     const id = c.req.param('id')
-    const parsed: unknown = await c.req.json()
+    const parsed: unknown = await c.req.json().catch(() => null)
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       return c.json({ error: 'Request body must be a JSON object' }, 400)
     }
@@ -4108,6 +4115,9 @@ app.post('/:id/start', migrationGuard, async (c) => {
     const body = await c.req
       .json<{ prompt?: string; agentSessionId?: string; resume?: boolean }>()
       .catch(() => ({ prompt: undefined, agentSessionId: undefined, resume: undefined }))
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return c.json({ error: 'Request body must be a JSON object' }, 400)
+    }
     // Prompt resolution order:
     //  1. Explicit body.prompt (user-typed in the chat input)
     //  2. Pending workspace.initial_prompt — set by workspace creation when
@@ -4282,7 +4292,7 @@ app.get('/:id/diff', async (c) => {
       // (single-commit diff of the first commit); the compare dialog otherwise
       // only offers refs that resolve.
       const fromRef = (await gitOps.commitExistsAsync(worktreePath, from)) ? from : gitOps.EMPTY_TREE_SHA
-      const files = await gitOps.getChangedFilesBetweenAsync(worktreePath, fromRef, to)
+      const files = await gitOps.getChangedFilesBetweenStrictAsync(worktreePath, fromRef, to)
       c.header('Cache-Control', 'no-store')
       return c.json({ files, mode: 'commits', from: fromRef, to })
     }
@@ -4302,7 +4312,7 @@ app.get('/:id/diff', async (c) => {
             'origin',
             workspace.sourceBranch,
           )
-        : await gitOps.getChangedFilesAsync(worktreePath, workspace.sourceBranch, includeUntracked)
+        : await gitOps.getChangedFilesStrictAsync(worktreePath, workspace.sourceBranch, includeUntracked)
 
     c.header('Cache-Control', 'no-store')
     return c.json({
@@ -4366,8 +4376,8 @@ app.get('/:id/diff-file', async (c) => {
       // see the matching note in the `/diff` commits branch above.
       const fromRef = (await gitOps.commitExistsAsync(worktreePath, from)) ? from : gitOps.EMPTY_TREE_SHA
       const [original, modified] = await Promise.all([
-        gitOps.getFileAtRefAsync(worktreePath, fromRef, filePath),
-        gitOps.getFileAtRefAsync(worktreePath, to, filePath),
+        gitOps.getFileAtRefStrictAsync(worktreePath, fromRef, filePath),
+        gitOps.getFileAtRefStrictAsync(worktreePath, to, filePath),
       ])
       c.header('Cache-Control', 'no-store')
       return c.json({
@@ -4384,7 +4394,7 @@ app.get('/:id/diff-file', async (c) => {
       mode === 'unpushed'
         ? await gitOps.resolveUnpushedBaseAsync(worktreePath, workspace.workingBranch, workspace.sourceBranch)
         : workspace.sourceBranch
-    const original = await gitOps.getFileAtRefAsync(worktreePath, baseRef, filePath)
+    const original = await gitOps.getFileAtRefStrictAsync(worktreePath, baseRef, filePath)
     const modified = gitOps.getFileContent(worktreePath, filePath)
 
     c.header('Cache-Control', 'no-store')
@@ -4546,7 +4556,7 @@ app.get('/:id/working-tree-files', async (c) => {
     const id = c.req.param('id')
     const workspace = workspaceService.getWorkspace(id)
     if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
-    const files = await gitOps.getWorkingTreeFilesAsync(workspace.worktreePath)
+    const files = await gitOps.getWorkingTreeFilesStrictAsync(workspace.worktreePath)
     return c.json({ files })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
@@ -4930,7 +4940,7 @@ app.post('/:id/git/commit-with-agent', migrationGuard, async (c) => {
     const workspace = workspaceService.getWorkspace(id)
     if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
 
-    const workingTree = await gitOps.getWorkingTreeStatusAsync(workspace.worktreePath)
+    const workingTree = await gitOps.getWorkingTreeStatusStrictAsync(workspace.worktreePath)
     if (workingTree.staged + workingTree.modified + workingTree.untracked === 0) {
       return c.json({ error: 'No uncommitted changes to commit' }, 400)
     }
@@ -4967,6 +4977,9 @@ app.post('/:id/git/discard', (c) => {
     const id = c.req.param('id')
     const workspace = workspaceService.getWorkspace(id)
     if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    // `reset --hard` under a live agent would destroy the work it is writing.
+    if (agentManager.hasController(id) || agentManager.hasParallelReviewController(id))
+      return c.json({ error: 'Stop the agent before discarding working-tree changes' }, 409)
 
     gitOps.discardWorkingTreeChanges(workspace.worktreePath)
     return c.json({ success: true })

@@ -388,6 +388,24 @@ describe('Mistral Vibe engine lifecycle', () => {
       { kind: 'session:ended', reason: 'killed', exitCode: null },
     ])
   })
+  it('still shuts the runtime down when the event handler throws', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const process = await createMistralVibeEngine().start(options, (event) => {
+      if (event.kind === 'session:ended') throw new Error('handler failed')
+    })
+    await tick()
+    closed.resolve(undefined)
+    await expect(process.stop()).resolves.toBeUndefined()
+    expect(stop).toHaveBeenCalledTimes(1)
+  })
+  it('asks the runtime again after an unconfirmed shutdown', async () => {
+    stop.mockRejectedValueOnce(new Error('Vibe ACP shutdown unconfirmed; retaining runtime ownership'))
+    const process = await launch()
+    await expect(process.stop()).rejects.toThrow('unconfirmed')
+    closed.resolve(undefined)
+    await expect(process.stop()).resolves.toBeUndefined()
+    expect(stop).toHaveBeenCalledTimes(2)
+  })
   it('keeps prompts beyond 120 seconds when the watchdog is disabled', async () => {
     vi.useFakeTimers()
     const process = await launch()

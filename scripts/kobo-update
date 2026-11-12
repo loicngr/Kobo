@@ -289,30 +289,42 @@ class Updater:
                   "require('better-sqlite3')(':memory:').close();require('node-pty')"])
         return image
 
+    skip_backup = False
+
     def backup(self):
-        archive = self.job / 'kobo.tar.gz'
+        skip = self.skip_backup
+        db_files = {f'./.config/kobo/{name}' for name in ('kobo.db','kobo.db-wal','kobo.db-shm')}
+        # --skip-backup: no archive; a transient tar of the SQLite files still feeds the migration test.
+        archive = self.job / ('migration-check.tar' if skip else 'kobo.tar.gz')
+        # Sidecars are normally absent after a clean stop: tolerate them, the kobo.db check below remains.
+        tar_args = ['--ignore-failed-read', '-cf', '-', *sorted(db_files)] if skip else ['-czf', '-', './.config/kobo']
+        label = 'database copy' if skip else 'backup'
         with archive.open('xb') as f, self.log.open('ab') as err:
             try:
                 subprocess.run(['docker', 'run', '--rm', '--network', 'none', '--read-only',
                     '--mount', f'type=volume,src={self.volume},dst=/data,readonly',
-                    '--entrypoint', 'tar', self.old_image, '-C', '/data', '-czf', '-', './.config/kobo'],
+                    '--entrypoint', 'tar', self.old_image, '-C', '/data', *tar_args],
                     stdout=f, stderr=err, check=True, timeout=3600)
                 f.flush()
                 os.fsync(f.fileno())
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-                raise UpdateError('Failed: backup. The previous version will be restarted.') from e
+                raise UpdateError(f'Failed: {label}. The previous version will be restarted.') from e
         check = self.job / 'migration-check'
         check.mkdir()
-        # Read the complete gzip stream; extract only DB files as regular files, never symlinks.
-        with tarfile.open(archive, 'r|gz') as tar:
-            for member in tar:
-                if member.name in {f'./.config/kobo/{name}' for name in ('kobo.db','kobo.db-wal','kobo.db-shm')}:
-                    if not member.isfile():
-                        raise UpdateError('Unexpected SQLite file in backup.')
-                    with tar.extractfile(member) as src, (check / Path(member.name).name).open('wb') as dst:
-                        shutil.copyfileobj(src, dst)
+        # Read the complete stream; extract only DB files as regular files, never symlinks.
+        try:
+            with tarfile.open(archive, 'r|' if skip else 'r|gz') as tar:
+                for member in tar:
+                    if member.name in db_files:
+                        if not member.isfile():
+                            raise UpdateError(f'Unexpected SQLite file in {label}.')
+                        with tar.extractfile(member) as src, (check / Path(member.name).name).open('wb') as dst:
+                            shutil.copyfileobj(src, dst)
+        finally:
+            if skip:
+                archive.unlink()
         if not (check / 'kobo.db').is_file():
-            raise UpdateError('Backup does not contain the Kōbō database.')
+            raise UpdateError(f'{label.capitalize()} does not contain the Kōbō database.')
         return check
 
     def verify(self, version):
@@ -338,7 +350,9 @@ class Updater:
                     time.sleep(2)
         raise UpdateError('HTTPS verification failed.') from last_error
 
-    def execute(self, requested, check_only=False, prepare_only=False):
+    def execute(self, requested, check_only=False, prepare_only=False, skip_backup=False):
+        # Only a real deployment backs up; main() rejects the flag with --check/--prepare.
+        self.skip_backup = skip_backup and not (check_only or prepare_only)
         for state in (self.stack / 'updates').glob('*/state.json'):
             if json.loads(state.read_text())['phase'] not in {'complete','prepared','aborted'}:
                 raise UpdateError(f'Interrupted update requires review: {state}. See RECOVERY.md in that directory.')
@@ -353,6 +367,9 @@ class Updater:
         if version == self.installed and not prepare_only:
             say('This version is already installed. Nothing to do.')
             return
+        if self.skip_backup:
+            say('WARNING: --skip-backup: no kobo.tar.gz archive will be created. '
+                'This update has no Kōbō data recovery point; a failed new version cannot be rolled back from it.')
         updates = self.stack / 'updates'
         updates.mkdir(mode=0o700, exist_ok=True)
         self.job = Path(tempfile.mkdtemp(prefix=datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ-'), dir=updates))
@@ -362,7 +379,9 @@ class Updater:
         self.record('building', previous_image=old_tag, previous_digest=self.old_image,
                     volume=self.volume, version=version, sha=sha,
                     maintenance_owner=self.maintenance_owner,
-                    backup_archive='kobo.tar.gz', backup_scope='/root/.config/kobo',
+                    backup_archive=None if self.skip_backup else 'kobo.tar.gz',
+                    backup_scope=None if self.skip_backup else '/root/.config/kobo',
+                    backup_skipped=self.skip_backup,
                     backup_complete=False, new_version_start_attempted=False)
         self.recovery_notes()
         stopped = False
@@ -389,14 +408,19 @@ class Updater:
             self.maintenance('POST')
             self.record('stopping')
             stopped = True  # Also recover if the stop command itself fails/interruption arrives.
-            say('Stopping Kōbō, backing up only /root/.config/kobo and testing migrations on a database copy…')
+            say('Stopping Kōbō, SKIPPING the backup (--skip-backup) and testing migrations on a database copy…'
+                if self.skip_backup else
+                'Stopping Kōbō, backing up only /root/.config/kobo and testing migrations on a database copy…')
             self.run(self.compose('stop', '-t', str(STOP_GRACE_SECONDS), 'kobo'),
                      timeout=STOP_GRACE_SECONDS + 30)
             info = json.loads(self.run(['docker', 'inspect', self.container]))[0]
             if info['State']['Running']:
                 raise UpdateError('The container did not stop.')
             check = self.backup()
-            self.record('backed-up', backup_complete=True)
+            if self.skip_backup:
+                self.record('backup-skipped')  # backup_complete stays false: nothing to restore from.
+            else:
+                self.record('backed-up', backup_complete=True)
             self.logged(['docker', 'run', '--rm', '--network', 'none',
                          '--mount', f'type=bind,src={check},dst=/check', '--entrypoint', 'node',
                          image, '--input-type=module', '-e', MIGRATION_JS], timeout=180)
@@ -408,7 +432,8 @@ class Updater:
             self.logged(self.compose('up', '-d', '--no-deps', '--wait', '--wait-timeout', '180', 'kobo'), timeout=240)
             self.verify(version)
             self.record('complete')
-            say(f'Kōbō {version} is up to date. Backup: {self.job / "kobo.tar.gz"}')
+            say(f'Kōbō {version} is up to date. No backup was created (--skip-backup).' if self.skip_backup
+                else f'Kōbō {version} is up to date. Backup: {self.job / "kobo.tar.gz"}')
         except BaseException:
             if stopped and not launching:
                 # Only safe before any process from the new version has used production data.
@@ -445,17 +470,40 @@ class Updater:
     def recovery_notes(self):
         import shlex
         restart = shlex.join(self.compose('up', '-d', '--no-deps', '--wait', 'kobo'))
+        if self.skip_backup:
+            archive = '''NO BACKUP ARCHIVE EXISTS for this update: it ran with --skip-backup
+(state.json: backup_skipped=true, backup_complete=false). Any `migration-check`
+directory is a disposable, possibly migrated database copy, NOT a backup.
+Claude/Codex credentials, skills/plugins, caches and projects remain in the
+original volume.'''
+            rollback = '''This update cannot roll back Kōbō data: no archive was created. Stop Kōbō,
+preserve the current volume and restore .config/kobo only from a backup you made
+yourself, into a NEW cloned volume, with the previous Compose configuration and
+the previous immutable image above. Kōbō's own daily `kobo.db.backup-*` files in
+.config/kobo predate this update but cover the database only. Keep the original
+volume.'''
+        else:
+            archive = '''The archive `kobo.tar.gz` is validated only when backup_complete=true.
+It contains ONLY /root/.config/kobo, with paths relative to /root.
+Claude/Codex credentials, skills/plugins, caches and projects are NOT included;
+back up those files separately if needed. They remain in the original volume.'''
+            rollback = '''To roll back Kōbō data, stop Kōbō and preserve the current volume. Clone that
+stopped volume into a NEW Docker volume to retain current engine credentials,
+skills and other files outside .config/kobo. In the NEW volume only, replace
+.config/kobo completely with the contents of kobo.tar.gz (extract at the volume
+root, preserving numeric owners and permissions). Do not merge the old database
+with newer WAL/SHM files or other new-version Kōbō files. Adapt the previous
+Compose configuration to use that restored volume and the previous immutable
+image above. Keep the original volume. This archive cannot roll back files
+outside .config/kobo, external agent actions or project changes.'''
         (self.job / 'RECOVERY.md').write_text(f'''# Kōbō update recovery
 
 Private log: `{self.job / 'update.log'}`. Durable phase: `state.json`.
 Previous configuration: `compose.before.yaml`.
 Previous immutable image: `{self.old_image}`.
 Original volume: `{self.volume}`.
-The archive `kobo.tar.gz` is validated only when backup_complete=true.
-It contains ONLY /root/.config/kobo, with paths relative to /root.
+{archive}
 new_version_start_attempted indicates whether a new-version launch was attempted.
-Claude/Codex credentials, skills/plugins, caches and projects are NOT included;
-back up those files separately if needed. They remain in the original volume.
 Old images, volumes and backups are never automatically deleted.
 
 ## Interrupted admission reservation
@@ -482,15 +530,7 @@ Do not run an older image against a potentially migrated database.
 Inspect the private log and Compose logs (which may contain credentials).
 A proxy error can leave a working backend: check for new messages and resumed
 work before considering a restore.
-To roll back Kōbō data, stop Kōbō and preserve the current volume. Clone that
-stopped volume into a NEW Docker volume to retain current engine credentials,
-skills and other files outside .config/kobo. In the NEW volume only, replace
-.config/kobo completely with the contents of kobo.tar.gz (extract at the volume
-root, preserving numeric owners and permissions). Do not merge the old database
-with newer WAL/SHM files or other new-version Kōbō files. Adapt the previous
-Compose configuration to use that restored volume and the previous immutable
-image above. Keep the original volume. This archive cannot roll back files
-outside .config/kobo, external agent actions or project changes.
+{rollback}
 After recovery and health verification, set state.json phase to complete or aborted.
 ''')
 
@@ -503,7 +543,12 @@ def main():
     modes.add_argument('--prepare', action='store_true', help='build and test the image without deploying')
     parser.add_argument('--directory', type=Path, default=Path.cwd(),
                         help='deployment directory containing compose.yaml and .env (default: current directory)')
+    parser.add_argument('--skip-backup', action='store_true',
+                        help='deploy without creating the kobo.tar.gz backup: no Kōbō data recovery point for this '
+                             'update (the migration test on a database copy still runs)')
     args = parser.parse_args()
+    if args.skip_backup and (args.check or args.prepare):
+        parser.error('--skip-backup only applies to a real deployment, not --check or --prepare')
     os.umask(0o077)
     for sig in (signal.SIGTERM, signal.SIGHUP):
         signal.signal(sig, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
@@ -513,7 +558,7 @@ def main():
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
                 raise UpdateError('Another update is already running.')
-            Updater(args.directory).execute(args.version, args.check, args.prepare)
+            Updater(args.directory).execute(args.version, args.check, args.prepare, args.skip_backup)
     except (Exception, KeyboardInterrupt) as e:
         message = str(e) if isinstance(e, UpdateError) else type(e).__name__
         say(f'Stopped: {message}.')

@@ -54,6 +54,8 @@ export function initMemorySchema(db: Database.Database): void {
       ON memory_entries(scope_id, id);
     CREATE INDEX IF NOT EXISTS idx_memory_entries_scope_updated
       ON memory_entries(scope_id, updated_at DESC, id DESC);
+    CREATE INDEX IF NOT EXISTS idx_memory_entries_source_workspace_id ON memory_entries(source_workspace_id);
+    CREATE INDEX IF NOT EXISTS idx_memory_entries_source_session_id ON memory_entries(source_session_id);
 
     CREATE TABLE IF NOT EXISTS memory_proposals (
       id TEXT PRIMARY KEY,
@@ -85,6 +87,8 @@ export function initMemorySchema(db: Database.Database): void {
       ON memory_proposals(scope_id, created_at DESC, id DESC);
     CREATE INDEX IF NOT EXISTS idx_memory_proposals_target
       ON memory_proposals(target_entry_id) WHERE target_entry_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_memory_proposals_source_workspace_id ON memory_proposals(source_workspace_id);
+    CREATE INDEX IF NOT EXISTS idx_memory_proposals_source_session_id ON memory_proposals(source_session_id);
 
     CREATE TABLE IF NOT EXISTS memory_operations (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -116,6 +120,7 @@ export function initMemorySchema(db: Database.Database): void {
       ON memory_operations(scope_id, id DESC);
     CREATE INDEX IF NOT EXISTS idx_memory_operations_source_workspace_id
       ON memory_operations(source_workspace_id, id DESC);
+    CREATE INDEX IF NOT EXISTS idx_memory_operations_source_session_id ON memory_operations(source_session_id);
 
     CREATE TABLE IF NOT EXISTS memory_contexts (
       id TEXT PRIMARY KEY,

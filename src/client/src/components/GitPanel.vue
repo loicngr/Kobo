@@ -990,14 +990,14 @@ async function abortSourceChange() {
     const res = await apiFetchResponseForStatus(`/api/workspaces/${props.workspace.id}/git/abort`, { method: 'POST' })
     if (!res.ok) {
       const data = await res.json().catch(() => ({}))
-      throw new Error(data.error ?? 'Abort failed')
+      throw new Error(data.error ?? t('git.abortFailed'))
     }
     $q.notify({ type: 'positive', message: t('git.conflictAborted'), position: 'top' })
     sourceChangeErrorDialog.value = false
     conflictOperation.value = null
     loadGitStats()
   } catch (e) {
-    const msg = e instanceof Error ? e.message : 'Abort failed'
+    const msg = e instanceof Error ? e.message : t('git.abortFailed')
     $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 0 })
   } finally {
     sourceChangeAborting.value = false
@@ -1414,7 +1414,7 @@ async function runRebase(opts?: { autostash?: boolean }) {
     }
     if (!res.ok) {
       const data = await res.json()
-      throw new Error(data.error ?? 'Rebase failed')
+      throw new Error(data.error ?? t('git.rebaseFailed'))
     }
     $q.notify({ type: 'positive', message: t('git.rebaseSuccess'), position: 'top' })
     loadGitStats()
@@ -1460,7 +1460,7 @@ async function runMerge(opts?: { autostash?: boolean }) {
     }
     if (!res.ok) {
       const data = await res.json()
-      throw new Error(data.error ?? 'Merge failed')
+      throw new Error(data.error ?? t('git.mergeFailed'))
     }
     $q.notify({ type: 'positive', message: t('git.mergeSuccess'), position: 'top' })
     loadGitStats()
@@ -1668,14 +1668,14 @@ async function runAbortGitOperation() {
     }
     if (!res.ok) {
       const data = await res.json()
-      throw new Error(data.error ?? 'Abort failed')
+      throw new Error(data.error ?? t('git.abortFailed'))
     }
     $q.notify({ type: 'positive', message: t('git.conflictAborted'), position: 'top' })
     conflictDialog.value = false
     conflictOperation.value = null
     loadGitStats()
   } catch (e) {
-    const msg = e instanceof Error ? e.message : 'Abort failed'
+    const msg = e instanceof Error ? e.message : t('git.abortFailed')
     reportGitFailure(msg, () => void runAbortGitOperation())
   } finally {
     conflictAborting.value = false
@@ -1697,14 +1697,14 @@ async function continueGitOperation() {
     }
     if (!res.ok) {
       const data = await res.json()
-      throw new Error(data.error ?? 'Continue failed')
+      throw new Error(data.error ?? t('git.continueFailed'))
     }
     $q.notify({ type: 'positive', message: t('git.conflictContinued'), position: 'top' })
     conflictDialog.value = false
     conflictOperation.value = null
     loadGitStats()
   } catch (e) {
-    const msg = e instanceof Error ? e.message : 'Continue failed'
+    const msg = e instanceof Error ? e.message : t('git.continueFailed')
     $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 0 })
   } finally {
     conflictContinuing.value = false
@@ -1723,7 +1723,7 @@ async function resolveWithAgent() {
     })
     if (!res.ok) {
       const data = await res.json()
-      throw new Error(data.error ?? 'Handoff failed')
+      throw new Error(data.error ?? t('git.handoffFailed'))
     }
     $q.notify({ type: 'positive', message: t('git.conflictHandoffSuccess'), position: 'top' })
     conflictDialog.value = false
@@ -1731,7 +1731,7 @@ async function resolveWithAgent() {
     // lands; release the local lock and let the server's 409 cover the gap.
     conflictOperation.value = null
   } catch (e) {
-    const msg = e instanceof Error ? e.message : 'Handoff failed'
+    const msg = e instanceof Error ? e.message : t('git.handoffFailed')
     $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 0 })
   } finally {
     conflictResolving.value = false
@@ -1866,7 +1866,7 @@ async function handleFetchAll() {
     const res = await apiFetchResponseForStatus(`/api/workspaces/${props.workspace.id}/fetch`, { method: 'POST' })
     if (!res.ok) {
       const data = await res.json()
-      throw new Error(data.error ?? 'Failed')
+      throw new Error(data.error ?? t('git.operationFailed'))
     }
     $q.notify({ type: 'positive', message: t('git.fetchSuccess'), position: 'top' })
     loadGitStats()
@@ -1880,7 +1880,7 @@ async function handleFetchAll() {
 
 function viewPr() {
   if (gitStats.value?.prUrl) {
-    window.open(gitStats.value.prUrl, '_blank')
+    window.open(gitStats.value.prUrl, '_blank', 'noopener,noreferrer')
   }
 }
 
@@ -1907,7 +1907,7 @@ function handleChangePrBase() {
       })
       if (!res.ok) {
         const data = await res.json()
-        throw new Error(data.error ?? 'Failed')
+        throw new Error(data.error ?? t('git.operationFailed'))
       }
       $q.notify({
         type: 'positive',
@@ -2059,7 +2059,7 @@ async function deleteRemoteBranch(workspaceId: string, branch: string) {
     })
     if (!res.ok) {
       const data = await res.json().catch(() => ({}))
-      throw new Error(data.error ?? 'Failed')
+      throw new Error(data.error ?? t('git.operationFailed'))
     }
     $q.notify({ type: 'positive', message: t('git.deleteRemoteBranchSuccess', { branch }), position: 'top' })
   } catch (e) {
@@ -2133,7 +2133,7 @@ async function handleChangeSourceBranch() {
               ? t('git.changeSourceBranchDirty')
               : data.code === 'agent_running'
                 ? t('git.changeSourceBranchAgentRunning')
-                : (data.error ?? 'Failed')
+                : (data.error ?? t('git.operationFailed'))
         // The server attaches `ongoingOperation` (cherry-pick / merge / rebase)
         // when a partial git state was left behind (typically a custom script
         // that crashed mid-flight). Route to the abort-aware dialog so the
@@ -2163,7 +2163,7 @@ async function handleChangeSourceBranch() {
         if (data.forcePushNeeded) promptForcePush()
       }
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Failed'
+      const msg = e instanceof Error ? e.message : t('git.operationFailed')
       $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 0 })
     } finally {
       dismissLoader()
@@ -2206,7 +2206,7 @@ async function handleOpenPr() {
       })
       return
     }
-    const msg = e instanceof Error ? e.message : 'Open PR failed'
+    const msg = e instanceof Error ? e.message : t('git.openPrFailed')
     $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 0 })
   } finally {
     openingPr.value = false

@@ -1100,6 +1100,8 @@ export function createManagedMcpDispatcher(context: ManagedMcpContext) {
         const limit = Math.min(Math.max(1, (a.limit as number | undefined) ?? 30), 100)
         const qs = new URLSearchParams({ q: query, limit: String(limit) })
         if (includeArchived) qs.set('includeArchived', 'true')
+        // Filter server-side: a limit applied to the global ranking would drop this workspace's hits.
+        if (scope !== 'all' && workspaceId) qs.set('workspaceId', workspaceId)
         const raw = (await backendRequest('GET', `/api/search?${qs.toString()}`)) as Array<Record<string, unknown>>
         const results = scope === 'all' ? raw : raw.filter((r) => r.workspaceId === workspaceId)
         return ok({ query, scope, total: results.length, results })

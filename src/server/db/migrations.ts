@@ -872,6 +872,26 @@ export const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 61,
+    name: 'index-cascade-foreign-keys',
+    // Deleting a workspace or session runs one implicit lookup per child
+    // foreign key; without these indexes each one scans its whole table.
+    migrate(db) {
+      const indexes: Array<[name: string, table: string, column: string]> = [
+        ['idx_search_fragments_workspace_id', 'search_fragments', 'workspace_id'],
+        ['idx_progress_bars_session_id', 'session_progress_bars', 'session_id'],
+        ['idx_memory_operations_source_session_id', 'memory_operations', 'source_session_id'],
+        ['idx_memory_entries_source_workspace_id', 'memory_entries', 'source_workspace_id'],
+        ['idx_memory_entries_source_session_id', 'memory_entries', 'source_session_id'],
+        ['idx_memory_proposals_source_workspace_id', 'memory_proposals', 'source_workspace_id'],
+        ['idx_memory_proposals_source_session_id', 'memory_proposals', 'source_session_id'],
+      ]
+      const hasTable = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")
+      for (const [name, table, column] of indexes)
+        if (hasTable.get(table)) db.exec(`CREATE INDEX IF NOT EXISTS ${name} ON ${table}(${column})`)
+    },
+  },
 ]
 
 /** Current schema version — always equals the highest migration version. */

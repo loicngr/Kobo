@@ -19,11 +19,20 @@ export function getParallelReview(workspaceId: string): ParallelReview | null {
         last_error: string | null
       }
     | undefined
+  let original: ReviewConfiguration
+  try {
+    original = row ? JSON.parse(row.original_configuration) : undefined
+  } catch (error) {
+    // Unrecoverable: without its source configuration the report cannot be
+    // returned. Treat it as absent so stop, delete and a new review still work.
+    console.error(`[parallel-review] Ignoring unreadable parallel review for workspace '${workspaceId}':`, error)
+    return null
+  }
   return row
     ? {
         reviewSessionId: row.review_session_id,
         originalSessionId: row.original_session_id,
-        original: JSON.parse(row.original_configuration),
+        original,
         returnToSession: !!row.return_to_session,
         phase: row.phase,
         returnPrompt: row.return_prompt,

@@ -9,6 +9,7 @@ import { withGitRepoLock } from '../utils/git-repo-lock.js'
 import { getAgentStatus, hasParallelReviewController } from './agent/orchestrator.js'
 import { getForgeProvider } from './forge/registry.js'
 import { resolveForge } from './forge/resolve.js'
+import { getAllPrSnapshots } from './pr-watcher-service.js'
 import { getEffectiveSettings } from './settings-service.js'
 import { getWorkspace, updateWorkspaceSourceBranch } from './workspace-service.js'
 
@@ -239,18 +240,25 @@ async function runBuiltInStrategy(
     }
   }
 
+  // The pr-watcher adopts the PR's base as source branch: a PR left on the old
+  // base silently undoes this change, so a failed update must reach the user.
+  let prBaseWarning: string | undefined
   try {
     const provider = getForgeProvider(resolveForge(projectPath))
     if (provider.capabilities.canChangePrBase) {
       const pr = await provider.getPrStatus(worktreePath, workingBranch)
       if (pr) await provider.changePrBase(worktreePath, trimmedNew)
+      // Providers answer null for "no PR" and for a failed lookup alike; the
+      // watcher's last snapshot tells the two apart.
+      else if (getAllPrSnapshots()[workspaceId]?.state === 'OPEN') throw new Error('the open PR could not be read')
     }
   } catch (err) {
     console.error('[change-source-branch] PR base update failed (non-fatal):', err)
+    prBaseWarning = `The PR base could not be updated to '${trimmedNew}' (${err instanceof Error ? err.message : String(err)}). Update it on the forge, or the workspace will return to the PR's base.`
   }
 
   // Each backup pins a whole previous history and git can never reclaim it.
-  const warnings = rotateBackupBranches(worktreePath, workingBranch)
+  const warnings = [...rotateBackupBranches(worktreePath, workingBranch), ...(prBaseWarning ? [prBaseWarning] : [])]
 
   return {
     status: isAligned ? 'aligned' : 'done',

@@ -150,6 +150,7 @@ settings exports.
 | `dangerouslySkipPermissions` | `boolean` | Disable all approval prompts. **Use with care.** |
 | `prPromptTemplate` | `string` | Template rendered by the `/open-pr` endpoint. Supports `{{pr_number}}`, `{{pr_url}}`, `{{branch_name}}`, `{{diff_stats}}`, `{{commits}}`, etc. |
 | `reviewPromptTemplate` | `string` | Template for the review prompt action. |
+| `reviewDefaultInstructions` | `string` | Prefills "Additional instructions" each time the manual review dialog opens (empty by default; scheduled auto-loop final reviews keep their own text). |
 | `notionInitialPromptTemplate` | `string` | Template injected as the first user message when a workspace is created from a Notion page. |
 | `sentryInitialPromptTemplate` | `string` | Template injected as the first user message when a workspace is created from a Sentry issue. |
 | `gitConventions` | `string` | Markdown block written to `.ai/.git-conventions.md` inside every workspace. |
@@ -1545,8 +1546,9 @@ and [manual bot configuration](./docs/deployment-vps.md#github-app-bot-authentic
 ### Docker updates and backups
 
 For the independent VPS layout, [`scripts/kobo-update`](./scripts/kobo-update)
-accepts a stable version or defaults to npm `latest`. It has `--check`, `--prepare`
-and `--directory` options. See [updater usage and recovery](./docs/deployment-vps.md#update-with-kobo-update).
+accepts a stable version or defaults to npm `latest`. It has `--check`, `--prepare`,
+`--directory` and `--skip-backup` options; the last one deploys without creating
+the archive and leaves that update without a data recovery point. See [updater usage and recovery](./docs/deployment-vps.md#update-with-kobo-update).
 This is an operator-invoked script; the in-app update banner does not install releases.
 Its `kobo.tar.gz` backup contains only `/root/.config/kobo` (database, settings and
 other Kōbō data). The rest of the persistent home, including engine credentials,

@@ -614,7 +614,7 @@ function navigateFile(direction: number) {
 
 function nextChange() {
   mobilePanel.value = 'code'
-  void nextTick(() => diffEditor?.goToDiff('next'))
+  void nextTick().then(() => diffEditor?.goToDiff('next'))
 }
 
 function commentCurrentLine() {
@@ -1087,6 +1087,7 @@ function retryFileList(): void {
 async function loadFileDiff(filePath: string) {
   if (!editorContainer.value) return
   loadingFile.value = true
+  let signal: AbortSignal | null = null
 
   try {
     // Dispose FIRST. Disposing after the request left the PREVIOUS file's
@@ -1127,7 +1128,7 @@ async function loadFileDiff(filePath: string) {
     const fileQuery = isCommitsMode.value
       ? `path=${encodeURIComponent(filePath)}&mode=commits&from=${encodeURIComponent(props.compareFrom!)}&to=${encodeURIComponent(props.compareTo!)}`
       : `path=${encodeURIComponent(filePath)}&mode=${diffMode.value}`
-    const signal = fileDiffRequest.begin()
+    signal = fileDiffRequest.begin()
     const data = await apiFetch<{ original?: string; modified?: string; modifiedSha?: string }>(
       `/api/workspaces/${props.workspaceId}/diff-file?${fileQuery}`,
       { cache: 'no-store', signal },
@@ -1202,7 +1203,8 @@ async function loadFileDiff(filePath: string) {
     fileLoadError.value = message
     console.error('Failed to load file diff:', err)
   } finally {
-    loadingFile.value = false
+    // A superseded request must not hide the spinner of the one that replaced it.
+    if (!signal || fileDiffRequest.isCurrent(signal)) loadingFile.value = false
   }
 }
 

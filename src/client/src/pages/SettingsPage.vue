@@ -61,7 +61,7 @@
           <TourReplayButton tour-id="settings" class="q-ml-sm" />
         </header>
 
-        <div class="text-caption text-kobo-3 q-mb-md">{{ $t(`settings.help.${activeTab}`) }}</div>
+        <div class="text-caption text-kobo-3 q-mb-md">{{ $t(`settings.help.${integrationSection ?? activeTab}`) }}</div>
 
         <div class="settings-panels">
         <div v-show="isGlobalSection" class="settings-global-wrap">
@@ -1221,6 +1221,20 @@ where ffmpeg</pre>
                 class="settings-input mono-textarea q-mb-md"
               />
 
+              <div class="text-subtitle2 q-mb-sm q-mt-md">{{ $t('settings.reviewDefaultInstructions') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.reviewDefaultInstructionsHint') }}</div>
+              <q-input
+                v-model="globalReviewDefaultInstructions"
+                type="textarea"
+                dense
+                dark
+                outlined
+                :rows="4"
+                :placeholder="$t('review.additionalInstructionsPlaceholder')"
+                class="settings-input mono-textarea q-mb-md"
+                data-test="review-default-instructions"
+              />
+
               <div class="row items-center q-mb-sm q-mt-md">
                 <div class="text-subtitle2">{{ $t('settings.ciFixPromptTemplate') }}</div>
                 <q-space />
@@ -1321,11 +1335,26 @@ where ffmpeg</pre>
               />
             </div>
 
-            <div v-if="activeTab === 'notion'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <q-tabs
+              v-if="activeTab === 'integrations'"
+              v-model="integrationTab"
+              dense
+              no-caps
+              align="left"
+              active-color="primary"
+              indicator-color="primary"
+              class="text-kobo-3 q-mb-md"
+              data-tour="settings-card-integrations"
+              data-test="integration-tabs"
+            >
+              <q-tab name="notion" icon="integration_instructions" :label="$t('settings.nav.notion')" data-test="integration-tab-notion" />
+              <q-tab name="sentry" icon="bug_report" :label="$t('settings.nav.sentry')" data-test="integration-tab-sentry" />
+            </q-tabs>
+            <div v-if="integrationSection === 'notion'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <q-toggle v-model="globalNotionEnabled" :label="$t('settings.integrationEnabled')" dark dense color="primary" />
             </div>
             <div
-              v-if="activeTab === 'notion'"
+              v-if="integrationSection === 'notion'"
               data-tour="settings-card-notion"
               :class="['settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md', { 'opacity-50': !globalNotionEnabled }]"
             >
@@ -1369,14 +1398,14 @@ where ffmpeg</pre>
             </div>
 
             <div
-              v-if="activeTab === 'sentry'"
+              v-if="integrationSection === 'sentry'"
               data-tour="settings-card-sentry"
               class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
             >
               <q-toggle v-model="globalSentryEnabled" :label="$t('settings.integrationEnabled')" dark dense color="primary" />
             </div>
 
-            <div v-if="activeTab === 'sentry'" :class="['settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md', { 'opacity-50': !globalSentryEnabled }]">
+            <div v-if="integrationSection === 'sentry'" :class="['settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md', { 'opacity-50': !globalSentryEnabled }]">
               <IntegrationConnectionSettings v-model="integrationDrafts.sentry" v-model:connection-status="integrationStatus.sentry" integration="sentry" />
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.mcpSelection') }}</div>
               <div class="text-caption text-kobo-3 q-mb-sm">{{ $t(integrationStatus.sentry.configured ? 'integration.directOverrides' : 'settings.mcpSelectionHint') }}</div>
@@ -1423,7 +1452,7 @@ where ffmpeg</pre>
               <q-input v-model="globalBitbucketToken" :label="$t('settings.bitbucketToken')" type="password" autocomplete="off" dark dense outlined />
             </div>
 
-            <div v-if="activeTab === 'notion'" :class="['settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md', { 'opacity-50': !globalNotionEnabled }]">
+            <div v-if="integrationSection === 'notion'" :class="['settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md', { 'opacity-50': !globalNotionEnabled }]">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.notionStatus') }}</div>
               <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.notionStatusHint') }}</div>
               <div class="q-mb-sm">
@@ -1475,7 +1504,7 @@ where ffmpeg</pre>
             </div>
 
             <!-- Notion assignment -->
-            <div v-if="activeTab === 'notion'" :class="['settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md', { 'opacity-50': !globalNotionEnabled }]">
+            <div v-if="integrationSection === 'notion'" :class="['settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md', { 'opacity-50': !globalNotionEnabled }]">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.notionAssignee') }}</div>
               <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.notionAssigneeHint') }}</div>
               <div class="q-mb-sm">
@@ -1521,8 +1550,8 @@ where ffmpeg</pre>
                     <q-item v-bind="scope.itemProps">
                       <q-item-section avatar>
                         <q-avatar size="24px">
-                          <img v-if="scope.opt.avatarUrl" :src="scope.opt.avatarUrl" :alt="scope.opt.label">
-                          <q-icon v-else name="person" size="20px" />
+                          <!-- Notion avatars are remote images, blocked by the img-src CSP. -->
+                          <q-icon name="person" size="20px" />
                         </q-avatar>
                       </q-item-section>
                       <q-item-section>
@@ -1552,7 +1581,7 @@ where ffmpeg</pre>
               </div>
             </div>
 
-            <div v-if="activeTab === 'sentry'" :class="['settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md', { 'opacity-50': !globalSentryEnabled }]">
+            <div v-if="integrationSection === 'sentry'" :class="['settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md', { 'opacity-50': !globalSentryEnabled }]">
               <div class="text-subtitle2 q-mb-sm">{{ t('settings.sentryIntegration') }}</div>
               <div class="row items-center q-mb-sm">
                 <div class="text-subtitle2">{{ t('settings.sentryInitialPrompt') }}</div>
@@ -2941,7 +2970,15 @@ const layout = useLayoutStore()
 const activeTab = ref('general')
 const navDrawerOpen = ref(false)
 
+// Notion and Sentry share one nav entry; their former tab ids still resolve (links, tours, tests).
+const integrationTab = ref<'notion' | 'sentry'>('notion')
+const integrationSection = computed(() => (activeTab.value === 'integrations' ? integrationTab.value : null))
+
 function selectTab(tab: string) {
+  if (tab === 'notion' || tab === 'sentry') {
+    integrationTab.value = tab
+    tab = 'integrations'
+  }
   activeTab.value = tab
   if (isMobile.value) navDrawerOpen.value = false
 }
@@ -2958,8 +2995,7 @@ const navItems = computed(() => [
   { value: 'git', icon: 'source', label: t('settings.nav.git') },
   { value: 'prompts', icon: 'text_snippet', label: t('settings.nav.prompts') },
   { value: 'scripts', icon: 'terminal', label: t('settings.nav.scripts') },
-  { value: 'notion', icon: 'integration_instructions', label: t('settings.nav.notion') },
-  { value: 'sentry', icon: 'bug_report', label: t('settings.nav.sentry') },
+  { value: 'integrations', icon: 'integration_instructions', label: t('settings.nav.integrations') },
   { value: 'forge', icon: 'account_tree', label: t('settings.nav.forge') },
   { value: 'voice', icon: 'mic', label: t('settings.nav.voice') },
   { value: 'notifications', icon: 'notifications', label: t('settings.nav.notifications') },
@@ -2974,7 +3010,8 @@ const settingsRoute = useRoute()
 watch(
   () => settingsRoute.query.tab,
   (tab) => {
-    if (typeof tab === 'string' && navItems.value.some((item) => item.value === tab)) selectTab(tab)
+    if (typeof tab !== 'string') return
+    if (tab === 'notion' || tab === 'sentry' || navItems.value.some((item) => item.value === tab)) selectTab(tab)
   },
   { immediate: true },
 )
@@ -2989,8 +3026,7 @@ const isGlobalSection = computed(() =>
     'prompts',
     'git',
     'scripts',
-    'notion',
-    'sentry',
+    'integrations',
     'forge',
     'voice',
     'notifications',
@@ -3024,6 +3060,7 @@ const globalAutoLoopMaxRetries = ref(5)
 const globalAgentWatchdogEnabled = ref(false)
 const globalForceImmediateMessages = ref(false)
 const globalAutoExitPlanMode = ref(false)
+const globalReviewDefaultInstructions = ref('')
 const globalShowProgressBars = ref(true)
 const globalSerializeDevServerStarts = ref(true)
 const globalMaxRunningDevServers = ref<number | string | null>(0)
@@ -4131,6 +4168,7 @@ function readGlobalForm(): Record<string, unknown> {
     agentWatchdogEnabled: globalAgentWatchdogEnabled.value,
     forceImmediateMessages: globalForceImmediateMessages.value,
     autoExitPlanMode: globalAutoExitPlanMode.value,
+    reviewDefaultInstructions: globalReviewDefaultInstructions.value,
     showProgressBars: globalShowProgressBars.value,
     serializeDevServerStarts: globalSerializeDevServerStarts.value,
     maxRunningDevServers: globalMaxRunningDevServers.value,
@@ -4277,6 +4315,7 @@ function syncGlobalForm() {
   globalAgentWatchdogEnabled.value = store.global.agentWatchdogEnabled === true
   globalForceImmediateMessages.value = store.global.forceImmediateMessages === true
   globalAutoExitPlanMode.value = store.global.autoExitPlanMode === true
+  globalReviewDefaultInstructions.value = store.global.reviewDefaultInstructions ?? ''
   globalShowProgressBars.value = store.global.showProgressBars !== false
   globalSerializeDevServerStarts.value = store.global.serializeDevServerStarts !== false
   globalMaxRunningDevServers.value = store.global.maxRunningDevServers ?? 0
@@ -4680,6 +4719,7 @@ async function saveGlobal() {
       agentWatchdogEnabled: globalAgentWatchdogEnabled.value,
       forceImmediateMessages: globalForceImmediateMessages.value,
       autoExitPlanMode: globalAutoExitPlanMode.value,
+      reviewDefaultInstructions: globalReviewDefaultInstructions.value,
       showProgressBars: globalShowProgressBars.value,
       serializeDevServerStarts: globalSerializeDevServerStarts.value,
       maxRunningDevServers: globalMaxRunningDevServers.value as number,

@@ -455,6 +455,8 @@ export class StaleDiagnosisError extends Error {
  * or a source-branch change.
  */
 export async function resolvePrCheckout(input: ResolvePrCheckoutInput): Promise<ResolvePrCheckoutResult> {
+  if (!gitOps.isSafeGitRefName(input.headBranch)) throw new Error(`Invalid head branch name '${input.headBranch}'`)
+  if (!gitOps.isSafeGitRefName(input.baseBranch)) throw new Error(`Invalid base branch name '${input.baseBranch}'`)
   const initial = await diagnoseLocalState(
     input.projectPath,
     input.headBranch,

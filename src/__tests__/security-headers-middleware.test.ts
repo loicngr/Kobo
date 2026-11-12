@@ -13,7 +13,9 @@ describe('security headers', () => {
     'protects %s, including error responses, without breaking same-origin panes',
     async (pathname) => {
       const response = await app.request(pathname)
-      expect(response.headers.get('Content-Security-Policy')).toBe("frame-ancestors 'self'")
+      expect(response.headers.get('Content-Security-Policy')).toBe(
+        "frame-ancestors 'self'; img-src 'self' data: blob:; form-action 'self'; base-uri 'self'; object-src 'none'",
+      )
       expect(response.headers.get('X-Frame-Options')).toBe('SAMEORIGIN')
       expect(response.headers.get('X-Content-Type-Options')).toBe('nosniff')
       expect(response.headers.get('Referrer-Policy')).toBe('no-referrer')

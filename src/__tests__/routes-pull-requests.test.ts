@@ -128,7 +128,7 @@ describe('POST /resolve', () => {
     app.request('/resolve', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ projectPath: '/repo', fingerprint: 'FP' }),
+      body: JSON.stringify({ projectPath: '/repo', headBranch: 'feat/x', baseBranch: 'main', fingerprint: 'FP' }),
     })
 
   it('rejects checkout before mutations while update maintenance is active', async () => {
@@ -168,7 +168,14 @@ describe('POST /resolve', () => {
     vi.mocked(prCheckout.resolvePrCheckout).mockRejectedValue(new MockStaleDiagnosisError('stale'))
     const res = await app.request('/resolve', {
       method: 'POST',
-      body: JSON.stringify({ projectPath: '/repo', prNumber: 1, decisions: {}, fingerprint: 'OLD' }),
+      body: JSON.stringify({
+        projectPath: '/repo',
+        prNumber: 1,
+        headBranch: 'feat/x',
+        baseBranch: 'main',
+        decisions: {},
+        fingerprint: 'OLD',
+      }),
       headers: { 'content-type': 'application/json' },
     })
     expect(res.status).toBe(409)
@@ -178,7 +185,14 @@ describe('POST /resolve', () => {
     vi.mocked(prCheckout.resolvePrCheckout).mockRejectedValue(new Error('cherry-pick failed'))
     const res = await app.request('/resolve', {
       method: 'POST',
-      body: JSON.stringify({ projectPath: '/repo', prNumber: 1, decisions: {}, fingerprint: 'FP' }),
+      body: JSON.stringify({
+        projectPath: '/repo',
+        prNumber: 1,
+        headBranch: 'feat/x',
+        baseBranch: 'main',
+        decisions: {},
+        fingerprint: 'FP',
+      }),
       headers: { 'content-type': 'application/json' },
     })
     expect(res.status).toBe(422)
@@ -211,4 +225,79 @@ describe('POST /resolve', () => {
       applied: [],
     })
   })
+})
+
+describe('branch name validation', () => {
+  it.each(['--upload-pack=touch /tmp/pwned', '-x', 'a..b', '', 'a b', 'a~1', 'a:b', 'a.lock', 'a/'])(
+    'refuses to diagnose a PR whose head branch is %j',
+    async (headBranch) => {
+      vi.mocked(resolveForge).mockReturnValue('github')
+      vi.mocked(getForgeProvider).mockReturnValue({
+        capabilities: { canListPullRequests: true },
+        isAvailable: vi.fn(async () => ({ available: true })),
+        listPullRequests: vi.fn(async () => ({
+          items: [{ number: 3, headBranch, baseBranch: 'main', isFork: false }],
+          nextCursor: null,
+        })),
+      } as never)
+      const res = await app.request('/diagnose', {
+        method: 'POST',
+        body: JSON.stringify({ projectPath: '/repo', prNumber: 3 }),
+        headers: { 'content-type': 'application/json' },
+      })
+      expect(res.status).toBe(422)
+      expect(prCheckout.diagnoseLocalState).not.toHaveBeenCalled()
+    },
+  )
+
+  it.each([
+    { headBranch: '--upload-pack=x', baseBranch: 'main' },
+    { headBranch: 'feat/x', baseBranch: '-evil' },
+    { headBranch: 'feat/x' },
+    { headBranch: 42, baseBranch: 'main' },
+  ])('refuses to resolve with invalid branch names: %j', async (branches) => {
+    const res = await app.request('/resolve', {
+      method: 'POST',
+      body: JSON.stringify({ projectPath: '/repo', prNumber: 1, decisions: {}, fingerprint: 'FP', ...branches }),
+      headers: { 'content-type': 'application/json' },
+    })
+    expect(res.status).toBe(400)
+    expect(prCheckout.resolvePrCheckout).not.toHaveBeenCalled()
+  })
+
+  // Valid Git branch names outside Kōbō's own creation alphabet stay importable.
+  it.each(['fix/issue#123', 'feat/été', 'a+b', 'x@y'])(
+    'diagnoses and resolves a PR on branch %j',
+    async (headBranch) => {
+      vi.mocked(resolveForge).mockReturnValue('github')
+      vi.mocked(getForgeProvider).mockReturnValue({
+        capabilities: { canListPullRequests: true },
+        isAvailable: vi.fn(async () => ({ available: true })),
+        listPullRequests: vi.fn(async () => ({
+          items: [{ number: 3, headBranch, baseBranch: 'main', isFork: false }],
+          nextCursor: null,
+        })),
+      } as never)
+      const diagnosed = await app.request('/diagnose', {
+        method: 'POST',
+        body: JSON.stringify({ projectPath: '/repo', prNumber: 3 }),
+        headers: { 'content-type': 'application/json' },
+      })
+      expect(diagnosed.status).not.toBe(422)
+      expect(prCheckout.diagnoseLocalState).toHaveBeenCalled()
+      const resolved = await app.request('/resolve', {
+        method: 'POST',
+        body: JSON.stringify({
+          projectPath: '/repo',
+          headBranch,
+          baseBranch: 'main',
+          decisions: {},
+          fingerprint: 'FP',
+        }),
+        headers: { 'content-type': 'application/json' },
+      })
+      expect(resolved.status).not.toBe(400)
+      expect(prCheckout.resolvePrCheckout).toHaveBeenCalled()
+    },
+  )
 })

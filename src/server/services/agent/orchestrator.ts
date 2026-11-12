@@ -294,7 +294,7 @@ function finishCompaction(workspaceId: string, controller: SessionController): v
       ? consumePreAwaitStatus(workspaceId)
       : (previous ?? 'executing')
   updateWorkspaceStatus(workspaceId, restored)
-  void dispatchParallelReviewReturn(workspaceId)
+  dispatchParallelReviewReturnInBackground(workspaceId)
 }
 
 export function assertWorkspaceNotCompacting(workspaceId: string): void {
@@ -478,13 +478,15 @@ function runWatchdog(): void {
       )
       // The start may still complete and acquire a process. Keep ownership
       // until its stop is confirmed instead of dispatching a second writer.
-      void stopAgentAndWait(workspaceId, STOP_AGENT_TIMEOUT_MS, 'replacement').then((outcome) => {
-        if (outcome === 'timeout' || outcome === 'failed') {
-          autoLoopService.block(workspaceId, 'engine-start-timeout')
-        } else if (getWs(workspaceId)?.autoLoop && !shuttingDown) {
-          scheduleTransientAutoLoopRecovery(workspaceId, ctrl)
-        }
-      })
+      void stopAgentAndWait(workspaceId, STOP_AGENT_TIMEOUT_MS, 'replacement')
+        .then((outcome) => {
+          if (outcome === 'timeout' || outcome === 'failed') {
+            autoLoopService.block(workspaceId, 'engine-start-timeout')
+          } else if (getWs(workspaceId)?.autoLoop && !shuttingDown) {
+            scheduleTransientAutoLoopRecovery(workspaceId, ctrl)
+          }
+        })
+        .catch((err) => console.error(`[watchdog] Cleanup failed for workspace '${workspaceId}':`, err))
       continue
     } else {
       // D1 — the pid is never a liveness criterion. The Claude engine exposes
@@ -714,6 +716,9 @@ function buildAgentPrompt(prompt: string, projectPath: string | undefined): stri
 
 // ── DB session row helpers ────────────────────────────────────────────────────
 
+/** Every column of an `agent_sessions` row, as read before a launch reuses it. */
+type SessionRowSnapshot = Record<string, unknown>
+
 interface AgentSessionRow {
   id: string
   engine_session_id: string | null
@@ -725,15 +730,21 @@ function resolveSessionForResume(
   existingSessionId: string | undefined,
   model: string | undefined,
   engineId: string,
-): { agentSessionId: string; engineSessionId: string | undefined; existed: boolean } {
+): {
+  agentSessionId: string
+  engineSessionId: string | undefined
+  existed: boolean
+  /** Full row as it was before this call reused it, for a refused launch. */
+  previous?: SessionRowSnapshot
+} {
   const db = getDb()
-  let lastSession: AgentSessionRow | undefined
+  let lastSession: (AgentSessionRow & SessionRowSnapshot) | undefined
   if (existingSessionId) {
     lastSession = db
       .prepare(
-        'SELECT id, engine_session_id, engine FROM agent_sessions WHERE id = ? AND workspace_id = ? AND engine_session_id IS NOT NULL LIMIT 1',
+        'SELECT * FROM agent_sessions WHERE id = ? AND workspace_id = ? AND engine_session_id IS NOT NULL LIMIT 1',
       )
-      .get(existingSessionId, workspaceId) as AgentSessionRow | undefined
+      .get(existingSessionId, workspaceId) as typeof lastSession
     if (!lastSession) {
       throw new Error(
         `Cannot resume session '${existingSessionId}' for workspace '${workspaceId}': ` +
@@ -748,9 +759,9 @@ function resolveSessionForResume(
   } else {
     lastSession = db
       .prepare(
-        `SELECT id, engine_session_id, engine FROM agent_sessions WHERE workspace_id = ? AND role = 'primary' AND COALESCE(engine, 'claude-code') = ? AND activation_order >= 0 ORDER BY ${SESSION_RECENCY_ORDER} LIMIT 1`,
+        `SELECT * FROM agent_sessions WHERE workspace_id = ? AND role = 'primary' AND COALESCE(engine, 'claude-code') = ? AND activation_order >= 0 ORDER BY ${SESSION_RECENCY_ORDER} LIMIT 1`,
       )
-      .get(workspaceId, engineId) as AgentSessionRow | undefined
+      .get(workspaceId, engineId) as typeof lastSession
   }
 
   // A failed latest conversation must start fresh, not silently fall back to
@@ -779,7 +790,7 @@ function resolveSessionForResume(
         'INSERT INTO agent_sessions (id, workspace_id, pid, status, engine_session_id, model, started_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
       ).run(agentSessionId, workspaceId, null, 'running', engineSessionId, model ?? null, new Date().toISOString())
     }
-    return { agentSessionId, engineSessionId, existed: Boolean(existingId) }
+    return { agentSessionId, engineSessionId, existed: Boolean(existingId), previous: lastSession }
   }
 
   // No engine session to resume — fall through to fresh session creation
@@ -1068,6 +1079,15 @@ function handleEvent(
         const closeDeadline = setTimeout(() => {
           if (controllers.get(workspaceId) === sourceController && !sourceController.isClosed) {
             autoLoopService.block(workspaceId, 'engine-stop-unconfirmed')
+            // Report only: the controller keeps ownership until real closure.
+            if (!shuttingDown)
+              routeEvent(workspaceId, agentSessionId, {
+                kind: 'error',
+                category: 'other',
+                code: 'engine_close_unconfirmed',
+                message:
+                  'The agent ended its turn but its process has not confirmed shutdown. The workspace stays busy until it does; stop the agent if this persists.',
+              })
           }
         }, STOP_AGENT_TIMEOUT_MS)
         closeDeadline.unref?.()
@@ -1848,7 +1868,8 @@ export function cancelReviewReturn(workspaceId: string): void {
  * after `engine.start` resolves — callers should subscribe to WS events or
  * query the controller via `_getControllers()` for tests.
  */
-export function startAgent(
+function launchAgent(
+  refused: RefusedLaunch,
   workspaceId: string,
   workingDir: string,
   prompt: string,
@@ -1943,13 +1964,19 @@ export function startAgent(
 
   if (resume) {
     const r = resolveSessionForResume(workspaceId, existingSessionId, model, engineId)
+    refused.previous = r.previous
     agentSessionId = r.agentSessionId
     resumeFromEngineSessionId = r.engineSessionId
     // Keep older DB rows attributable even when they were created pre-migration.
     getDb().prepare('UPDATE agent_sessions SET engine = ? WHERE id = ?').run(engineId, agentSessionId)
   } else {
+    if (existingSessionId)
+      refused.previous = getDb()
+        .prepare('SELECT * FROM agent_sessions WHERE id = ? AND workspace_id = ?')
+        .get(existingSessionId, workspaceId) as SessionRowSnapshot | undefined
     agentSessionId = reuseOrCreateFreshSession(workspaceId, existingSessionId, model, engineId)
   }
+  refused.sessionId = agentSessionId
 
   // Persist before the asynchronous engine can emit its first event. This
   // survives a Kōbō restart and does not depend on SDK system:init delivery.
@@ -2222,6 +2249,9 @@ export function startAgent(
     })
     .catch((err) => {
       revokeControllerCapabilities(controller)
+      // A failed eviction or pre-start check never reaches engine.start: without
+      // this the session:ended below waits forever on a closure nobody confirms.
+      controller.abandonUnstarted()
       if (shuttingDown || (registry.get(workspaceId) !== controller && pendingStarts.get(workspaceId) !== controller))
         return
       const contextId = controllerMemoryContextIds.get(controller)
@@ -2245,6 +2275,52 @@ export function startAgent(
     })
 
   return { agentSessionId, pid: undefined }
+}
+
+/** Filled by `launchAgent` once it has written its session row. */
+interface RefusedLaunch {
+  sessionId?: string
+  /** The reused row before the launch touched it; absent for a new row. */
+  previous?: SessionRowSnapshot
+}
+
+type StartAgentArgs = Parameters<typeof launchAgent> extends [RefusedLaunch, ...infer Rest] ? Rest : never
+
+/**
+ * `launchAgent` writes its session row before `beforeDispatch` and the launch
+ * options can still refuse the start. No controller exists at that point, so
+ * nothing would ever close the row: undo it here. The zombie eviction it may
+ * have begun is left alone, the workspace was already logically idle.
+ *
+ * The pending `workspaces.initial_prompt` needs no undo: it is only cleared by
+ * `onPromptPrepared`, which the engine calls after a successful dispatch.
+ */
+export function startAgent(...args: StartAgentArgs): StartAgentResult {
+  const refused: RefusedLaunch = {}
+  try {
+    return launchAgent(refused, ...args)
+  } catch (error) {
+    const { sessionId, previous } = refused
+    if (sessionId) {
+      try {
+        const db = getDb()
+        if (previous) {
+          // Column names come from the row itself (schema), never from input.
+          const columns = Object.keys(previous).filter((column) => column !== 'id')
+          db.prepare(
+            `UPDATE agent_sessions SET ${columns.map((column) => `${column} = @${column}`).join(', ')} WHERE id = @id`,
+          ).run(previous)
+        } else
+          db.prepare(
+            "UPDATE agent_sessions SET status = 'error', ended_at = ?, end_reason = 'error', activation_order = -1 WHERE id = ?",
+          ).run(new Date().toISOString(), sessionId)
+        taskProgressSnapshots.get(args[0])?.delete(sessionId)
+      } catch (rollbackError) {
+        console.error('[orchestrator] Failed to close the session of a refused launch:', rollbackError)
+      }
+    }
+    throw error
+  }
 }
 
 /**
@@ -2537,6 +2613,36 @@ export function sendWakeupIfWaiting(workspaceId: string, content: string, expect
   return true
 }
 
+/**
+ * Deliver a due wakeup to the session that is currently working, the same way
+ * a forced chat message steers it. Resolves false when nothing was delivered
+ * (human input pending, compaction, wrong session, engine without live
+ * steering): the caller keeps the wakeup and retries later.
+ */
+export async function deliverWakeupToActiveSession(
+  workspaceId: string,
+  content: string,
+  expectedSessionId?: string,
+): Promise<boolean> {
+  if (sendWakeupIfWaiting(workspaceId, content, expectedSessionId)) return true
+  if (workspaceLifecycleReason(workspaceId) === 'session-handoff') return false
+  const ctrl = controllers.get(workspaceId)
+  if (ctrl?.status !== 'running') return false
+  if (expectedSessionId && ctrl.agentSessionId !== expectedSessionId) return false
+  const workspace = getWs(workspaceId)
+  if (!workspace || workspace.archivedAt || workspace.worktreePurgedAt) return false
+  if (workspace.status === 'awaiting-user' || workspace.status === 'quota' || workspace.status === 'compacting')
+    return false
+  try {
+    ctrl.assertImmediateMessageSupported()
+  } catch {
+    return false
+  }
+  await ctrl.sendMessage(content)
+  emit(workspaceId, 'user:message', { content, sender: 'system-prompt' }, ctrl.agentSessionId)
+  return true
+}
+
 /** Reject unsupported steering before saving attachments or recording dispatch. */
 export function assertImmediateMessageSupported(workspaceId: string): void {
   controllers.get(workspaceId)?.assertImmediateMessageSupported()
@@ -2563,7 +2669,7 @@ export async function sendMessage(
     throw new Error(`Session '${expectedSessionId}' is not active for workspace '${workspaceId}'`)
   }
   ctrl.assertImmediateMessageSupported()
-  wakeupService.cancel(workspaceId, 'user-message')
+  // A pending wakeup survives chat: only Stop, archive, delete or an explicit cancel removes it.
   await ctrl.sendMessage(content, beforeDispatch)
 }
 
@@ -2578,19 +2684,22 @@ export async function sendMessageForFallback(workspaceId: string, content: strin
   assertWorkspaceLifecycleAvailable(workspaceId)
   assertWorkspaceNotCompacting(workspaceId)
   const capturedController = controllers.get(workspaceId)
-  wakeupService.cancel(workspaceId, 'user-message')
   if (!capturedController) return { status: 'stopped' }
   try {
     await capturedController.sendMessage(content)
     return { status: 'sent', sessionId: capturedController.agentSessionId }
-  } catch {
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
     assertWorkspaceLifecycleAvailable(workspaceId)
     assertWorkspaceNotCompacting(workspaceId)
     const deadline = Date.now() + FALLBACK_CONTROLLER_TURNOVER_TIMEOUT_MS
     while (controllers.get(workspaceId) === capturedController) {
       const remaining = deadline - Date.now()
       if (remaining <= 0) {
-        throw new Error(`Timed out waiting for agent controller turnover for workspace '${workspaceId}'`)
+        throw new Error(
+          `Timed out waiting for agent controller turnover for workspace '${workspaceId}' (delivery failed: ${reason})`,
+          { cause: error },
+        )
       }
       await new Promise<void>((resolve) => {
         setTimeout(resolve, Math.min(FALLBACK_CONTROLLER_TURNOVER_POLL_MS, remaining))
@@ -2694,7 +2803,7 @@ function handleParallelReviewEvent(workspaceId: string, controller: SessionContr
               null,
               buildReviewReturnPrompt(workspaceId, sessionId),
             )
-            void dispatchParallelReviewReturn(workspaceId)
+            dispatchParallelReviewReturnInBackground(workspaceId)
           } else setParallelReviewPhase(workspaceId, 'interrupted', 'Review did not complete')
         }
         notifyCapacityAvailable()
@@ -2947,11 +3056,18 @@ export async function dispatchParallelReviewReturn(workspaceId: string): Promise
   }
 }
 
+/** Fire-and-forget callers: an unhandled rejection would shut the whole server down. */
+function dispatchParallelReviewReturnInBackground(workspaceId: string): void {
+  void dispatchParallelReviewReturn(workspaceId).catch((error) =>
+    console.error(`[parallel-review] Report return failed for workspace '${workspaceId}':`, error),
+  )
+}
+
 export function resumePendingParallelReviewReturns(): void {
   for (const row of getDb().prepare("SELECT workspace_id FROM parallel_reviews WHERE phase='ready'").all() as {
     workspace_id: string
   }[])
-    void dispatchParallelReviewReturn(row.workspace_id)
+    dispatchParallelReviewReturnInBackground(row.workspace_id)
 }
 
 export function retryParallelReviewReturn(workspaceId: string, expectedSessionId?: string): void {
@@ -2961,7 +3077,7 @@ export function retryParallelReviewReturn(workspaceId: string, expectedSessionId
     throw new Error('No retryable review return')
   parallelReviewDispatchAttempts.delete(workspaceId)
   setParallelReviewPhase(workspaceId, 'ready')
-  void dispatchParallelReviewReturn(workspaceId)
+  dispatchParallelReviewReturnInBackground(workspaceId)
 }
 
 export function cancelParallelReviewReturn(workspaceId: string, expectedSessionId?: string): void {
@@ -3092,7 +3208,7 @@ export async function answerPendingQuestion(
     console.warn(`[orchestrator] Failed to transition awaiting-user → ${restoreTo}:`, err)
   }
 
-  void dispatchParallelReviewReturn(workspaceId)
+  dispatchParallelReviewReturnInBackground(workspaceId)
 
   // "Other" means the user owes a free-form clarification in their next chat
   // message. If auto-loop is active, the agent finishing its turn would
@@ -3236,7 +3352,7 @@ export async function answerPendingPermission(
   } catch (err) {
     console.warn(`[orchestrator] Failed to transition awaiting-user → ${restoreTo}:`, err)
   }
-  void dispatchParallelReviewReturn(workspaceId)
+  dispatchParallelReviewReturnInBackground(workspaceId)
 }
 
 /**
@@ -3310,7 +3426,7 @@ export async function cancelPendingQuestion(
   } catch (err) {
     console.warn(`[orchestrator] Failed to transition awaiting-user → ${restoreTo}:`, err)
   }
-  void dispatchParallelReviewReturn(workspaceId)
+  dispatchParallelReviewReturnInBackground(workspaceId)
 }
 
 /** @deprecated use `answerPendingQuestion` instead. Kept for legacy callers/tests. */

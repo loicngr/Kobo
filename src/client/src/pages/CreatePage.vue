@@ -47,7 +47,7 @@
       <q-banner v-if="duplicatedFrom" dense dark class="bg-kobo-surface q-mb-md">
         {{ $t('createPage.duplicatedFrom', { name: duplicatedFrom }) }}
         <template #action>
-          <q-btn flat dense icon="close" color="kobo-2" @click="duplicatedFrom = null" />
+          <q-btn flat dense icon="close" color="kobo-2" :aria-label="$t('common.close')" @click="duplicatedFrom = null" />
         </template>
       </q-banner>
 
@@ -935,6 +935,7 @@ import { ApiError, apiFetchResponse, apiFetchStatus, apiResponseError } from 'sr
 import { resolveCreateOverrides } from 'src/utils/create-overrides'
 import { loadCreatePagePrefs, saveCreatePagePrefs } from 'src/utils/create-page-prefs'
 import { buildTemplateVars, expandTemplate } from 'src/utils/expand-template'
+import { createLatestRequest } from 'src/utils/latest-request'
 import { playNotificationSound } from 'src/utils/notifications'
 import { prefillFromPr } from 'src/utils/pr-prefill'
 import { projectNameForPath } from 'src/utils/project-color'
@@ -1197,14 +1198,31 @@ function onDescriptionKeydown(event: KeyboardEvent) {
   }
 }
 
+let createVoiceStartPending = false
+
 async function startCreateVoiceCapture() {
-  if (!createVoiceEnabled.value || isCreateVoiceRecording.value || isCreateVoiceTranscribing.value) return
+  if (
+    !createVoiceEnabled.value ||
+    isCreateVoiceRecording.value ||
+    isCreateVoiceTranscribing.value ||
+    createVoiceStartPending
+  )
+    return
   if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
     $q.notify({ type: 'warning', message: t('voice.notSupported'), position: 'top', timeout: 4000 })
     return
   }
   try {
+    createVoiceStartPending = true
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    // Released (or unmounted) while the permission prompt was open, or the page
+    // is hidden so the release can no longer be observed: do not record.
+    if (!createVoiceStartPending || document.visibilityState !== 'visible') {
+      createVoiceStartPending = false
+      for (const track of stream.getTracks()) track.stop()
+      return
+    }
+    createVoiceStartPending = false
     createVoiceStreamRef.value = stream
     createVoiceChunksRef.value = []
     const mimeType = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : ''
@@ -1220,11 +1238,13 @@ async function startCreateVoiceCapture() {
       $q.notify({ type: 'info', message: t('voice.maxDurationReached'), position: 'top', timeout: 3500 })
     }, CREATE_VOICE_MAX_MS)
   } catch {
+    createVoiceStartPending = false
     $q.notify({ type: 'negative', message: t('voice.errorMicPermission'), position: 'top', timeout: 0 })
   }
 }
 
 async function stopCreateVoiceCapture() {
+  createVoiceStartPending = false
   if (!isCreateVoiceRecording.value) return
   const recorder = createVoiceRecorderRef.value
   if (!recorder) return
@@ -1293,6 +1313,8 @@ function onCreateWindowKeyUp(event: KeyboardEvent) {
   void stopCreateVoiceCapture()
 }
 
+// The browser's permission prompt blurs the window: only a real recording is
+// stopped here, a start still waiting for the microphone is left alone.
 function onCreateWindowBlur() {
   if (isCreateVoiceRecording.value) void stopCreateVoiceCapture()
 }
@@ -1883,18 +1905,26 @@ const resolvedOverrides = computed(() =>
   }),
 )
 
+// A slow answer for a project the user already left must not overwrite the
+// current project's list.
+const orphansRequest = createLatestRequest()
+const branchesRequest = createLatestRequest()
+
 async function fetchOrphans() {
+  const signal = orphansRequest.begin()
   if (!projectPath.value.trim()) {
     orphanWorktrees.value = []
+    loadingOrphanWorktrees.value = false
     return
   }
   loadingOrphanWorktrees.value = true
   try {
-    orphanWorktrees.value = await store.fetchOrphanWorktrees(projectPath.value.trim())
+    const orphans = await store.fetchOrphanWorktrees(projectPath.value.trim())
+    if (orphansRequest.isCurrent(signal)) orphanWorktrees.value = orphans
   } catch {
-    orphanWorktrees.value = []
+    if (orphansRequest.isCurrent(signal)) orphanWorktrees.value = []
   } finally {
-    loadingOrphanWorktrees.value = false
+    if (orphansRequest.isCurrent(signal)) loadingOrphanWorktrees.value = false
   }
 }
 
@@ -1939,25 +1969,29 @@ watch(selectedWorktreePath, (newPath) => {
 
 // Fetch branches when project path changes
 async function fetchBranches(path: string) {
+  const signal = branchesRequest.begin()
   if (!path.trim()) {
     branches.value = []
     branch.value = null
+    loadingBranches.value = false
     return
   }
   loadingBranches.value = true
   try {
-    const res = await apiFetchResponse(`/api/git/branches?path=${encodeURIComponent(path.trim())}`)
+    const res = await apiFetchResponse(`/api/git/branches?path=${encodeURIComponent(path.trim())}`, { signal })
     if (!res.ok) throw await apiResponseError(res)
     const data = await res.json()
+    if (!branchesRequest.isCurrent(signal)) return
     branches.value = data.local ?? data.branches ?? []
     if (branches.value.length > 0 && !branch.value) {
       branch.value = branches.value[0] ?? null
     }
   } catch {
+    if (!branchesRequest.isCurrent(signal)) return
     branches.value = []
     branch.value = null
   } finally {
-    loadingBranches.value = false
+    if (branchesRequest.isCurrent(signal)) loadingBranches.value = false
   }
 }
 
@@ -2184,7 +2218,7 @@ onUnmounted(() => {
     clearTimeout(createVoiceTimeoutRef.value)
     createVoiceTimeoutRef.value = null
   }
-  if (isCreateVoiceRecording.value) void stopCreateVoiceCapture()
+  void stopCreateVoiceCapture()
 })
 
 // Convert text to kebab-case feature branch name.

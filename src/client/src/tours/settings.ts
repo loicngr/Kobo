@@ -11,7 +11,7 @@ export const SETTINGS_GROUPS = {
   engines: ['agents'],
   skills: ['skills'],
   git: ['git'],
-  integrations: ['notion', 'sentry', 'forge'],
+  integrations: ['integrations', 'forge'],
   automation: ['scripts', 'prompts', 'templates', 'workspaceTemplates'],
   worktrees: ['worktrees'],
   memory: ['memory'],

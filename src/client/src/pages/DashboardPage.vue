@@ -18,6 +18,7 @@
     <q-markup-table v-else flat dense dark class="kobo-dashboard-table" data-tour="dash-overview">
       <thead>
         <tr>
+          <th />
           <th class="text-left">{{ $t('dashboard.workspace') }}</th>
           <th class="text-left">{{ $t('dashboard.status') }}</th>
           <th class="text-left">{{ $t('dashboard.attention') }}</th>
@@ -33,6 +34,19 @@
           class="kobo-dashboard-row"
           @click="open(row.workspace.id)"
         >
+          <td class="q-pr-none">
+            <q-btn
+              flat
+              dense
+              round
+              size="sm"
+              icon="more_vert"
+              data-test="dashboard-row-menu"
+              aria-haspopup="menu"
+              :aria-label="$t('workspacePage.moreActions')"
+              @click.stop="openContextMenu(row.workspace.id, $event)"
+            />
+          </td>
           <td>
             <div class="row items-center no-wrap">
               <q-icon
@@ -157,6 +171,7 @@
 
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
+import { useQuasar } from 'quasar'
 import PinnedMessagesDialog from 'src/components/PinnedMessagesDialog.vue'
 import TourReplayButton from 'src/components/TourReplayButton.vue'
 import WorkspaceAttentionLabels from 'src/components/WorkspaceAttentionLabels.vue'
@@ -175,6 +190,7 @@ const store = useWorkspaceStore()
 const { workspaces, prSnapshots, gitStatsCache } = storeToRefs(store)
 const { timeAgo } = useTimeAgo()
 const { t, locale } = useI18n()
+const $q = useQuasar()
 const { scheduleAutoRun } = useTours()
 
 /** Reuses the labels the workspace cards already show, rather than a second wording. */
@@ -226,6 +242,18 @@ function statusColor(status: string): string {
 
 function open(id: string): void {
   void router.push({ name: 'workspace', params: { id } })
+}
+
+// shortcut: reuses the drawer card's context menu (its handlers live in WorkspaceList),
+// so it needs that card rendered; give the menu its own host if a hidden card becomes common.
+function openContextMenu(id: string, event: Event): void {
+  const card = document.querySelector(`[data-workspace-id="${CSS.escape(id)}"]`)
+  if (!card) {
+    $q.notify({ type: 'info', message: t('dashboard.menuUnavailable'), position: 'top', timeout: 3000 })
+    return
+  }
+  const { left, bottom } = (event.currentTarget as HTMLElement).getBoundingClientRect()
+  card.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: left, clientY: bottom }))
 }
 
 interface ReliabilityRow {

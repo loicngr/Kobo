@@ -248,6 +248,18 @@ describe('PUT /api/settings/global', () => {
     },
   )
 
+  it.each(['5', '"text"', 'true', '[]'])('answers 400, not 500, to the non-object body %s', async (body) => {
+    for (const url of [
+      '/api/settings/global',
+      `/api/settings/projects/${Buffer.from('/repo').toString('base64url')}`,
+    ]) {
+      const res = await app.request(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body })
+      expect(res.status).toBe(400)
+    }
+    expect(settingsService.updateGlobalSettings).not.toHaveBeenCalled()
+    expect(settingsService.upsertProject).not.toHaveBeenCalled()
+  })
+
   it('rejects a nonfinite JSON number without saving other fields', async () => {
     const res = await app.request('/api/settings/global', {
       method: 'PUT',

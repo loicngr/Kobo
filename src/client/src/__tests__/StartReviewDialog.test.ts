@@ -253,3 +253,21 @@ it('keeps native Vibe permissions selectable for parallel review', async () => {
   })
   view.unmount()
 })
+
+it('prefills a manual review with the default instructions from settings on every open', async () => {
+  useSettingsStore().global.reviewDefaultInstructions = 'Check migrations first'
+  const view = mountDialog()
+  const instructions = () => view.findComponent({ name: 'QInput' })
+  expect(instructions().props('modelValue')).toBe('Check migrations first')
+
+  await instructions().vm.$emit('update:modelValue', 'One-off note')
+  await view.setProps({ modelValue: false })
+  await view.setProps({ modelValue: true })
+  expect(instructions().props('modelValue')).toBe('Check migrations first')
+  view.unmount()
+
+  // A scheduled final review keeps its own text and never inherits the manual default.
+  const scheduled = mountDialog({ mode: 'auto-loop' })
+  expect(scheduled.findComponent({ name: 'QInput' }).props('modelValue')).toBe('')
+  scheduled.unmount()
+})

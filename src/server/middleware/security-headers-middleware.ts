@@ -3,7 +3,11 @@ import type { MiddlewareHandler } from 'hono'
 /** Browser protections that also apply to denied requests and SPA responses. */
 export function securityHeadersMiddleware(): MiddlewareHandler {
   return async (c, next) => {
-    c.header('Content-Security-Policy', "frame-ancestors 'self'")
+    // No default-src/script-src: Monaco workers and the PWA would break.
+    c.header(
+      'Content-Security-Policy',
+      "frame-ancestors 'self'; img-src 'self' data: blob:; form-action 'self'; base-uri 'self'; object-src 'none'",
+    )
     c.header('X-Frame-Options', 'SAMEORIGIN')
     c.header('X-Content-Type-Options', 'nosniff')
     c.header('Referrer-Policy', 'no-referrer')

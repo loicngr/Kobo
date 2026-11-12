@@ -479,6 +479,7 @@ export default {
   'common.retry': 'Erneut versuchen',
   'common.delete': 'Löschen',
   'common.close': 'Schließen',
+  'common.back': 'Zurück',
   'workspace.deleteTitle': 'Workspace löschen',
   'workspace.deleteTypeBranch': 'Branch-Namen zur Bestätigung erneut eingeben',
   'workspace.deleteConsequences': 'Dies entfernt den Worktree und den gesamten Verlauf.',
@@ -495,6 +496,7 @@ export default {
   'dashboard.pr': 'PR',
   'dashboard.diff': 'Diff',
   'dashboard.activity': 'Aktivität',
+  'dashboard.menuUnavailable': 'Zeige diesen Workspace in der Seitenleiste an, um sein Menü zu öffnen.',
   'dashboard.prOpen': 'offen',
   'reliability.title': 'Modellzuverlässigkeit',
   'reliability.subtitle': 'Wie jede Engine und jedes Modell auf diesem Rechner tatsächlich endete.',
@@ -1200,6 +1202,9 @@ export default {
   'settings.prPromptHint': 'Verwenden Sie die oben aufgeführten Platzhalter (doppelte geschweifte Klammern).',
   'settings.reviewPromptTemplate': 'Review-Prompt-Vorlage',
   'settings.reviewPromptPlaceholder': 'Anweisungen für den Agenten bei der Review von Branch-Änderungen...',
+  'settings.reviewDefaultInstructions': 'Standard-Review-Anweisungen',
+  'settings.reviewDefaultInstructionsHint':
+    'Füllt „Zusätzliche Anweisungen“ bei jedem Öffnen des Review-Dialogs vor. Du kannst sie vor dem Start noch ändern.',
   'settings.ciFixPromptTemplate': 'CI-Fix-Prompt-Vorlage',
   'settings.ciFixPromptHint':
     'Wird an den Agenten gesendet, wenn die CI eines Workspaces fehlschlägt. Variablen (doppelte geschweifte Klammern): pr_url, pr_number, pr_title, branch_name, source_branch, workspace_name, workspace_id, project_name, failed_jobs, ci_run_url.',
@@ -1577,6 +1582,7 @@ export default {
   'workspaceTemplates.deleteConfirm': 'Vorlage „{name}“ löschen?',
   'workspaceTemplates.deleted': 'Vorlage „{name}“ gelöscht',
   'settings.nav.notion': 'Notion',
+  'settings.nav.integrations': 'Integrationen',
   'settings.nav.forge': 'Forge',
   'settings.bitbucketCommunity': 'Bitbucket Community',
   'settings.bitbucketCommunityHint': 'Zugangsdaten bleiben lokal und werden nur von bkt verwendet.',
@@ -1593,6 +1599,8 @@ export default {
   'settings.help.prompts':
     'Agentenanweisungen nach dem Öffnen einer PR/MR, für Code-Reviews, CI-Korrekturen und Abschluss.',
   'settings.help.scripts': 'Setup-, Cleanup- und Change-Source-Branch-Skripte sowie Lifecycle-Hooks.',
+  'settings.help.integrations':
+    'Verbinde Kōbō mit Notion und Sentry, um Workspaces aus Tickets und Issues zu erstellen.',
   'settings.help.notion': 'Eine Notion-Seite als Source of Truth eines Workspace importieren.',
   'settings.help.sentry': 'Einen Workspace aus einem Sentry-Issue erstellen.',
   'settings.help.forge':
@@ -1743,6 +1751,11 @@ export default {
   'git.rebaseConfirmMessage': 'Rebase auf {branch}. Es können Konflikte auftreten.',
   'git.rebaseSuccess': 'Rebase abgeschlossen',
   'git.rebaseFailed': 'Rebase fehlgeschlagen',
+  'git.abortFailed': 'Abbruch fehlgeschlagen',
+  'git.continueFailed': 'Fortsetzen fehlgeschlagen',
+  'git.handoffFailed': 'Übergabe an den Agenten fehlgeschlagen',
+  'git.operationFailed': 'Der Vorgang ist fehlgeschlagen',
+  'git.openPrFailed': 'PR konnte nicht geöffnet werden',
   'git.merge': 'Merge',
   'git.fetch': 'Fetch',
   'git.fetchSuccess': 'Repository abgerufen',
@@ -2475,6 +2488,7 @@ export default {
   'wakeup.firing': 'Wecke auf...',
   'wakeup.reason': 'Grund: {reason}',
   'wakeup.cancel': 'Diese Weckung abbrechen',
+  'wakeup.cancelFailed': 'Die Weckung konnte nicht abgebrochen werden. Sie kann weiterhin auslösen.',
   'wakeup.pendingIndicator': 'Weckung geplant',
   'cron.pendingIndicator': '{n} Cron(s) geplant',
 

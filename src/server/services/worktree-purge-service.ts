@@ -95,8 +95,13 @@ async function purgeWorktreeGuarded(workspaceId: string, expectedArchivedAt?: st
   try {
     markWorktreePurged(workspaceId, restoreData)
   } catch (err) {
+    // The folder is gone but nothing records it: announcing "purged" would lie
+    // to the UI and to the watcher's auto-restore probe. Retrying the purge is
+    // safe, it skips the removal and only records the metadata.
     const msg = err instanceof Error ? err.message : String(err)
-    warnings.push(`DB metadata update failed: ${msg}`)
+    throw new Error(
+      `Worktree '${workspace.worktreePath}' was removed from disk but the purge could not be recorded: ${msg}. Retry the purge.`,
+    )
   }
 
   emitEphemeral(workspaceId, 'workspace:worktree-purged', {

@@ -391,3 +391,50 @@ describe('resolvePrCheckout', () => {
     expect(result.applied.map((a) => a.kind)).toContain('align-branch')
   })
 })
+
+describe('resolvePrCheckout branch name validation', () => {
+  it.each([
+    ['--upload-pack=x', 'main'],
+    ['feat/r', '-evil'],
+  ])('rejects head %j / base %j before touching git', async (headBranch, baseBranch) => {
+    const fetch = vi.spyOn(gitOps, 'fetchSourceBranchOrThrowAsync')
+    try {
+      await expect(
+        resolvePrCheckout({
+          projectPath: '/nonexistent',
+          headBranch,
+          baseBranch,
+          worktreesPath: null,
+          decisions: {},
+          fingerprint: 'FP',
+        }),
+      ).rejects.toThrow(/Invalid (head|base) branch name/)
+      expect(fetch).not.toHaveBeenCalled()
+    } finally {
+      fetch.mockRestore()
+    }
+  })
+
+  it('still resolves a PR whose valid branch name falls outside the creation alphabet', async () => {
+    const repo = createTempRepo()
+    try {
+      repo.git(['checkout', '-b', 'fix/issue#123'])
+      repo.commit('f.txt', 'x\n', 'fix')
+      repo.git(['push', 'origin', 'fix/issue#123'])
+      repo.git(['checkout', 'main'])
+      repo.git(['branch', '-D', 'fix/issue#123'])
+      const report = await diagnoseLocalState(repo.path, 'fix/issue#123', null)
+      const result = await resolvePrCheckout({
+        projectPath: repo.path,
+        headBranch: 'fix/issue#123',
+        baseBranch: 'main',
+        worktreesPath: null,
+        decisions: {},
+        fingerprint: await computeFingerprint(report),
+      })
+      expect(repo.git(['rev-parse', '--abbrev-ref', 'HEAD'], result.worktreePath)).toBe('fix/issue#123')
+    } finally {
+      repo.cleanup()
+    }
+  })
+})

@@ -2309,6 +2309,22 @@ describe('workspace store', () => {
       expect(store.pendingQuotaBackoffs.w1).toBeUndefined()
     })
 
+    it('keeps the quota banner and reports the failure when the cancel is not confirmed', async () => {
+      const store = useWorkspaceStore()
+      store.setPendingQuotaBackoff('w1', { targetAt: 't', resetsAt: null, source: 'fallback_ladder', reason: 'quota' })
+      vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('offline'))
+      await expect(store.cancelQuotaBackoff('w1')).rejects.toThrow()
+      expect(store.pendingQuotaBackoffs.w1?.targetAt).toBe('t')
+    })
+
+    it('keeps the wakeup banner and reports the failure when the cancel is not confirmed', async () => {
+      const store = useWorkspaceStore()
+      store.setPendingWakeup('w1', { targetAt: 't' } as never)
+      vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('offline'))
+      await expect(store.cancelPendingWakeup('w1')).rejects.toThrow()
+      expect(store.pendingWakeups.w1?.targetAt).toBe('t')
+    })
+
     it('resumes the interrupted session instead of starting a fresh one', async () => {
       const store = useWorkspaceStore()
       store.selectedWorkspaceId = 'w1'

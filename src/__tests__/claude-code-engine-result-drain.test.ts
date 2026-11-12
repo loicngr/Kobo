@@ -9,6 +9,7 @@ let completeSubagent: (() => void) | undefined
 let extraTurnGate: (() => void) | undefined
 let releaseStream: (() => void) | undefined
 let sdkInput: AsyncIterable<unknown>
+let sdkStderr: ((data: string) => void) | undefined
 let stopTaskMock: Mock<(taskId: string) => Promise<void>>
 // Optional overrides of the default subagent messages, used to replay real
 // sequences where one task changes identity (tool_use_id vs task_id).
@@ -16,73 +17,79 @@ let startedMessages: Record<string, unknown>[] | undefined
 let completionMessages: Record<string, unknown>[] | undefined
 
 vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
-  query: vi.fn((args: { prompt: AsyncIterable<unknown>; options: { abortController?: AbortController } }) => {
-    sdkInput = args.prompt
-    abortSignal = args.options.abortController?.signal
-    stopTaskMock = vi.fn(async (_taskId: string) => {})
-    return {
-      async *[Symbol.asyncIterator]() {
-        yield { type: 'system', subtype: 'init', session_id: 'sess-drain', model: 'm', slash_commands: [] }
-        if (emitSubagentStarted) {
-          if (startedMessages) {
-            for (const message of startedMessages) yield message
-          } else {
-            yield {
-              type: 'system',
-              subtype: 'task_started',
-              task_id: 'task-review-1',
-              tool_use_id: 'review-1',
-              description: 'Full PR review',
+  query: vi.fn(
+    (args: {
+      prompt: AsyncIterable<unknown>
+      options: { abortController?: AbortController; stderr?: (data: string) => void }
+    }) => {
+      sdkInput = args.prompt
+      sdkStderr = args.options.stderr
+      abortSignal = args.options.abortController?.signal
+      stopTaskMock = vi.fn(async (_taskId: string) => {})
+      return {
+        async *[Symbol.asyncIterator]() {
+          yield { type: 'system', subtype: 'init', session_id: 'sess-drain', model: 'm', slash_commands: [] }
+          if (emitSubagentStarted) {
+            if (startedMessages) {
+              for (const message of startedMessages) yield message
+            } else {
+              yield {
+                type: 'system',
+                subtype: 'task_started',
+                task_id: 'task-review-1',
+                tool_use_id: 'review-1',
+                description: 'Full PR review',
+              }
             }
           }
-        }
-        yield { type: 'result', subtype: 'success', usage: { input_tokens: 1, output_tokens: 1 } }
-        if (emitSubagentStarted) {
-          if (emitStalledExtraTurn) {
-            // A second, healthy turn — the subagent is still active but real
-            // forward progress happened. The stall countdown must restart
-            // from here, not from the first result above.
+          yield { type: 'result', subtype: 'success', usage: { input_tokens: 1, output_tokens: 1 } }
+          if (emitSubagentStarted) {
+            if (emitStalledExtraTurn) {
+              // A second, healthy turn — the subagent is still active but real
+              // forward progress happened. The stall countdown must restart
+              // from here, not from the first result above.
+              await new Promise<void>((resolve) => {
+                extraTurnGate = resolve
+              })
+              yield { type: 'result', subtype: 'success', usage: { input_tokens: 3, output_tokens: 3 } }
+            }
             await new Promise<void>((resolve) => {
-              extraTurnGate = resolve
+              completeSubagent = resolve
             })
-            yield { type: 'result', subtype: 'success', usage: { input_tokens: 3, output_tokens: 3 } }
+            if (completionMessages) {
+              for (const message of completionMessages) yield message
+            } else {
+              yield {
+                type: 'system',
+                subtype: 'task_notification',
+                task_id: 'task-review-1',
+                tool_use_id: 'review-1',
+                status: 'completed',
+              }
+            }
+            if (emitActivityAfterSubagentCompletion) {
+              yield {
+                type: 'assistant',
+                message: {
+                  id: 'msg-after-subagent',
+                  content: [{ type: 'text', text: 'continuation after subagent completion' }],
+                  stop_reason: null,
+                },
+              }
+            }
+            if (!skipSecondResult) {
+              yield { type: 'result', subtype: 'success', usage: { input_tokens: 2, output_tokens: 2 } }
+            }
           }
           await new Promise<void>((resolve) => {
-            completeSubagent = resolve
+            releaseStream = resolve
+            abortSignal?.addEventListener('abort', () => resolve(), { once: true })
           })
-          if (completionMessages) {
-            for (const message of completionMessages) yield message
-          } else {
-            yield {
-              type: 'system',
-              subtype: 'task_notification',
-              task_id: 'task-review-1',
-              tool_use_id: 'review-1',
-              status: 'completed',
-            }
-          }
-          if (emitActivityAfterSubagentCompletion) {
-            yield {
-              type: 'assistant',
-              message: {
-                id: 'msg-after-subagent',
-                content: [{ type: 'text', text: 'continuation after subagent completion' }],
-                stop_reason: null,
-              },
-            }
-          }
-          if (!skipSecondResult) {
-            yield { type: 'result', subtype: 'success', usage: { input_tokens: 2, output_tokens: 2 } }
-          }
-        }
-        await new Promise<void>((resolve) => {
-          releaseStream = resolve
-          abortSignal?.addEventListener('abort', () => resolve(), { once: true })
-        })
-      },
-      stopTask: (taskId: string) => stopTaskMock(taskId),
-    }
-  }),
+        },
+        stopTask: (taskId: string) => stopTaskMock(taskId),
+      }
+    },
+  ),
 }))
 
 import {
@@ -163,6 +170,61 @@ describe('claude-code engine — result drain watchdog', () => {
       await vi.advanceTimersByTimeAsync(0)
       expect(events).toContainEqual({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
     } finally {
+      releaseStream?.()
+      resetControls()
+      vi.useRealTimers()
+    }
+  })
+
+  it('contains a throwing event handler on the stderr path', async () => {
+    vi.useFakeTimers()
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const errors: AgentEvent[] = []
+      await createClaudeCodeEngine().start(BASE_OPTIONS, (event) => {
+        if (event.kind !== 'error') return
+        errors.push(event)
+        throw new Error('handler failed')
+      })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(() => sdkStderr?.('No conversation found with session ID abc')).not.toThrow()
+      expect(() => sdkStderr?.('Claude AI usage limit reached')).not.toThrow()
+      await vi.advanceTimersByTimeAsync(100)
+      expect(errors.map((event) => (event as { category: string }).category)).toEqual(['resume_failed', 'quota'])
+    } finally {
+      releaseStream?.()
+      await vi.advanceTimersByTimeAsync(0)
+      logged.mockRestore()
+      resetControls()
+      vi.useRealTimers()
+    }
+  })
+
+  it('settles after the last background subagent ends without watchdog opt-in', async () => {
+    vi.useFakeTimers()
+    try {
+      emitSubagentStarted = true
+      skipSecondResult = true
+      const events: AgentEvent[] = []
+      await createClaudeCodeEngine().start({ ...BASE_OPTIONS, watchdogEnabled: false }, (e) => events.push(e))
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(events).not.toContainEqual({ kind: 'turn:completed' })
+
+      completeSubagent?.()
+      await vi.advanceTimersByTimeAsync(BACKGROUND_CONTINUATION_GRACE_MS)
+      expect(events).toContainEqual({ kind: 'turn:completed' })
+      // Normal completion closed the input: the SDK stream can now end on its own.
+      const input = sdkInput[Symbol.asyncIterator]()
+      await input.next()
+      expect((await input.next()).done).toBe(true)
+      expect(events.some((e) => e.kind === 'error')).toBe(false)
+
+      releaseStream?.()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(events).toContainEqual({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
+    } finally {
+      completeSubagent?.()
+      await vi.advanceTimersByTimeAsync(0)
       releaseStream?.()
       resetControls()
       vi.useRealTimers()

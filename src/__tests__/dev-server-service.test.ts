@@ -43,7 +43,11 @@ import {
 import { getGlobalSettings, getProjectSettings } from '../server/services/settings-service.js'
 import { emitEphemeral } from '../server/services/websocket-service.js'
 import { getWorkspace, listWorkspaces, updateDevServerStatus } from '../server/services/workspace-service.js'
-import { makeProjectSettings, makeWorkspace } from './helpers/fixtures.js'
+import { makeWorkspace as makeBaseWorkspace, makeProjectSettings } from './helpers/fixtures.js'
+
+// startDevServer refuses a worktree missing on disk: default the fixture to a directory that exists.
+const makeWorkspace: typeof makeBaseWorkspace = (overrides = {}) =>
+  makeBaseWorkspace({ worktreePath: os.tmpdir(), ...overrides })
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -506,7 +510,7 @@ describe('startDevServer', () => {
       'bash',
       ['-c', 'make dev-server'],
       expect.objectContaining({
-        cwd: '/project',
+        cwd: os.tmpdir(),
         env: expect.objectContaining({
           INSTANCE: 'feature-test',
           DEV_DOCKER_NO_FOLLOW: '1',
@@ -887,7 +891,7 @@ it('retains a stopping process and ignores its stale events after replacement', 
   const a = child(),
     b = child()
   vi.mocked(getWorkspace).mockReturnValue(
-    makeWorkspace({ id: 'ws-race', projectPath: '/tmp/no-dev-config', worktreePath: '/tmp/no-dev-config' }),
+    makeWorkspace({ id: 'ws-race', projectPath: '/tmp/no-dev-config', worktreePath: os.tmpdir() }),
   )
   vi.mocked(getProjectSettings).mockReturnValue(
     makeProjectSettings({ devServer: { startCommand: 'npm run dev', stopCommand: '' } }),
@@ -940,6 +944,31 @@ it.each(['empty', 'running', 'unavailable'])(
     }
   },
 )
+
+it('skips the custom stop command when the worktree is gone, but still tears Docker down by project', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kobo-missing-worktree-stop-'))
+  try {
+    fs.mkdirSync(path.join(dir, '.container/instances'), { recursive: true })
+    fs.writeFileSync(path.join(dir, '.container/instances/foo.env'), 'INSTANCE_NAME=foo\nPROJECT_NAME=foo\n')
+    vi.mocked(getWorkspace).mockReturnValue(
+      makeWorkspace({ id: 'gone', projectPath: dir, worktreePath: path.join(dir, 'removed'), workingBranch: 'foo' }),
+    )
+    vi.mocked(getProjectSettings).mockReturnValue(
+      makeProjectSettings({ devServer: { startCommand: 'true', stopCommand: 'custom-stop' } }),
+    )
+    const commands: string[] = []
+    vi.mocked(execFile).mockImplementation(((command: string, args: string[], ...rest: unknown[]) => {
+      commands.push([command, ...args].join(' '))
+      ;(rest.at(-1) as (err: Error | null, stdout: string) => void)(null, '')
+      return {}
+    }) as never)
+    expect((await stopDevServer('gone')).status).toBe('stopped')
+    // The user's command must never run in the main repository.
+    expect(commands).toEqual(['docker compose -p foo down'])
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
 
 it('retains ownership when the process group cannot be inspected', async () => {
   const proc = Object.assign(new EventEmitter(), {
@@ -1006,7 +1035,7 @@ it('preserves Docker services on shutdown and discovers them again after restart
 })
 
 it('still terminates tracked local processes without stop scripts when preserving Docker', async () => {
-  const workspace = makeWorkspace({ id: 'local', projectPath: '/tmp/no-instance', worktreePath: '/tmp/no-instance' })
+  const workspace = makeWorkspace({ id: 'local', projectPath: '/tmp/no-instance', worktreePath: os.tmpdir() })
   const proc = Object.assign(new EventEmitter(), {
     stdout: null,
     stderr: null,
@@ -1387,4 +1416,21 @@ describe('dev-server admission', () => {
       }
     },
   )
+})
+
+describe('startDevServer worktree preconditions', () => {
+  const settings = makeProjectSettings({ devServer: { startCommand: 'npm run dev', stopCommand: '' } })
+
+  it.each([
+    ['archived', { archivedAt: '2026-01-01T00:00:00Z' }, /is archived/],
+    ['purged', { worktreePurgedAt: '2026-01-01T00:00:00Z' }, /has been purged/],
+    ['missing on disk', { worktreePath: path.join(os.tmpdir(), 'kobo-missing-worktree-xyz') }, /is missing on disk/],
+  ])('refuses a workspace whose worktree is %s instead of running in the project path', (_label, overrides, error) => {
+    vi.mocked(getWorkspace).mockReturnValue(
+      makeWorkspace({ id: 'ws-guard', projectPath: os.tmpdir(), worktreePath: os.tmpdir(), ...overrides }),
+    )
+    vi.mocked(getProjectSettings).mockReturnValue(settings)
+    expect(() => startDevServer('ws-guard')).toThrow(error)
+    expect(spawn).not.toHaveBeenCalled()
+  })
 })

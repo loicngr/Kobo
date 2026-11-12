@@ -1032,6 +1032,33 @@ describe('websocket dispatch — AgentEvent side-effects to workspace store', ()
     }
   })
 
+  it('does NOT trigger git refreshes or a branch resync while replaying history', async () => {
+    vi.useFakeTimers()
+    const { dispatchAgentEvent, _setReplayingForDispatch } = await import('../stores/websocket.js')
+    try {
+      const { useWorkspaceStore } = await import('../stores/workspace.js')
+      const ws = useWorkspaceStore()
+      const refresh = vi.spyOn(ws, 'triggerGitRefresh')
+      const resync = vi.spyOn(ws, 'resyncWorkspaceBranch').mockResolvedValue(undefined as never)
+
+      _setReplayingForDispatch(true)
+      dispatchAgentEvent('w1', {
+        kind: 'tool:call',
+        messageId: 'm1',
+        toolCallId: 'c1',
+        name: 'Bash',
+        input: { command: 'git branch -m new && gh pr create --title X', description: 'rename' },
+      })
+
+      vi.advanceTimersByTime(5000)
+      expect(refresh).not.toHaveBeenCalled()
+      expect(resync).not.toHaveBeenCalled()
+    } finally {
+      _setReplayingForDispatch(false)
+      vi.useRealTimers()
+    }
+  })
+
   it('does NOT trigger a git refresh for `gh pr view` (read-only)', async () => {
     vi.useFakeTimers()
     try {

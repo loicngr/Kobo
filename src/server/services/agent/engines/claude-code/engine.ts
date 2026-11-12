@@ -476,9 +476,10 @@ export function createClaudeCodeEngine(): AgentEngine {
             // structured SDK signal (assistant.error / rate_limit_event)
             // does not double-fire `handleQuota` (which would double the
             // retryCount and overwrite the persisted backoff row).
-            tryEmitQuota(mapperState, onEvent, data)
+            // `safeEmit` is declared below, before the SDK can report stderr.
+            tryEmitQuota(mapperState, (ev) => safeEmit(ev), data)
           } else if (lower.includes('no conversation found with session id')) {
-            onEvent({ kind: 'error', category: 'resume_failed', message: data })
+            safeEmit({ kind: 'error', category: 'resume_failed', message: data })
           } else if (data.trim().length > 0) {
             console.warn(`[claude-engine stderr] ${data}`)
           }
@@ -910,7 +911,14 @@ export function createClaudeCodeEngine(): AgentEngine {
             // the stream only if the parent does not continue (see
             // BACKGROUND_CONTINUATION_GRACE_MS): its continuation still needs
             // the input for permission requests.
-            if (subagentStallTimer && activeSubagentTaskIds.size === 0 && !inputStream.hasUnansweredInput()) {
+            // `waitingForBackground` (set by a settled result) keeps this normal
+            // completion path independent of the opt-in stall watchdog timer.
+            if (
+              (subagentStallTimer || waitingForBackground) &&
+              activeSubagentTaskIds.size === 0 &&
+              !inputStream.hasUnansweredInput()
+            ) {
+              waitingForBackground = false
               clearSubagentStallWatchdog()
               armContinuationGrace(BACKGROUND_CONTINUATION_GRACE_MS)
             }

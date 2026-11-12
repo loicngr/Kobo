@@ -115,8 +115,10 @@ export function spawnVibeAcp(options: { cwd: string; env: NodeJS.ProcessEnv }): 
   })
 
   const stop = (cooperate?: () => Promise<void>): Promise<void> => {
+    // A confirmed exit wins over an earlier rejected attempt.
+    if (confirmed && !spawnFailure) return Promise.resolve()
     if (stopPromise) return stopPromise
-    stopPromise = (async () => {
+    const attempt = (async () => {
       if (spawnFailure) throw spawnFailure
       if (confirmed) return
       if (groupGone && abnormal) throw new Error('Vibe ACP closed abnormally; retaining runtime ownership')
@@ -160,7 +162,12 @@ export function spawnVibeAcp(options: { cwd: string; env: NodeJS.ProcessEnv }): 
       ])
       if (spawnFailure) throw spawnFailure
     })()
-    return stopPromise
+    stopPromise = attempt
+    // A rejected attempt is not cached, so a later call can escalate again.
+    attempt.catch(() => {
+      if (stopPromise === attempt) stopPromise = undefined
+    })
+    return attempt
   }
   return { child, closed, stop }
 }

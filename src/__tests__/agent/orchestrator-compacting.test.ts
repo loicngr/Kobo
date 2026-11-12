@@ -153,6 +153,17 @@ describe('workspace compaction lifecycle', () => {
     await f.orch.stopAgentAndWait(f.ws.id)
   })
 
+  it('keeps a scheduled wakeup when the user talks to the session', async () => {
+    const f = await fixture()
+    const wakeup = await import('../../server/services/wakeup-service.js')
+    wakeup.schedule(f.ws.id, 60, 'Check later', undefined)
+    await f.orch.sendMessage(f.ws.id, 'Hello')
+    await f.orch.sendMessageForFallback(f.ws.id, 'Hello again')
+    expect(f.send).toHaveBeenCalledTimes(2)
+    expect(wakeup.getPending(f.ws.id)).not.toBeNull()
+    await f.orch.stopAgentAndWait(f.ws.id)
+  })
+
   it.each(['stop', 'end', 'error', 'dead', 'boot'])('clears compaction on %s', async (mode) => {
     const f = await fixture()
     f.emit({ kind: 'session:compacting', active: true })

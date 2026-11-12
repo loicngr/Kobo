@@ -182,8 +182,9 @@ export async function startWorkspaceReview(
       )
     }
     const [commits, committedStats, workingTreeStats] = await Promise.all([
-      gitOps.getCommitsBetweenAsync(worktreePath, workspace.sourceBranch, workspace.workingBranch),
-      gitOps.getDiffStatsBetweenAsync(worktreePath, workspace.sourceBranch, workspace.workingBranch),
+      // Strict: a failed read must not hand the reviewer an empty change summary.
+      gitOps.getCommitsBetweenStrictAsync(worktreePath, workspace.sourceBranch, workspace.workingBranch),
+      gitOps.getDiffStatsBetweenStrictAsync(worktreePath, workspace.sourceBranch, workspace.workingBranch),
       gitOps.getWorkingTreeDiffStatsAsync(worktreePath),
     ])
     const diffStats = workingTreeStats.trim()

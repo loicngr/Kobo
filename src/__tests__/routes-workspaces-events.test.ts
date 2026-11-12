@@ -403,3 +403,20 @@ it('opens an available pinned native-session event in its canonical session hist
     expect(body.events.every((e) => [target, canonical, legacyNull].includes(e.id))).toBe(true)
   }
 })
+
+it('ignores a "before" cursor that belongs to another workspace', async () => {
+  const { getDb } = await import('../server/db/index.js')
+  const db = getDb()
+  const otherWorkspaceId = nanoid()
+  db.prepare(
+    `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, status, created_at, updated_at)
+     VALUES (?, 'Other WS', '/tmp/other', 'main', 'feature/other', 'idle', datetime('now'), datetime('now'))`,
+  ).run(otherWorkspaceId)
+  insertEvent(db, { workspaceId })
+  const foreignCursor = insertEvent(db, { workspaceId: otherWorkspaceId })
+
+  const app = await getApp()
+  const res = await app.request(`/${workspaceId}/events?before=${foreignCursor}`)
+  expect(res.status).toBe(200)
+  expect(await res.json()).toEqual({ events: [], hasMore: false })
+})

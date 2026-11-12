@@ -182,7 +182,7 @@ app.put('/global', async (c) => {
     const body = await c.req.json<Partial<GlobalSettings>>().catch(() => null)
     // `{}` merges nothing but still rewrites settings.json; a parse failure
     // must answer 400 rather than do that.
-    if (!body) return c.json({ error: 'Invalid JSON body' }, 400)
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return c.json({ error: 'Invalid JSON body' }, 400)
     if (body.workflowPolicy !== undefined && !isWorkflowPolicy(body.workflowPolicy))
       return c.json({ error: 'Invalid workflowPolicy' }, 400)
     if (body.memoryMode !== undefined && !isMemoryMode(body.memoryMode))
@@ -259,7 +259,7 @@ app.put('/projects/:encodedPath', async (c) => {
     const projectPath = Buffer.from(encodedPath, 'base64url').toString()
     const body = await c.req.json<Partial<Omit<ProjectSettings, 'path'>>>().catch(() => null)
     // `{}` CREATES a project entry with defaults; a malformed body must not.
-    if (!body) return c.json({ error: 'Invalid JSON body' }, 400)
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return c.json({ error: 'Invalid JSON body' }, 400)
     if (body.workflowPolicy !== undefined && !isWorkflowPolicy(body.workflowPolicy))
       return c.json({ error: 'Invalid workflowPolicy' }, 400)
     const project = settingsService.upsertProject(projectPath, body)

@@ -116,7 +116,16 @@ export function getReviewReturnStatus(workspaceId: string): ReviewReturnStatus |
 
 export function listReviewReturns(): ReviewReturn[] {
   return (getDb().prepare('SELECT workspace_id FROM pending_review_returns').all() as Array<{ workspace_id: string }>)
-    .map((row) => getReviewReturn(row.workspace_id))
+    .map((row) => {
+      try {
+        return getReviewReturn(row.workspace_id)
+      } catch (error) {
+        // Startup iterates every row: skip an unreadable one instead of failing
+        // to boot. Direct reads keep throwing, so its reviewer stays restricted.
+        console.error(`[review-return] Skipping unreadable review return for workspace '${row.workspace_id}':`, error)
+        return null
+      }
+    })
     .filter((row): row is ReviewReturn => row !== null)
 }
 

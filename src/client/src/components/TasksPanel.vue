@@ -203,7 +203,7 @@ function cancelAdd() {
 function startEdit(task: Task) {
   editingId.value = task.id
   editTitle.value = task.title
-  nextTick(() => {
+  nextTick().then(() => {
     const el = editInputRefs.value[task.id]
     const input = el?.querySelector('input, textarea') as HTMLInputElement | null
     input?.focus()

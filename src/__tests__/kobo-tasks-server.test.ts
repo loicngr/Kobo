@@ -685,6 +685,12 @@ describe('MCP tasks server handlers', () => {
         now,
       )
 
+      // Invalid JSON and a usage-looking non-agent event must be skipped, not fail the query
+      insert.run('e4', workspaceId, 'not json', 'sess-running', now)
+      db.prepare(
+        "INSERT INTO ws_events (id, workspace_id, type, payload, session_id, created_at) VALUES ('e5', ?, 'user:message', ?, 'sess-running', ?)",
+      ).run(workspaceId, JSON.stringify({ kind: 'usage', inputTokens: 999 }), now)
+
       const res = getSessionUsageHandler(db, workspaceId)
       expect(res.workspaceTotals).toEqual({ inputTokens: 300, outputTokens: 125, costUsd: 0.03 })
       expect(res.currentSession).toEqual({
@@ -937,6 +943,28 @@ describe('MCP server tool registration — global workspace tools', () => {
     expect(scopedBlock).not.toContain('...WORKSPACE_LIFECYCLE_TOOLS')
     for (const toolName of ['list_workspaces', 'stop_workspace']) {
       expect(scopedBlock).not.toMatch(new RegExp(`name:\\s*['"]${toolName}['"]`))
+    }
+  })
+
+  it('asks the backend to filter search_codebase by workspace unless scope is all', async () => {
+    const db = new Database(':memory:')
+    try {
+      const backendRequest = vi.fn(async () => [{ workspaceId: 'own' }])
+      const dispatcher = createManagedMcpDispatcher({
+        db,
+        backendUrl: 'http://localhost',
+        env: {},
+        backendRequest,
+        workspaceId: 'own',
+      })
+      await dispatcher.callTool('search_codebase', { query: 'needle', limit: 5 })
+      await dispatcher.callTool('search_codebase', { query: 'needle', scope: 'all' })
+      const urls = backendRequest.mock.calls.map((call) => new URL(String((call as unknown[])[1]), 'http://localhost'))
+      expect(urls[0].searchParams.get('workspaceId')).toBe('own')
+      expect(urls[0].searchParams.get('limit')).toBe('5')
+      expect(urls[1].searchParams.has('workspaceId')).toBe(false)
+    } finally {
+      db.close()
     }
   })
 

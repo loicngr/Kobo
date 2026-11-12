@@ -13,8 +13,54 @@ function ensureHook(): void {
         node.setAttribute('rel', 'noopener noreferrer nofollow')
       }
     }
+    // A remote subresource is a zero-click exfiltration channel for anything
+    // an agent or imported document can render; keep same-origin ones only.
+    const src = node.getAttribute('src')
+    if (src !== null && !isLocalSrc(src)) {
+      if (node.nodeName === 'IMG') node.replaceWith(...remoteImageFallback(node, src))
+      else node.removeAttribute('src')
+    }
   })
   hookRegistered = true
+}
+
+/** What stands in for a remote image: a link to it (never fetched at render),
+ *  plain text inside an existing link, nothing for a non-http(s) scheme. */
+function remoteImageFallback(img: Element, src: string): Node[] {
+  let url: URL
+  try {
+    url = new URL(src, window.location.href)
+  } catch {
+    return []
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return []
+  const doc = img.ownerDocument
+  const label = doc.createTextNode(img.getAttribute('alt')?.trim() || url.href)
+  if (img.closest('a')) return [label]
+  const link = doc.createElement('a')
+  link.setAttribute('href', url.href)
+  // Set here too: the sanitizer's walk is not guaranteed to revisit a node inserted from a hook.
+  link.setAttribute('target', '_blank')
+  link.setAttribute('rel', 'noopener noreferrer nofollow')
+  link.append(label)
+  return [link]
+}
+
+function isLocalSrc(src: string): boolean {
+  if (/^\s*(data|blob):/i.test(src)) return true
+  try {
+    return new URL(src, window.location.href).origin === window.location.origin
+  } catch {
+    return false
+  }
+}
+
+function sanitizeConfig(options: RenderChatMarkdownOptions) {
+  return {
+    FORBID_TAGS: ['style', 'form', 'audio', 'video', 'picture', 'source', 'track'],
+    FORBID_ATTR: ['style', 'srcset', 'background', 'poster'],
+    ...(options.addAttr ? { ADD_ATTR: options.addAttr } : {}),
+  }
 }
 
 ensureHook()
@@ -32,7 +78,7 @@ export interface RenderChatMarkdownOptions {
 export function renderChatMarkdown(raw: string, options: RenderChatMarkdownOptions = {}): string {
   ensureHook()
   const html = marked.parse(raw, { async: false, breaks: true, gfm: true }) as string
-  return DOMPurify.sanitize(html, options.addAttr ? { ADD_ATTR: options.addAttr } : undefined)
+  return DOMPurify.sanitize(html, sanitizeConfig(options))
 }
 
 /**
@@ -43,7 +89,7 @@ export function renderChatMarkdown(raw: string, options: RenderChatMarkdownOptio
  */
 export function sanitizeChatHtml(html: string, options: RenderChatMarkdownOptions = {}): string {
   ensureHook()
-  return DOMPurify.sanitize(html, options.addAttr ? { ADD_ATTR: options.addAttr } : undefined)
+  return DOMPurify.sanitize(html, sanitizeConfig(options))
 }
 
 /** Upper bound on memoised message renders. A feed shows a few hundred

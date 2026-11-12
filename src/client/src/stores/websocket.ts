@@ -112,7 +112,7 @@ function prToastActions(workspaceId: string, prUrl?: string): Array<Record<strin
       label: t('pr.openPr'),
       color: 'white',
       noDismiss: true,
-      handler: () => window.open(prUrl, '_blank'),
+      handler: () => window.open(prUrl, '_blank', 'noopener,noreferrer'),
     })
   }
   actions.push({
@@ -398,7 +398,7 @@ export function dispatchAgentEvent(
   // the command completes. The regex is deliberately loose — false
   // positives just cause an extra stats refresh, whereas a miss means
   // the panel stays stale until the user clicks refresh.
-  if (event.kind === 'tool:call' && event.name === 'Bash') {
+  if (!_replayingNotifications && event.kind === 'tool:call' && event.name === 'Bash') {
     const input = event.input as Record<string, unknown> | undefined
     const cmd = `${(input?.command as string | undefined) ?? ''} ${(input?.description as string | undefined) ?? ''}`
     if (/\bgit\b|commit|push|pull|merge|rebase|checkout|branch/i.test(cmd)) {

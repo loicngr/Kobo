@@ -1,6 +1,7 @@
 <template>
   <div
     data-testid="workspace-card"
+    :data-workspace-id="workspace.id"
     class="wl-item cursor-pointer q-pa-sm q-mx-xs rounded-borders"
     :class="{ 'wl-item--selected': selected, 'wl-item--archived': variant === 'archived' }"
     role="option"

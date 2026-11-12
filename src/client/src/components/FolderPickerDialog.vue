@@ -7,7 +7,7 @@
       <q-card-section class="row items-center q-pb-none">
         <div class="text-h6">{{ $t('folderPicker.title') }}</div>
         <q-space />
-        <q-btn v-close-popup flat dense round icon="close" color="kobo-2" />
+        <q-btn v-close-popup flat dense round icon="close" color="kobo-2" :aria-label="$t('common.close')" />
       </q-card-section>
 
       <q-card-section>

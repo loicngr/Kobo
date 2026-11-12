@@ -465,6 +465,7 @@ export function createCodexEngine(): AgentEngine {
 
           if (method === 'thread/tokenUsage/updated') {
             const p = params as {
+              threadId?: string
               tokenUsage: {
                 last: {
                   inputTokens: number
@@ -474,7 +475,8 @@ export function createCodexEngine(): AgentEngine {
                 }
               }
             }
-            if (p?.tokenUsage?.last) {
+            // Sub-agent threads report their own usage; keep the parent gauge clean.
+            if (p?.tokenUsage?.last && isParentTurn(p.threadId)) {
               const last = p.tokenUsage.last
               safeEmit({
                 kind: 'usage',
@@ -507,7 +509,7 @@ export function createCodexEngine(): AgentEngine {
         },
 
         onServerRequest(id: number | string, method: string, params: unknown) {
-          handleServerRequest({
+          const handled = handleServerRequest({
             requestId: id,
             method,
             params,
@@ -532,6 +534,8 @@ export function createCodexEngine(): AgentEngine {
             autoApprove: (toolName, payload) =>
               isWorkspacePermissionAllowed(options.workspaceId, { engine: 'codex', toolName, payload }),
           })
+          // Codex waits forever on a server request that never gets a reply.
+          if (!handled) client.peer.respondError(id, -32601, `Method not supported by this client: ${method}`)
         },
 
         onDisconnect: rejectChildFailure,

@@ -52,3 +52,17 @@ it('keeps the log reader open on snapshot refresh and closes it for another PR o
   expect(wrapper.findComponent(CiJobLogsDialog).exists()).toBe(false)
   wrapper.unmount()
 })
+
+it('never links a check whose details URL is not http(s)', () => {
+  const unsafe = {
+    ...snapshot,
+    ci: { ...snapshot.ci, checks: [{ ...snapshot.ci.checks[0], detailsUrl: 'javascript:alert(1)' }] },
+  }
+  const wrapper = mount(PrPanel, {
+    shallow: true,
+    props: { snapshot: unsafe, workspaceId: 'a' },
+    global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })] },
+  })
+  expect(wrapper.html()).not.toContain('javascript:')
+  wrapper.unmount()
+})

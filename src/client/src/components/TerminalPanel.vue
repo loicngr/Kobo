@@ -325,7 +325,7 @@ function reopenTerminal() {
   disposeTerminalEntry(wid)
   currentAttachedId = null
   bumpTerminalState()
-  nextTick(() => openTerminal())
+  nextTick().then(() => openTerminal())
 }
 
 function reconnectNow() {
@@ -355,7 +355,7 @@ function attachTerminal(wid: string, entry: TerminalEntry) {
   // Move the persistent container into the visible DOM
   containerRef.value.appendChild(entry.container)
   // Double nextTick: first for Vue to update v-show, second to fit after layout
-  nextTick(() => nextTick(() => entry.fitAddon.fit()))
+  nextTick().then(() => nextTick().then(() => entry.fitAddon.fit()))
 }
 
 function detachTerminal() {
@@ -372,7 +372,7 @@ watch(workspaceId, (newId, oldId) => {
   if (newId) {
     const entry = terminalMap.get(newId)
     if (entry) {
-      nextTick(() => {
+      nextTick().then(() => {
         attachTerminal(newId, entry)
         // A reconnect backoff may still be armed from before this workspace
         // tab lost focus. Cancel it before deciding whether to connect now —
@@ -408,7 +408,7 @@ onMounted(() => {
   if (workspaceId.value) {
     const entry = terminalMap.get(workspaceId.value)
     if (entry) {
-      nextTick(() => attachTerminal(workspaceId.value!, entry))
+      nextTick().then(() => attachTerminal(workspaceId.value!, entry))
     }
   }
 })

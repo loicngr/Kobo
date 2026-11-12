@@ -723,6 +723,42 @@ describe('event-mapper', () => {
       )
       expect(state.sawErrorResult).toBe(false)
     })
+
+    it('treats a success subtype with is_error as a failed result carrying the API error text', () => {
+      const state = createMapperState()
+      const events = mapSdkMessage(
+        asMsg({ type: 'result', subtype: 'success', is_error: true, result: 'API Error: 529 overloaded' }),
+        state,
+      )
+      const errEvent = events.find((e) => e.kind === 'error') as
+        | { kind: 'error'; category: string; message: string }
+        | undefined
+      expect(errEvent?.category).toBe('other')
+      expect(errEvent?.message).toContain('API Error: 529 overloaded')
+      expect(state.sawErrorResult).toBe(true)
+    })
+
+    it('routes a success subtype with is_error and a quota text through the quota path', () => {
+      const state = createMapperState()
+      const events = mapSdkMessage(
+        asMsg({ type: 'result', subtype: 'success', is_error: true, result: 'Claude AI usage limit reached.' }),
+        state,
+      )
+      const errors = events.filter((e) => e.kind === 'error') as Array<{ kind: 'error'; category: string }>
+      expect(errors).toHaveLength(1)
+      expect(errors[0].category).toBe('quota')
+    })
+
+    it('keeps a success subtype with is_error a clean stop when userInterrupted is set', () => {
+      const state = createMapperState()
+      state.userInterrupted = true
+      const events = mapSdkMessage(
+        asMsg({ type: 'result', subtype: 'success', is_error: true, result: 'Request was aborted.' }),
+        state,
+      )
+      expect(events.find((e) => e.kind === 'error')).toBeUndefined()
+      expect(state.sawErrorResult).toBe(false)
+    })
   })
 })
 

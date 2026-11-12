@@ -24,11 +24,13 @@
 </template>
 
 <script setup lang="ts">
+import { useQuasar } from 'quasar'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 const { t } = useI18n()
+const $q = useQuasar()
 const store = useWorkspaceStore()
 
 const now = ref(Date.now())
@@ -74,6 +76,8 @@ const display = computed(() => {
 function onCancel(): void {
   const ws = store.selectedWorkspace
   if (!ws) return
-  void store.cancelPendingWakeup(ws.id)
+  store.cancelPendingWakeup(ws.id).catch(() => {
+    $q.notify({ type: 'negative', message: t('wakeup.cancelFailed'), position: 'top', timeout: 0 })
+  })
 }
 </script>

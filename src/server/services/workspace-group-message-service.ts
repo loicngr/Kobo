@@ -183,7 +183,14 @@ export function reconcileGroupMessageBatches(db: Database.Database): void {
       Row & { id: string }
     >
     for (const row of rows) {
-      const batch = JSON.parse(row.receipt_json) as GroupMessageBatch
+      let batch: GroupMessageBatch
+      try {
+        batch = JSON.parse(row.receipt_json) as GroupMessageBatch
+      } catch (error) {
+        // One unreadable receipt must not keep the server from starting.
+        console.error(`[group-message] Skipping unreadable receipt '${row.id}' at startup:`, error)
+        continue
+      }
       if (batch.complete) continue
       for (const recipient of batch.recipients) {
         if (recipient.state === 'pending') {

@@ -43,14 +43,19 @@ function withLock<T>(worktreePath: string, fn: () => T): Promise<T> {
   return next
 }
 
-function readIndex(imagesDir: string): ImageIndexEntry[] {
+/** `backupUnreadable`: the caller is about to rewrite the index, so keep a copy of what cannot be parsed. */
+function readIndex(imagesDir: string, backupUnreadable = false): ImageIndexEntry[] {
   const indexPath = path.join(imagesDir, INDEX_FILE)
   if (!fs.existsSync(indexPath)) return []
   if (fs.lstatSync(indexPath).isSymbolicLink()) throw new Error('Symbolic links are not allowed for image index')
   try {
-    return JSON.parse(fs.readFileSync(indexPath, 'utf-8'))
+    const entries: unknown = JSON.parse(fs.readFileSync(indexPath, 'utf-8'))
+    if (!Array.isArray(entries)) throw new Error('image index is not an array')
+    return entries
   } catch (err) {
     console.error(`[image-service] Failed to parse ${indexPath}, treating as empty index:`, err)
+    // A failed copy propagates: better a refused upload than metadata lost for good.
+    if (backupUnreadable) fs.copyFileSync(indexPath, path.join(imagesDir, `index.corrupt-${Date.now()}.json`))
     return []
   }
 }
@@ -99,7 +104,7 @@ export async function saveImage(worktreePath: string, fileBuffer: Buffer, origin
       } finally {
         fs.closeSync(descriptor)
       }
-      const entries = readIndex(imagesDir)
+      const entries = readIndex(imagesDir, true)
       entries.push({ uid, originalName, createdAt: new Date().toISOString() })
       writeIndex(imagesDir, entries)
     } catch (err) {

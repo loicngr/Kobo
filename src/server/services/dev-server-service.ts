@@ -355,6 +355,15 @@ export async function getStatus(
 
 // ── Start ──────────────────────────────────────────────────────────────────────
 
+// The start command must never run in the main repository: refuse instead of falling back to projectPath.
+function requireStartWorktree(workspace: NonNullable<ReturnType<typeof getWorkspace>>): string {
+  if (workspace.archivedAt) throw new Error(`Workspace '${workspace.id}' is archived`)
+  if (workspace.worktreePurgedAt) throw new Error(`Workspace '${workspace.id}' worktree has been purged`)
+  if (!workspace.worktreePath || !existsSync(workspace.worktreePath))
+    throw new Error(`Workspace '${workspace.id}' worktree is missing on disk`)
+  return workspace.worktreePath
+}
+
 /**
  * Start the dev-server for a workspace.
  */
@@ -363,6 +372,7 @@ export function startDevServer(workspaceId: string): DevServerStatus {
   assertWorkspaceLifecycleAvailable(workspaceId)
   const workspace = getWorkspace(workspaceId)
   if (!workspace) throw new Error(`Workspace '${workspaceId}' not found`)
+  requireStartWorktree(workspace)
   if (!getProjectSettings(workspace.projectPath)?.devServer.startCommand)
     throw new Error('No dev-server start command configured')
   if (stoppingProcesses.has(workspaceId)) throw new Error(`Dev server for workspace '${workspaceId}' is stopping`)
@@ -416,8 +426,7 @@ function launchDevServer(workspaceId: string): DevServerStatus {
   const allowedDockerHost = dockerAgentHost()
 
   // Execute as bash script (supports multi-line scripts)
-  const worktreePath = workspace.worktreePath
-  const cwd = worktreePath && existsSync(worktreePath) ? worktreePath : workspace.projectPath
+  const cwd = requireStartWorktree(workspace)
   const proc = spawn('bash', ['-c', settings.devServer.startCommand], {
     cwd,
     env: {
@@ -709,7 +718,9 @@ async function stopDevServerOwned(workspaceId: string): Promise<DevServerStatus>
   const config = resolveInstance(workspace.projectPath, workspace.workingBranch)
   const instanceName = config?.instanceName ?? sanitizeBranchName(workspace.workingBranch)
   const worktreePath = workspace.worktreePath
-  const cwd = worktreePath && existsSync(worktreePath) ? worktreePath : workspace.projectPath
+  const worktreeExists = !!worktreePath && existsSync(worktreePath)
+  // Only the generic `docker compose -p <project> down` may fall back to projectPath: it is scoped by label.
+  const cwd = worktreeExists ? worktreePath : workspace.projectPath
 
   // Kill tracked process first (covers Node servers and any spawned process)
   await stopTrackedProcess(workspaceId)
@@ -718,7 +729,8 @@ async function stopDevServerOwned(workspaceId: string): Promise<DevServerStatus>
 
   let stopError: unknown
   let customStopSucceeded = false
-  if (settings?.devServer.stopCommand) {
+  // Like the start command, the user's stop command must never run in the main repository.
+  if (settings?.devServer.stopCommand && worktreeExists) {
     try {
       await runCommand('bash', ['-c', settings.devServer.stopCommand], {
         cwd,

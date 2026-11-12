@@ -1375,6 +1375,55 @@ describe('createCodexEngine — quota error in stderr', () => {
   })
 })
 
+describe('createCodexEngine — audit remediation', () => {
+  async function startTurn(threadId: string) {
+    resetChild()
+    const events: AgentEvent[] = []
+    void createCodexEngine().start(BASE_OPTIONS, (ev) => events.push(ev))
+    await flush(5)
+    pushInitializeResponse(1)
+    await flush(5)
+    pushThreadStartResponse(threadId, 2)
+    await flush(5)
+    pushTurnStartResponse('turn_1', 3)
+    await flush(5)
+    return events
+  }
+
+  it('answers an unknown server request with a JSON-RPC method-not-found error', async () => {
+    await startTurn('thr_unknown_req')
+    pushLine({ jsonrpc: '2.0', id: 'srv-77', method: 'item/unknown/method', params: {} })
+    await flush(10)
+    const reply = _child._written.map((line) => JSON.parse(line)).find((message) => message.id === 'srv-77')
+    expect(reply?.error?.code).toBe(-32601)
+    pushNotification('turn/completed', {
+      threadId: 'thr_unknown_req',
+      turn: { id: 'turn_1', status: 'completed', startedAt: null, completedAt: null, durationMs: null, error: null },
+    })
+    await flush(10)
+  })
+
+  it('ignores token usage reported for a sub-agent thread', async () => {
+    const events = await startTurn('thr_parent_usage')
+    const last = { totalTokens: 9, inputTokens: 5, cachedInputTokens: 1, outputTokens: 2, reasoningOutputTokens: 1 }
+    pushNotification('thread/tokenUsage/updated', { threadId: 'thr_child', turnId: 'turn_c', tokenUsage: { last } })
+    await flush(10)
+    expect(events.filter((event) => event.kind === 'usage')).toHaveLength(0)
+    pushNotification('thread/tokenUsage/updated', {
+      threadId: 'thr_parent_usage',
+      turnId: 'turn_1',
+      tokenUsage: { last },
+    })
+    await flush(10)
+    expect(events.filter((event) => event.kind === 'usage')).toHaveLength(1)
+    pushNotification('turn/completed', {
+      threadId: 'thr_parent_usage',
+      turn: { id: 'turn_1', status: 'completed', startedAt: null, completedAt: null, durationMs: null, error: null },
+    })
+    await flush(10)
+  })
+})
+
 describe('createCodexEngine — token usage', () => {
   it('emits usage event from thread/tokenUsage/updated notification', async () => {
     resetChild()

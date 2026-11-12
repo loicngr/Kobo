@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
+import { StringDecoder } from 'node:string_decoder'
 import * as wsService from '../services/websocket-service.js'
 import { resolveInstance, sanitizeBranchName } from './dev-server-instance.js'
 import { getIndexLockPath } from './git-ops.js'
@@ -8,6 +9,11 @@ import { ensureDirectoryInside } from './safe-path.js'
 
 /** Default wall-clock budget for a user script before it is force-killed. */
 export const SCRIPT_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes
+
+/** Every output line is a persisted `ws_events` row plus a broadcast: bound what one script can add. */
+export const MAX_SCRIPT_OUTPUT_LINES = 5_000
+export const MAX_SCRIPT_OUTPUT_CHARS = 1024 * 1024
+export const MAX_SCRIPT_OUTPUT_LINE_CHARS = 16 * 1024
 
 /** Environment variables exposed to a user script. */
 export interface ScriptEnv {
@@ -126,25 +132,51 @@ export function runScript(opts: RunScriptOptions): Promise<{ exitCode: number }>
     // "Done" instead of a near-empty card when a script runs silently.
     let outputEmitted = false
 
+    let emittedLines = 0
+    let emittedChars = 0
+    let truncated = false
+
     const emitLine = (text: string) => {
       const trimmed = stripAnsi(text).trim()
-      if (trimmed) {
-        outputEmitted = true
-        wsService.emit(workspaceId, `${eventPrefix}:output`, { text: trimmed })
+      if (!trimmed || truncated) return
+      if (emittedLines >= MAX_SCRIPT_OUTPUT_LINES || emittedChars + trimmed.length > MAX_SCRIPT_OUTPUT_CHARS) {
+        truncated = true
+        wsService.emit(workspaceId, `${eventPrefix}:output`, {
+          text: `[kobo] Output truncated after ${emittedLines} lines; the script keeps running but later output is not recorded`,
+        })
+        return
       }
+      outputEmitted = true
+      emittedLines++
+      emittedChars += trimmed.length
+      wsService.emit(workspaceId, `${eventPrefix}:output`, { text: trimmed })
     }
 
-    proc.stdout.on('data', (data: Buffer) => {
-      for (const line of data.toString().split('\n')) {
-        emitLine(line)
+    // Chunks cut lines and multi-byte characters anywhere: decode statefully and
+    // keep the unfinished line of each stream until its newline (or the end) arrives.
+    const flushers: Array<() => void> = []
+    for (const stream of [proc.stdout, proc.stderr]) {
+      const decoder = new StringDecoder('utf8')
+      let pending = ''
+      const consume = (text: string, end = false) => {
+        if (truncated) {
+          pending = ''
+          return
+        }
+        const lines = (pending + text).split('\n')
+        pending = end ? '' : (lines.pop() ?? '')
+        for (const line of lines)
+          for (let i = 0; i < line.length; i += MAX_SCRIPT_OUTPUT_LINE_CHARS)
+            emitLine(line.slice(i, i + MAX_SCRIPT_OUTPUT_LINE_CHARS))
+        // A line that never ends must not accumulate without bound.
+        while (pending.length > MAX_SCRIPT_OUTPUT_LINE_CHARS) {
+          emitLine(pending.slice(0, MAX_SCRIPT_OUTPUT_LINE_CHARS))
+          pending = pending.slice(MAX_SCRIPT_OUTPUT_LINE_CHARS)
+        }
       }
-    })
-
-    proc.stderr.on('data', (data: Buffer) => {
-      for (const line of data.toString().split('\n')) {
-        emitLine(line)
-      }
-    })
+      stream.on('data', (data: Buffer) => consume(decoder.write(data)))
+      flushers.push(() => consume(decoder.end(), true))
+    }
 
     let settled = false
 
@@ -173,6 +205,7 @@ export function runScript(opts: RunScriptOptions): Promise<{ exitCode: number }>
     })
 
     proc.on('close', (code) => {
+      for (const flush of flushers) flush()
       finish(code ?? 1)
     })
   }).catch((err) => {

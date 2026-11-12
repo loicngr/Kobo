@@ -58,8 +58,8 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 60', () => {
-    expect(SCHEMA_VERSION).toBe(60)
+  it('exporte SCHEMA_VERSION = 61', () => {
+    expect(SCHEMA_VERSION).toBe(61)
   })
 
   it('migration v33 records and backfills the engine on agent sessions', () => {
@@ -2633,7 +2633,7 @@ describe('persistent memory schema migration v51', () => {
     const beforeUpgrade = memoryObjects(old)
     expect(beforeUpgrade.objects).toEqual([])
     expect(getMigrationHistory(old).at(-1)?.version).toBe(50)
-    expect(getPendingMigrations(old)).toEqual([51, 52, 53, 54, 55, 56, 57, 58, 59, 60])
+    expect(getPendingMigrations(old)).toEqual([51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61])
 
     runMigrations(old)
     migrations.find((entry) => entry.version === 51)!.migrate(old)
@@ -2773,7 +2773,7 @@ describe('durable final reviews v52', () => {
       INSERT INTO pending_review_returns VALUES('w','review','original','{"engine":"codex"}','{"engine":"claude-code"}','c');`)
     for (const migration of migrations.filter((m) => m.version <= 51))
       old.prepare('INSERT INTO schema_migrations VALUES(?,?,?)').run(migration.version, migration.name, 'v51')
-    expect(getPendingMigrations(old)).toEqual([52, 53, 54, 55, 56, 57, 58, 59, 60])
+    expect(getPendingMigrations(old)).toEqual([52, 53, 54, 55, 56, 57, 58, 59, 60, 61])
     runMigrations(old)
     migrations.find((m) => m.version === 52)!.migrate(old)
     expect(old.prepare('SELECT * FROM pending_review_returns').get()).toEqual({
@@ -2927,7 +2927,7 @@ describe('Mistral memory engine migration v55', () => {
       const column = table === 'memory_contexts' || table === 'memory_budget_contexts' ? 'engine' : 'source_engine'
       expect(() => db.exec(`UPDATE ${table} SET ${column} = 'mistral-vibe'`)).toThrow(/CHECK/)
     }
-    expect(getPendingMigrations(db)).toEqual([55, 56, 57, 58, 59, 60])
+    expect(getPendingMigrations(db)).toEqual([55, 56, 57, 58, 59, 60, 61])
     runMigrations(db)
     expect({ ...rows(db), schema_migrations: before.schema_migrations }).toEqual({
       ...before,
@@ -2942,13 +2942,13 @@ describe('Mistral memory engine migration v55', () => {
     expect(
       db
         .prepare(
-          "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name NOT IN ('parallel_reviews', 'pinned_messages', 'browser_sessions', 'sprints') AND name != 'idx_workspaces_sprint_id' ORDER BY name",
+          "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name NOT IN ('parallel_reviews', 'pinned_messages', 'browser_sessions', 'sprints') AND name != 'idx_workspaces_sprint_id' AND name NOT IN ('idx_search_fragments_workspace_id', 'idx_progress_bars_session_id', 'idx_memory_operations_source_session_id', 'idx_memory_entries_source_workspace_id', 'idx_memory_entries_source_session_id', 'idx_memory_proposals_source_workspace_id', 'idx_memory_proposals_source_session_id') ORDER BY name",
         )
         .all(),
     ).toEqual(indexes)
     expect(getMigrationHistory(db).at(-1)).toMatchObject({
       version: SCHEMA_VERSION,
-      name: 'remove-workspace-engine-comparison',
+      name: 'index-cascade-foreign-keys',
     })
     const fresh = new Database(':memory:')
     initSchema(fresh)
@@ -2990,7 +2990,7 @@ describe('Mistral memory engine migration v55', () => {
     spy.mockRestore()
     expect(rows(db)).toEqual(before)
     expect(db.prepare('SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY name').all()).toEqual(schema)
-    expect(getPendingMigrations(db)).toEqual([55, 56, 57, 58, 59, 60])
+    expect(getPendingMigrations(db)).toEqual([55, 56, 57, 58, 59, 60, 61])
     expect(db.pragma('foreign_key_check')).toEqual([])
     runMigrations(db)
     expect(getPendingMigrations(db)).toEqual([])
@@ -3118,5 +3118,81 @@ describe('sprint migration v59', () => {
     }
     upgraded.close()
     fresh.close()
+  })
+})
+
+describe('foreign key index migration v61', () => {
+  const cascades: Array<[index: string, query: string]> = [
+    ['idx_search_fragments_workspace_id', 'DELETE FROM search_fragments WHERE workspace_id = ?'],
+    ['idx_progress_bars_session_id', 'DELETE FROM session_progress_bars WHERE session_id = ?'],
+    [
+      'idx_memory_operations_source_session_id',
+      'UPDATE memory_operations SET source_session_id = NULL WHERE source_session_id = ?',
+    ],
+    [
+      'idx_memory_entries_source_workspace_id',
+      'UPDATE memory_entries SET source_workspace_id = NULL WHERE source_workspace_id = ?',
+    ],
+    [
+      'idx_memory_entries_source_session_id',
+      'UPDATE memory_entries SET source_session_id = NULL WHERE source_session_id = ?',
+    ],
+    [
+      'idx_memory_proposals_source_workspace_id',
+      'UPDATE memory_proposals SET source_workspace_id = NULL WHERE source_workspace_id = ?',
+    ],
+    [
+      'idx_memory_proposals_source_session_id',
+      'UPDATE memory_proposals SET source_session_id = NULL WHERE source_session_id = ?',
+    ],
+  ]
+
+  it('upgrades v60 without losing rows, converges with fresh installs and indexes the cascade lookups', () => {
+    const upgraded = new Database(':memory:')
+    const fresh = new Database(':memory:')
+    try {
+      upgraded.pragma('foreign_keys = ON')
+      runMigrations(upgraded)
+      upgraded.exec(
+        `${cascades.map(([index]) => `DROP INDEX ${index};`).join('')} DELETE FROM schema_migrations WHERE version = 61`,
+      )
+      upgraded.exec(`INSERT INTO workspaces (id,name,project_path,source_branch,working_branch,created_at,updated_at)
+          VALUES ('w','Existing','/tmp','main','branch','now','now');
+        INSERT INTO agent_sessions (id, workspace_id, status, started_at) VALUES ('s', 'w', 'completed', 'now');
+        INSERT INTO search_fragments (event_id, message_key, workspace_id, session_id, type, created_at, event_order, text)
+          VALUES ('e', 'm', 'w', 's', 'user:message', 'now', 1, 'kept');
+        INSERT INTO session_progress_bars (id, workspace_id, session_id, owner_kind, owner_launch_id, activity_key,
+          creation_fingerprint, label, status, created_at, updated_at)
+          VALUES ('p', 'w', 's', 'external', 'l', 'k', 'f', 'Kept', 'running', 'now', 'now')`)
+      const plan = (db: Database.Database, query: string) =>
+        (db.prepare(`EXPLAIN QUERY PLAN ${query}`).all('x') as Array<{ detail: string }>).map((row) => row.detail)
+      for (const [, query] of cascades) expect(plan(upgraded, query).join()).toMatch(/^SCAN /)
+      expect(getPendingMigrations(upgraded)).toEqual([61])
+
+      runMigrations(upgraded)
+
+      expect(getMigrationHistory(upgraded).at(-1)?.version).toBe(SCHEMA_VERSION)
+      expect(upgraded.prepare('SELECT text FROM search_fragments').all()).toEqual([{ text: 'kept' }])
+      expect(upgraded.prepare('SELECT label FROM session_progress_bars').all()).toEqual([{ label: 'Kept' }])
+      runMigrations(fresh)
+      const schema = (db: Database.Database) =>
+        db
+          .prepare(
+            `SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name IN
+              ('search_fragments','session_progress_bars','memory_operations','memory_entries','memory_proposals')
+              ORDER BY name`,
+          )
+          .all()
+      expect(schema(upgraded)).toEqual(schema(fresh))
+      for (const db of [upgraded, fresh])
+        for (const [index, query] of cascades) expect(plan(db, query).join()).toContain(`INDEX ${index} `)
+      migrations.find((m) => m.version === 61)!.migrate(upgraded)
+      upgraded.prepare('DELETE FROM workspaces WHERE id = ?').run('w')
+      expect(upgraded.prepare('SELECT COUNT(*) AS count FROM search_fragments').get()).toEqual({ count: 0 })
+      expect(upgraded.prepare('SELECT COUNT(*) AS count FROM session_progress_bars').get()).toEqual({ count: 0 })
+    } finally {
+      upgraded.close()
+      fresh.close()
+    }
   })
 })

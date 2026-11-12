@@ -140,6 +140,50 @@ class UpdateTests(unittest.TestCase):
         self.assertIn('replace\n.config/kobo completely', recovery)
         self.assertIn('Clone that\nstopped volume into a NEW Docker volume', recovery)
         self.assertNotIn('home.tar.gz', recovery)
+        self.assertIs(u.state['backup_skipped'], False)
+        self.assertIs(u.state['backup_complete'], True)
+        self.assertNotIn('--skip-backup', recovery)
+
+    def test_skip_backup_records_no_archive_and_warns(self):
+        u = self.updater()
+        with patch.object(m, 'say') as say:
+            u.execute('latest', skip_backup=True)
+        # The migration test on a database copy still runs.
+        self.assertEqual(u.events, ['build','reserve','stop','backup','migration','start-new','verify'])
+        self.assertEqual(u.state['phase'], 'complete')
+        self.assertIs(u.state['backup_skipped'], True)
+        self.assertIs(u.state['backup_complete'], False)
+        self.assertIsNone(u.state['backup_archive'])
+        self.assertIsNone(u.state['backup_scope'])
+        said = ' '.join(call.args[0] for call in say.call_args_list)
+        self.assertIn('WARNING: --skip-backup', said)
+        self.assertIn('No backup was created', said)
+        self.assertNotIn('kobo.tar.gz"', said)
+        recovery = (u.job / 'RECOVERY.md').read_text()
+        self.assertIn('NO BACKUP ARCHIVE EXISTS', recovery)
+        self.assertNotIn('contents of kobo.tar.gz', recovery)
+        self.assertNotIn('backup_complete=true', recovery)
+
+    def test_skip_backup_failure_still_restarts_old(self):
+        u = self.updater('migration')
+        with self.assertRaises(m.UpdateError):
+            u.execute('latest', skip_backup=True)
+        self.assertEqual(u.events, ['build','reserve','stop','backup','migration','start-old'])
+        self.assertEqual(u.state['phase'], 'aborted')
+        self.assertIs(u.state['backup_complete'], False)
+
+    def test_skip_backup_is_documented_and_refused_with_check_or_prepare(self):
+        result = subprocess.run(['python3', str(path), '--help'], capture_output=True, text=True)
+        self.assertIn('--skip-backup', result.stdout)
+        for mode in ('--check', '--prepare'):
+            result = subprocess.run(['python3', str(path), '--skip-backup', mode], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 2)
+            self.assertIn('--skip-backup only applies', result.stderr)
+        u = self.updater()
+        with patch.object(m, 'say') as say:
+            u.execute('latest', prepare_only=True, skip_backup=True)
+        self.assertIs(u.state['backup_skipped'], False)
+        self.assertFalse(any('WARNING' in call.args[0] for call in say.call_args_list))
 
     def test_check_never_builds_or_stops(self):
         u = self.updater()
@@ -377,6 +421,35 @@ class BackupTests(unittest.TestCase):
     def test_missing_data_directory_fails_backup(self):
         self.data.rename(self.home / 'moved')
         with self.assertRaisesRegex(m.UpdateError, 'Failed: backup'):
+            self.u.backup()
+
+    def test_skip_backup_creates_no_archive_but_copies_sqlite_for_migration(self):
+        self.u.skip_backup = True
+        check = self.u.backup()
+        self.assertEqual({p.name for p in self.u.job.iterdir()}, {'update.log', 'migration-check'})
+        self.assertEqual({p.name for p in check.iterdir()}, {'kobo.db', 'kobo.db-wal', 'kobo.db-shm'})
+        for item in check.iterdir():
+            self.assertEqual(item.read_bytes(), (self.data / item.name).read_bytes())
+        self.assertNotIn('./.config/kobo', self.command)
+
+    def test_skip_backup_tolerates_absent_sidecars_but_requires_database(self):
+        (self.data / 'kobo.db-wal').unlink()
+        (self.data / 'kobo.db-shm').unlink()
+        self.u.skip_backup = True
+        self.assertEqual({p.name for p in self.u.backup().iterdir()}, {'kobo.db'})
+        (self.data / 'kobo.db').unlink()
+        self.u.job = self.stack / 'job2'
+        self.u.job.mkdir()
+        self.u.log = self.u.job / 'update.log'
+        with self.assertRaisesRegex(m.UpdateError, 'does not contain'):
+            self.u.backup()
+        self.assertFalse(any(p.suffix in {'.tar', '.gz'} for p in self.u.job.iterdir()))
+
+    def test_skip_backup_rejects_symlink_database(self):
+        (self.data / 'kobo.db').unlink()
+        (self.data / 'kobo.db').symlink_to(self.home / '.claude/excluded')
+        self.u.skip_backup = True
+        with self.assertRaisesRegex(m.UpdateError, 'Unexpected SQLite'):
             self.u.backup()
 
 

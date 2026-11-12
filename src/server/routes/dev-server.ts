@@ -80,7 +80,10 @@ app.post('/:workspaceId/start', migrationGuard, (c) => {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     const status =
-      err instanceof WorkspaceLifecycleBusyError || /already starting|is stopping/.test(message) ? 409 : 500
+      err instanceof WorkspaceLifecycleBusyError ||
+      /already starting|is stopping|is archived|has been purged|is missing on disk/.test(message)
+        ? 409
+        : 500
     return c.json({ error: message }, status)
   }
 })

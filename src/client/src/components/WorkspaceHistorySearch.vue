@@ -117,7 +117,7 @@ function formatDate(createdAt: string): string {
 }
 
 onMounted(() => {
-  void nextTick(() => searchInput.value?.focus())
+  void nextTick().then(() => searchInput.value?.focus())
 })
 </script>
 

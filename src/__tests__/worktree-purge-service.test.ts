@@ -150,6 +150,17 @@ describe('purgeWorktree()', () => {
     expect(emitEphemeralMock).toHaveBeenCalledWith('ws-1', 'workspace:worktree-purged', expect.anything())
   })
 
+  it('fails explicitly, without announcing a purge, when the metadata update fails after removal', async () => {
+    getWorkspaceMock.mockReturnValue(makeWorkspace())
+    existsSyncMock.mockImplementation(() => removeWorktreeMock.mock.calls.length === 0)
+    markWorktreePurgedMock.mockImplementationOnce(() => {
+      throw new Error('database is locked')
+    })
+
+    await expect(purgeWorktree('ws-1')).rejects.toThrow(/removed from disk.*database is locked/s)
+    expect(emitEphemeralMock).not.toHaveBeenCalledWith('ws-1', 'workspace:worktree-purged', expect.anything())
+  })
+
   it('never marks purged when the directory survived the removal', async () => {
     getWorkspaceMock.mockReturnValue(makeWorkspace())
     removeWorktreeMock.mockImplementation(() => {

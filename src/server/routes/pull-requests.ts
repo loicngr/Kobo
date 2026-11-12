@@ -6,6 +6,7 @@ import { resolveForge } from '../services/forge/resolve.js'
 import type { PullRequestFilter, PullRequestSummary } from '../services/forge/types.js'
 import * as prCheckout from '../services/pr-checkout-service.js'
 import { listWorkspaces } from '../services/workspace-service.js'
+import { isSafeGitRefName } from '../utils/git-ops.js'
 
 const app = new Hono()
 
@@ -95,6 +96,10 @@ app.post('/diagnose', async (c) => {
       cursor = page.nextCursor
     } while (!pr && cursor !== null)
     if (!pr) return c.json({ error: `Pull request #${prNumber} not found` }, 404)
+    // Forge-supplied names reach git as arguments: refuse only what git would misread or reject.
+    if (!isSafeGitRefName(pr.headBranch) || !isSafeGitRefName(pr.baseBranch)) {
+      return c.json({ error: `Pull request #${prNumber} uses a branch name Kōbō cannot check out` }, 422)
+    }
 
     const workspaces = listWorkspaces(true).filter(
       (workspace) => path.resolve(workspace.projectPath) === path.resolve(projectPath),
@@ -141,6 +146,9 @@ app.post('/resolve', workspaceCreationMaintenance, async (c) => {
       )
     if (!body.projectPath || !body.fingerprint) {
       return c.json({ error: 'Missing required fields: projectPath, fingerprint' }, 400)
+    }
+    if (!isSafeGitRefName(body.headBranch) || !isSafeGitRefName(body.baseBranch)) {
+      return c.json({ error: 'Invalid headBranch or baseBranch' }, 400)
     }
 
     const workspaces = listWorkspaces(true).filter(

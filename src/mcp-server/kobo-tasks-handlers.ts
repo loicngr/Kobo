@@ -652,7 +652,10 @@ export function getSessionUsageHandler(db: Database.Database, workspaceId: strin
   const currentSessionId = runningSession?.id ?? null
 
   const rows = db
-    .prepare("SELECT payload, session_id FROM ws_events WHERE workspace_id = ? AND type = 'agent:event'")
+    // Filter usage rows in SQL; CASE keeps json_extract away from invalid payloads.
+    .prepare(
+      "SELECT payload, session_id FROM ws_events WHERE workspace_id = ? AND type = 'agent:event' AND CASE WHEN json_valid(payload) THEN json_extract(payload, '$.kind') END = 'usage'",
+    )
     .all(workspaceId) as Array<{ payload: string; session_id: string | null }>
 
   const totals = { inputTokens: 0, outputTokens: 0, costUsd: 0 }

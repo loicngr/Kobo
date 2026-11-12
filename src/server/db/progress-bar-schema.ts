@@ -25,5 +25,6 @@ export function initProgressBarSchema(db: Database.Database): void {
     UNIQUE(workspace_id,session_id,owner_kind,owner_launch_id,activity_key)
   );
   CREATE INDEX IF NOT EXISTS idx_progress_bars_session ON session_progress_bars(workspace_id,session_id,created_at,id);
-  CREATE INDEX IF NOT EXISTS idx_progress_bars_launch ON session_progress_bars(owner_kind,owner_launch_id,status);`)
+  CREATE INDEX IF NOT EXISTS idx_progress_bars_launch ON session_progress_bars(owner_kind,owner_launch_id,status);
+  CREATE INDEX IF NOT EXISTS idx_progress_bars_session_id ON session_progress_bars(session_id);`)
 }

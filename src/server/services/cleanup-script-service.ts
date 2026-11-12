@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import { getDb } from '../db/index.js'
-import { worktreeHasChanges } from '../utils/git-ops.js'
+import { worktreeHasChangesStrict } from '../utils/git-ops.js'
 import { slugifyProjectName } from '../utils/project-slug.js'
 import { runScript, SCRIPT_TIMEOUT_MS, type ScriptEnv } from '../utils/script-runner.js'
 import { resolveWorkspaceWorktreePath } from '../utils/worktree-paths.js'
@@ -130,8 +130,9 @@ function trigger(
       return
     }
 
-    // Optional gate: only run when the worktree has uncommitted changes.
-    if (effective.cleanupScriptOnlyOnChanges && !worktreeHasChanges(worktreePath)) {
+    // Optional gate: only run when the worktree has uncommitted changes. Strict:
+    // an unreadable worktree lands in the catch below and is logged, not read as "clean".
+    if (effective.cleanupScriptOnlyOnChanges && !worktreeHasChangesStrict(worktreePath)) {
       return
     }
 

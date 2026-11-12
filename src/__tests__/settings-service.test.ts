@@ -3318,3 +3318,55 @@ it.each([undefined, false, true, 'true', 1])('migrates automatic Plan exit conse
   expect(migrated.global.autoExitPlanMode).toBe(value === true)
   expect(migrated.global.editorCommand).toBe('keep')
 })
+
+describe('audit remediation 2026-11', () => {
+  it.each([
+    { networkAccessEnabled: true, networkAccessBehindProxy: true },
+    { networkAccessEnabled: false, networkAccessBehindProxy: false },
+  ])('keeps the local network policy %j when a bundle carries the opposite flags', (local) => {
+    updateNetworkAccessSettings({ ...local, networkAccessToken: 'local-token' })
+    const bundle = exportConfigBundle([])
+    bundle.settings.global.networkAccessEnabled = !local.networkAccessEnabled
+    bundle.settings.global.networkAccessBehindProxy = !local.networkAccessBehindProxy
+    bundle.settings.global.editorCommand = 'imported-editor'
+
+    importConfigBundle(bundle)
+
+    expect(getGlobalSettings()).toMatchObject({ ...local, networkAccessToken: 'local-token' })
+    expect(getGlobalSettings().editorCommand).toBe('imported-editor')
+  })
+
+  it.each([
+    ['unparsable JSON', '{"global": '],
+    ['a non-object document', '42'],
+  ])('logs the cause and the backup path when settings.json holds %s', (_label, corrupt) => {
+    fs.writeFileSync(settingsPath, corrupt)
+    _setSettingsPath(settingsPath)
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      expect(getGlobalSettings()).toMatchObject({ networkAccessEnabled: false })
+      const backup = fs.readdirSync(tmpDir).find((name) => name.startsWith('settings.json.backup-'))
+      expect(backup).toBeDefined()
+      expect(fs.readFileSync(path.join(tmpDir, backup!), 'utf-8')).toBe(corrupt)
+      expect(error).toHaveBeenCalledOnce()
+      const message = String(error.mock.calls[0]?.[0])
+      expect(message).toContain(settingsPath)
+      expect(message).toContain(path.join(tmpDir, backup!))
+    } finally {
+      error.mockRestore()
+    }
+  })
+})
+
+it('stores default review instructions as a string and migrates older settings to an empty value', () => {
+  expect(getGlobalSettings().reviewDefaultInstructions).toBe('')
+  updateGlobalSettings({ reviewDefaultInstructions: 'Check migrations first' })
+  expect(getGlobalSettings().reviewDefaultInstructions).toBe('Check migrations first')
+  updateGlobalSettings({ reviewDefaultInstructions: 42 } as unknown as Partial<GlobalSettings>)
+  expect(getGlobalSettings().reviewDefaultInstructions).toBe('Check migrations first')
+
+  const migrated = runSettingsMigrations({ schemaVersion: 71, global: { editorCommand: 'keep' }, projects: [] })
+  expect(migrated.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
+  expect(migrated.global.reviewDefaultInstructions).toBe('')
+  expect(migrated.global.editorCommand).toBe('keep')
+})

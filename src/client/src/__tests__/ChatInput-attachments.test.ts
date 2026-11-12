@@ -640,3 +640,73 @@ it('removes unfinished attachment placeholders and cleans late uploads without c
   expect(wrapper.get('textarea').element.value.trim()).toBe('Keep my text')
   expect(wrapper.findAll('.attachment-tag')).toHaveLength(0)
 })
+
+async function pressPushToTalkWithPendingMicrophone() {
+  useSettingsStore().global.voiceEnabled = true
+  const stopTrack = vi.fn()
+  let grant: (stream: MediaStream) => void = () => {}
+  const getUserMedia = vi.fn(() => new Promise<MediaStream>((resolve) => (grant = resolve)))
+  vi.stubGlobal('navigator', { ...navigator, mediaDevices: { getUserMedia } })
+  const start = vi.fn()
+  const stopRecorder = vi.fn()
+  class FakeRecorder {
+    static isTypeSupported = () => true
+    start = start
+    stop = stopRecorder
+  }
+  vi.stubGlobal('MediaRecorder', FakeRecorder)
+  await setup()
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Alt' }))
+  return {
+    start,
+    stopRecorder,
+    stopTrack,
+    grant: async () => {
+      grant({ getTracks: () => [{ stop: stopTrack }] } as unknown as MediaStream)
+      await flushPromises()
+    },
+  }
+}
+
+it('does not start recording when push-to-talk is released before the microphone resolves', async () => {
+  const mic = await pressPushToTalkWithPendingMicrophone()
+  window.dispatchEvent(new KeyboardEvent('keyup', { key: 'Alt' }))
+  await mic.grant()
+
+  expect(mic.stopTrack).toHaveBeenCalledTimes(1)
+  expect(mic.start).not.toHaveBeenCalled()
+})
+
+it('starts recording when the permission prompt blurs the window before the microphone resolves', async () => {
+  const mic = await pressPushToTalkWithPendingMicrophone()
+  window.dispatchEvent(new Event('blur'))
+  document.dispatchEvent(new Event('visibilitychange'))
+  await mic.grant()
+
+  expect(mic.start).toHaveBeenCalledTimes(1)
+  expect(mic.stopTrack).not.toHaveBeenCalled()
+
+  // Once really recording, a blur stops it as before.
+  window.dispatchEvent(new Event('blur'))
+  expect(mic.stopRecorder).toHaveBeenCalledTimes(1)
+})
+
+it('does not start recording when the page is hidden once the microphone resolves', async () => {
+  const mic = await pressPushToTalkWithPendingMicrophone()
+  const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+  await mic.grant()
+  visibility.mockRestore()
+
+  expect(mic.stopTrack).toHaveBeenCalledTimes(1)
+  expect(mic.start).not.toHaveBeenCalled()
+})
+
+it('hides the microphone button while voice input is disabled in settings', async () => {
+  useSettingsStore().global.voiceEnabled = false
+  const { wrapper } = await setup()
+  expect(wrapper.find('[data-test="voice-button"]').exists()).toBe(false)
+
+  useSettingsStore().global.voiceEnabled = true
+  await flushPromises()
+  expect(wrapper.find('[data-test="voice-button"]').exists()).toBe(true)
+})

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
-import { getFileContent, writeFileInWorktree } from '../utils/git-ops.js'
+import { readFileSync } from 'node:fs'
+import { writeFileInWorktree } from '../utils/git-ops.js'
 import { resolvePathInside } from '../utils/safe-path.js'
 
 const MAX_FILE_BYTES = 1024 * 1024
@@ -25,11 +26,23 @@ export function saveWorkspaceFile(
   if (Buffer.byteLength(content, 'utf8') > MAX_FILE_BYTES) {
     throw new Error(`File too large (max ${MAX_FILE_BYTES / 1024 / 1024} MB)`)
   }
-  const current = getFileContent(worktreePath, relativePath) ?? ''
+  // Only a missing file counts as empty: an unreadable one must not be overwritten blind.
+  let current = ''
+  try {
+    const bytes = readFileSync(absPath)
+    current = bytes.toString('utf8')
+    // The editor only ever saw the UTF-8 view: saving it back would destroy anything that view lost.
+    if (bytes.includes(0) || !Buffer.from(current, 'utf8').equals(bytes))
+      throw new Error(`'${relativePath}' is not UTF-8 text; refusing to overwrite it`)
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+  }
   const currentSha = shaOf(current)
   if (currentSha !== baseSha) {
     return { status: 'conflict', currentSha }
   }
+  // In place, not temp + rename: keeps owner, hard links and mode, works in a read-only directory,
+  // and leaves no stray file for dev-server watchers.
   writeFileInWorktree(absPath, content)
   return { status: 'saved' }
 }

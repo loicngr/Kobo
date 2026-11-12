@@ -34,9 +34,15 @@ app.get('/', async (c) => {
   }
 
   const includeArchived = c.req.query('includeArchived') === 'true'
+  // Optional: restrict the ranking to one workspace before the limit applies.
+  const workspaceId = c.req.query('workspaceId')
 
   try {
-    const results = await searchEvents(q, { limit, includeArchived }, c.req.raw.signal)
+    const results = await searchEvents(
+      q,
+      { limit, includeArchived, ...(workspaceId ? { workspaceId } : {}) },
+      c.req.raw.signal,
+    )
     c.header('X-Kobo-Search-Partial', String(getSearchIndexStatus().state !== 'ready'))
     return c.json(results)
   } catch (err) {

@@ -146,6 +146,8 @@
       </q-btn>
 
       <q-btn
+        v-if="settingsStore.global.voiceEnabled"
+        data-test="voice-button"
         flat
         dense
         :icon="isTranscribing ? 'hourglass_top' : isRecording ? 'mic' : 'mic_none'"
@@ -435,7 +437,7 @@ const {
 function selectFile(file: string | undefined) {
   if (!file) return
   replaceMentionWith(file)
-  void nextTick(() => getChatInputEl()?.focus())
+  void nextTick().then(() => getChatInputEl()?.focus())
 }
 
 // Attachment state owns uploads and their cleanup independently of chat delivery.
@@ -520,7 +522,7 @@ function insertTextAtCaret(text: string) {
   const before = message.value.slice(0, caret)
   const after = message.value.slice(caret)
   message.value = before + text + after
-  nextTick(() => {
+  nextTick().then(() => {
     if (el) {
       const newPos = caret + text.length
       el.focus()
@@ -620,7 +622,7 @@ watch(
 )
 
 watch([() => props.workspaceId, () => store.selectedSessionId], () => {
-  if (isRecording.value) void stopVoiceCapture()
+  void stopVoiceCapture()
 })
 
 // Reconcile removed attachment references after updating autocomplete.
@@ -651,7 +653,7 @@ onUnmounted(() => {
     clearTimeout(recordTimeoutRef.value)
     recordTimeoutRef.value = null
   }
-  if (isRecording.value) void stopVoiceCapture()
+  void stopVoiceCapture()
 })
 
 function selectDropdownItem(item: SlashDropdownItem | undefined) {
@@ -1018,14 +1020,25 @@ async function sendMessageNow() {
   }
 }
 
+let voiceStartPending = false
+
 async function startVoiceCapture() {
-  if (!voiceEnabled.value || isRecording.value || isTranscribing.value) return
+  if (!voiceEnabled.value || isRecording.value || isTranscribing.value || voiceStartPending) return
   if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
     $q.notify({ type: 'warning', message: t('voice.notSupported'), position: 'top', timeout: 4000 })
     return
   }
   try {
+    voiceStartPending = true
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    // Released (or unmounted) while the permission prompt was open, or the page
+    // is hidden so the release can no longer be observed: do not record.
+    if (!voiceStartPending || document.visibilityState !== 'visible') {
+      voiceStartPending = false
+      for (const track of stream.getTracks()) track.stop()
+      return
+    }
+    voiceStartPending = false
     mediaStreamRef.value = stream
     chunksRef.value = []
     const mimeType = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : ''
@@ -1041,11 +1054,13 @@ async function startVoiceCapture() {
       $q.notify({ type: 'info', message: t('voice.maxDurationReached'), position: 'top', timeout: 3500 })
     }, MAX_RECORDING_MS)
   } catch {
+    voiceStartPending = false
     $q.notify({ type: 'negative', message: t('voice.errorMicPermission'), position: 'top', timeout: 0 })
   }
 }
 
 async function stopVoiceCapture() {
+  voiceStartPending = false
   if (!isRecording.value) return
   const recorder = mediaRecorderRef.value
   if (!recorder) return
@@ -1120,6 +1135,8 @@ function onWindowKeyUp(event: KeyboardEvent) {
   void stopVoiceCapture()
 }
 
+// The browser's permission prompt blurs the window: only a real recording is
+// stopped here, a start still waiting for the microphone is left alone.
 function onWindowBlur() {
   if (isRecording.value) void stopVoiceCapture()
 }
@@ -1143,7 +1160,7 @@ function onKeydown(event: KeyboardEvent) {
     const start = textarea?.selectionStart ?? message.value.length
     const end = textarea?.selectionEnd ?? start
     message.value = `${message.value.slice(0, start)}\n${message.value.slice(end)}`
-    nextTick(() => textarea?.setSelectionRange(start + 1, start + 1))
+    nextTick().then(() => textarea?.setSelectionRange(start + 1, start + 1))
     return
   }
 

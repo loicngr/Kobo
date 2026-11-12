@@ -168,6 +168,29 @@ describe('Vibe runtime ownership', () => {
     expect(log.mock.calls.flat().join(' ')).not.toContain('secret-token')
   })
 
+  it('retries an unconfirmed stop and reports a later confirmed exit', async () => {
+    vi.useFakeTimers()
+    const child = fakeChild()
+    mocks.spawn.mockReturnValue(child)
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    // Signals find no group (ESRCH) so the exit stays a normal one.
+    vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw Object.assign(new Error('gone'), { code: 'ESRCH' })
+    })
+    const runtime = spawnVibeAcp({ cwd: '/tmp', env: {} })
+    const first = runtime.stop()
+    const firstOutcome = expect(first).rejects.toThrow('shutdown unconfirmed')
+    await vi.advanceTimersByTimeAsync(25_000)
+    await firstOutcome
+
+    const second = runtime.stop()
+    expect(second).not.toBe(first)
+    child.emit('close', 0, null)
+    await vi.advanceTimersByTimeAsync(0)
+    await expect(second).resolves.toBeUndefined()
+    await expect(runtime.stop()).resolves.toBeUndefined()
+  })
+
   it('does not release ownership after abnormal native exit', async () => {
     const child = fakeChild()
     mocks.spawn.mockReturnValue(child)

@@ -21,6 +21,7 @@ export function initSearchSchema(db: Database.Database): void {
       event_order INTEGER NOT NULL, text TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_search_fragments_message ON search_fragments(message_key, event_order);
+    CREATE INDEX IF NOT EXISTS idx_search_fragments_workspace_id ON search_fragments(workspace_id);
     CREATE TABLE IF NOT EXISTS search_messages (
       id INTEGER PRIMARY KEY, message_key TEXT NOT NULL UNIQUE,
       workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,

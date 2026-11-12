@@ -122,6 +122,7 @@ interface GlobalSettings {
   agentWatchdogEnabled: boolean
   forceImmediateMessages: boolean
   autoExitPlanMode?: boolean
+  reviewDefaultInstructions?: string
   showProgressBars: boolean
   serializeDevServerStarts: boolean
   maxRunningDevServers: number
@@ -278,6 +279,7 @@ export const useSettingsStore = defineStore('settings', {
       agentWatchdogEnabled: false,
       forceImmediateMessages: false,
       autoExitPlanMode: false,
+      reviewDefaultInstructions: '',
       showProgressBars: true,
       serializeDevServerStarts: true,
       maxRunningDevServers: 0,

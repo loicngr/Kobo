@@ -102,6 +102,14 @@ export function createMistralVibeEngine(): AgentEngine {
             message: 'Mistral Vibe stopped reporting foreground activity for this turn.',
           }),
       })
+      // A throwing handler must neither skip shutdown() nor escape as an uncaught exception.
+      const deliver = (event: AgentEvent) => {
+        try {
+          onEvent(event)
+        } catch (err) {
+          console.error('[mistral-vibe] onEvent handler threw:', err)
+        }
+      }
       const emit = (event: AgentEvent) => {
         if (ended) return
         if (
@@ -120,18 +128,22 @@ export function createMistralVibeEngine(): AgentEngine {
           // Typed native notices may include provider details; expose fixed actionable diagnostics.
           if (!event.code && event.category !== 'parse_error') event = diagnostic(new Error(event.message), 'prompt')
         }
-        onEvent(event)
+        deliver(event)
       }
       const mapper = createMistralEventMapper(randomUUID(), emit)
       let requests: ReturnType<typeof createMistralServerRequests> | undefined
       const shutdown = (): Promise<void> => {
         if (!shutdownPromise) {
-          shutdownPromise = runtime.stop(
+          const attempt = runtime.stop(
             connection && sessionId
               ? () => closeVibeAcpSession(connection!, { sessionId: sessionId!, active, canClose })
               : undefined,
           )
-          void shutdownPromise.catch(() => {})
+          shutdownPromise = attempt
+          // A rejected stop is not cached: the next call asks the runtime again.
+          void attempt.catch(() => {
+            if (shutdownPromise === attempt) shutdownPromise = undefined
+          })
         }
         return shutdownPromise
       }
@@ -150,8 +162,8 @@ export function createMistralVibeEngine(): AgentEngine {
         )
         ready.reject(failure)
         accepted.reject(failure)
-        if (reason === 'completed') onEvent({ kind: 'turn:completed' })
-        onEvent({ kind: 'session:ended', reason, exitCode: reason === 'completed' ? 0 : null })
+        if (reason === 'completed') deliver({ kind: 'turn:completed' })
+        deliver({ kind: 'session:ended', reason, exitCode: reason === 'completed' ? 0 : null })
         void shutdown()
       }
       const onClose = () => {

@@ -61,6 +61,44 @@ describe('orchestrator — ScheduleWakeup detection in handleEvent', () => {
     }
   })
 
+  it('forces a due wakeup into a session that is still working', async () => {
+    const orch = await import('../server/services/agent/orchestrator.js')
+    const ws = await import('../server/services/websocket-service.js')
+    const sendMessage = vi.fn(async () => {})
+    const assertImmediateMessageSupported = vi.fn()
+    const controller = {
+      agentSessionId: 'session-1',
+      status: 'running',
+      engineProcess: { sendWakeupIfWaiting: vi.fn(() => false) },
+      assertImmediateMessageSupported,
+      sendMessage,
+    }
+    orch._getControllers().set(wsId, controller as unknown as SessionController)
+    try {
+      await expect(orch.deliverWakeupToActiveSession(wsId, 'check logs', 'other-session')).resolves.toBe(false)
+      expect(sendMessage).not.toHaveBeenCalled()
+
+      await expect(orch.deliverWakeupToActiveSession(wsId, 'check logs', 'session-1')).resolves.toBe(true)
+      expect(sendMessage).toHaveBeenCalledWith('check logs')
+      expect(ws.emit).toHaveBeenCalledWith(
+        wsId,
+        'user:message',
+        { content: 'check logs', sender: 'system-prompt' },
+        'session-1',
+      )
+
+      // An engine without live steering keeps the wakeup for later.
+      sendMessage.mockClear()
+      assertImmediateMessageSupported.mockImplementation(() => {
+        throw new Error('live message delivery is unsupported')
+      })
+      await expect(orch.deliverWakeupToActiveSession(wsId, 'check logs', 'session-1')).resolves.toBe(false)
+      expect(sendMessage).not.toHaveBeenCalled()
+    } finally {
+      orch._getControllers().delete(wsId)
+    }
+  })
+
   it('delivers a wakeup only to its matching, running controller', async () => {
     const orch = await import('../server/services/agent/orchestrator.js')
     const ws = await import('../server/services/websocket-service.js')

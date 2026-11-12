@@ -184,6 +184,19 @@ describe('POST /api/dev-server/:workspaceId/start', () => {
     const res = await app.request('/api/dev-server/ws-1/start', { method: 'POST' })
     expect(res.status).toBe(409)
   })
+
+  it.each([
+    "Workspace 'ws-1' is archived",
+    "Workspace 'ws-1' worktree has been purged",
+    "Workspace 'ws-1' worktree is missing on disk",
+  ])('returns 409 when the worktree is unavailable: %s', async (message) => {
+    vi.mocked(getWorkspace).mockReturnValue({ id: 'ws-1' } as never)
+    vi.mocked(devServerService.startDevServer).mockImplementation(() => {
+      throw new Error(message)
+    })
+    const res = await app.request('/api/dev-server/ws-1/start', { method: 'POST' })
+    expect(res.status).toBe(409)
+  })
 })
 
 describe('POST /api/dev-server/:workspaceId/stop', () => {

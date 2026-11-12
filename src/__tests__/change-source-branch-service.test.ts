@@ -20,14 +20,18 @@ vi.mock('../server/services/agent/orchestrator.js', () => ({
 vi.mock('../server/services/forge/resolve.js', () => ({ resolveForge: vi.fn(() => 'none') }))
 // Configurable per-test (mirror of the agentStatusMock pattern).
 const getPrStatusMock = vi.fn(async (): Promise<{ number: number; url: string; state: string } | null> => null)
+const forgeCapabilities = { canChangePrBase: false }
+const changePrBaseMock = vi.fn(async () => {})
 vi.mock('../server/services/forge/registry.js', () => ({
   getForgeProvider: () => ({
     id: 'none',
-    capabilities: { canChangePrBase: false },
+    capabilities: forgeCapabilities,
     getPrStatus: () => getPrStatusMock(),
-    changePrBase: vi.fn(),
+    changePrBase: () => changePrBaseMock(),
   }),
 }))
+const knownPrSnapshots: Record<string, { state: string }> = {}
+vi.mock('../server/services/pr-watcher-service.js', () => ({ getAllPrSnapshots: () => knownPrSnapshots }))
 
 const getEffectiveSettingsMock = vi.fn((_projectPath: string) => ({ changeSourceBranchScript: '' }))
 vi.mock('../server/services/settings-service.js', () => ({
@@ -103,6 +107,10 @@ beforeEach(() => {
   spawnMock.mockReset()
   getPrStatusMock.mockReset()
   getPrStatusMock.mockResolvedValue(null)
+  forgeCapabilities.canChangePrBase = false
+  changePrBaseMock.mockReset()
+  changePrBaseMock.mockResolvedValue(undefined)
+  delete knownPrSnapshots.w1
   getEffectiveSettingsMock.mockReset()
   getEffectiveSettingsMock.mockReturnValue({ changeSourceBranchScript: '' })
   bare = mkdtempSync(join(tmpdir(), 'kobo-csb-bare-'))
@@ -817,4 +825,63 @@ it('escalates a timed-out script to SIGKILL before releasing its operation', asy
     vi.restoreAllMocks()
     vi.useRealTimers()
   }
+})
+
+describe('changeSourceBranch PR base update warnings', () => {
+  beforeEach(() => {
+    forgeCapabilities.canChangePrBase = true
+    g(repo, ['checkout', '-q', '-b', 'feature'])
+    writeFileSync(join(repo, 'feat.txt'), 'feat\n')
+    g(repo, ['add', '.'])
+    g(repo, ['commit', '-q', '-m', 'F1'])
+    getWorkspaceMock.mockReturnValue({
+      id: 'w1',
+      sourceBranch: 'main',
+      workingBranch: 'feature',
+      worktreePath: repo,
+      projectPath: repo,
+    })
+  })
+
+  it('stays silent when the PR base is updated, or when no PR is known', async () => {
+    getPrStatusMock.mockResolvedValueOnce({ number: 42, url: 'https://example.com/pr/42', state: 'OPEN' })
+    const res = await changeSourceBranch('w1', 'develop')
+    expect(res.status).toBe('done')
+    expect(changePrBaseMock).toHaveBeenCalledOnce()
+    expect(res.warnings).toBeUndefined()
+
+    // Back to main with no PR at all: a null lookup is not a failure.
+    getWorkspaceMock.mockReturnValue({
+      id: 'w1',
+      sourceBranch: 'develop',
+      workingBranch: 'feature',
+      worktreePath: repo,
+      projectPath: repo,
+    })
+    expect((await changeSourceBranch('w1', 'main')).warnings).toBeUndefined()
+  })
+
+  it('warns when the forge refuses the PR base update', async () => {
+    getPrStatusMock.mockResolvedValueOnce({ number: 42, url: 'https://example.com/pr/42', state: 'OPEN' })
+    changePrBaseMock.mockRejectedValueOnce(new Error('GraphQL: base branch was not found'))
+    const res = await changeSourceBranch('w1', 'develop')
+    expect(res.status).toBe('done')
+    expect(updateSourceMock).toHaveBeenCalledWith('w1', 'develop')
+    expect(res.warnings).toEqual([expect.stringMatching(/PR base.*develop.*base branch was not found/)])
+  })
+
+  it('warns when the PR lookup throws', async () => {
+    getPrStatusMock.mockRejectedValueOnce(new Error('gh: command not found'))
+    const res = await changeSourceBranch('w1', 'develop')
+    expect(res.status).toBe('done')
+    expect(res.warnings).toEqual([expect.stringMatching(/PR base.*develop.*gh: command not found/)])
+  })
+
+  it('warns when the lookup finds nothing although the watcher knows an open PR', async () => {
+    knownPrSnapshots.w1 = { state: 'OPEN' }
+    const res = await changeSourceBranch('w1', 'develop')
+    expect(res.status).toBe('done')
+    expect(changePrBaseMock).not.toHaveBeenCalled()
+    expect(res.warnings).toEqual([expect.stringMatching(/PR base.*develop/)])
+  })
 })

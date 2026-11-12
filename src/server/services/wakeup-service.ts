@@ -263,17 +263,31 @@ function fire(workspaceId: string): void {
       // Claude can keep the stream open after a result while a background
       // task runs. Waiting for that controller to disappear deadlocks a
       // scheduled check on the very work it is meant to inspect.
-      try {
-        if (orchestrator.sendWakeupIfWaiting(workspaceId, row.prompt, row.agent_session_id ?? undefined)) {
+      // A session that is still working receives the prompt like a forced
+      // chat message. Delivery is asynchronous: the row is only removed once
+      // the engine accepted it, and only if it was not replaced meanwhile.
+      const stillThisWakeup = () =>
+        !suspended &&
+        !timers.has(workspaceId) &&
+        !!getDb()
+          .prepare('SELECT 1 FROM pending_wakeups WHERE workspace_id = ? AND created_at = ?')
+          .get(workspaceId, row.created_at)
+      orchestrator
+        .deliverWakeupToActiveSession(workspaceId, row.prompt, row.agent_session_id ?? undefined)
+        .catch((err) => {
+          console.error(`[wakeup-service] delivery to active session failed for '${workspaceId}':`, err)
+          return false
+        })
+        .then((delivered) => {
+          if (!stillThisWakeup()) return
+          if (!delivered) return defer(workspaceId, row)
           failedRetries.delete(workspaceId)
-          db.prepare('DELETE FROM pending_wakeups WHERE workspace_id = ?').run(workspaceId)
+          getDb()
+            .prepare('DELETE FROM pending_wakeups WHERE workspace_id = ? AND created_at = ?')
+            .run(workspaceId, row.created_at)
           emitEphemeral(workspaceId, 'wakeup:fired', {})
-          return
-        }
-      } catch (err) {
-        console.error(`[wakeup-service] delivery to active session failed for '${workspaceId}':`, err)
-      }
-      defer(workspaceId, row)
+        })
+        .catch((err) => console.error('[wakeup-service] fire failed:', err))
       return
     }
 

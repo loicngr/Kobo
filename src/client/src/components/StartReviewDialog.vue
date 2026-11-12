@@ -209,7 +209,12 @@ watch(
   ([open]) => {
     if (!open) return
     const saved = scheduled.value ? props.scheduledConfiguration : null
-    additionalInstructions.value = saved?.additionalInstructions ?? ''
+    // A scheduled review reopens with its own saved text; a manual one starts from the global default.
+    additionalInstructions.value = saved
+      ? (saved.additionalInstructions ?? '')
+      : scheduled.value
+        ? ''
+        : (settings.global.reviewDefaultInstructions ?? '')
     requestedNewSession.value = false
     returnToSession.value = scheduled.value
     if (props.workspace) {

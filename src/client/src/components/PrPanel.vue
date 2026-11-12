@@ -205,7 +205,14 @@ function reviewerColor(state: PrSnapshot['reviewers'][number]['state']): string 
   }
 }
 
-const ciGroups = computed(() => summarizeCiChecks(props.snapshot.ci.checks))
+// Forge-supplied URLs end up in href: only http(s) may be linked.
+const ciGroups = computed(() =>
+  summarizeCiChecks(
+    props.snapshot.ci.checks.map((c) =>
+      c.detailsUrl && !/^https?:\/\//i.test(c.detailsUrl) ? { ...c, detailsUrl: null } : c,
+    ),
+  ),
+)
 
 const ciIcon = computed(() => {
   switch (props.snapshot.ci.rollup) {

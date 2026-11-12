@@ -521,8 +521,11 @@ function mapSdkMessagePayload(msg: SDKMessage, state: MapperState): AgentEvent[]
     // through this normal iterator path. That is a clean stop, not a
     // failure — skip the error event so the UI shows no red banner and the
     // workspace is not pushed into `error`.
-    const isInterruptedStop = state.userInterrupted && subtype === 'error_during_execution'
-    if (isErrorResultSubtype(subtype) && !isInterruptedStop) {
+    // The SDK also reports a turn that ended on an API error as
+    // `subtype: 'success'` + `is_error: true`, with the error text in `result`.
+    const isApiErrorResult = subtype === 'success' && parsed.is_error === true
+    const isInterruptedStop = state.userInterrupted && (subtype === 'error_during_execution' || isApiErrorResult)
+    if ((isErrorResultSubtype(subtype) || isApiErrorResult) && !isInterruptedStop) {
       state.sawErrorResult = true
       const detail =
         (typeof parsed.error === 'string' && parsed.error) || (typeof parsed.result === 'string' && parsed.result) || ''

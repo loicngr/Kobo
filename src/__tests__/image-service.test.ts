@@ -35,6 +35,26 @@ describe('image-service', () => {
       }
     })
 
+    it.each(['{not json', '{"uid":"not-an-array"}'])(
+      'keeps a copy of an unreadable index (%s) before rewriting it',
+      async (corrupt) => {
+        const images = path.join(tmpDir, '.ai/images')
+        fs.mkdirSync(images, { recursive: true })
+        fs.writeFileSync(path.join(images, 'index.json'), corrupt)
+        const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+        try {
+          const saved = await saveImage(tmpDir, Buffer.from('image'), 'a.png')
+          const backups = fs.readdirSync(images).filter((name) => name.startsWith('index.corrupt-'))
+          expect(backups).toHaveLength(1)
+          expect(fs.readFileSync(path.join(images, backups[0]!), 'utf-8')).toBe(corrupt)
+          const index = JSON.parse(fs.readFileSync(path.join(images, 'index.json'), 'utf-8'))
+          expect(index.map((entry: { uid: string }) => entry.uid)).toEqual([saved.uid])
+        } finally {
+          error.mockRestore()
+        }
+      },
+    )
+
     it('does not follow a pre-existing temporary index symlink', async () => {
       const images = path.join(tmpDir, '.ai/images')
       fs.mkdirSync(images, { recursive: true })

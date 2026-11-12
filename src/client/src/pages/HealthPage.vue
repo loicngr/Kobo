@@ -2,7 +2,7 @@
   <q-page class="q-pa-md" style="max-width: 900px; margin: 0 auto;">
     <div class="row items-center q-mb-md">
       <DrawerToggleButton class="q-mr-xs" />
-      <q-btn flat dense round icon="arrow_back" @click="router.back()" />
+      <q-btn flat dense round icon="arrow_back" :aria-label="$t('common.back')" @click="router.back()" />
       <div class="text-h6 q-ml-sm">{{ $t('health.title') }}</div>
       <q-space />
       <q-btn flat dense icon="refresh" :loading="loading" :label="$t('common.refresh')" @click="refresh" />

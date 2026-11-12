@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { nanoid } from 'nanoid'
@@ -532,7 +533,9 @@ export function submitSessionHandoff(
     runtime.cancelled ||
     typeof token !== 'string' ||
     !token ||
-    token !== row.generation_token
+    !row.generation_token ||
+    Buffer.byteLength(token) !== Buffer.byteLength(row.generation_token) ||
+    !timingSafeEqual(Buffer.from(token), Buffer.from(row.generation_token))
   )
     throw new SessionHandoffError('This handoff generation is no longer active')
   if (typeof report !== 'string' || !report.trim() || report.length > HANDOFF_REPORT_MAX_CHARS)
@@ -579,6 +582,15 @@ export function reconcileSessionHandoffs(): void {
     .all() as HandoffRow[]
   for (const row of rows) {
     getDb().prepare('UPDATE session_handoffs SET generation_token = NULL WHERE id = ?').run(row.id)
+    try {
+      map(row)
+    } catch (error) {
+      // Neither configuration can be restored or retried: close the transfer
+      // without reserving the workspace rather than failing to boot.
+      console.error(`[session-handoff] Cancelling unreadable transfer '${row.id}' at startup:`, error)
+      persistState(row.id, 'cancelled', 'Stored transfer configuration is unreadable; the transfer was cancelled.')
+      continue
+    }
     restoreSource(row)
     state(
       row.id,

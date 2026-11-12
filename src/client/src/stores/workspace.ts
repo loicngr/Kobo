@@ -510,8 +510,6 @@ export const useWorkspaceStore = defineStore('workspace', {
     // archived load from clearing a banner it has no authority over:
     // `retryLoadWorkspaces` runs both loaders back to back.
     activeListLoadFailed: false,
-    loadingOlderEvents: false,
-    hasMoreEvents: {} as Record<string, boolean>,
     providerUsage: {} as Record<ProviderId, UsageSnapshot | undefined>,
     chatDraft: '',
     chatComposerDrafts: {} as Record<string, { text: string; attachments: PendingAttachment[] }>,
@@ -661,7 +659,6 @@ export const useWorkspaceStore = defineStore('workspace', {
       delete this.activityCounts[id]
       delete this.subagents[id]
       delete this.agentTodos[id]
-      delete this.hasMoreEvents[id]
       delete this.gitStatsCache[id]
       useParallelReviewStore().forget(id)
       delete this.pendingWakeups[id]
@@ -1668,50 +1665,6 @@ export const useWorkspaceStore = defineStore('workspace', {
       }
     },
 
-    async fetchOlderEvents(workspaceId: string): Promise<boolean> {
-      if (this.loadingOlderEvents) return false
-      if (this.hasMoreEvents[workspaceId] === false) return false
-
-      const feed = this.activityFeeds[workspaceId]
-      if (!feed?.length) return false
-
-      const oldestId = feed[0].id
-      this.loadingOlderEvents = true
-      try {
-        const res = await apiFetchResponse(
-          `/api/workspaces/${workspaceId}/events?before=${encodeURIComponent(oldestId)}&limit=100`,
-        )
-        if (!res.ok) throw await apiResponseError(res)
-        const data = (await res.json()) as {
-          events: Array<{
-            id: string
-            workspaceId: string
-            type: string
-            payload: Record<string, unknown>
-            createdAt: string
-          }>
-          hasMore: boolean
-        }
-
-        this.hasMoreEvents[workspaceId] = data.hasMore
-
-        if (data.events.length > 0) {
-          // Route each event through the websocket store to parse and add properly
-          const wsStore = useWebSocketStore()
-          for (const evt of data.events) {
-            wsStore._routeMessage(evt)
-          }
-        }
-
-        return data.events.length > 0
-      } catch (err) {
-        console.error('[workspace store] fetchOlderEvents failed:', err)
-        return false
-      } finally {
-        this.loadingOlderEvents = false
-      }
-    },
-
     selectSession(id: string | null) {
       this.selectedSessionId = id
       if (this.selectedWorkspaceId) {
@@ -2242,17 +2195,19 @@ export const useWorkspaceStore = defineStore('workspace', {
       // same a moment later, but clearing now gives instant feedback. If the
       // DELETE fails (network, 500, etc.), re-fetch to restore the truth so
       // the banner doesn't lie about what the backend will actually do.
-      const hadPending = this.pendingWakeups[workspaceId] !== undefined
+      const previous = this.pendingWakeups[workspaceId]
       delete this.pendingWakeups[workspaceId]
       try {
         await apiFetchOk(`/api/workspaces/${workspaceId}/pending-wakeup`, { method: 'DELETE' })
       } catch (err) {
         console.error('[workspace-store] cancelPendingWakeup failed:', err)
-        if (hadPending) {
-          // Reconcile with backend — may restore the banner if the server
-          // still has the row, or confirm the clear if it was already gone.
+        if (previous) {
+          // Unconfirmed: the wakeup may still fire, so the banner comes back.
+          // The re-fetch then drops it only if the server says it is gone.
+          this.pendingWakeups[workspaceId] = previous
           await this.fetchPendingWakeup(workspaceId)
         }
+        throw err
       }
     },
 
@@ -2291,13 +2246,17 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
 
     async cancelQuotaBackoff(workspaceId: string): Promise<void> {
-      const had = this.pendingQuotaBackoffs[workspaceId] !== undefined
+      const previous = this.pendingQuotaBackoffs[workspaceId]
       delete this.pendingQuotaBackoffs[workspaceId]
       try {
         await apiFetchOk(`/api/workspaces/${workspaceId}/quota-backoff`, { method: 'DELETE' })
       } catch (err) {
         console.error('[workspace-store] cancelQuotaBackoff failed:', err)
-        if (had) await this.fetchPendingQuotaBackoff(workspaceId)
+        if (previous) {
+          this.pendingQuotaBackoffs[workspaceId] = previous
+          await this.fetchPendingQuotaBackoff(workspaceId)
+        }
+        throw err
       }
     },
 

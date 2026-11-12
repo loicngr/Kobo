@@ -8,7 +8,7 @@
         <q-icon name="auto_awesome" size="sm" color="primary" class="q-mr-sm" />
         <div class="text-h6">{{ $t('whatsNew.title') }}</div>
         <q-space />
-        <q-btn v-close-popup flat dense round icon="close" color="kobo-2" />
+        <q-btn v-close-popup flat dense round icon="close" color="kobo-2" :aria-label="$t('common.close')" />
       </q-card-section>
 
       <q-card-section style="max-height: 60vh; overflow-y: auto;">

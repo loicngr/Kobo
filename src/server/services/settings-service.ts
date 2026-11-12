@@ -329,6 +329,8 @@ export interface GlobalSettings {
   agentWatchdogEnabled: boolean
   forceImmediateMessages: boolean
   autoExitPlanMode?: boolean
+  /** Prefills "Additional instructions" each time the manual review dialog opens. */
+  reviewDefaultInstructions?: string
   showProgressBars: boolean
   stopDevServersOnShutdown: boolean
   serializeDevServerStarts: boolean
@@ -1398,6 +1400,13 @@ const settingsMigrations: SettingsMigration[] = [
       global.autoExitPlanMode = global.autoExitPlanMode === true
     },
   },
+  {
+    version: 72,
+    name: 'review-default-instructions',
+    migrate: ({ global }) => {
+      if (typeof global.reviewDefaultInstructions !== 'string') global.reviewDefaultInstructions = ''
+    },
+  },
 ]
 
 /** Current settings schema version — always equals the highest migration version. */
@@ -1492,6 +1501,7 @@ function defaultSettings(): Settings {
       agentWatchdogEnabled: false,
       forceImmediateMessages: false,
       autoExitPlanMode: false,
+      reviewDefaultInstructions: '',
       showProgressBars: true,
       stopDevServersOnShutdown: true,
       serializeDevServerStarts: true,
@@ -1731,16 +1741,19 @@ function readSettingsFromDisk(): Settings {
 
   const raw = fs.readFileSync(settingsFilePath, 'utf-8')
   let parsed: unknown
+  let corruption: string | undefined
   try {
     parsed = JSON.parse(raw)
-  } catch {
-    createSettingsBackupIfPresent()
-    const defaults = defaultSettings()
-    writeSettings(defaults)
-    return defaults
+    if (!parsed || typeof parsed !== 'object') corruption = 'the document is not a JSON object'
+  } catch (err) {
+    corruption = err instanceof Error ? err.message : String(err)
   }
-  if (!parsed || typeof parsed !== 'object') {
-    createSettingsBackupIfPresent()
+  if (corruption) {
+    const backupPath = createSettingsBackupIfPresent()
+    // Every custom setting just disappeared from the running instance: say why and where it went.
+    console.error(
+      `[settings] ${settingsFilePath} is unreadable (${corruption}); replaced with defaults, previous content saved to ${backupPath}`,
+    )
     const defaults = defaultSettings()
     writeSettings(defaults)
     return defaults
@@ -1812,8 +1825,8 @@ function pruneSettingsBackups(dir: string): void {
   }
 }
 
-function createSettingsBackupIfPresent(): void {
-  if (!fs.existsSync(settingsFilePath)) return
+function createSettingsBackupIfPresent(): string | undefined {
+  if (!fs.existsSync(settingsFilePath)) return undefined
 
   const dir = path.dirname(settingsFilePath)
   const stamp = new Date().toISOString().replace(/[:.]/g, '-')
@@ -1821,6 +1834,7 @@ function createSettingsBackupIfPresent(): void {
   const backupPath = path.join(dir, `settings.json.backup-${stamp}-${settingsBackupSequence}`)
   fs.writeFileSync(backupPath, fs.readFileSync(settingsFilePath), { mode: 0o600, flag: 'wx' })
   pruneSettingsBackups(dir)
+  return backupPath
 }
 
 function writeSettings(settings: Settings, options?: { backup?: boolean }): void {
@@ -1928,6 +1942,9 @@ export function importConfigBundle(bundle: ConfigBundle): void {
   for (const key of SECRET_GLOBAL_KEYS) {
     migrated.global[key] = current.global[key]
   }
+  // Same for the network policy: a bundle must not open (or lock) this instance. See updateNetworkAccessSettings.
+  migrated.global.networkAccessEnabled = current.global.networkAccessEnabled
+  migrated.global.networkAccessBehindProxy = current.global.networkAccessBehindProxy
   pruneWorkspaceTemplateTags(migrated.global.tags)
   writeSettings(migrated, { backup: true })
 }
@@ -2084,6 +2101,9 @@ export function updateGlobalSettings(input: Partial<GlobalSettings>): GlobalSett
   if ('forceImmediateMessages' in data && typeof data.forceImmediateMessages !== 'boolean') {
     delete (data as Record<string, unknown>).forceImmediateMessages
   }
+  if ('reviewDefaultInstructions' in data && typeof data.reviewDefaultInstructions !== 'string') {
+    delete (data as Record<string, unknown>).reviewDefaultInstructions
+  }
   if ('autoExitPlanMode' in data && typeof data.autoExitPlanMode !== 'boolean') {
     delete (data as Record<string, unknown>).autoExitPlanMode
   }
@@ -2160,6 +2180,7 @@ export function updateGlobalSettings(input: Partial<GlobalSettings>): GlobalSett
     'agentWatchdogEnabled',
     'forceImmediateMessages',
     'autoExitPlanMode',
+    'reviewDefaultInstructions',
     'showProgressBars',
     'stopDevServersOnShutdown',
     'serializeDevServerStarts',

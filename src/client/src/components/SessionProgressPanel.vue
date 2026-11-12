@@ -137,7 +137,7 @@ watch(
     const removedOverflow = active.dataset.action === 'overflow' && !current.hasOverflow
     if (!removedDismiss && !removedOverflow) return
     const index = focusedId ? previous.ids.indexOf(focusedId) : previous.ids.length - 1
-    void nextTick(() => {
+    void nextTick().then(() => {
       // A user may have focused another control while this render was pending.
       if (document.activeElement !== active && document.activeElement !== document.body) return
       const buttons = panelRef.value?.querySelectorAll<HTMLButtonElement>('[data-dismiss]')

@@ -91,12 +91,11 @@
 </template>
 
 <script setup lang="ts">
-import DOMPurify from 'dompurify'
-import { marked } from 'marked'
 import { useQuasar } from 'quasar'
 import { type DocumentFile, useDocumentsStore } from 'src/stores/documents'
 import type { Workspace } from 'src/stores/workspace'
 import { buildPathTree } from 'src/utils/build-path-tree'
+import { renderChatMarkdown } from 'src/utils/render-chat-markdown'
 import { computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
@@ -114,8 +113,7 @@ const selectedPath = computed(() => store.selected?.path ?? null)
 
 const renderedMarkdown = computed(() => {
   if (!store.selected) return ''
-  const html = marked.parse(store.selected.content, { async: false, breaks: true, gfm: true }) as string
-  return DOMPurify.sanitize(html)
+  return renderChatMarkdown(store.selected.content)
 })
 
 async function refresh() {

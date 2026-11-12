@@ -79,6 +79,16 @@ export class SessionController {
     private readonly onEvent: (ev: AgentEvent) => void,
   ) {}
 
+  /**
+   * A launch abandoned before `start()` has no runtime whose closure could be
+   * awaited. Confirm it so terminal handling waiting on `closed` can finish.
+   */
+  abandonUnstarted(): void {
+    if (this._startPromise || this._isClosed) return
+    this._stopRequested = true
+    this.confirmClosed()
+  }
+
   async start(options: StartOptions): Promise<void> {
     if (this._startPromise) throw new Error('SessionController already started')
     this._startPromise = this.startEngine(options)

@@ -547,6 +547,7 @@ To select a version or build without interruption:
 ```bash
 ./kobo-update 2.1.16 --prepare  # example version; build and smoke-test only
 ./kobo-update 2.1.16           # deploy that version, or do nothing if already installed
+./kobo-update --skip-backup    # deploy without the kobo.tar.gz backup (see below)
 ```
 
 From another directory, pass `--directory /opt/kobo`. From your PC, for example:
@@ -617,6 +618,18 @@ data. It retains paths relative to `/root`. Settings can contain credentials;
 keep the archive private. `state.json` records the backup scope and archive name.
 A prepared-only build does not create a backup. No old images, backups or
 volumes are automatically removed; monitor disk space and retain off-host copies.
+
+`--skip-backup` is an explicit opt-in for a real deployment (it is refused with
+`--check` and `--prepare`) and never the default. It creates no `kobo.tar.gz`:
+the updater prints a warning, records `backup_skipped: true`, a null archive name
+and `backup_complete: false` in `state.json`, and writes a `RECOVERY.md` that
+points to no archive. The migration test still runs: with Kōbō stopped, only
+`kobo.db` and its WAL/SHM sidecars are copied into `migration-check/`, a
+disposable copy that the test may migrate and that is **not** a backup. A failure
+before the new version starts still restarts the previous version on the
+untouched data. After a new-version launch there is no recovery point from this
+update: use it only when you already hold your own current backup of
+`/root/.config/kobo`.
 
 An error before shutdown releases the reservation, including a lost acquisition
 response. If shutdown was attempted, the updater confirms the old process has
