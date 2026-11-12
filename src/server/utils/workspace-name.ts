@@ -18,21 +18,9 @@ export function truncateWorkspaceName(name: string): string {
 }
 
 /**
- * The create page sends `workspace` when the user typed no name, and an engine
- * comparison sends `workspace (Claude Code)` / `workspace (OpenAI Codex)`. Both
- * are placeholders the extracted title should replace; the suffix is what
- * tells the two halves apart and must survive the rename.
- */
-const PLACEHOLDER = /^workspace( \([^()]+\))?$/
-
-/**
  * The name a workspace should take once a title was extracted for it, or
  * `null` when the current name is the user's own and must be left alone.
  */
 export function resolveExtractedName(currentName: string, extractedTitle: string): string | null {
-  const match = PLACEHOLDER.exec(currentName)
-  if (!match) return null
-  const suffix = match[1] ?? ''
-  // Truncate the title alone so the engine suffix is never what gets cut.
-  return `${truncateWorkspaceName(extractedTitle)}${suffix}`
+  return currentName === 'workspace' ? truncateWorkspaceName(extractedTitle) : null
 }

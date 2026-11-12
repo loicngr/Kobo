@@ -73,7 +73,6 @@ const properties: Record<string, Schema> = {
   sentry_url: url,
   pr_url: url,
   worktree_path: path,
-  comparison_id: string(),
   sprint_id: {
     ...string(64),
     type: ['string', 'null'],

@@ -188,7 +188,6 @@ const args = {
   },
   workflow_policy: { commit: 'manual', push: 'manual', publish: 'automatic' },
   skip_setup_script: false,
-  comparison_id: 'comparison',
   creation_id: 'creation',
   attachments: [
     {
@@ -247,7 +246,6 @@ it('advertises creation and PR diagnosis and forwards every option and attachmen
           },
           workflowPolicy: { commit: 'manual', push: 'manual', publish: 'automatic' },
           skipSetupScript: false,
-          comparisonId: 'comparison',
           creationId: 'creation',
         },
         files: ['requirements.md:Requirements'],

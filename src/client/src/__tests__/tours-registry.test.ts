@@ -70,7 +70,6 @@ describe('tours registry', () => {
       'settings-mcp',
       'create-brainstorm',
       'create-final-review',
-      'create-comparison',
       'ws-selectors',
       'ws-sessions',
       'ws-review-return',
@@ -123,7 +122,6 @@ describe('create tour', () => {
       'create-project',
       'create-engine',
       'create-autoloop',
-      'create-comparison',
       'create-brainstorm',
       'create-final-review',
     ])

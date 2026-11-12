@@ -51,7 +51,6 @@ describe('LatestThinkingPanel', () => {
         prCiFailureDismissedAt: null,
         worktreePurgedAt: null,
         worktreePurgeRestoreData: null,
-        comparisonId: null,
         autoLoop: false,
         autoLoopReady: false,
         noProgressStreak: 0,

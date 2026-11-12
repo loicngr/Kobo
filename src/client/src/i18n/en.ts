@@ -930,41 +930,6 @@ export default {
   'createPage.advancedOptions': 'Advanced options',
   'createPage.keyboardHint': 'Press Ctrl/Cmd + Enter to create the workspace.',
   'createPage.createWorkspace': 'Create workspace',
-  'createPage.compareEngines': 'Compare two engines',
-  'createPage.engineA': 'Engine A',
-  'createPage.engineB': 'Engine B',
-  'createPage.compareBrainstormLocked':
-    'Comparison mode: each engine brainstorms on the model and effort set in its own block above.',
-  'createPage.compareEnginesHint':
-    'Creates two workspaces from this task, one per engine, in sibling worktrees. Their diffs can then be compared side by side.',
-  'createPage.compareNeedsNewWorktree':
-    'Comparing two engines needs two new worktrees. Turn off “use an existing worktree” first.',
-  'createPage.compareNeedsSecondEngine': 'Pick a second engine, different from the first, to compare against.',
-  'comparison.title': 'Engine comparison',
-  'comparison.hint': 'The same task, run by each engine in its own worktree.',
-  'comparison.engine': 'Engine',
-  'comparison.status': 'Status',
-  'comparison.tasks': 'Tasks',
-  'comparison.commits': 'Commits',
-  'comparison.files': 'Files',
-  'comparison.diff': 'Diff',
-  'comparison.messages': 'Messages',
-  'comparison.messagesTitle': 'Agent messages / your messages',
-  'comparison.questions': 'Questions',
-  'comparison.tools': 'Tools',
-  'comparison.errors': 'Errors',
-  'comparison.tokens': 'Tokens',
-  'comparison.tokensTitle': 'Input / output tokens',
-  'comparison.sessions': 'Sessions',
-  'comparison.duration': 'Time',
-  'comparison.exportCsv': 'Export as CSV',
-  'comparison.open': 'Open',
-  'comparison.current': 'This one',
-  'comparison.archived': 'archived',
-  'comparison.incomplete':
-    'Only one workspace of this comparison exists. The other was never created, or has been deleted.',
-  'createPage.comparisonPartial':
-    'Only {count} of {total} workspaces were created. The one that exists is usable on its own; delete it if you would rather start over.',
   'createPage.notionEnabled': 'Notion enabled',
   'createPage.importNotion': 'Import from Notion',
   'createPage.notionPlaceholder': 'https://www.notion.so/workspace/Page-title-abc123...',
@@ -1439,9 +1404,6 @@ export default {
   'tours.workspace.reviewReturn.title': 'Return from a review',
   'tours.workspace.reviewReturn.description':
     'The summary returns to the original session, even after restarting Kōbō. If delivery is uncertain, inspect that conversation before Retry; Cancel abandons the return. Manual reviews wait for your instructions before fixes; auto-loop reviews correct findings automatically.',
-  'tours.create.comparison.title': 'Compare two engines',
-  'tours.create.comparison.description':
-    'Create two sibling workspaces on the same task and compare their commits, tasks and activity.',
   'tours.workspace.sessions.title': 'Workspace sessions',
   'tours.workspace.sessions.description':
     'Click the title to choose, create or rename a session, or copy its identifier.',

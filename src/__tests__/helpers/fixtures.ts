@@ -43,7 +43,6 @@ export function makeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
     prCiFailureDismissedAt: null,
     worktreePurgedAt: null,
     worktreePurgeRestoreData: null,
-    comparisonId: null,
     sprintId: null,
     engine: 'claude-code',
     autoLoop: false,

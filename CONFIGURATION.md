@@ -15,7 +15,6 @@ Reference for Kōbō configuration and external integrations. The tables cover t
 - [Lifecycle hooks](#lifecycle-hooks)
 - [Unanswered question reminder](#unanswered-question-reminder)
 - [Imported notification sounds](#imported-notification-sounds)
-- [Comparing two engines on one task](#comparing-two-engines-on-one-task)
 - [Workspace templates and duplication](#workspace-templates-and-duplication)
 - [Auto-purge worktree on PR merged](#auto-purge-worktree-on-pr-merged)
 - [Conversation history retention](#conversation-history-retention-opt-in)
@@ -593,8 +592,7 @@ document names so the agent can read them. PDFs are copied as supplied; reading
 or extracting their content uses the selected agent's available tools. Kōbō does
 not perform PDF extraction or OCR during creation.
 
-Comparing two engines copies the same attachments into each worktree
-independently. If creation fails without creating a workspace, the form keeps
+If creation fails without creating a workspace, the form keeps
 the attachments for retry. If only the setup script fails, the workspace keeps
 the files and initial prompt for resuming later.
 
@@ -629,52 +627,6 @@ confirmation; leaving cancels that draft attachment and cleans up any late uploa
 receipt in its original workspace. Ready, queued and sent attachments are preserved.
 Documents stored in `.ai/attachments/` are added to the worktree's `.gitignore`,
 including workspaces created before this feature.
-
-## Comparing two engines on one task
-
-Kōbō drives two agent runtimes. Which one does better on *your* code is an
-empirical question, and this answers it.
-
-On the create page, turn on **Compare two engines** and pick the engine to
-compare against. Creating then produces **two workspaces instead of one**, from
-the same task description, source branch and Notion/Sentry context:
-
-- names are suffixed with the engine (`Fix the parser (Claude Code)` and
-  `Fix the parser (Codex)`), both halves, so neither reads as the default one;
-- branches are suffixed with the engine id (`feature/fix-the-parser-claude-code`,
-  `feature/fix-the-parser-codex`), so each gets its own worktree;
-- each engine runs with the model, reasoning effort and permission mode set in
-  its own block (engine B's are pre-filled with that engine's defaults), since
-  a Codex model id means nothing to Claude Code and vice versa;
-- with auto-loop on, the brainstorm model and effort pickers are disabled: each
-  engine brainstorms on the model and effort of its own block, so both halves
-  start from the same footing.
-
-The two workspaces are created **one after the other**, not in parallel: each
-one fetches, branches and builds a worktree in the same repository, and two of
-those at once contend on the git index lock. If the second creation fails you
-are told so explicitly — the first workspace exists and is usable on its own.
-
-Once both workspaces are created, Kōbō opens them automatically in the side-by-side
-view, with the first engine on the left and the comparison engine on the right.
-If only the first workspace was created, it opens in the usual single-workspace view.
-
-### Reading the result
-
-Both workspaces show an **Engine comparison** table at the top of their Git tab:
-engine, model, status, tasks done over tasks planned, commits, files changed,
-diff size, then what it took — agent messages over your messages, questions the
-agent stopped to ask, tool calls, errors, input over output tokens, sessions and
-total time — for each side, with a download button that exports the whole
-table as CSV (one row per engine) and
-a button to jump to the other one. The numbers come from the same git-stats
-cache the rest of the UI uses; the table reads it when it opens and on its
-refresh button, so a dash means "not measured yet", which is not the same claim
-as zero. When one half was never created (or was deleted), the table says so
-instead of showing a single row as if that were the whole comparison.
-
-From there, each side's actual diff is one click away in the Git tab it sits
-above.
 
 ## Choosing an LLM for code review
 
@@ -959,7 +911,7 @@ The setting also lives in `settings.json` under `global`:
 
 ## External LLM access through MCP
 
-An external MCP client can connect to `http://127.0.0.1:3000/api/mcp` using Streamable HTTP (use your backend's configured port). It can create workspaces with the same options as the form, diagnose and check out existing PRs, discover workspaces, read their conversations, send messages and answer pending questions. Workspace-bound stdio, global stdio and HTTP share the creation contract, including brainstorm settings, final auto-loop review, workflow policy, imports, existing worktrees, comparison grouping and inline attachments. All three transports also expose archive, disk-space purge, permanent deletion with explicit branch confirmation, unarchive and recovery of purged worktrees. See the [creation and PR guide](src/mcp-server/README.md#create_workspace) for fields, explicit checkout decisions and timeout/retry behavior.
+An external MCP client can connect to `http://127.0.0.1:3000/api/mcp` using Streamable HTTP (use your backend's configured port). It can create workspaces with the same options as the form, diagnose and check out existing PRs, discover workspaces, read their conversations, send messages and answer pending questions. Workspace-bound stdio, global stdio and HTTP share the creation contract, including brainstorm settings, final auto-loop review, workflow policy, imports, existing worktrees and inline attachments. All three transports also expose archive, disk-space purge, permanent deletion with explicit branch confirmation, unarchive and recovery of purged worktrees. See the [creation and PR guide](src/mcp-server/README.md#create_workspace) for fields, explicit checkout decisions and timeout/retry behavior.
 
 Both `create_workspace` and `send_workspace_message` accept inline `attachments`
 with `{name, mime_type, data_base64}`: 10 files, 50 MiB decoded total, same formats
@@ -1805,7 +1757,6 @@ modes are offered:
 These are native approval modes, not a Kōbō sandbox. Native profiles and admin
 policy may change effective permissions. Plan/read-only launches are rejected before spawning or changing the workspace. Existing Plan
 choices require an explicit supported mode; they are never promoted automatically.
-The comparison feature remains **Claude Code versus Codex**.
 
 Native tools, approval/question panels, managed tasks/memory/progress MCP, resume
 and whole-session Stop are supported. Messages wait in the normal queue until

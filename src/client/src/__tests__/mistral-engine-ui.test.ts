@@ -316,7 +316,6 @@ it('creates a visibly interactive Vibe workspace from setup and preserves native
       .props('options')
       .map((x: { value: string }) => x.value),
   ).toEqual(['auto'])
-  expect(view.find('[data-tour="create-comparison"]').exists()).toBe(false)
   const vm = view.vm as unknown as { applyPresetToForm(preset: Record<string, unknown>): Promise<void> }
   await vm.applyPresetToForm({ engine: 'codex', model: 'gpt-6.1-sol', reasoningEffort: 'high' })
   await vm.applyPresetToForm({

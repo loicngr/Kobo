@@ -232,16 +232,16 @@
             color="kobo-2"
             icon="open_in_new"
             :label="$t('git.viewRequest', { request: forge.capabilities.requestTermShort })"
-            class="full-width q-mb-xs"
+            class="full-width q-mb-xs git-btn"
             @click="viewPr"
           />
           <ActionAvailability v-else :reason="openPrBlocker">
           <q-btn
-            no-caps unelevated dense size="sm"
-            color="primary"
+            no-caps outline dense size="sm"
+            color="kobo-2"
             icon="open_in_new"
             :label="$t('git.createRequest', { request: forge.capabilities.requestTermShort })"
-            class="full-width q-mb-xs"
+            class="full-width q-mb-xs git-btn"
             :loading="openingPr"
             :disable="!!openPrBlocker"
             @click="handleOpenPr"
@@ -254,13 +254,13 @@
         <q-btn
           v-if="canMergeRequest"
           no-caps
-          unelevated
+          outline
           dense
           size="sm"
-          color="primary"
+          color="kobo-2"
           icon="merge"
           :label="$t('git.mergeRequest', { request: forge.capabilities.requestTermShort })"
-          class="full-width q-mb-xs"
+          class="full-width q-mb-xs git-btn"
           :loading="mergingRequest"
           :disable="isArchived"
           @click="handleMergeRequest()"
@@ -279,13 +279,13 @@
         <q-btn
           v-if="hasUncommittedChanges"
           no-caps
-          unelevated
+          outline
           dense
           size="sm"
-          color="primary"
+          color="kobo-2"
           icon="commit"
           :label="$t('git.commitChanges')"
-          class="full-width q-mb-xs"
+          class="full-width q-mb-xs git-btn"
           :disable="isArchived"
           @click="showCommitDialog = true"
         />
@@ -333,7 +333,7 @@
                 <ActionAvailability :reason="syncBlocker">
 <q-item clickable v-close-popup :disable="!!syncBlocker" @click="handleMerge">
                   <q-item-section avatar style="min-width: 28px;">
-                    <q-icon name="merge" size="16px" color="primary" />
+                    <q-icon name="merge" size="16px" color="kobo-2" />
                   </q-item-section>
                   <q-item-section>{{ $t('git.merge') }}</q-item-section>
                 </q-item>
@@ -355,7 +355,7 @@
             <ActionAvailability :reason="pushBlocker">
               <div class="row no-wrap items-stretch">
                 <q-btn
-                  dense no-caps size="sm" outline color="orange-5"
+                  dense no-caps size="sm" outline color="kobo-2"
                   icon="upload"
                   :label="$t('git.push')"
                   class="col git-btn"
@@ -366,7 +366,7 @@
                   <q-tooltip anchor="bottom middle" self="top middle" :delay="400">{{ pushBlockedTooltip ?? $t('git.push') }}</q-tooltip>
                 </q-btn>
                 <q-btn
-                  dense size="sm" outline color="orange-6"
+                  dense size="sm" outline color="kobo-warning"
                   icon="keyboard_double_arrow_up"
                   class="col-auto git-btn q-ml-xs"
                   :aria-label="$t('git.forcePush')"
@@ -381,7 +381,7 @@
 
           <div class="col">
             <q-btn
-              dense no-caps size="sm" outline color="primary"
+              dense no-caps size="sm" outline color="kobo-2"
               icon="rate_review"
               :label="$t('git.diffReview')"
               class="full-width git-btn"

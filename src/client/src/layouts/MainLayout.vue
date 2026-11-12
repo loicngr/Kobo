@@ -73,10 +73,6 @@
           <div class="col" style="overflow: auto;">
             <q-tab-panels v-model="rightTab" animated keep-alive>
               <q-tab-panel name="git" data-tour="ws-tab-git" class="q-pa-none">
-                <ComparisonPanel
-                  v-if="store.selectedWorkspace?.comparisonId && store.selectedWorkspaceId"
-                  :workspace-id="store.selectedWorkspaceId"
-                />
                 <GitPanel :workspace="store.selectedWorkspace" />
               </q-tab-panel>
               <q-tab-panel name="tasks" data-tour="ws-tab-tasks" class="q-pa-none">
@@ -212,9 +208,6 @@ import { useRoute } from 'vue-router'
 // stylesheet, DocumentsPanel drags marked + dompurify.
 const DocumentsPanel = defineAsyncComponent(() => import('src/components/DocumentsPanel.vue'))
 const GitPanel = defineAsyncComponent(() => import('src/components/GitPanel.vue'))
-// Async like its neighbours: the vast majority of workspaces belong to no
-// comparison and never render this.
-const ComparisonPanel = defineAsyncComponent(() => import('src/components/ComparisonPanel.vue'))
 const SchedulePanel = defineAsyncComponent(() => import('src/components/SchedulePanel.vue'))
 const TerminalPanel = defineAsyncComponent(() => import('src/components/TerminalPanel.vue'))
 const MemoryPanel = defineAsyncComponent(() => import('src/components/MemoryPanel.vue'))

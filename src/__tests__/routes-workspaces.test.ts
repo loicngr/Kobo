@@ -109,7 +109,6 @@ vi.mock('../server/services/workspace-service.js', () => ({
   setInitialPrompt: vi.fn(),
   clearInitialPrompt: vi.fn(),
   recomputeSessionMetrics: vi.fn(),
-  listComparisonMembers: vi.fn(() => []),
 }))
 
 vi.mock('../server/services/worktree-service.js', async (importOriginal) => ({
@@ -324,21 +323,6 @@ vi.mock('../server/services/cron-service.js', () => ({
   cancel: vi.fn(),
   listForWorkspace: vi.fn(),
   cancelAllForWorkspace: vi.fn(),
-}))
-
-vi.mock('../server/services/comparison-stats-service.js', () => ({
-  computeWorkspaceActivityStats: vi.fn((_db: unknown, id: string) => ({
-    sessions: id === 'w1' ? 2 : 1,
-    durationMs: 0,
-    userMessages: 3,
-    injectedPrompts: 0,
-    agentMessages: 7,
-    questions: 1,
-    toolCalls: 12,
-    errors: 0,
-    inputTokens: 1000,
-    outputTokens: 100,
-  })),
 }))
 
 vi.mock('../server/services/pr-watcher-service.js', () => ({
@@ -2532,78 +2516,6 @@ describe('POST /api/workspaces — Notion/Sentry initial prompt injection', () =
     expect(prompt).not.toContain('Commit referencing')
     // Notion absent → no notion render either.
     expect(prompt).not.toContain('Notion ticket:')
-  })
-
-  it('keeps the engine suffix when a comparison workspace takes the Sentry title', async () => {
-    commonHappyPathMocks()
-    // The shared mock answers `workspace`; this row was created with the
-    // comparison placeholder, suffix included.
-    vi.mocked(workspaceService.createWorkspace).mockReturnValue({ ...fakeWorkspace, name: 'workspace (OpenAI Codex)' })
-    await mockSentryExtraction({ issueId: 'ACME-API-3' })
-
-    const res = await app.request('/api/workspaces', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name: 'workspace (OpenAI Codex)',
-        projectPath: '/tmp/project',
-        sourceBranch: 'main',
-        workingBranch: 'feature/task-1-codex',
-        engine: 'codex',
-        comparisonId: 'cmp_1',
-        sentryUrl: 'https://my-org.sentry.io/issues/42/',
-      }),
-    })
-
-    expect(res.status).toBe(201)
-    expect(workspaceService.updateWorkspaceName).toHaveBeenCalledWith(
-      expect.anything(),
-      'ACME-API-3 | crash (OpenAI Codex)',
-    )
-  })
-
-  it('keeps the engine suffix on the branch when the Sentry rewrite renames it', async () => {
-    commonHappyPathMocks()
-    await mockSentryExtraction({ issueId: 'ACME-API-3' })
-
-    const res = await app.request('/api/workspaces', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name: 'workspace (OpenAI Codex)',
-        projectPath: '/tmp/project',
-        sourceBranch: 'main',
-        workingBranch: 'feature/task-1-codex',
-        engine: 'codex',
-        comparisonId: 'cmp_1',
-        sentryUrl: 'https://my-org.sentry.io/issues/42/',
-      }),
-    })
-
-    expect(res.status).toBe(201)
-    // Without the suffix both halves of the comparison collapse onto the same
-    // branch and the second one gets a random `-HASH` instead of its engine.
-    const created = vi.mocked(workspaceService.createWorkspace).mock.calls[0]?.[0]
-    expect(created?.workingBranch).toBe('feature/ACME-API-3--crash-codex')
-  })
-
-  it('rejects a comparison id that is not a string', async () => {
-    commonHappyPathMocks()
-
-    const res = await app.request('/api/workspaces', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name: 'x',
-        projectPath: '/tmp/project',
-        sourceBranch: 'main',
-        workingBranch: 'feature/x',
-        comparisonId: { nope: true },
-      }),
-    })
-
-    expect(res.status).toBe(400)
-    expect(workspaceService.createWorkspace).not.toHaveBeenCalled()
   })
 
   it('truncates an overlong Sentry issue title instead of failing workspace creation', async () => {
@@ -8884,82 +8796,6 @@ describe('GET /api/workspaces/:id/sessions/:sessionId/summary', () => {
     getDbMock.mockReturnValue({ prepare: vi.fn().mockReturnValue({ get: () => undefined }) } as never)
 
     const res = await app.request('/api/workspaces/ws-1/sessions/nope/summary')
-
-    expect(res.status).toBe(404)
-  })
-})
-
-describe('GET /api/workspaces/:id/comparison', () => {
-  beforeEach(() => vi.clearAllMocks())
-
-  const memberA = { id: 'w1', name: 'task (claude-code)', engine: 'claude-code', comparisonId: 'cmp_1' }
-  const memberB = { id: 'w2', name: 'task (codex)', engine: 'codex', comparisonId: 'cmp_1' }
-
-  it('returns every member of the comparison with its git stats and task progress', async () => {
-    vi.mocked(workspaceService.getWorkspace).mockReturnValue(memberA as never)
-    vi.mocked(workspaceService.listComparisonMembers).mockReturnValue([memberA, memberB] as never)
-    vi.mocked(prWatcher.getAllGitStats).mockReturnValue({
-      w1: { insertions: 10, deletions: 2 },
-      w2: { insertions: 40, deletions: 30 },
-    } as never)
-    // How finely each engine planned the same task is the first thing the
-    // comparison shows, before any code exists: 16 tasks against 5.
-    vi.mocked(workspaceService.listTasks).mockImplementation(
-      (id: string) =>
-        (id === 'w1'
-          ? [{ status: 'done' }, { status: 'done' }, { status: 'pending' }]
-          : [{ status: 'in_progress' }]) as never,
-    )
-
-    const res = await app.request('/api/workspaces/w1/comparison')
-
-    expect(res.status).toBe(200)
-    const body = (await res.json()) as {
-      comparisonId: string
-      members: Array<{
-        workspace: { id: string }
-        gitStats: { insertions: number } | null
-        tasks: { done: number; total: number }
-        activity: { sessions: number; questions: number }
-      }>
-    }
-    expect(body.comparisonId).toBe('cmp_1')
-    expect(body.members.map((m) => m.workspace.id)).toEqual(['w1', 'w2'])
-    expect(body.members[1].gitStats?.insertions).toBe(40)
-    expect(body.members.map((m) => m.tasks)).toEqual([
-      { done: 2, total: 3 },
-      { done: 0, total: 1 },
-    ])
-    expect(body.members.map((m) => m.activity.sessions)).toEqual([2, 1])
-    expect(body.members[0].activity.questions).toBe(1)
-  })
-
-  it('reports a null stat rather than inventing zeros when nothing was measured yet', async () => {
-    vi.mocked(workspaceService.getWorkspace).mockReturnValue(memberA as never)
-    vi.mocked(workspaceService.listComparisonMembers).mockReturnValue([memberA] as never)
-    vi.mocked(prWatcher.getAllGitStats).mockReturnValue({} as never)
-
-    const res = await app.request('/api/workspaces/w1/comparison')
-
-    const body = (await res.json()) as { members: Array<{ gitStats: unknown }> }
-    // Zeros would read as "this engine changed nothing", which is a different claim.
-    expect(body.members[0].gitStats).toBeNull()
-  })
-
-  it('answers with an empty comparison for a workspace that belongs to none', async () => {
-    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ id: 'w9', comparisonId: null } as never)
-
-    const res = await app.request('/api/workspaces/w9/comparison')
-
-    expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({ comparisonId: null, members: [] })
-    expect(workspaceService.listComparisonMembers).not.toHaveBeenCalled()
-  })
-
-  it('404s on an unknown workspace', async () => {
-    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null)
-
-    const res = await app.request('/api/workspaces/missing/comparison')
 
     expect(res.status).toBe(404)
   })

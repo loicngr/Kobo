@@ -560,7 +560,7 @@ Create a workspace through the same backend handlers as the Create page, includi
 | `notion_url`, `notion_page_id`, `sentry_url` | `notion_url` or `sentry_url` imports ticket context using the enabled, configured integration. `notion_page_id` stores an optional identifier; it does not import content on its own. |
 | `pr_url`, `pr_checkout` | Resume a PR/MR through diagnosis and checkout; see below. |
 | `worktree_path`, `skip_setup_script` | Reuse an existing worktree or control the setup script. PR checkout skips setup by default; explicit `false` runs it. |
-| `comparison_id`, `creation_id` | Group separate creations for comparison; correlate creation progress. These are not idempotency keys. |
+| `creation_id` | Correlate creation progress. This is not an idempotency key. |
 | `attachments` | Up to 10 `{name, mime_type, data_base64}` files, 50 MiB decoded total. Same file types as the form; send inline base64, never a server file path. |
 
 Mistral Vibe uses native model aliases and thinking levels; `auto` preserves native
@@ -569,7 +569,7 @@ modifications, while managed MCP/memory grants remain restricted. Busy Vibe sess
 reject immediate external messages; send again after the native process closes.
 See [Mistral Vibe capabilities](../../CONFIGURATION.md#mistral-vibe).
 
-For a Claude Code/Codex engine comparison, create two workspaces with distinct working branches and the same `comparison_id`, configuring each engine separately. Selecting a saved form preset in an MCP client means sending its effective field values.
+Selecting a saved form preset in an MCP client means sending its effective field values.
 
 Example with final review:
 

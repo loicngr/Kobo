@@ -135,7 +135,7 @@ proxy authorization in the preview component/service tests. See
 
 | Table | Purpose |
 |---|---|
-| `workspaces` | the unit of work: id, name, project_path, source_branch, working_branch, status, notion_url, model, `brainstorm_model`, dev_server_status, `archived_at`, `worktree_purged_at`, `worktree_purge_restore_data` (JSON), `auto_loop`, `auto_loop_ready`, `auto_loop_session_mode`, `no_progress_streak`, timestamps, `comparison_id` |
+| `workspaces` | the unit of work: id, name, project_path, source_branch, working_branch, status, notion_url, model, `brainstorm_model`, dev_server_status, `archived_at`, `worktree_purged_at`, `worktree_purge_restore_data` (JSON), `auto_loop`, `auto_loop_ready`, `auto_loop_session_mode`, `no_progress_streak`, timestamps |
 | `tasks` | workspace sub-items: title, status, `is_acceptance_criterion`, sort_order; CASCADE DELETE on workspace |
 | `agent_sessions` | agent-engine sessions: pid where applicable, engine session id, status, timestamps, model, name and `role` (`primary` or `parallel-review`) |
 | `ws_events` | persisted WebSocket events for replay on reconnect: type, payload, session_id, created_at |
@@ -829,8 +829,7 @@ Limits and supported formats live in `src/shared/attachments.ts`:
 Document validation uses supported filename extensions because browser MIME
 labels can be empty or generic. A failed creation cleans its own uploaded files
 from reused worktrees, preserving existing files; setup failures retain the
-workspace, files and initial prompt. Comparison requests copy the same browser
-files independently. Attachments are not persisted in form presets.
+workspace, files and initial prompt. Attachments are not persisted in form presets.
 See [creation attachments](CONFIGURATION.md#attachments-in-the-creation-description).
 
 ### Chat attachments
@@ -880,12 +879,6 @@ dev-server service. Never inherit ambient Docker identity or invent a Compose
 project name: `PROJECT_NAME` is empty when no matching instance metadata exists.
 `ScriptVariablesHelp.vue` documents common and event-specific variables in both
 global and project settings; keep this help and CONFIGURATION.md in sync.
-
-### Engine comparison
-
-Successful paired creation opens the existing `split` route with `left` and `right` workspace ids in creation order. A single successful creation keeps the normal workspace route, including when the second creation fails.
-
-One task, Claude Code versus Codex, two sibling worktrees. Mistral Vibe is excluded from comparisons. `POST /api/workspaces` accepts a `comparisonId`; the client posts twice with the same one (sequentially — parallel creations contend on the git index lock), suffixing the name with the engine's display name and the branch with the engine id and giving the non-configured engine the model picked for it on the form and its own effort / permission defaults. `workspaces.comparison_id` (migration v40) groups them; `listComparisonMembers` reads them back, treating an empty id as no group rather than as a match against the NULL majority. `GET /api/workspaces/:id/comparison` returns each member with its cached git stats (`null`, never zeros, when nothing has been measured). `ComparisonPanel.vue` renders the table at the top of the Git tab, only for workspaces that belong to a comparison. See [CONFIGURATION.md → Comparing two engines on one task](CONFIGURATION.md#comparing-two-engines-on-one-task).
 
 ### Unanswered question reminder
 

@@ -14,14 +14,6 @@ export const createTour: TourDefinition = {
     { id: 'create-engine', anchor: 'create-engine', i18nKey: 'tours.create.engine' },
     { id: 'create-autoloop', anchor: 'create-autoloop', i18nKey: 'tours.create.autoloop' },
     {
-      id: 'create-comparison',
-      anchor: 'create-comparison',
-      i18nKey: 'tours.create.comparison',
-      // The comparison toggle only renders with more than one engine installed.
-      when: () => anchorPresent('create-comparison'),
-      gate: 'dom',
-    },
-    {
       id: 'create-brainstorm',
       anchor: 'create-brainstorm',
       i18nKey: 'tours.create.brainstorm',

@@ -65,7 +65,6 @@ import * as autoLoopService from '../services/auto-loop-service.js'
 import { changeSourceBranch } from '../services/change-source-branch-service.js'
 import { listChatHistory, pushChatHistory } from '../services/chat-history-service.js'
 import { type CiFixCheck, renderCiFixTemplate } from '../services/ci-fix-template-service.js'
-import { computeWorkspaceActivityStats } from '../services/comparison-stats-service.js'
 import * as cronService from '../services/cron-service.js'
 import * as devServerService from '../services/dev-server-service.js'
 import { buildEngineHandoff } from '../services/engine-handoff-service.js'
@@ -642,7 +641,6 @@ interface CreateWorkspaceBody {
   autoLoopSessionMode?: 'per_task' | 'continuous'
   worktreePath?: string
   creationId?: string
-  comparisonId?: string
   sprintId?: string | null
 }
 
@@ -714,9 +712,6 @@ app.post('/', workspaceCreationMaintenance, migrationGuard, creationBodyLimit, a
     // reaches `git fetch <remote> <sourceBranch>` as a bare argument.
     if (!gitOps.isValidBranchName(body.sourceBranch)) {
       return c.json({ error: `Invalid source branch name: ${body.sourceBranch}` }, 400)
-    }
-    if (body.comparisonId !== undefined && typeof body.comparisonId !== 'string') {
-      return c.json({ error: 'comparisonId must be a string' }, 400)
     }
     if (body.tags !== undefined && (!Array.isArray(body.tags) || body.tags.some((tag) => typeof tag !== 'string'))) {
       return c.json({ error: 'tags must be an array of strings' }, 400)
@@ -1048,13 +1043,7 @@ app.post('/', workspaceCreationMaintenance, migrationGuard, creationBodyLimit, a
           .replace(/^-|-$/g, '')
           .substring(0, 50)
         const safeSlug = titleSlug || 'task'
-        // An engine comparison posts here once per engine with the same
-        // ticket: without the suffix both halves collapse onto one branch and
-        // the second gets a random hash instead of its engine.
-        const engineSuffix = body.comparisonId && body.engine ? `-${body.engine}` : ''
-        workingBranch = ticketPrefix
-          ? `${typePrefix}${ticketPrefix}--${safeSlug}${engineSuffix}`
-          : `${typePrefix}${safeSlug}${engineSuffix}`
+        workingBranch = ticketPrefix ? `${typePrefix}${ticketPrefix}--${safeSlug}` : `${typePrefix}${safeSlug}`
       }
     }
 
@@ -1170,9 +1159,6 @@ app.post('/', workspaceCreationMaintenance, migrationGuard, creationBodyLimit, a
           body.engine ?? 'claude-code',
         ),
         engine: body.engine,
-        // Set by the engine-comparison flow, which posts here once per engine
-        // with the same id so the resulting workspaces can find each other.
-        comparisonId: body.comparisonId,
         sprintId: body.sprintId,
         ...(useReusedWorktree ? {} : { worktreesPath: globalSettings.worktreesPath }),
       })
@@ -1994,39 +1980,6 @@ app.get('/info', (c) => {
       // this map has no agent, whatever its status claims.
       agentLiveness: agentManager.getAllAgentLiveness(),
     })
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, workspaceErrorStatus(err))
-  }
-})
-
-// GET /api/workspaces/:id/comparison — the workspaces running the same task on
-// another engine, with the diff each one produced. Reads the git-stats cache the
-// pr-watcher already maintains rather than shelling out to git twice per request.
-app.get('/:id/comparison', (c) => {
-  const id = c.req.param('id')
-  try {
-    const workspace = workspaceService.getWorkspace(id)
-    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
-    if (!workspace.comparisonId) return c.json({ comparisonId: null, members: [] })
-
-    const stats = getAllGitStats()
-    const members = workspaceService.listComparisonMembers(workspace.comparisonId).map((member) => {
-      // Same count as the auto-loop badge: every task, acceptance criteria
-      // included. How finely each engine planned the task is visible before
-      // a single line of code is, and it colours every later number.
-      const tasks = workspaceService.listTasks(member.id)
-      return {
-        workspace: member,
-        // Null, not zeros: "not measured yet" and "changed nothing" are
-        // different answers, and only one of them is true here.
-        gitStats: stats[member.id] ?? null,
-        tasks: { done: tasks.filter((t) => t.status === 'done').length, total: tasks.length },
-        // What it took: messages, questions, tools, tokens, over every session.
-        activity: computeWorkspaceActivityStats(getDb(), member.id),
-      }
-    })
-    return c.json({ comparisonId: workspace.comparisonId, members })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, workspaceErrorStatus(err))

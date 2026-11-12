@@ -235,7 +235,7 @@ section — the in-app "What's new" dialog reads released version sections.
 
 ## 1.11.37
 
-- fix(kobo): harden workspace lifecycle and comparison navigation
+- fix(kobo): harden workspace lifecycle
 
 ## 1.11.36
 
@@ -270,11 +270,10 @@ section — the in-app "What's new" dialog reads released version sections.
 
 ## 1.11.29
 
-- feat(comparison): task progress, activity stats and CSV export
 
 ## 1.11.28
 
-- feat: lifecycle hooks, reminders, engine comparison and audit follow-ups
+- feat: lifecycle hooks, reminders and audit follow-ups
 - fix(security): trust the page we served, not a guessed port list
 - fix(security): close browser-driven access paths and credential leaks
 

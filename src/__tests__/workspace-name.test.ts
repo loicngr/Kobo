@@ -15,20 +15,14 @@ describe('resolveExtractedName', () => {
     expect(resolveExtractedName('workspace', 'Fix the parser')).toBe('Fix the parser')
   })
 
-  it('keeps the engine suffix an engine comparison put on the placeholder', () => {
-    // A comparison creates `workspace (Claude Code)` and `workspace (Codex)`.
-    // Both are still placeholders: the title goes in, the suffix stays.
-    expect(resolveExtractedName('workspace (OpenAI Codex)', 'Fix the parser')).toBe('Fix the parser (OpenAI Codex)')
-  })
-
   it('never touches a name the user typed', () => {
     expect(resolveExtractedName('my own name', 'Fix the parser')).toBeNull()
     expect(resolveExtractedName('workspaces', 'Fix the parser')).toBeNull()
     expect(resolveExtractedName('workspace2 (Codex)', 'Fix the parser')).toBeNull()
   })
 
-  it('truncates the title, not the suffix, so the engine stays readable', () => {
-    const name = resolveExtractedName('workspace (Codex)', 'y'.repeat(300))
-    expect(name?.endsWith('… (Codex)')).toBe(true)
+  it('truncates an extracted title', () => {
+    const name = resolveExtractedName('workspace', 'y'.repeat(300))
+    expect(name?.endsWith('…')).toBe(true)
   })
 })

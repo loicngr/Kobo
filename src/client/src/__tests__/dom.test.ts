@@ -22,7 +22,7 @@ describe('anchorPresent', () => {
   it('is true once an element carries the data-tour attribute', () => {
     document.body.innerHTML = '<div data-tour="create-brainstorm"></div>'
     expect(anchorPresent('create-brainstorm')).toBe(true)
-    expect(anchorPresent('create-comparison')).toBe(false)
+    expect(anchorPresent('missing-anchor')).toBe(false)
   })
 })
 

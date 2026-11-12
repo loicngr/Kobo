@@ -35,7 +35,6 @@ function makeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
     prCiFailureDismissedAt: null,
     worktreePurgedAt: null,
     worktreePurgeRestoreData: null,
-    comparisonId: null,
     sprintId: null,
     tags: [],
     engine: 'claude-code',

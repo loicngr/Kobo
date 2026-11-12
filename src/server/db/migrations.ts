@@ -862,6 +862,16 @@ export const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 60,
+    name: 'remove-workspace-engine-comparison',
+    migrate(db) {
+      const columns = db.pragma('table_info(workspaces)') as { name: string }[]
+      if (columns.some((column) => column.name === 'comparison_id')) {
+        db.exec('ALTER TABLE workspaces DROP COLUMN comparison_id')
+      }
+    },
+  },
 ]
 
 /** Current schema version — always equals the highest migration version. */

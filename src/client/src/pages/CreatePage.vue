@@ -689,24 +689,7 @@
             </template>
 
             <q-card-section class="responsive-fields row q-col-gutter-x-md q-pt-md">
-              <div v-if="engineSelectOptions.length > 1 && selectedEngineId !== 'mistral-vibe'" class="col-12 q-mb-sm" data-tour="create-comparison">
-                <q-toggle
-                  v-model="comparisonMode"
-                  :label="$t('createPage.compareEngines')"
-                  dark
-                  dense
-                  color="primary"
-                  class="text-kobo-2 text-caption"
-                />
-                <div v-if="comparisonMode" class="text-caption text-kobo-3 q-mt-xs">
-                  {{ $t('createPage.compareEnginesHint') }}
-                </div>
-              </div>
-
               <div v-if="selectedEngineId === 'mistral-vibe'" class="col-12 text-caption text-kobo-3">{{ $t('engine.mistralNativeHint') }}<div role="status">{{ nativeOptions.message }} <q-btn v-if="nativeOptions.message && !nativeOptions.loading" flat dense size="sm" :label="$t('common.retry')" @click="nativeOptions.refresh" /></div></div>
-              <div v-if="comparisonMode" class="col-12 text-overline text-kobo-3 q-mb-xs">
-                {{ $t('createPage.engineA') }}
-              </div>
               <div v-if="engineSelectOptions.length > 0" class="col-12 col-sm-6">
                 <q-select
                   v-model="selectedEngineId"
@@ -794,92 +777,6 @@
               </div>
 
               <div class="col-12"><WorkflowPolicyEditor v-model="workflowPolicy" inherit /></div>
-              <template v-if="comparisonMode">
-                <div class="col-12 text-overline text-kobo-3 q-mt-md q-mb-xs">
-                  {{ $t('createPage.engineB') }}
-                </div>
-                <div class="col-12 col-sm-6">
-                  <q-select
-                    v-model="comparisonEngineId"
-                    :options="comparisonEngineOptions"
-                    dark
-                    dense
-                    outlined
-                    stack-label
-                    emit-value
-                    map-options
-                    option-value="value"
-                    option-label="label"
-                    :label="$t('engine.select')"
-                  />
-                </div>
-                <div class="col-12 col-sm-6">
-                  <q-select
-                    v-model="comparisonModel"
-                    :options="comparisonModelOptions"
-                    dark
-                    dense
-                    outlined
-                    stack-label
-                    emit-value
-                    map-options
-                    option-value="value"
-                    option-label="label"
-                    :label="$t('engine.model')"
-                  >
-                    <template #option="{ opt, itemProps }">
-                      <q-item v-bind="itemProps">
-                        <q-item-section>
-                          <q-item-label>{{ opt.label }}</q-item-label>
-                          <q-item-label caption>{{ opt.description }}</q-item-label>
-                        </q-item-section>
-                      </q-item>
-                    </template>
-                  </q-select>
-                </div>
-                <div class="col-12 col-sm-6">
-                  <q-select
-                    v-model="comparisonReasoningEffort"
-                    :options="comparisonReasoningOptions"
-                    dark
-                    dense
-                    outlined
-                    stack-label
-                    emit-value
-                    map-options
-                    option-value="value"
-                    option-label="label"
-                    :label="$t('engine.effort')"
-                  >
-                    <template #option="{ opt, itemProps }">
-                      <q-item v-bind="itemProps">
-                        <q-item-section>
-                          <q-item-label>{{ opt.label }}</q-item-label>
-                          <q-item-label caption>{{ opt.description }}</q-item-label>
-                        </q-item-section>
-                      </q-item>
-                    </template>
-                  </q-select>
-                </div>
-                <div class="col-12 col-sm-6">
-                  <q-select
-                    :model-value="resolvedComparisonOverrides.agentPermissionMode"
-                    :options="comparisonPermissionModeOptions"
-                    dark
-                    dense
-                    outlined
-                    stack-label
-                    emit-value
-                    map-options
-                    option-value="value"
-                    option-label="label"
-                    :option-disable="isOptionDisabled"
-                    :label="$t('agentPermissionMode.label')"
-                    :hint="autoLoop ? $t('workflow.planExecution') : undefined"
-                    @update:model-value="(val) => (comparisonPermissionMode = val as AgentPermissionMode)"
-                  />
-                </div>
-              </template>
             </q-card-section>
           </q-expansion-item>
 
@@ -902,12 +799,6 @@
                   { label: $t('autoLoop.sessionMode.continuous'), value: 'continuous', icon: 'link' },
                 ]"
               />
-              <!-- In a comparison each engine brainstorms on the model and
-                   effort configured in its own block: a single picker here
-                   could only describe one of the two. -->
-              <div v-if="comparisonMode" class="text-caption text-kobo-3 q-mt-sm">
-                {{ $t('createPage.compareBrainstormLocked') }}
-              </div>
               <div class="responsive-fields row q-col-gutter-x-md" data-tour="create-brainstorm">
                 <div class="col-12 col-sm-6">
                   <q-select
@@ -922,7 +813,6 @@
                     map-options
                     option-value="value"
                     option-label="label"
-                    :disable="comparisonMode"
                     :label="$t('autoLoop.brainstormModelPrefix')"
                   />
                 </div>
@@ -939,7 +829,6 @@
                     map-options
                     option-value="value"
                     option-label="label"
-                    :disable="comparisonMode"
                     :label="$t('autoLoop.brainstormReasoningPrefix')"
                   />
                 </div>
@@ -1050,7 +939,6 @@ import { playNotificationSound } from 'src/utils/notifications'
 import { prefillFromPr } from 'src/utils/pr-prefill'
 import { projectNameForPath } from 'src/utils/project-color'
 import { registerUnsavedScope, unregisterUnsavedScope } from 'src/utils/unsaved-guard'
-import { workspaceCreationRoute } from 'src/utils/workspace-creation-route'
 import { applyPreset, capturePreset, type PresetFormState, type WorkspacePreset } from 'src/utils/workspace-preset'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -1134,29 +1022,8 @@ const selectedEngineId = ref<string>(
     : 'claude-code',
 )
 const selectedEngine = computed<EngineDto | undefined>(() => engines.value.find((e) => e.id === selectedEngineId.value))
-/** Run the same task on two engines, in two sibling worktrees, to compare them. */
-const comparisonMode = ref(false)
-const comparisonEngineId = ref<string>('codex')
-/**
- * Engine B's own settings. Each mirrors its engine-A counterpart and is
- * resolved against B's catalogue, never A's: a Claude model id or a 'max'
- * effort means nothing to Codex.
- */
-const comparisonModel = ref<string>('auto')
-const comparisonReasoningEffort = ref<string>('auto')
 const workflowPolicy = ref<Partial<WorkflowPolicy>>({})
-const comparisonPermissionMode = ref<AgentPermissionMode>('bypass')
-const engineSelectOptions = computed(() =>
-  engines.value
-    .filter((e) => !comparisonMode.value || e.id !== 'mistral-vibe')
-    .map((e) => ({ value: e.id, label: e.displayName })),
-)
-/** The engine to compare against — never the one already selected. */
-const comparisonEngineOptions = computed(() =>
-  engines.value
-    .filter((e) => e.id !== 'mistral-vibe' && e.id !== selectedEngineId.value)
-    .map((e) => ({ value: e.id, label: e.displayName })),
-)
+const engineSelectOptions = computed(() => engines.value.map((e) => ({ value: e.id, label: e.displayName })))
 // Branch prefix options are user-managed in global settings (stored without
 // the trailing `/`). The select emits the bare prefix; `/` is added at display
 // time and when composing the working branch (`<prefix>/<slug>`).
@@ -1469,85 +1336,6 @@ const modelOptions = computed(() => {
   }))
 })
 
-// When the user switches engine, apply the per-engine default model from
-// global settings if it's part of the new catalogue. Falls back to 'auto' if
-// neither the current value nor the configured default is compatible.
-// Also re-derives the permission mode so a value incompatible with the new
-// engine (e.g. 'interactive' under Codex) is replaced by the engine's
-// configured default.
-// Picking the primary engine that was the comparison target would compare an
-// engine against itself. Move the target rather than silently doing that.
-watch([selectedEngineId, comparisonEngineOptions], () => {
-  if (comparisonEngineOptions.value.some((o) => o.value === comparisonEngineId.value)) return
-  comparisonEngineId.value = comparisonEngineOptions.value[0]?.value ?? ''
-})
-
-const comparisonModelOptions = computed(() => {
-  const defs = MODEL_OPTION_DEFS_BY_ENGINE[comparisonEngineId.value] ?? MODEL_OPTION_DEFS
-  return defs.map((option) => ({
-    label: t(option.i18nLabelKey),
-    value: option.value,
-    description: t(option.i18nDescriptionKey),
-  }))
-})
-
-const comparisonReasoningOptions = computed(() => {
-  const defs = EFFORT_OPTION_DEFS_BY_ENGINE[comparisonEngineId.value] ?? EFFORT_OPTION_DEFS_BY_ENGINE['claude-code']
-  return defs.map((d) => ({
-    value: d.value,
-    label: formatReasoningLabel(t(d.i18nLabelKey)),
-    description: t(d.i18nDescriptionKey),
-  }))
-})
-
-const comparisonPermissionModeOptions = computed(() => {
-  const supported = PERMISSION_MODES_BY_ENGINE[comparisonEngineId.value] ?? ALL_AGENT_PERMISSION_MODES
-  return supported.map((value) => ({
-    value,
-    label: t(`agentPermissionMode.${value}`),
-    disabled: false,
-  }))
-})
-
-/** Engine B goes through the same override rules as A (auto-loop locks Bypass). */
-const resolvedComparisonOverrides = computed(() =>
-  resolveCreateOverrides({
-    useExistingWorktree: useExistingWorktree.value,
-    prCheckout: prCheckoutLocked.value,
-    skipSetupScript: skipSetupScript.value,
-    autoLoop: autoLoop.value,
-    agentPermissionMode: comparisonPermissionMode.value,
-  }),
-)
-
-// Same rules as when engine A changes: the global per-engine default when it
-// is in the catalogue, else 'auto'; an effort or permission mode the new
-// engine does not support is replaced by that engine's default. Re-run
-// whenever B changes so nothing chosen for one runtime lingers on another.
-watch(
-  [comparisonEngineId, comparisonModelOptions],
-  () => {
-    const validIds = comparisonModelOptions.value.map((m) => m.value)
-    if (validIds.length > 0) {
-      const globalDefault = settingsStore.global.defaultModelByEngine?.[comparisonEngineId.value]
-      if (typeof globalDefault === 'string' && validIds.includes(globalDefault)) {
-        comparisonModel.value = globalDefault
-      } else if (!validIds.includes(comparisonModel.value)) {
-        comparisonModel.value = validIds.includes('auto') ? 'auto' : (validIds[0] ?? 'auto')
-      }
-    }
-    const supportedModes = PERMISSION_MODES_BY_ENGINE[comparisonEngineId.value] ?? []
-    if (supportedModes.length > 0 && !supportedModes.includes(comparisonPermissionMode.value)) {
-      comparisonPermissionMode.value = deriveDefaultAgentPermissionMode(projectPath.value, comparisonEngineId.value)
-    }
-    const supportedEfforts = (EFFORT_OPTION_DEFS_BY_ENGINE[comparisonEngineId.value] ?? []).map((e) => e.value)
-    if (supportedEfforts.length > 0 && !supportedEfforts.includes(comparisonReasoningEffort.value)) {
-      comparisonReasoningEffort.value = supportedEfforts.includes('auto') ? 'auto' : (supportedEfforts[0] ?? 'auto')
-    }
-  },
-  { immediate: true },
-)
-
 /**
  * Clamp model / brainstorm model / permission mode / effort to the selected
  * engine's catalogue. On an engine switch (`preferGlobalDefault`) the model
@@ -1596,7 +1384,6 @@ function normaliseForEngine(preferGlobalDefault = false): void {
 }
 
 watch(selectedEngineId, () => {
-  if (selectedEngineId.value === 'mistral-vibe') comparisonMode.value = false
   normaliseForEngine(true)
 })
 
@@ -2570,19 +2357,6 @@ async function handleCreate() {
     return
   }
 
-  // Two engines need two worktrees. Reusing one existing folder for both would
-  // have them writing over each other, which is not a comparison.
-  if (comparisonMode.value && useExistingWorktree.value) {
-    $q.notify({ type: 'negative', message: t('createPage.compareNeedsNewWorktree'), position: 'top' })
-    return
-  }
-  // The user asked for a comparison: silently creating a single workspace
-  // instead would be the one outcome they did not ask for.
-  if (comparisonMode.value && (!comparisonEngineId.value || comparisonEngineId.value === selectedEngineId.value)) {
-    $q.notify({ type: 'negative', message: t('createPage.compareNeedsSecondEngine'), position: 'top' })
-    return
-  }
-
   submitting.value = true
   const wsStoreForProgress = useWebSocketStore()
 
@@ -2602,33 +2376,19 @@ async function handleCreate() {
     branchSlug = `task-${Date.now()}`
   }
 
-  // One entry per workspace to create: one normally, two in comparison mode.
-  const plans = comparisonMode.value
-    ? [
-        buildEnginePlan(selectedEngineId.value, name, branchSlug),
-        buildEnginePlan(comparisonEngineId.value, name, branchSlug),
-      ]
-    : [
-        {
-          engine: selectedEngineId.value,
-          name,
-          workingBranch: `${branchType.value}/${branchSlug}`,
-          model: model.value,
-          reasoningEffort: reasoningEffort.value,
-          agentPermissionMode: resolvedOverrides.value.agentPermissionMode,
-        },
-      ]
-  // Only ever set when there is something to compare against.
-  const comparisonId = plans.length > 1 ? `cmp-${randomToken()}` : undefined
-
-  const created: Array<{ id: string; workingBranch: string }> = []
+  let created: { id: string; workingBranch: string } | undefined
   try {
-    for (const plan of plans) {
-      // Sequential on purpose: each creation fetches, branches and builds a
-      // worktree in the same repository. Two of those at once contend on the
-      // git index lock, and the second one fails on a lock the first holds.
-      created.push(await createOneWorkspace(plan, comparisonId, wsStoreForProgress))
-    }
+    created = await createOneWorkspace(
+      {
+        engine: selectedEngineId.value,
+        name,
+        workingBranch: `${branchType.value}/${branchSlug}`,
+        model: model.value,
+        reasoningEffort: reasoningEffort.value,
+        agentPermissionMode: resolvedOverrides.value.agentPermissionMode,
+      },
+      wsStoreForProgress,
+    )
   } catch (err) {
     // The server undoes what it created when a step fails — every step past
     // `create-record` — so there is nothing half-built to navigate to, only an
@@ -2645,29 +2405,13 @@ async function handleCreate() {
       message: step ? t('createPage.errorAtStep', { step, message }) : message,
       actions: [{ label: t('common.close'), color: 'white' }],
     })
-    // A comparison whose second half failed leaves one real workspace behind.
-    // Saying so is the difference between a usable half-result and a mystery.
-    if (created.length > 0 && created.length < plans.length) {
-      $q.notify({
-        type: 'warning',
-        position: 'top',
-        timeout: 0,
-        multiLine: true,
-        message: t('createPage.comparisonPartial', { count: created.length, total: plans.length }),
-        actions: [{ label: t('common.close'), color: 'white' }],
-      })
-    }
   } finally {
     submitting.value = false
     creationId.value = null
     store.clearCreationProgress()
   }
 
-  const first = created[0]
-  const destination = workspaceCreationRoute(created)
-  // Nothing was created: the error was shown above, and nothing below may run
-  // — the prefs save and the navigation both assume at least one workspace.
-  if (!first || !destination) return
+  if (!created) return
 
   // Persist last-used inputs so the next Create-workspace visit pre-fills
   // them. Reached only after a successful create (see the guard above), so a
@@ -2689,7 +2433,7 @@ async function handleCreate() {
   // workspace that was already created. `onUnmounted` unregisters again; the
   // registry tolerates that (see unsaved-guard.test.ts).
   unregisterUnsavedScope('create:form')
-  void router.push(destination)
+  void router.push({ name: 'workspace', params: { id: created.id } })
 }
 
 interface EnginePlan {
@@ -2707,34 +2451,9 @@ function randomToken(): string {
     : `${Date.now()}-${Math.random().toString(36).slice(2)}`
 }
 
-/**
- * What to create for one engine of a comparison.
- *
- * Engine A takes the form's main settings, engine B the ones from its own
- * block. Nothing crosses over: a Codex model id or effort level means nothing
- * to Claude Code, and vice versa.
- */
-function buildEnginePlan(engineId: string, name: string, branchSlug: string): EnginePlan {
-  const isConfiguredEngine = engineId === selectedEngineId.value
-  const displayName = engines.value.find((e) => e.id === engineId)?.displayName ?? engineId
-  return {
-    engine: engineId,
-    // Both halves are suffixed, not just the second: "task" next to
-    // "task (Codex)" reads as if only one of them has an engine.
-    name: `${name} (${displayName})`,
-    workingBranch: `${branchType.value}/${branchSlug}-${engineId}`,
-    model: isConfiguredEngine ? model.value : comparisonModel.value,
-    reasoningEffort: isConfiguredEngine ? reasoningEffort.value : comparisonReasoningEffort.value,
-    agentPermissionMode: isConfiguredEngine
-      ? resolvedOverrides.value.agentPermissionMode
-      : resolvedComparisonOverrides.value.agentPermissionMode,
-  }
-}
-
 /** Create a single workspace, streaming its own progress channel. */
 async function createOneWorkspace(
   plan: EnginePlan,
-  comparisonId: string | undefined,
   wsStoreForProgress: ReturnType<typeof useWebSocketStore>,
 ): Promise<{ id: string; workingBranch: string }> {
   // Subscribe BEFORE posting: the first progress beats are emitted while the
@@ -2760,7 +2479,6 @@ async function createOneWorkspace(
       engine: plan.engine,
       model: plan.model,
       reasoningEffort: plan.reasoningEffort,
-      ...(comparisonId ? { comparisonId } : {}),
       ...(useNotion.value && isValidNotionUrl.value ? { notionUrl: getEffectiveNotionUrl() } : {}),
       ...(useSentry.value && isValidSentryUrl.value ? { sentryUrl: sentryUrl.value.trim() } : {}),
       ...(lockedPrUrl.value ? { prUrl: lockedPrUrl.value } : {}),
@@ -2777,13 +2495,8 @@ async function createOneWorkspace(
             autoLoop: true,
             autoLoopSessionMode: autoLoopSessionMode.value,
             autoLoopFinalReview: autoLoopFinalReview.value,
-            // In a comparison the brainstorm pickers are disabled: each engine
-            // brainstorms on the model and effort of its own block, so the two
-            // halves start from the same footing and no id from A's catalogue
-            // ever reaches B.
-            ...(comparisonId
-              ? { brainstormModel: plan.model, brainstormReasoningEffort: plan.reasoningEffort }
-              : { brainstormModel: brainstormModel.value, brainstormReasoningEffort: brainstormReasoningEffort.value }),
+            brainstormModel: brainstormModel.value,
+            brainstormReasoningEffort: brainstormReasoningEffort.value,
           }
         : {}),
       // Resolved in exactly one place (utils/create-overrides) so what the page

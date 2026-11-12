@@ -61,7 +61,6 @@ export function initSchema(db: Database.Database): void {
       pr_ci_failure_dismissed_at TEXT,
       worktree_purged_at TEXT,
       worktree_purge_restore_data TEXT,
-      comparison_id TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       sprint_id TEXT REFERENCES sprints(id) ON DELETE SET NULL

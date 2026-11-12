@@ -58,8 +58,8 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 59', () => {
-    expect(SCHEMA_VERSION).toBe(59)
+  it('exporte SCHEMA_VERSION = 60', () => {
+    expect(SCHEMA_VERSION).toBe(60)
   })
 
   it('migration v33 records and backfills the engine on agent sessions', () => {
@@ -2244,27 +2244,31 @@ describe('v39 — agent_sessions.end_reason', () => {
   })
 })
 
-describe('v40 — workspaces.comparison_id', () => {
-  it('adds the column to a database that predates it, without losing rows', () => {
+describe('v60 — retire workspace grouping without deleting workspaces', () => {
+  it('preserves workspaces and their history and converges with fresh installs', () => {
     const db = new Database(':memory:')
     migrateFixture(db)
-    // Rewind to v39: drop the column and forget the migration ever ran.
-    db.exec('ALTER TABLE workspaces DROP COLUMN comparison_id')
-    db.prepare('DELETE FROM schema_migrations WHERE version = 40').run()
-    db.prepare(
-      `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
-       VALUES ('w1', 'legacy', '/tmp/p', 'main', 'feat', '2026-01-01', '2026-01-01')`,
-    ).run()
+    const freshColumns = db.pragma('table_info(workspaces)')
+    db.exec('ALTER TABLE workspaces ADD COLUMN comparison_id TEXT')
+    db.prepare('DELETE FROM schema_migrations WHERE version = 60').run()
+    db.exec(`
+      INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, comparison_id, created_at, updated_at)
+      VALUES ('w1', 'Task (Claude Code)', '/tmp/p', 'main', 'feat-a', 'legacy-group', '2026-01-01', '2026-01-01'),
+             ('w2', 'Task (Codex)', '/tmp/p', 'main', 'feat-b', 'legacy-group', '2026-01-01', '2026-01-01');
+      INSERT INTO ws_events (id, workspace_id, type, payload, created_at)
+      VALUES ('event1', 'w1', 'agent:message', '{"text":"keep me"}', '2026-01-01');
+    `)
+    const events = db.prepare('SELECT * FROM ws_events').all()
+    const workspaces = db.prepare('SELECT id, name, working_branch FROM workspaces ORDER BY id').all()
 
     migrateFixture(db)
+    migrations.find((migration) => migration.version === 60)?.migrate(db)
 
-    const row = db.prepare('SELECT name, comparison_id FROM workspaces WHERE id = ?').get('w1') as {
-      name: string
-      comparison_id: string | null
-    }
-    expect(row.name).toBe('legacy')
-    // An existing workspace belongs to no comparison — that is a fact, not a gap.
-    expect(row.comparison_id).toBeNull()
+    expect(db.pragma('table_info(workspaces)')).toEqual(freshColumns)
+    expect(db.prepare('SELECT id, name, working_branch FROM workspaces ORDER BY id').all()).toEqual(workspaces)
+    expect(db.prepare('SELECT * FROM ws_events').all()).toEqual(events)
+    expect(getPendingMigrations(db)).toEqual([])
+    expect(getMigrationHistory(db).at(-1)?.version).toBe(SCHEMA_VERSION)
     db.close()
   })
 })
@@ -2629,7 +2633,7 @@ describe('persistent memory schema migration v51', () => {
     const beforeUpgrade = memoryObjects(old)
     expect(beforeUpgrade.objects).toEqual([])
     expect(getMigrationHistory(old).at(-1)?.version).toBe(50)
-    expect(getPendingMigrations(old)).toEqual([51, 52, 53, 54, 55, 56, 57, 58, 59])
+    expect(getPendingMigrations(old)).toEqual([51, 52, 53, 54, 55, 56, 57, 58, 59, 60])
 
     runMigrations(old)
     migrations.find((entry) => entry.version === 51)!.migrate(old)
@@ -2769,7 +2773,7 @@ describe('durable final reviews v52', () => {
       INSERT INTO pending_review_returns VALUES('w','review','original','{"engine":"codex"}','{"engine":"claude-code"}','c');`)
     for (const migration of migrations.filter((m) => m.version <= 51))
       old.prepare('INSERT INTO schema_migrations VALUES(?,?,?)').run(migration.version, migration.name, 'v51')
-    expect(getPendingMigrations(old)).toEqual([52, 53, 54, 55, 56, 57, 58, 59])
+    expect(getPendingMigrations(old)).toEqual([52, 53, 54, 55, 56, 57, 58, 59, 60])
     runMigrations(old)
     migrations.find((m) => m.version === 52)!.migrate(old)
     expect(old.prepare('SELECT * FROM pending_review_returns').get()).toEqual({
@@ -2923,12 +2927,15 @@ describe('Mistral memory engine migration v55', () => {
       const column = table === 'memory_contexts' || table === 'memory_budget_contexts' ? 'engine' : 'source_engine'
       expect(() => db.exec(`UPDATE ${table} SET ${column} = 'mistral-vibe'`)).toThrow(/CHECK/)
     }
-    expect(getPendingMigrations(db)).toEqual([55, 56, 57, 58, 59])
+    expect(getPendingMigrations(db)).toEqual([55, 56, 57, 58, 59, 60])
     runMigrations(db)
     expect({ ...rows(db), schema_migrations: before.schema_migrations }).toEqual({
       ...before,
       agent_sessions: before.agent_sessions.map((row: unknown) => ({ ...(row as object), role: 'primary' })),
-      workspaces: before.workspaces.map((row: unknown) => ({ ...(row as object), sprint_id: null })),
+      workspaces: before.workspaces.map((row: unknown) => {
+        const { comparison_id: _removed, ...workspace } = row as Record<string, unknown>
+        return { ...workspace, sprint_id: null }
+      }),
     })
     expect(db.pragma('foreign_keys', { simple: true })).toBe(1)
     expect(db.pragma('foreign_key_check')).toEqual([])
@@ -2941,7 +2948,7 @@ describe('Mistral memory engine migration v55', () => {
     ).toEqual(indexes)
     expect(getMigrationHistory(db).at(-1)).toMatchObject({
       version: SCHEMA_VERSION,
-      name: 'workspace-sprints',
+      name: 'remove-workspace-engine-comparison',
     })
     const fresh = new Database(':memory:')
     initSchema(fresh)
@@ -2983,7 +2990,7 @@ describe('Mistral memory engine migration v55', () => {
     spy.mockRestore()
     expect(rows(db)).toEqual(before)
     expect(db.prepare('SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY name').all()).toEqual(schema)
-    expect(getPendingMigrations(db)).toEqual([55, 56, 57, 58, 59])
+    expect(getPendingMigrations(db)).toEqual([55, 56, 57, 58, 59, 60])
     expect(db.pragma('foreign_key_check')).toEqual([])
     runMigrations(db)
     expect(getPendingMigrations(db)).toEqual([])

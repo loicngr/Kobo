@@ -220,7 +220,6 @@ describe('MCP workspace creation', () => {
           additional_instructions: 'Inspect',
         },
         workflow_policy: { commit: 'automatic', push: 'manual', publish: 'manual' },
-        comparison_id: 'pair',
         creation_id: 'request',
         notion_page_id: 'page',
       },
@@ -237,7 +236,6 @@ describe('MCP workspace creation', () => {
         additionalInstructions: 'Inspect',
       },
       workflowPolicy: { commit: 'automatic', push: 'manual', publish: 'manual' },
-      comparisonId: 'pair',
       creationId: 'request',
       notionPageId: 'page',
     })
