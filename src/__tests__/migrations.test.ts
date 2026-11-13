@@ -58,8 +58,8 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 61', () => {
-    expect(SCHEMA_VERSION).toBe(61)
+  it('exporte SCHEMA_VERSION = 64', () => {
+    expect(SCHEMA_VERSION).toBe(64)
   })
 
   it('migration v33 records and backfills the engine on agent sessions', () => {
@@ -2633,7 +2633,7 @@ describe('persistent memory schema migration v51', () => {
     const beforeUpgrade = memoryObjects(old)
     expect(beforeUpgrade.objects).toEqual([])
     expect(getMigrationHistory(old).at(-1)?.version).toBe(50)
-    expect(getPendingMigrations(old)).toEqual([51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61])
+    expect(getPendingMigrations(old)).toEqual([51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64])
 
     runMigrations(old)
     migrations.find((entry) => entry.version === 51)!.migrate(old)
@@ -2773,7 +2773,7 @@ describe('durable final reviews v52', () => {
       INSERT INTO pending_review_returns VALUES('w','review','original','{"engine":"codex"}','{"engine":"claude-code"}','c');`)
     for (const migration of migrations.filter((m) => m.version <= 51))
       old.prepare('INSERT INTO schema_migrations VALUES(?,?,?)').run(migration.version, migration.name, 'v51')
-    expect(getPendingMigrations(old)).toEqual([52, 53, 54, 55, 56, 57, 58, 59, 60, 61])
+    expect(getPendingMigrations(old)).toEqual([52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64])
     runMigrations(old)
     migrations.find((m) => m.version === 52)!.migrate(old)
     expect(old.prepare('SELECT * FROM pending_review_returns').get()).toEqual({
@@ -2927,14 +2927,14 @@ describe('Mistral memory engine migration v55', () => {
       const column = table === 'memory_contexts' || table === 'memory_budget_contexts' ? 'engine' : 'source_engine'
       expect(() => db.exec(`UPDATE ${table} SET ${column} = 'mistral-vibe'`)).toThrow(/CHECK/)
     }
-    expect(getPendingMigrations(db)).toEqual([55, 56, 57, 58, 59, 60, 61])
+    expect(getPendingMigrations(db)).toEqual([55, 56, 57, 58, 59, 60, 61, 62, 63, 64])
     runMigrations(db)
     expect({ ...rows(db), schema_migrations: before.schema_migrations }).toEqual({
       ...before,
       agent_sessions: before.agent_sessions.map((row: unknown) => ({ ...(row as object), role: 'primary' })),
       workspaces: before.workspaces.map((row: unknown) => {
         const { comparison_id: _removed, ...workspace } = row as Record<string, unknown>
-        return { ...workspace, sprint_id: null }
+        return { ...workspace, sprint_id: null, slack_channel_id: null, slack_question_mirror: 'never' }
       }),
     })
     expect(db.pragma('foreign_keys', { simple: true })).toBe(1)
@@ -2942,13 +2942,13 @@ describe('Mistral memory engine migration v55', () => {
     expect(
       db
         .prepare(
-          "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name NOT IN ('parallel_reviews', 'pinned_messages', 'browser_sessions', 'sprints') AND name != 'idx_workspaces_sprint_id' AND name NOT IN ('idx_search_fragments_workspace_id', 'idx_progress_bars_session_id', 'idx_memory_operations_source_session_id', 'idx_memory_entries_source_workspace_id', 'idx_memory_entries_source_session_id', 'idx_memory_proposals_source_workspace_id', 'idx_memory_proposals_source_session_id') ORDER BY name",
+          "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name NOT IN ('parallel_reviews', 'pinned_messages', 'browser_sessions', 'sprints', 'slack_messages', 'slack_questions') AND name NOT IN ('idx_workspaces_sprint_id', 'idx_workspaces_slack_channel') AND name NOT IN ('idx_search_fragments_workspace_id', 'idx_progress_bars_session_id', 'idx_memory_operations_source_session_id', 'idx_memory_entries_source_workspace_id', 'idx_memory_entries_source_session_id', 'idx_memory_proposals_source_workspace_id', 'idx_memory_proposals_source_session_id') ORDER BY name",
         )
         .all(),
     ).toEqual(indexes)
     expect(getMigrationHistory(db).at(-1)).toMatchObject({
       version: SCHEMA_VERSION,
-      name: 'index-cascade-foreign-keys',
+      name: 'slack-question-mirror',
     })
     const fresh = new Database(':memory:')
     initSchema(fresh)
@@ -2990,7 +2990,7 @@ describe('Mistral memory engine migration v55', () => {
     spy.mockRestore()
     expect(rows(db)).toEqual(before)
     expect(db.prepare('SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY name').all()).toEqual(schema)
-    expect(getPendingMigrations(db)).toEqual([55, 56, 57, 58, 59, 60, 61])
+    expect(getPendingMigrations(db)).toEqual([55, 56, 57, 58, 59, 60, 61, 62, 63, 64])
     expect(db.pragma('foreign_key_check')).toEqual([])
     runMigrations(db)
     expect(getPendingMigrations(db)).toEqual([])
@@ -3104,7 +3104,7 @@ describe('sprint migration v59', () => {
     upgraded.pragma('foreign_keys = ON')
     runMigrations(upgraded)
     upgraded.exec(
-      `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at) VALUES ('old', 'Old', '/repo', 'main', 'branch', 'now', 'now'); DROP INDEX idx_workspaces_sprint_id; ALTER TABLE workspaces DROP COLUMN sprint_id; DROP TABLE sprints; DELETE FROM schema_migrations WHERE version = 59`,
+      `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at) VALUES ('old', 'Old', '/repo', 'main', 'branch', 'now', 'now'); DROP TABLE slack_questions; ALTER TABLE workspaces DROP COLUMN slack_question_mirror; DROP TABLE slack_messages; DROP INDEX idx_workspaces_slack_channel; ALTER TABLE workspaces DROP COLUMN slack_channel_id; DROP INDEX idx_workspaces_sprint_id; ALTER TABLE workspaces DROP COLUMN sprint_id; DROP TABLE sprints; DELETE FROM schema_migrations WHERE version IN (59, 62, 64)`,
     )
     runMigrations(upgraded)
     runMigrations(fresh)
@@ -3194,5 +3194,114 @@ describe('foreign key index migration v61', () => {
       upgraded.close()
       fresh.close()
     }
+  })
+})
+
+describe('slack integration migration v62', () => {
+  it('upgrades v61 without losing workspaces and matches the fresh schema', () => {
+    const old = new Database(':memory:')
+    runMigrations(old)
+    old.exec(
+      'DROP TABLE slack_questions; ALTER TABLE workspaces DROP COLUMN slack_question_mirror; DROP TABLE slack_messages; DROP INDEX idx_workspaces_slack_channel; ALTER TABLE workspaces DROP COLUMN slack_channel_id; DELETE FROM schema_migrations WHERE version IN (62, 63, 64)',
+    )
+    old
+      .prepare(
+        "INSERT INTO workspaces(id,name,project_path,source_branch,working_branch,created_at,updated_at) VALUES ('preserved','Preserved','/tmp','main','work','now','now')",
+      )
+      .run()
+    expect(getPendingMigrations(old)).toEqual([62, 63, 64])
+    runMigrations(old)
+    expect(old.prepare("SELECT name, slack_channel_id FROM workspaces WHERE id='preserved'").get()).toEqual({
+      name: 'Preserved',
+      slack_channel_id: null,
+    })
+    expect(getMigrationHistory(old).at(-1)?.version).toBe(SCHEMA_VERSION)
+    const fresh = new Database(':memory:')
+    initSchema(fresh)
+    for (const table of ['slack_messages', 'workspaces'])
+      expect(old.prepare(`PRAGMA table_info(${table})`).all()).toEqual(
+        fresh.prepare(`PRAGMA table_info(${table})`).all(),
+      )
+    old.close()
+    fresh.close()
+  })
+})
+
+describe('slack buttons migration v63', () => {
+  it('upgrades v62 without losing Slack messages and matches the fresh schema', () => {
+    const old = new Database(':memory:')
+    runMigrations(old)
+    old.exec(
+      'ALTER TABLE slack_messages DROP COLUMN buttons; ALTER TABLE slack_messages DROP COLUMN buttons_multiple; ALTER TABLE slack_messages DROP COLUMN answered_at; ALTER TABLE slack_messages DROP COLUMN click_of; DELETE FROM schema_migrations WHERE version = 63',
+    )
+    old.exec(
+      `INSERT INTO workspaces(id,name,project_path,source_branch,working_branch,created_at,updated_at) VALUES ('w','W','/tmp','main','work','now','now');
+       INSERT INTO slack_messages(channel_id,ts,thread_ts,workspace_id,user_id,user_name,text,direction,state,files,created_at,updated_at)
+       VALUES ('C1','1.1','1.1','w','U1','alice','kept','in','delivered','[]','now','now')`,
+    )
+    expect(getPendingMigrations(old)).toEqual([63])
+    runMigrations(old)
+    expect(
+      old.prepare('SELECT text, buttons, buttons_multiple, answered_at, click_of FROM slack_messages').get(),
+    ).toEqual({
+      text: 'kept',
+      buttons: null,
+      buttons_multiple: 0,
+      answered_at: null,
+      click_of: null,
+    })
+    expect(getMigrationHistory(old).find((m) => m.version === 63)).toMatchObject({ name: 'slack-buttons' })
+    const fresh = new Database(':memory:')
+    initSchema(fresh)
+    expect(old.prepare('PRAGMA table_info(slack_messages)').all()).toEqual(
+      fresh.prepare('PRAGMA table_info(slack_messages)').all(),
+    )
+    migrations.find((m) => m.version === 63)!.migrate(old)
+    expect(old.prepare('PRAGMA table_info(slack_messages)').all()).toEqual(
+      fresh.prepare('PRAGMA table_info(slack_messages)').all(),
+    )
+    old.close()
+    fresh.close()
+  })
+})
+
+describe('slack question mirror migration v64', () => {
+  it('upgrades v63 without losing workspaces or Slack messages and matches the fresh schema', () => {
+    const old = new Database(':memory:')
+    runMigrations(old)
+    old.exec(
+      'DROP TABLE slack_questions; ALTER TABLE workspaces DROP COLUMN slack_question_mirror; DELETE FROM schema_migrations WHERE version = 64',
+    )
+    old.exec(
+      `INSERT INTO workspaces(id,name,project_path,source_branch,working_branch,slack_channel_id,created_at,updated_at) VALUES ('w','W','/tmp','main','work','C1','now','now');
+       INSERT INTO slack_messages(channel_id,ts,thread_ts,workspace_id,user_id,user_name,text,direction,state,files,created_at,updated_at)
+       VALUES ('C1','1.1','1.1','w','U1','alice','kept','in','delivered','[]','now','now')`,
+    )
+    expect(getPendingMigrations(old)).toEqual([64])
+    runMigrations(old)
+    expect(old.prepare('SELECT slack_channel_id, slack_question_mirror FROM workspaces').get()).toEqual({
+      slack_channel_id: 'C1',
+      slack_question_mirror: 'never',
+    })
+    expect(old.prepare('SELECT text FROM slack_messages').get()).toEqual({ text: 'kept' })
+    expect(getMigrationHistory(old).at(-1)).toMatchObject({ version: SCHEMA_VERSION, name: 'slack-question-mirror' })
+    expect(SCHEMA_VERSION).toBe(64)
+    expect(() => old.exec("UPDATE workspaces SET slack_question_mirror = 'sometimes'")).toThrow(/CHECK/)
+    const fresh = new Database(':memory:')
+    initSchema(fresh)
+    const shapeOf = (db: Database.Database) =>
+      ['workspaces', 'slack_questions'].map((table) => ({
+        columns: db.prepare(`PRAGMA table_info(${table})`).all(),
+        keys: db.prepare(`PRAGMA foreign_key_list(${table})`).all(),
+        indexes: db
+          .prepare(`SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name=? ORDER BY name`)
+          .all(table),
+      }))
+    expect(shapeOf(old)).toEqual(shapeOf(fresh))
+    migrations.find((m) => m.version === 64)!.migrate(old)
+    expect(shapeOf(old)).toEqual(shapeOf(fresh))
+    old.exec("DELETE FROM workspaces WHERE id = 'w'")
+    old.close()
+    fresh.close()
   })
 })

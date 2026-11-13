@@ -5,6 +5,10 @@ import { describe, expect, it } from 'vitest'
 const source = readFileSync(join(process.cwd(), 'src/components/TurnCard.vue'), 'utf-8')
 
 describe('TurnCard', () => {
+  it('labels Slack-sourced user messages with the Slack author', () => {
+    expect(source).toContain("t('chat.slackUser', { name: source.userName })")
+  })
+
   it('uses distinct accents for user and agent turns', () => {
     expect(source).toContain("accent: 'var(--kobo-turn-user)'")
     expect(source).toContain("accent: 'var(--kobo-turn-agent)'")

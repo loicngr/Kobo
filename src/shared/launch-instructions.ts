@@ -1,4 +1,5 @@
 import { PROGRESS_BAR_PROMPT } from './progress-bar-prompts.js'
+import { SLACK_PROMPT, SLACK_READ_ONLY_PROMPT } from './slack-tools.js'
 
 export interface KoboLaunchContext {
   engine: 'claude-code' | 'codex' | 'mistral-vibe'
@@ -9,6 +10,7 @@ export interface KoboLaunchContext {
   reviewOnly?: boolean
   autoLoop?: boolean
   progressReporting?: boolean
+  slackLinked?: boolean
 }
 
 /** Only application-owned text: no provider preset, environment or capability values. */
@@ -24,6 +26,8 @@ export function getKoboPromptCapabilities(env?: Record<string, string | undefine
     finalReview: Boolean(env?.KOBO_FINAL_REVIEW_SESSION_ID && env.KOBO_FINAL_REVIEW_TOKEN),
     progressReporting: Boolean(env?.KOBO_PROGRESS_SESSION_TOKEN),
     reviewOnly: env?.KOBO_REVIEW_ONLY === '1',
+    // Prompt composition only: Slack tool authorization never trusts this value.
+    slackLinked: Boolean(env?.KOBO_SLACK_CHANNEL_ID),
   }
 }
 
@@ -97,6 +101,7 @@ export function buildKoboLaunchInstructions(context: KoboLaunchContext): KoboLau
     'Only one agent edits the worktree at a time. Parallel read-only analysis is allowed; wait for an editing subagent to finish before editing or running tests yourself. Give each delegate its objective, exact worktree path, relevant user constraints, current permissions, intended test runtime and applicable Kōbō tools and reporting rules. Do not assume it inherits this context. A delegate without the required managed tools must ask its parent to coordinate the operation within the same permissions, not bypass Kōbō.',
   )
   if (context.progressReporting) lines.push(PROGRESS_BAR_PROMPT)
+  if (context.slackLinked) lines.push(restricted ? SLACK_READ_ONLY_PROMPT : SLACK_PROMPT)
   lines.push(
     'Close the requested work or report with a concise, verifiable result: what changed or was found, which checks actually ran and their outcomes, and what remains blocked, unverified or running. Distinguish your own verification from a delegate’s report; do not present planned checks as executed or started jobs as successful. Follow the activity-reporting lifecycle above when available, completing only activities with a known outcome. Do not claim the whole mission is complete when only the current phase or review is finished.',
   )

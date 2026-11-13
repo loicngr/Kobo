@@ -164,7 +164,11 @@ const header = computed<HeaderMeta>(() => {
       const first = props.turn.items[0]
       const source = first?.type === 'user' ? first.source : undefined
       return {
-        label: source ? t('chat.externalLlm', { name: source.clientName }) : t('chat.you'),
+        label: !source
+          ? t('chat.you')
+          : source.kind === 'slack'
+            ? t('chat.slackUser', { name: source.userName })
+            : t('chat.externalLlm', { name: source.clientName }),
         accent: 'var(--kobo-turn-user)',
         badgeClass: 'turn-badge-user',
       }

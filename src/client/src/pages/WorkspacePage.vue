@@ -77,6 +77,8 @@
               v-model:model="currentModel" v-model:reasoning-effort="currentReasoningEffort"
               @rename="openRenameDialog" @copy-session-id="copyEngineSessionId" @delete-session="confirmDeleteSession"
               @update-workflow="setWorkflowMode" />
+            <WorkspaceSlackChannel :workspace-id="selectedWs.id" :slack-channel-id="selectedWs.slackChannelId ?? null"
+              :slack-question-mirror="selectedWs.slackQuestionMirror ?? 'never'" :open="nativeConfigurationOpen" />
           </q-list></q-menu>
         </q-btn>
         <q-btn v-if="(devServerStore.getStatus(selectedWs.id)?.status ?? selectedWs.devServerStatus) === 'running'"
@@ -382,6 +384,7 @@ import StaleSessionBanner from 'src/components/StaleSessionBanner.vue'
 import WakeupBanner from 'src/components/WakeupBanner.vue'
 import WorkspaceHistorySearch from 'src/components/WorkspaceHistorySearch.vue'
 import WorkspacePreview from 'src/components/WorkspacePreview.vue'
+import WorkspaceSlackChannel from 'src/components/WorkspaceSlackChannel.vue'
 import WorkspaceToolbarSelectors from 'src/components/WorkspaceToolbarSelectors.vue'
 import WorkspaceWhipControl from 'src/components/WorkspaceWhipControl.vue'
 

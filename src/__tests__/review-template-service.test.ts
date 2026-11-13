@@ -36,6 +36,8 @@ function makeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
     worktreePurgedAt: null,
     worktreePurgeRestoreData: null,
     sprintId: null,
+    slackChannelId: null,
+    slackQuestionMirror: 'never',
     tags: [],
     engine: 'claude-code',
     autoLoop: false,

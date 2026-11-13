@@ -122,6 +122,9 @@ interface GlobalSettings {
   agentWatchdogEnabled: boolean
   forceImmediateMessages: boolean
   autoExitPlanMode?: boolean
+  agentWorkspaceLifecycleEnabled: boolean
+  slackEnabled: boolean
+  slackAllowedUserIds: string[]
   reviewDefaultInstructions?: string
   showProgressBars: boolean
   serializeDevServerStarts: boolean
@@ -279,6 +282,9 @@ export const useSettingsStore = defineStore('settings', {
       agentWatchdogEnabled: false,
       forceImmediateMessages: false,
       autoExitPlanMode: false,
+      agentWorkspaceLifecycleEnabled: false,
+      slackEnabled: false,
+      slackAllowedUserIds: [],
       reviewDefaultInstructions: '',
       showProgressBars: true,
       serializeDevServerStarts: true,

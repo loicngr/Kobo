@@ -27,6 +27,7 @@ describe('LatestThinkingPanel', () => {
         id: 'w',
         name: 'Test',
         sprintId: null,
+        slackChannelId: null,
         projectPath: '/tmp/project',
         sourceBranch: 'main',
         workingBranch: 'feature',

@@ -135,3 +135,37 @@ it('puts Vibe native discovery and continuation in the dispatched prompt', async
   expect(instructions.promptPrefix).not.toContain('mcp__kobo-tasks__')
   expect(instructions.systemAppend).toBe('')
 })
+
+describe('Slack launch instructions', () => {
+  it('composes Slack guidance only for a linked channel and gates posting on restriction', async () => {
+    const { buildKoboLaunchInstructions, getKoboPromptCapabilities } = await import('../shared/launch-instructions.js')
+    const prompt = (env: Record<string, string>, extra: Record<string, unknown> = {}) =>
+      buildKoboLaunchInstructions({
+        engine: 'claude-code',
+        permissionMode: 'plan',
+        ...getKoboPromptCapabilities(env),
+        ...extra,
+      }).promptPrefix
+    const linked = { KOBO_SLACK_CHANNEL_ID: 'C123' }
+    const plan = prompt(linked)
+    expect(plan).toContain('slack_post_message')
+    expect(plan).toContain('slack_read_thread')
+    expect(plan).toContain('mrkdwn')
+    expect(plan).not.toContain('C123')
+    // Kōbō never relays the agent's output; its only automatic posts are mirrored questions and approval notices.
+    expect(plan).not.toContain('Nothing is sent to Slack automatically')
+    expect(plan).toContain('The only automatic posts are your blocking questions')
+    for (const restricted of [
+      prompt({ ...linked, KOBO_REVIEW_ONLY: '1' }),
+      prompt(linked, { readOnly: true }),
+      prompt({ ...linked, KOBO_HANDOFF_ID: 'h', KOBO_HANDOFF_TOKEN: 't' }),
+      prompt({ ...linked, KOBO_FINAL_REVIEW_SESSION_ID: 's', KOBO_FINAL_REVIEW_TOKEN: 't' }),
+    ]) {
+      expect(restricted).toContain('slack_read_thread')
+      expect(restricted).not.toContain('slack_post_message')
+    }
+    const unlinked = prompt({})
+    expect(unlinked).not.toContain('slack_post_message')
+    expect(unlinked).not.toContain('slack_read_thread')
+  })
+})

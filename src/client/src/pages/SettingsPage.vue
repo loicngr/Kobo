@@ -256,7 +256,7 @@
               class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
             >
 
-              <div class="q-mb-md" data-tour="settings-agent-watchdog">
+              <div class="settings-subcard q-pa-md" data-tour="settings-agent-watchdog">
                 <q-toggle
                   v-model="globalAgentWatchdogEnabled"
                   :label="$t('settings.agentWatchdogEnabled')"
@@ -267,48 +267,58 @@
                 </div>
               </div>
 
-              <div class="q-mb-md">
+              <div class="settings-subcard q-pa-md">
                 <q-toggle v-model="globalAutoExitPlanMode" :label="$t('settings.autoExitPlanMode')" color="primary" data-test="auto-exit-plan-mode" />
                 <div class="text-caption text-kobo-3 q-mt-xs">{{ $t('settings.autoExitPlanModeHint') }}</div>
               </div>
 
-              <q-input
-                v-model.number="globalMaxConcurrentAgents"
-                data-test="max-concurrent-agents"
-                type="number"
-                min="0"
-                step="1"
-                :label="$t('settings.maxConcurrentAgents')"
-                :hint="$t('settings.maxConcurrentAgentsHint')"
-                :rules="[() => maxConcurrentAgentsValid || $t('settings.maxConcurrentAgentsInvalid')]"
-                dense
-                dark
-                outlined
-                class="q-mb-md"
-              />
+              <div class="settings-subcard q-pa-md">
+                <q-toggle v-model="globalAgentWorkspaceLifecycleEnabled" :label="$t('settings.agentWorkspaceLifecycle')" color="primary" data-test="agent-workspace-lifecycle" />
+                <div class="text-caption text-kobo-3 q-mt-xs">{{ $t('settings.agentWorkspaceLifecycleHint') }}</div>
+              </div>
 
-              <div class="q-mb-md" data-tour="settings-immediate-messages">
+              <div class="settings-subcard q-pa-md">
+                <div class="text-subtitle2 q-mb-sm">{{ $t('settings.executionLimitsSection') }}</div>
+                <q-input
+                  v-model.number="globalMaxConcurrentAgents"
+                  data-test="max-concurrent-agents"
+                  type="number"
+                  min="0"
+                  step="1"
+                  :label="$t('settings.maxConcurrentAgents')"
+                  :hint="$t('settings.maxConcurrentAgentsHint')"
+                  :rules="[() => maxConcurrentAgentsValid || $t('settings.maxConcurrentAgentsInvalid')]"
+                  dense
+                  dark
+                  outlined
+                />
+              </div>
+
+              <div class="settings-subcard q-pa-md" data-tour="settings-immediate-messages">
                 <q-toggle v-model="globalForceImmediateMessages" :label="$t('settings.forceImmediateMessages')" color="primary" />
                 <div class="text-caption text-kobo-3 q-mt-xs">{{ $t('settings.forceImmediateMessagesHint') }}</div>
               </div>
 
-              <div class="q-mb-md" data-tour="settings-progress-bars">
+              <div class="settings-subcard q-pa-md" data-tour="settings-progress-bars">
                 <q-toggle v-model="globalShowProgressBars" :label="$t('settings.showProgressBars')" color="primary" />
                 <div class="text-caption text-kobo-3 q-mt-xs">{{ $t('settings.showProgressBarsHint') }}</div>
               </div>
 
-              <q-input
-                v-model.number="globalAutoLoopMaxRetries"
-                :label="$t('settings.autoLoopMaxRetries')"
-                :hint="$t('settings.autoLoopMaxRetriesHint')"
-                type="number"
-                min="1"
-                max="20"
-                dense
-                dark
-                outlined
-                class="settings-input q-mb-md"
-              />
+              <div class="settings-subcard q-pa-md">
+                <div class="text-subtitle2 q-mb-sm">{{ $t('settings.autoRetrySection') }}</div>
+                <q-input
+                  v-model.number="globalAutoLoopMaxRetries"
+                  :label="$t('settings.autoLoopMaxRetries')"
+                  :hint="$t('settings.autoLoopMaxRetriesHint')"
+                  type="number"
+                  min="1"
+                  max="20"
+                  dense
+                  dark
+                  outlined
+                  class="settings-input q-mb-md"
+                />
+              </div>
 
               <section class="settings-subcard q-pa-md" aria-labelledby="settings-claude-title">
                 <h3 id="settings-claude-title" class="text-subtitle1 text-weight-medium q-mt-none q-mb-md">{{ $t('workspacePage.engineClaude') }}</h3>
@@ -1349,7 +1359,9 @@ where ffmpeg</pre>
             >
               <q-tab name="notion" icon="integration_instructions" :label="$t('settings.nav.notion')" data-test="integration-tab-notion" />
               <q-tab name="sentry" icon="bug_report" :label="$t('settings.nav.sentry')" data-test="integration-tab-sentry" />
+              <q-tab name="slack" icon="forum" :label="$t('settings.nav.slack')" data-test="integration-tab-slack" />
             </q-tabs>
+            <SlackSettings v-if="integrationSection === 'slack'" />
             <div v-if="integrationSection === 'notion'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <q-toggle v-model="globalNotionEnabled" :label="$t('settings.integrationEnabled')" dark dense color="primary" />
             </div>
@@ -2904,6 +2916,7 @@ import MemorySettingsPanel from 'src/components/MemorySettingsPanel.vue'
 import PrNotificationSoundSettings from 'src/components/PrNotificationSoundSettings.vue'
 import ScriptVariablesHelp from 'src/components/ScriptVariablesHelp.vue'
 import SettingsNavList from 'src/components/SettingsNavList.vue'
+import SlackSettings from 'src/components/SlackSettings.vue'
 import TourReplayButton from 'src/components/TourReplayButton.vue'
 import WhipShortcutRecorder from 'src/components/WhipShortcutRecorder.vue'
 import WorkflowPolicyEditor from 'src/components/WorkflowPolicyEditor.vue'
@@ -2971,7 +2984,7 @@ const activeTab = ref('general')
 const navDrawerOpen = ref(false)
 
 // Notion and Sentry share one nav entry; their former tab ids still resolve (links, tours, tests).
-const integrationTab = ref<'notion' | 'sentry'>('notion')
+const integrationTab = ref<'notion' | 'sentry' | 'slack'>('notion')
 const integrationSection = computed(() => (activeTab.value === 'integrations' ? integrationTab.value : null))
 
 function selectTab(tab: string) {
@@ -3060,6 +3073,7 @@ const globalAutoLoopMaxRetries = ref(5)
 const globalAgentWatchdogEnabled = ref(false)
 const globalForceImmediateMessages = ref(false)
 const globalAutoExitPlanMode = ref(false)
+const globalAgentWorkspaceLifecycleEnabled = ref(false)
 const globalReviewDefaultInstructions = ref('')
 const globalShowProgressBars = ref(true)
 const globalSerializeDevServerStarts = ref(true)
@@ -4168,6 +4182,7 @@ function readGlobalForm(): Record<string, unknown> {
     agentWatchdogEnabled: globalAgentWatchdogEnabled.value,
     forceImmediateMessages: globalForceImmediateMessages.value,
     autoExitPlanMode: globalAutoExitPlanMode.value,
+    agentWorkspaceLifecycleEnabled: globalAgentWorkspaceLifecycleEnabled.value,
     reviewDefaultInstructions: globalReviewDefaultInstructions.value,
     showProgressBars: globalShowProgressBars.value,
     serializeDevServerStarts: globalSerializeDevServerStarts.value,
@@ -4315,6 +4330,7 @@ function syncGlobalForm() {
   globalAgentWatchdogEnabled.value = store.global.agentWatchdogEnabled === true
   globalForceImmediateMessages.value = store.global.forceImmediateMessages === true
   globalAutoExitPlanMode.value = store.global.autoExitPlanMode === true
+  globalAgentWorkspaceLifecycleEnabled.value = store.global.agentWorkspaceLifecycleEnabled === true
   globalReviewDefaultInstructions.value = store.global.reviewDefaultInstructions ?? ''
   globalShowProgressBars.value = store.global.showProgressBars !== false
   globalSerializeDevServerStarts.value = store.global.serializeDevServerStarts !== false
@@ -4719,6 +4735,7 @@ async function saveGlobal() {
       agentWatchdogEnabled: globalAgentWatchdogEnabled.value,
       forceImmediateMessages: globalForceImmediateMessages.value,
       autoExitPlanMode: globalAutoExitPlanMode.value,
+      agentWorkspaceLifecycleEnabled: globalAgentWorkspaceLifecycleEnabled.value,
       reviewDefaultInstructions: globalReviewDefaultInstructions.value,
       showProgressBars: globalShowProgressBars.value,
       serializeDevServerStarts: globalSerializeDevServerStarts.value,

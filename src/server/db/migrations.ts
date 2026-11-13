@@ -12,6 +12,7 @@ import { initReviewReturnSchema, migrateDurableReviewReturns } from './review-re
 import { initSchema } from './schema.js'
 import { initSearchSchema } from './search-schema.js'
 import { initSessionHandoffSchema } from './session-handoff-schema.js'
+import { initSlackButtonsSchema, initSlackQuestionsSchema, initSlackSchema } from './slack-schema.js'
 import { initWorkspaceMessageBatchSchema } from './workspace-message-batch-schema.js'
 
 // ── Migration registry ────────────────────────────────────────────────────────
@@ -892,6 +893,9 @@ export const migrations: Migration[] = [
         if (hasTable.get(table)) db.exec(`CREATE INDEX IF NOT EXISTS ${name} ON ${table}(${column})`)
     },
   },
+  { version: 62, name: 'slack-integration', migrate: initSlackSchema },
+  { version: 63, name: 'slack-buttons', migrate: initSlackButtonsSchema },
+  { version: 64, name: 'slack-question-mirror', migrate: initSlackQuestionsSchema },
 ]
 
 /** Current schema version — always equals the highest migration version. */

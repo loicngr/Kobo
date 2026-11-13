@@ -30,6 +30,7 @@ function workspaceFixture(status = 'executing'): Workspace {
     id: 'w1',
     name: 'Replacement workspace',
     sprintId: null,
+    slackChannelId: null,
     projectPath: '/tmp/project',
     sourceBranch: 'main',
     workingBranch: 'feature/replacement',
@@ -146,6 +147,33 @@ describe('websocket dispatch — AgentEvent side-effects to workspace store', ()
     expect(store.autoLoopStates.w1.finalReview).toEqual(status)
   })
 
+  it('updates the Slack channel link from a global event', async () => {
+    const { useWebSocketStore } = await import('../stores/websocket.js')
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const store = useWorkspaceStore()
+    store.workspaces = [workspaceFixture()]
+    useWebSocketStore()._routeMessage({
+      type: 'workspace:slack-channel-updated',
+      payload: { workspaceId: 'w1', slackChannelId: 'C1' },
+    })
+    expect(store.workspaces[0]?.slackChannelId).toBe('C1')
+  })
+
+  it('updates the question mirror mode from a global event and ignores an unknown mode', async () => {
+    const { useWebSocketStore } = await import('../stores/websocket.js')
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const store = useWorkspaceStore()
+    store.workspaces = [workspaceFixture()]
+    const route = (slackQuestionMirror: unknown) =>
+      useWebSocketStore()._routeMessage({
+        type: 'workspace:slack-question-mirror-updated',
+        payload: { workspaceId: 'w1', slackQuestionMirror },
+      })
+    route('always')
+    route('sometimes')
+    expect(store.workspaces[0]?.slackQuestionMirror).toBe('always')
+  })
+
   it('routes global release checks without a workspace subscription or activity item', async () => {
     const { useWebSocketStore } = await import('../stores/websocket.js')
     const { useUpdateStore } = await import('../stores/update.js')
@@ -244,6 +272,7 @@ describe('websocket dispatch — AgentEvent side-effects to workspace store', ()
         id: 'w1',
         name: 'Quota workspace',
         sprintId: null,
+        slackChannelId: null,
         projectPath: '/tmp/project',
         sourceBranch: 'main',
         workingBranch: 'feature/quota',

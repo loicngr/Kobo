@@ -97,6 +97,8 @@
     "@hono/node-server": "^2.1.6",
     "@modelcontextprotocol/sdk": "^1.32.2",
     "@openai/codex": "^0.167.0",
+    "@slack/socket-mode": "^3.2.0",
+    "@slack/web-api": "^8.4.0",
     "better-sqlite3": "^13.0.3",
     "cron-parser": "^5.10.4",
     "hono": "^4.13.17",

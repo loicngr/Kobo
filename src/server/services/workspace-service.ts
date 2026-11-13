@@ -1,4 +1,5 @@
 import { nanoid } from 'nanoid'
+import { isSlackQuestionMirror, type SlackQuestionMirror } from '../../shared/slack-question-mirror.js'
 import { parseTaskVerification, type TaskRole, type TaskVerification } from '../../shared/task-verification.js'
 import {
   isWorkflowPolicy,
@@ -106,6 +107,8 @@ export interface Workspace {
    *  unpurge feature — read but never modified by V1. */
   worktreePurgeRestoreData: string | null
   sprintId: string | null
+  slackChannelId: string | null
+  slackQuestionMirror: SlackQuestionMirror
   engine: string
   autoLoop: boolean
   autoLoopReady: boolean
@@ -231,6 +234,8 @@ interface WorkspaceRow {
   worktree_purged_at: string | null
   worktree_purge_restore_data: string | null
   sprint_id: string | null
+  slack_channel_id: string | null
+  slack_question_mirror?: string | null
   created_at: string
   updated_at: string
 }
@@ -304,6 +309,8 @@ function mapWorkspace(row: WorkspaceRow): Workspace {
     worktreePurgedAt: row.worktree_purged_at,
     worktreePurgeRestoreData: row.worktree_purge_restore_data,
     sprintId: row.sprint_id ?? null,
+    slackChannelId: row.slack_channel_id ?? null,
+    slackQuestionMirror: isSlackQuestionMirror(row.slack_question_mirror) ? row.slack_question_mirror : 'never',
     engine: row.engine ?? 'claude-code',
     autoLoop: row.auto_loop === 1,
     autoLoopReady: row.auto_loop_ready === 1,

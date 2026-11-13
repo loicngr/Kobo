@@ -1,9 +1,10 @@
-import type { Tool } from '@modelcontextprotocol/sdk/types.js'
+import type { CallToolResult, Tool } from '@modelcontextprotocol/sdk/types.js'
 import type Database from 'better-sqlite3'
 import { executeSprintTool } from '../server/services/sprint-mcp-service.js'
 import { INTERNAL_START_CODE_REVIEW_TOOL, START_CODE_REVIEW_TOOL } from '../shared/code-review-tools.js'
 import { EXTERNAL_MEMORY_TOOL_DEFINITIONS, isMemoryToolName, MEMORY_TOOL_DEFINITIONS } from '../shared/memory-tools.js'
 import { INTERNAL_PROGRESS_BAR_TOOLS, isProgressBarTool, PROGRESS_BAR_TOOLS } from '../shared/progress-bar-tools.js'
+import { isSlackTool, SLACK_TOOLS } from '../shared/slack-tools.js'
 import { isSprintTool, MANAGED_SPRINT_TOOLS, SPRINT_TOOLS } from '../shared/sprint-tools.js'
 import { isWorkspaceCreationTool, WORKSPACE_CREATION_TOOLS } from '../shared/workspace-creation-tools.js'
 import { WORKSPACE_DIALOGUE_TOOLS } from '../shared/workspace-dialogue-tools.js'
@@ -55,6 +56,8 @@ export interface ManagedMcpContext {
   backendRequest: (method: 'GET' | 'POST' | 'PATCH' | 'DELETE', pathname: string, body?: unknown) => Promise<unknown>
   fetcher?: typeof fetch
   dialogueTool?: (...args: Parameters<typeof callWorkspaceDialogueTool>) => Promise<unknown>
+  /** Backend-owned Slack dispatch bound to the launch capability's workspace. */
+  slackTool?: (name: string, args: Record<string, unknown>) => Promise<CallToolResult>
 }
 
 /** Runs only in the owning backend for workspace launches. */
@@ -594,6 +597,7 @@ export function createManagedMcpDispatcher(context: ManagedMcpContext) {
     ...INTERNAL_WORKSPACE_OBSERVATION_TOOLS,
     INTERNAL_RUN_SETUP_SCRIPT_TOOL,
     ...INTERNAL_WORKSPACE_TAG_TOOLS,
+    ...SLACK_TOOLS,
   ]
 
   const GLOBAL_TOOLS: typeof WORKSPACE_SCOPED_TOOLS = [
@@ -609,7 +613,7 @@ export function createManagedMcpDispatcher(context: ManagedMcpContext) {
     {
       name: 'list_workspaces',
       description:
-        'List Kōbō workspaces with their id, title, status, tags, and creation date. Set tag to return only workspaces carrying that exact tag. Requires the Kōbō backend server to be running. Use this to discover existing workspaces before creating one or targeting one with archive_workspace/stop_workspace.',
+        'List Kōbō workspaces with their id, title, status, tags, and creation date. Set tag to return only workspaces carrying that exact tag. Requires the Kōbō backend server to be running. Use this to discover existing workspaces before targeting one with stop_workspace or send_workspace_message.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -763,6 +767,10 @@ export function createManagedMcpDispatcher(context: ManagedMcpContext) {
               : {}),
           }),
         )
+      }
+      if (isSlackTool(name)) {
+        if (!context.slackTool) return fail('Slack tools require the current workspace launch capability.')
+        return await context.slackTool(name, a)
       }
       if (isProgressBarTool(name)) {
         if (!workspaceId)

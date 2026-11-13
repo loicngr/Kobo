@@ -236,6 +236,7 @@ export function executeMemoryMcpTool(
 ): unknown {
   if (!isMemoryToolName(name)) throw new TypeError(`Unknown memory tool '${name}'`)
   const actor = externalActor(source)
+  if (source.kind !== 'mcp') throw new TypeError('External memory tools require MCP client context')
   const transport = source.transport as MemoryTransport
   if (!input || typeof input !== 'object' || Array.isArray(input))
     throw new TypeError('Memory tool arguments must be an object')

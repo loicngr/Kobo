@@ -25,6 +25,7 @@ import {
   type ProjectSettings,
 } from '../services/settings-service.js'
 import { getSuitePrompts } from '../services/skill-suite-prompts.js'
+import { restartSlack } from '../services/slack/slack-service.js'
 import { listTemplates, replaceAllTemplates, validateTemplatesForReplacement } from '../services/templates-service.js'
 import { previewWsEventsRetention } from '../services/ws-events-retention-worker-service.js'
 
@@ -208,7 +209,9 @@ app.put('/global', async (c) => {
     }
     const previousLimit =
       'maxConcurrentAgents' in body ? settingsService.getGlobalSettings().maxConcurrentAgents : undefined
+    const slackWasEnabled = settingsService.getGlobalSettings().slackEnabled
     const updated = settingsService.updateGlobalSettings(body)
+    if (updated.slackEnabled !== slackWasEnabled) void restartSlack().catch(() => undefined)
     if (previousLimit && (updated.maxConcurrentAgents === 0 || updated.maxConcurrentAgents > previousLimit))
       notifyCapacityAvailable()
     if ('serializeDevServerStarts' in body || 'maxRunningDevServers' in body) resumeQueuedDevServers()
@@ -218,7 +221,8 @@ app.put('/global', async (c) => {
     return c.json(settingsService.redactGlobalSecrets(updated))
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    const status = err instanceof Error && err.name === 'InvalidWorktreesPathError' ? 400 : 500
+    const status =
+      err instanceof Error && ['InvalidWorktreesPathError', 'InvalidSlackSettingsError'].includes(err.name) ? 400 : 500
     return c.json({ error: message }, status)
   }
 })
@@ -310,7 +314,9 @@ app.post('/import', async (c) => {
     }
     // Settings validates its section before writing. Each file is replaced
     // atomically; this is not a transaction spanning the two files.
+    const slackWasEnabled = settingsService.getGlobalSettings().slackEnabled
     settingsService.importConfigBundle(body)
+    if (settingsService.getGlobalSettings().slackEnabled !== slackWasEnabled) void restartSlack().catch(() => undefined)
     resumeQueuedDevServers()
     if (validatedTemplates !== undefined) {
       // Accept missing templates for backward-compatible bundles.

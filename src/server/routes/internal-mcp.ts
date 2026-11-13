@@ -104,6 +104,11 @@ app.post('/', async (c) => {
           transport: 'stdio',
         })
       },
+      slackTool: async (tool, arguments_) => {
+        const { executeSlackTool } = await import('../services/slack/slack-mcp-service.js')
+        check()
+        return executeSlackTool(tool, arguments_, capability.workspaceId)
+      },
     })
     if (input.method === 'list')
       return c.json({

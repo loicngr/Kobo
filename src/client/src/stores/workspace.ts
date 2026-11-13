@@ -15,6 +15,7 @@ import { isAbortError } from 'src/utils/latest-request'
 import type { AutoLoopFinalReviewStatus, AutoLoopReviewConfiguration } from '../../../shared/auto-loop-review'
 import type { AutoLoopRuntime, QueuedAutoLoopMessage } from '../../../shared/auto-loop-types'
 import type { MergeMethod } from '../../../shared/forge-merge'
+import type { SlackQuestionMirror } from '../../../shared/slack-question-mirror'
 import { isSubagentTask } from '../../../shared/subagent-classification'
 import type { WorkflowPolicy } from '../../../shared/workflow-policy'
 import type { ProviderId, UsageSnapshot } from '../types/usage'
@@ -31,6 +32,9 @@ export interface Workspace {
   id: string
   name: string
   sprintId: string | null
+  slackChannelId: string | null
+  /** Absent on payloads older than the setting: treated as 'never'. */
+  slackQuestionMirror?: SlackQuestionMirror
   projectPath: string
   sourceBranch: string
   workingBranch: string

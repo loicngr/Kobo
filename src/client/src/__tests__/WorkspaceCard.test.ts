@@ -32,6 +32,7 @@ const makeWorkspace = (over: Partial<Workspace> = {}): Workspace => ({
   id: 'ws-1',
   name: 'Test',
   sprintId: null,
+  slackChannelId: null,
   projectPath: '/tmp/project',
   sourceBranch: 'main',
   workingBranch: 'feature/test',

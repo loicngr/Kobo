@@ -151,7 +151,12 @@ it.each(['external', 'internal', 'read-only'] as const)(
   'supports real %s stdio with the same options',
   async (mode) => {
     const key = credential()
-    const cap = createInternalMcpCapability({ workspaceId: 'own', sessionId: 'source', readOnly: mode === 'read-only' })
+    const cap = createInternalMcpCapability({
+      workspaceId: 'own',
+      sessionId: 'source',
+      readOnly: mode === 'read-only',
+      restricted: mode === 'read-only',
+    })
     const listener = serve({ fetch: app.fetch, hostname: '127.0.0.1', port: 0 })
     if (!listener.listening) await new Promise<void>((resolve) => listener.once('listening', resolve))
     const address = listener.address()

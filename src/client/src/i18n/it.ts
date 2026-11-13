@@ -455,6 +455,7 @@ export default {
   'handoff.loadFailed': 'Impossibile caricare lo stato del passaggio di consegne.',
   'handoff.status': 'Passaggio di consegne',
   'chat.externalLlm': 'LLM esterno · {name}',
+  'chat.slackUser': '{name} (Slack)',
   'search.indexing': 'Indicizzazione cronologia: {processed}/{total}. Risultati parziali.',
   'search.indexUnavailable': 'Indice di ricerca non disponibile. Riprova più tardi.',
   'blockers.setupConfiguration':
@@ -1486,7 +1487,7 @@ export default {
   'tours.settings.engines.description': 'Modelli, permessi predefiniti e limiti dei tentativi automatici.',
   'tours.settings.integrations.title': 'Integrazioni',
   'tours.settings.integrations.description':
-    'Connessioni Notion e Sentry e credenziali Bitbucket. GitHub e GitLab usano la sessione CLI locale.',
+    'Connessioni Notion, Sentry e Slack e credenziali Bitbucket. GitHub e GitLab usano la sessione CLI locale.',
   'tours.settings.automation.title': 'Automazione',
   'tours.settings.automation.description':
     'Script di setup e cleanup, lifecycle hook, template di prompt, template di workspace e skill. Apri «Variabili disponibili» sotto ogni script per le variabili del workspace, di Docker e dell’hook.',
@@ -1603,6 +1604,8 @@ export default {
   'settings.help.integrations': 'Collega Kōbō a Notion e Sentry per creare workspace da ticket e issue.',
   'settings.help.notion': 'Importa una pagina Notion come fonte di verità di un workspace.',
   'settings.help.sentry': 'Crea un workspace da una issue Sentry.',
+  'settings.help.slack':
+    'Collega un canale Slack a un workspace così le persone autorizzate possono parlare con il suo agente.',
   'settings.help.forge':
     'Credenziali Bitbucket. GitHub e GitLab usano la CLI gh/glab autenticata; scegli la forge per progetto.',
   'settings.help.voice': 'Dettatura e push-to-talk.',
@@ -2188,6 +2191,9 @@ export default {
   'settings.autoExitPlanMode': 'Consentire l’uscita automatica dalla modalità Plan (Claude Code)',
   'settings.autoExitPlanModeHint':
     'Quando Claude chiama ExitPlanMode, passare alla modalità interattiva con le normali richieste di autorizzazione. Disattivato: negare l’uscita. Le revisioni in sola lettura restano protette. Le modifiche salvate valgono dalla chiamata successiva.',
+  'settings.agentWorkspaceLifecycle': 'Consenti agli agenti di gestire i workspace',
+  'settings.agentWorkspaceLifecycleHint':
+    'Attivo: gli agenti avviati da Kōbō possono creare, eliminare, archiviare, ripristinare dall’archivio, eliminare il worktree o ripristinare workspace tramite il MCP gestito, in qualsiasi modalità di permessi. Disattivato per impostazione predefinita. I client MCP esterni non sono interessati. La disattivazione si applica alla chiamata successiva dello strumento; l’attivazione al prossimo avvio o ripresa di un agente. Non copre i server MCP esterni configurati su questa macchina.',
   'settings.showProgressBars': 'Mostra le barre di avanzamento',
   'settings.showProgressBarsHint':
     'Attivo per impostazione predefinita. Nascondere le barre non chiude le attività né interrompe il monitoraggio. Le modifiche si applicano al salvataggio.',
@@ -2203,12 +2209,14 @@ export default {
   'tours.settings.agentWatchdog.title': 'Watchdog di inattività',
   'tours.settings.agentWatchdog.description':
     'Lascia questa opzione disattivata per consentire attese lunghe senza attività visibile. Attivala per chiudere automaticamente le sessioni bloccate. Si applica al prossimo avvio o ripresa dell’agente.',
+  'settings.executionLimitsSection': 'Limiti di esecuzione',
   'settings.maxConcurrentAgents': 'Agenti automatici simultanei',
   'settings.maxConcurrentAgentsHint':
     '0 = illimitato. Si applica solo alle sessioni automatiche; gli avvii manuali sono esclusi.',
   'settings.maxConcurrentAgentsInvalid': 'Inserisci un intero non negativo compreso tra gli interi sicuri.',
   'createPage.chooseNativePermissionMode':
     'Scegli una modalità di esecuzione nativa per continuare. Mistral Vibe non supporta Plan.',
+  'settings.autoRetrySection': 'Tentativi automatici',
   'settings.autoLoopMaxRetries': 'Numero massimo di tentativi automatici',
   'settings.awaitingUserReminder': 'Promemoria di domanda senza risposta',
   'settings.awaitingUserReminderHint':
@@ -2825,4 +2833,70 @@ export default {
   'tours.workspace.progress.title': 'Avanzamento delle attività',
   'tours.workspace.progress.description':
     'Gli agenti e i loro sottoagenti segnalano le attività lunghe sopra il campo del messaggio. Sono mostrate tre attività; espandi per vedere le altre. I valori sono dichiarati dagli agenti e non costituiscono una verifica. I successi scompaiono dopo cinque secondi; gli errori restano visibili. Chiudere nasconde solo quella attività senza annullare il lavoro.',
+  'settings.nav.slack': 'Slack',
+  'slack.enabled': "Attiva l'integrazione Slack",
+  'slack.botToken': 'Bot User OAuth Token',
+  'slack.appToken': 'App-Level Token',
+  'slack.tokensHint': 'I token sono salvati sul server e non vengono più mostrati.',
+  'slack.tokensConfigured': 'I token sono configurati.',
+  'slack.tokensReplaceHint': 'Inserisci nuovi valori per sostituirli.',
+  'slack.saveCredentials': 'Salva i token',
+  'slack.removeCredentials': 'Rimuovi i token',
+  'slack.removeConfirmTitle': 'Rimuovi i token Slack',
+  'slack.removeConfirm': 'I token salvati verranno eliminati e Slack verrà disconnesso. Continuare?',
+  'slack.credentialsSaved': 'Token Slack salvati',
+  'slack.credentialsRemoved': 'Token Slack rimossi',
+  'slack.saveFailed': 'Impossibile salvare le impostazioni di Slack.',
+  'slack.allowedUsers': 'ID dei membri Slack autorizzati',
+  'slack.allowedUsersHint': 'Solo questi membri possono guidare gli agenti da Slack. Digita un ID e premi Invio.',
+  'slack.saveAllowed': 'Salva elenco',
+  'slack.allowedSaved': 'Elenco salvato',
+  'slack.status.connected': 'Connesso come {bot} in {team}',
+  'slack.status.disconnected': 'Non connesso',
+  'slack.status.notConfigured': 'Nessun token configurato',
+  'slack.status.disabled': 'Integrazione disattivata',
+  'slack.status.unavailable': 'Stato non disponibile',
+  'slack.error.invalid_auth': 'Slack ha rifiutato i token. Verifica che siano corretti e non revocati.',
+  'slack.error.missing_scope': "All'app Slack manca uno scope richiesto. Ricreala dal manifest.",
+  'slack.error.not_in_channel': 'Il bot non è membro del canale. Invitalo con /invite.',
+  'slack.error.rate_limited': 'Slack sta limitando le richieste. Riprova tra poco.',
+  'slack.error.network': 'Impossibile raggiungere Slack. Controlla la connessione di rete.',
+  'slack.error.unknown': 'La connessione a Slack è fallita per un motivo sconosciuto.',
+  'slack.guideTitle': 'Come funziona - creare il bot Slack',
+  'slack.guideStep1Title': "1. Creare l'app",
+  'slack.guideStep1Body':
+    'Apri https://api.slack.com/apps, fai clic su "Create new app", scegli "From scratch", poi "Paste a manifest", seleziona il tuo workspace Slack, apri la scheda JSON e incolla il manifest qui sotto.',
+  'slack.guideInteractivity':
+    'App creata prima dell\'arrivo dei pulsanti? Apri "Interactivity & Shortcuts" nelle impostazioni dell\'app Slack e attiva "Interactivity" (in Socket Mode non serve alcun URL), oppure incolla il manifest aggiornato in "App Manifest".',
+  'slack.guideStep2Title': "2. Generare il token dell'app",
+  'slack.guideStep2Body':
+    'In "Basic Information", sotto "App-Level Tokens", genera un token con lo scope connections:write. Inizia con xapp-.',
+  'slack.guideStep3Title': "3. Installare l'app",
+  'slack.guideStep3Body':
+    'In "Install App", installala nel workspace. Se le installazioni richiedono approvazione, attendi un amministratore. Copia il "Bot User OAuth Token" (xoxb-...). Lascia disattivati la rotazione dei token e PKCE.',
+  'slack.guideStep4Title': '4. Incollare i token',
+  'slack.guideStep4Body': "Incolla entrambi i token nei campi qui sopra, salvali e attiva l'integrazione.",
+  'slack.guideStep5Title': '5. Autorizzarsi',
+  'slack.guideStep5Body':
+    'Trova il tuo ID membro: profilo Slack, poi "...", poi "Copy member ID". Aggiungilo all\'elenco autorizzato qui sopra.',
+  'slack.guideStep6Title': '6. Invitare il bot e collegare un canale',
+  'slack.guideStep6Body':
+    "In Slack, esegui /invite {'@'}Kobo in ogni canale da ascoltare, poi scegli quel canale nel menu di configurazione del workspace.",
+  'slack.guideStep7Title': '7. Da sapere',
+  'slack.guideStep7Body':
+    "I messaggi inviati mentre Kōbō è offline vanno persi: se un messaggio non riceve la reazione eyes, invialo di nuovo. Tutte le persone nell'elenco autorizzato possono guidare l'agente con i permessi del workspace. Esegui una sola istanza di Kōbō per app Slack.",
+  'slack.channel.label': 'Canale Slack',
+  'slack.channel.hint':
+    "I messaggi di questo canale vengono inviati all'agente. Scollegare o cambiare il canale elimina i messaggi Slack salvati di questo workspace.",
+  'slack.channel.linkedElsewhere': 'Collegato a un altro workspace',
+  'slack.channel.taken': 'Questo canale è già collegato a un altro workspace, oppure il workspace è occupato.',
+  'slack.channel.notConnected': "Slack non è connesso. Controlla le impostazioni dell'integrazione.",
+  'slack.channel.failed': 'Impossibile aggiornare il canale Slack.',
+  'slack.questionMirror.label': 'Inoltra le domande bloccanti',
+  'slack.questionMirror.hint':
+    "Quando l'agente pone una domanda bloccante, Kōbō può pubblicarla in questo canale perché le persone autorizzate rispondano lì.",
+  'slack.questionMirror.never': 'Mai',
+  'slack.questionMirror.slackConversation': 'Solo per le conversazioni da Slack',
+  'slack.questionMirror.always': 'Sempre',
+  'slack.questionMirror.failed': "Impossibile aggiornare l'inoltro delle domande.",
 }

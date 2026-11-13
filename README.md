@@ -107,13 +107,14 @@ Use **Continue in a fresh session** or **Change LLM** to continue a mission with
 ### Context, tools and integrations
 
 - **Persistent memory:** global, project and workspace knowledge shared across engines, with Manual, Hybrid and Automatic modes. Hybrid asks for approval before shared project/global changes.
-- **MCP access:** managed agent tools and separately authorized external clients can work with tasks, conversations, workspace creation, lifecycle operations and progress reporting.
-- **Optional integrations:** Notion, Sentry, forge tools and local voice transcription through `whisper.cpp`.
+- **MCP access:** managed agent tools and separately authorized external clients can work with tasks, conversations, workspace creation, lifecycle operations and progress reporting. For agents launched by Kōbō, workspace creation and lifecycle tools are off by default and enabled by one global switch.
+- **Slack channels (optional):** link a Slack channel to a workspace so allow-listed people can talk to its agent by mentioning the bot or replying in a thread, with attachments. The agent answers through its own tools, can attach buttons to a question, and can have its blocking questions mirrored to Slack. It uses Socket Mode with your own Slack app, so no public URL is needed.
+- **Optional integrations:** Notion, Sentry, Slack, forge tools and local voice transcription through `whisper.cpp`.
 - **Skill suites:** Standard works without extensions; optional Superpowers, gstack, ECC and custom instructions reuse skills installed for the chosen engine.
 - **Account controls:** optional `ccswap` integration switches Claude Code or Codex credentials; account changes are provider-wide, not isolated per workspace.
 - **Lifecycle and storage:** hooks, workspace presets, conversation retention, worktree purge/restore and session diagnostics help manage longer-running installations.
 
-[Configuration reference →](./CONFIGURATION.md) · [MCP guide →](./src/mcp-server/README.md)
+[Configuration reference →](./CONFIGURATION.md) · [Slack integration →](./CONFIGURATION.md#slack-integration) · [MCP guide →](./src/mcp-server/README.md)
 
 ## Agent runtimes
 
@@ -160,7 +161,7 @@ SERVER_PORT=9997 npx @loicngr/kobo@latest
 
 Kōbō is a **single-user development tool**, not a multi-tenant service. It binds to `127.0.0.1` by default. Optional network access uses an operator token and browser sessions; internet-facing deployments require the documented reverse-proxy configuration.
 
-Agents and project commands run with the server account's privileges and the selected engine's permissions. Conversations are stored locally, but agents send applicable context to their provider. Back up the data home and repositories before upgrading; database migrations do not replace a full backup.
+Agents and project commands run with the server account's privileges and the selected engine's permissions. Conversations are stored locally, but agents send applicable context to their provider. When the Slack integration is enabled, everyone on its allow-list can drive the linked workspace's agent with that workspace's permissions: treat the list as operator access. Back up the data home and repositories before upgrading; database migrations do not replace a full backup.
 
 [Security model and private vulnerability reporting →](./SECURITY.md)
 

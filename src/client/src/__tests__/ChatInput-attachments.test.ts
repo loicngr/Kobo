@@ -56,6 +56,7 @@ async function setup(status: Workspace['status'] = 'idle') {
       tags: [],
       worktreePath: '/tmp/a',
       sprintId: null,
+      slackChannelId: null,
       projectPath: '/',
       sourceBranch: 'main',
       workingBranch: 'b',

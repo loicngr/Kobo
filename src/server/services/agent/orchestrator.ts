@@ -274,6 +274,22 @@ export type PendingItem =
 /** workspaceId -> FIFO queue of pending items */
 const pendingQueue = new Map<string, PendingItem[]>()
 
+const pendingListeners = new Set<(workspaceId: string) => void>()
+/** Called synchronously after any pending-input change; listeners must not block, their errors are swallowed. */
+export function onPendingInputsChanged(listener: (workspaceId: string) => void): () => void {
+  pendingListeners.add(listener)
+  return () => pendingListeners.delete(listener)
+}
+function notifyPendingChanged(workspaceId: string): void {
+  for (const listener of pendingListeners) {
+    try {
+      listener(workspaceId)
+    } catch {
+      // A listener never affects the orchestrator.
+    }
+  }
+}
+
 /**
  * workspaceId -> the workspace status held BEFORE we transitioned to
  * `awaiting-user` because the SDK is awaiting an answer via canUseTool.
@@ -307,6 +323,7 @@ function enqueuePending(workspaceId: string, item: PendingItem): void {
   const arr = pendingQueue.get(workspaceId) ?? []
   arr.push(item)
   pendingQueue.set(workspaceId, arr)
+  notifyPendingChanged(workspaceId)
 }
 
 function peekPending(workspaceId: string): PendingItem | undefined {
@@ -318,6 +335,7 @@ function dequeuePending(workspaceId: string): PendingItem | undefined {
   if (!arr || arr.length === 0) return undefined
   const head = arr.shift()
   if (arr.length === 0) pendingQueue.delete(workspaceId)
+  notifyPendingChanged(workspaceId)
   return head
 }
 
@@ -402,6 +420,7 @@ function clearPendingForSession(workspaceId: string, agentSessionId: string): vo
   if (!pendingQueue.has(workspaceId)) {
     preAwaitStatus.delete(workspaceId)
   }
+  if (arr) notifyPendingChanged(workspaceId)
 }
 
 /** Cached list of available slash commands — persisted to <KOBO_HOME>/skills.json */
@@ -1033,6 +1052,7 @@ export function getPendingInputs(workspaceId: string): PendingItem[] {
 /** Drop the pending question/permission queue for a workspace (called on delete). */
 export function forgetPendingQueue(workspaceId: string): void {
   pendingQueue.delete(workspaceId)
+  notifyPendingChanged(workspaceId)
 }
 
 /** Drop the pre-await status snapshot for a workspace (called on delete). */
@@ -2013,11 +2033,14 @@ function launchAgent(
     workspaceId,
     sessionId: agentSessionId,
     readOnly: effectivePermissionMode === 'plan' || restricted,
+    restricted,
     env: {
       ...launch?.mcpEnv,
       ...(restricted && engineId === 'mistral-vibe' ? { KOBO_REVIEW_ONLY: '1' } : {}),
       KOBO_MEMORY_SESSION_TOKEN: memoryCapability.token,
       KOBO_PROGRESS_SESSION_TOKEN: progressCapability.token,
+      // Prompt composition only; Slack tool authorization never reads it.
+      KOBO_SLACK_CHANNEL_ID: (getGlobalSettings().slackEnabled === true && ws?.slackChannelId) || undefined,
     },
   })
 
@@ -2784,6 +2807,7 @@ function handleParallelReviewEvent(workspaceId: string, controller: SessionContr
         finalizedControllers.add(controller)
         parallelReviewControllers.delete(workspaceId)
         parallelPending.delete(workspaceId)
+        notifyPendingChanged(workspaceId)
         if (shuttingDown) return
         purgeAllPersistedUserInputRequests(workspaceId, sessionId)
         routeEvent(workspaceId, sessionId, { ...event, sessionRole: 'parallel-review' })
@@ -2866,6 +2890,7 @@ function handleParallelReviewEvent(workspaceId: string, controller: SessionContr
             },
       )
       parallelPending.set(workspaceId, items)
+      notifyPendingChanged(workspaceId)
     }
   }
 }
@@ -2888,6 +2913,7 @@ function resolveParallelInput(
   if (!controller.engineProcess?.resolvePendingUserInput(toolCallId, response))
     throw new Error('No pending review callback')
   items.splice(index, 1)
+  notifyPendingChanged(workspaceId)
   getDb()
     .prepare(
       "DELETE FROM ws_events WHERE workspace_id=? AND session_id=? AND type='agent:event' AND json_extract(payload, '$.kind')='session:user-input-requested' AND json_extract(payload, '$.toolCallId')=?",

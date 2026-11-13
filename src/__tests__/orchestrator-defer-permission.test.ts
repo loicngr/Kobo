@@ -523,6 +523,66 @@ describe('Orchestrator — pending permission queue (canUseTool)', () => {
     expect(queue[1]?.kind).toBe('permission')
   })
 
+  it('every "no longer answerable" error of answerPendingQuestion is classified as gone by the Slack mirror', async () => {
+    const { answerFailure } = await import('../server/services/slack/slack-questions.js')
+    const { createWorkspace, updateWorkspaceStatus } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({ name: 'G', projectPath: '/tmp', sourceBranch: 'develop', workingBranch: 'feature/g' })
+    updateWorkspaceStatus(ws.id, 'brainstorming')
+    const orch = await import('../server/services/agent/orchestrator.js')
+    const errors: unknown[] = []
+    const capture = async (p: Promise<unknown>) =>
+      errors.push(
+        await p.then(
+          () => undefined,
+          (err: unknown) => err,
+        ),
+      )
+    const item = (toolCallId: string, agentSessionId: string, kind: 'question' | 'permission' = 'question') =>
+      kind === 'question'
+        ? { kind, agentSessionId, toolCallId, toolName: 'AskUserQuestion', input: {}, resolve: () => {} }
+        : { kind, agentSessionId, toolCallId, toolName: 'Bash', toolInput: {}, resolve: () => {} }
+    const queue = orch._getPendingQueue() as Map<string, unknown[]>
+    // No pending input / unknown workspace / no agent running.
+    await capture(orch.answerPendingQuestion(ws.id, {}, 'q0'))
+    queue.set('missing-ws', [item('q0', 's')])
+    await capture(orch.answerPendingQuestion('missing-ws', {}, 'q0'))
+    queue.set(ws.id, [item('q0', 's')])
+    await capture(orch.answerPendingQuestion(ws.id, {}, 'q0'))
+    queue.delete(ws.id)
+    const agent = orch.startAgent(ws.id, '/tmp', 'hi')
+    // The controller exists before its engine process does.
+    queue.set(ws.id, [item('q0', agent.agentSessionId)])
+    await capture(orch.answerPendingQuestion(ws.id, {}, 'q0'))
+    queue.delete(ws.id)
+    await Promise.resolve()
+    await Promise.resolve()
+    const cap = captured[0]!
+    cap.onEvent({ kind: 'session:started', engineSessionId: 'engine-sess-1' })
+    // Another session's question, a changed head, a permission at the head, an expired callback.
+    await capture(orch.answerPendingQuestion(ws.id, {}, 'q1', { sessionId: 'older' }))
+    queue.set(ws.id, [item('q1', 'older')])
+    await capture(orch.answerPendingQuestion(ws.id, {}, 'q1'))
+    queue.set(ws.id, [item('q2', agent.agentSessionId)])
+    await capture(orch.answerPendingQuestion(ws.id, {}, 'q1'))
+    queue.set(ws.id, [item('p1', agent.agentSessionId, 'permission')])
+    await capture(orch.answerPendingQuestion(ws.id, {}, 'p1'))
+    queue.set(ws.id, [item('q3', agent.agentSessionId)])
+    cap.resolvePendingUserInput.mockReturnValueOnce(false)
+    await capture(orch.answerPendingQuestion(ws.id, {}, 'q3'))
+    expect(errors.map((err) => (err as Error).message)).toEqual([
+      expect.stringContaining('No deferred tool use pending'),
+      expect.stringContaining('not found'),
+      expect.stringContaining('No agent running'),
+      expect.stringContaining('no active engine process'),
+      'Question session is no longer active',
+      expect.stringContaining('is no longer active'),
+      expect.stringContaining('Pending question changed'),
+      expect.stringContaining('Expected a deferred question'),
+      expect.stringContaining('No pending callback'),
+    ])
+    expect(errors.map(answerFailure)).toEqual(errors.map(() => 'gone'))
+  })
+
   it('rejects answerPendingPermission when head is a question', async () => {
     const { createWorkspace, updateWorkspaceStatus } = await import('../server/services/workspace-service.js')
     const ws = createWorkspace({
@@ -554,5 +614,90 @@ describe('Orchestrator — pending permission queue (canUseTool)', () => {
     await expect(answerPendingPermission(ws.id, { toolCallId: 'q1', decision: 'allow' })).rejects.toThrow(
       /Expected a deferred permission/,
     )
+  })
+})
+
+describe('Orchestrator - pending input listeners', () => {
+  beforeEach(async () => {
+    vi.resetModules()
+    await resetDb()
+    captured.length = 0
+    const { _registerEngineForTest } = await import('../server/services/agent/engines/registry.js')
+    _registerEngineForTest({
+      id: 'claude-code',
+      displayName: 'Claude Code',
+      capabilities: {
+        models: [{ id: 'auto', label: 'Auto' }],
+        permissionModes: ['bypass'],
+        supportsResume: true,
+        supportsMcp: true,
+        supportsLiveSteering: true,
+        supportsReadOnly: true,
+        supportsSkills: true,
+        supportsSubagents: false,
+        supportsQuotaStatus: false,
+      },
+      async start(opts, onEvent) {
+        const resolvePendingUserInput = vi.fn().mockReturnValue(true)
+        const hasPendingUserInput = vi.fn().mockReturnValue(true)
+        captured.push({
+          options: opts as CapturedStart['options'],
+          onEvent,
+          resolvePendingUserInput,
+          hasPendingUserInput,
+        })
+        return {
+          pid: 4242,
+          engineSessionId: 'engine-sess-1',
+          sendMessage() {},
+          interrupt() {},
+          async stop() {},
+          resolvePendingUserInput,
+          hasPendingUserInput,
+        }
+      },
+    })
+  })
+
+  const question = (toolCallId: string): AgentEvent => ({
+    kind: 'session:user-input-requested',
+    requestKind: 'question',
+    toolCallId,
+    toolName: 'AskUserQuestion',
+    payload: { questions: [] },
+  })
+
+  it('notifies after enqueue, dequeue, clear and forget, survives a throwing listener and unsubscribes', async () => {
+    const { createWorkspace, updateWorkspaceStatus } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({ name: 'L', projectPath: '/tmp', sourceBranch: 'develop', workingBranch: 'feature/l' })
+    updateWorkspaceStatus(ws.id, 'brainstorming')
+    const orch = await import('../server/services/agent/orchestrator.js')
+    const seen: Array<[string, number]> = []
+    orch.onPendingInputsChanged(() => {
+      throw new Error('listener failure')
+    })
+    const off = orch.onPendingInputsChanged((id) => seen.push([id, orch.getPendingInputs(id).length]))
+    orch.startAgent(ws.id, '/tmp', 'hi')
+    await Promise.resolve()
+    await Promise.resolve()
+    const cap = captured[0]!
+    cap.onEvent({ kind: 'session:started', engineSessionId: 'engine-sess-1' })
+    cap.onEvent(question('q1'))
+    expect(seen).toEqual([[ws.id, 1]])
+    await orch.answerPendingQuestion(ws.id, { a: 'b' }, 'q1')
+    expect(seen.at(-1)).toEqual([ws.id, 0])
+    cap.onEvent(question('q2'))
+    await orch.cancelPendingQuestion(ws.id, undefined, 'q2')
+    expect(seen.at(-1)).toEqual([ws.id, 0])
+    cap.onEvent(question('q3'))
+    const before = seen.length
+    cap.onEvent({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
+    expect(seen.length).toBe(before + 1)
+    expect(seen.at(-1)).toEqual([ws.id, 0])
+    orch.forgetPendingQueue(ws.id)
+    expect(seen.length).toBe(before + 2)
+    off()
+    orch.forgetPendingQueue(ws.id)
+    expect(seen.length).toBe(before + 2)
   })
 })

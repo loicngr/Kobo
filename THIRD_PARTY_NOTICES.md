@@ -8,6 +8,7 @@ their respective licenses; consult the installed packages and lockfiles.
 | `src/client/public/sounds/neutral.wav` and `ready.wav` | Original mathematical sine tones, no samples or recordings | GPL-3.0-or-later; reproducible with `node scripts/generate-notification-sounds.mjs` |
 | Geist and Geist Mono | Vendored font distributions | SIL Open Font License, shipped in `src/client/public/fonts/GEIST-LICENSE.txt` |
 | Quasar Material icons | Installed through `@quasar/extras` | See the package's upstream notices |
+| `@slack/socket-mode` 3.2.0 and `@slack/web-api` 8.4.0 | Runtime dependencies, installed from npm and imported only by `src/server/services/slack/slack-api.ts` | MIT, see each package's `LICENSE` |
 
 Earlier versions included recorded notification sounds without a provenance
 manifest in this repository. Those files are no longer part of the current source

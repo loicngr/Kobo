@@ -68,7 +68,7 @@ export function groupIntoTurns(items: ConversationItem[], previous: Turn[] = [])
       speaker === 'script' && item.type === 'user'
         ? `script:${item.sender}`
         : speaker === 'user' && item.type === 'user' && item.source
-          ? JSON.stringify(['mcp', item.source.transport, item.source.clientName])
+          ? sourceKey(item.source)
           : speaker
 
     if (!current || currentKey !== key || standalone) {
@@ -84,6 +84,12 @@ export function groupIntoTurns(items: ConversationItem[], previous: Turn[] = [])
   return turns
 }
 
+function sourceKey(source: NonNullable<Extract<ConversationItem, { type: 'user' }>['source']>): string {
+  return source.kind === 'slack'
+    ? JSON.stringify(['slack', source.userId, source.channelId, source.threadTs])
+    : JSON.stringify(['mcp', source.transport, source.clientName])
+}
+
 // Agent items are copy-on-write; user items are remapped from the activity feed.
 function sameTurnItem(a: ConversationItem, b: ConversationItem | undefined): boolean {
   if (a === b) return true
@@ -93,9 +99,7 @@ function sameTurnItem(a: ConversationItem, b: ConversationItem | undefined): boo
     a.content === b.content &&
     a.sender === b.sender &&
     a.ts === b.ts &&
-    a.source?.kind === b.source?.kind &&
-    a.source?.clientName === b.source?.clientName &&
-    a.source?.transport === b.source?.transport &&
+    JSON.stringify(a.source) === JSON.stringify(b.source) &&
     a.eventIds?.length === b.eventIds?.length &&
     (a.eventIds ?? []).every((id, index) => id === b.eventIds?.[index])
   )

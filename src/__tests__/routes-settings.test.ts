@@ -13,6 +13,7 @@ vi.mock('../server/services/settings-service.js', async (importOriginal) => ({
   getSettings: vi.fn(),
   getGlobalSettings: vi.fn(),
   updateGlobalSettings: vi.fn(),
+  importConfigBundle: vi.fn(),
   updateNetworkAccessSettings: vi.fn(),
   listActiveClaudeMcpServers: vi.fn(),
   listProjects: vi.fn(),
@@ -34,6 +35,7 @@ vi.mock('../server/services/agent/orchestrator.js', () => ({
   notifyCapacityAvailable: vi.fn(),
 }))
 
+vi.mock('../server/services/slack/slack-service.js', () => ({ restartSlack: vi.fn(async () => undefined) }))
 vi.mock('../server/services/dev-server-service.js', () => ({ resumeQueuedDevServers: vi.fn() }))
 
 vi.mock('../server/db/index.js', () => ({
@@ -53,6 +55,7 @@ import router from '../server/routes/settings.js'
 import { notifyCapacityAvailable } from '../server/services/agent/orchestrator.js'
 import { resumeQueuedDevServers } from '../server/services/dev-server-service.js'
 import * as settingsService from '../server/services/settings-service.js'
+import { restartSlack } from '../server/services/slack/slack-service.js'
 import { previewWsEventsRetention } from '../server/services/ws-events-retention-worker-service.js'
 import { MASKED_SECRET } from '../shared/consts.js'
 import { makeGlobalSettings, makeProjectSettings } from './helpers/fixtures.js'
@@ -659,4 +662,71 @@ it('rejects inconsistent memory limits before persisting global settings', async
   })
   expect(response.status).toBe(400)
   expect(settingsService.updateGlobalSettings).not.toHaveBeenCalled()
+})
+
+describe('Slack settings', () => {
+  const putGlobal = (body: unknown) =>
+    app.request('/api/settings/global', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+
+  it('restarts Slack once when slackEnabled flips', async () => {
+    vi.mocked(settingsService.getGlobalSettings).mockReturnValue(makeGlobalSettings({ slackEnabled: false }))
+    vi.mocked(settingsService.updateGlobalSettings).mockReturnValue(makeGlobalSettings({ slackEnabled: true }))
+    expect((await putGlobal({ slackEnabled: true })).status).toBe(200)
+    expect(restartSlack).toHaveBeenCalledOnce()
+  })
+
+  it('does not restart Slack when another key changes', async () => {
+    vi.mocked(settingsService.getGlobalSettings).mockReturnValue(makeGlobalSettings({ slackEnabled: true }))
+    vi.mocked(settingsService.updateGlobalSettings).mockReturnValue(
+      makeGlobalSettings({ slackEnabled: true, showProgressBars: false }),
+    )
+    await putGlobal({ showProgressBars: false })
+    expect(restartSlack).not.toHaveBeenCalled()
+  })
+
+  it('does not restart Slack when slackEnabled is sent with its current value', async () => {
+    vi.mocked(settingsService.getGlobalSettings).mockReturnValue(makeGlobalSettings({ slackEnabled: true }))
+    vi.mocked(settingsService.updateGlobalSettings).mockReturnValue(makeGlobalSettings({ slackEnabled: true }))
+    await putGlobal({ slackEnabled: true })
+    expect(restartSlack).not.toHaveBeenCalled()
+  })
+
+  it('answers 400 with the message when the allow-list validation fails', async () => {
+    vi.mocked(settingsService.getGlobalSettings).mockReturnValue(makeGlobalSettings())
+    vi.mocked(settingsService.updateGlobalSettings).mockImplementation(() => {
+      const err = new Error('Invalid Slack member ID: nope')
+      err.name = 'InvalidSlackSettingsError'
+      throw err
+    })
+    const res = await putGlobal({ slackAllowedUserIds: ['nope'] })
+    expect(res.status).toBe(400)
+    expect(await res.json()).toEqual({ error: 'Invalid Slack member ID: nope' })
+  })
+
+  describe('POST /import', () => {
+    const post = () =>
+      app.request('/api/settings/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ settings: {} }),
+      })
+
+    it('restarts Slack when the import flips slackEnabled', async () => {
+      vi.mocked(settingsService.getGlobalSettings)
+        .mockReturnValueOnce(makeGlobalSettings({ slackEnabled: false }))
+        .mockReturnValueOnce(makeGlobalSettings({ slackEnabled: true }))
+      expect((await post()).status).toBe(200)
+      expect(restartSlack).toHaveBeenCalledOnce()
+    })
+
+    it('does not restart Slack when the import leaves slackEnabled unchanged', async () => {
+      vi.mocked(settingsService.getGlobalSettings).mockReturnValue(makeGlobalSettings({ slackEnabled: true }))
+      expect((await post()).status).toBe(200)
+      expect(restartSlack).not.toHaveBeenCalled()
+    })
+  })
 })

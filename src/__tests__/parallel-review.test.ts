@@ -791,3 +791,21 @@ it('keeps a parallel return ready at capacity and resumes the exact source once 
   await new Promise((resolve) => setImmediate(resolve))
   expect(f.starts).toHaveLength(4)
 })
+
+it('notifies pending-input listeners when reviewer requests are added and resolved', async () => {
+  const f = await fixture()
+  const seen: number[] = []
+  f.orch.onPendingInputsChanged((id) => {
+    if (id === f.workspace.id) seen.push(f.orch.getPendingInputs(id).length)
+  })
+  f.starts[1]!.emit({
+    kind: 'session:user-input-requested',
+    requestKind: 'permission',
+    toolCallId: 'rp',
+    toolName: 'Bash',
+    payload: {},
+  })
+  expect(seen).toEqual([1])
+  await f.orch.answerPendingPermission(f.workspace.id, { toolCallId: 'rp', decision: 'deny', sessionId: f.review })
+  expect(seen).toEqual([1, 0])
+})

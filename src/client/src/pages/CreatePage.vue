@@ -2774,6 +2774,9 @@ async function createOneWorkspace(
 }
 
 .create-actions-card {
+  position: sticky;
+  bottom: var(--kobo-space-lg);
+  z-index: 10;
   margin-top: var(--kobo-space-sm);
   box-shadow: none;
 }
@@ -2825,6 +2828,8 @@ async function createOneWorkspace(
   }
 
   .create-actions-card {
+    bottom: var(--kobo-space-sm);
+
     :deep(.q-card__section) {
       align-items: stretch;
     }

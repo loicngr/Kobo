@@ -129,7 +129,12 @@ it.each(['external', 'internal', 'read-only'] as const)(
   'supports %s stdio and binds managed calls to their workspace',
   async (mode) => {
     const key = createExternalMcpCredential({ name: 'Stdio', workspaceIds: ['own'], tools })
-    const cap = createInternalMcpCapability({ workspaceId: 'own', sessionId: 'source', readOnly: mode === 'read-only' })
+    const cap = createInternalMcpCapability({
+      workspaceId: 'own',
+      sessionId: 'source',
+      readOnly: mode === 'read-only',
+      restricted: mode === 'read-only',
+    })
     const listener = serve({ fetch: app.fetch, hostname: '127.0.0.1', port: 0 })
     if (!listener.listening) await new Promise<void>((resolve) => listener.once('listening', resolve))
     const address = listener.address()

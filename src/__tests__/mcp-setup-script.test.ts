@@ -213,7 +213,12 @@ it('rejects concurrent runs instead of executing setup twice', async () => {
 it.each(['external', 'internal', 'read-only'] as const)(
   'supports %s stdio with workspace binding and permissions',
   async (mode) => {
-    const cap = createInternalMcpCapability({ workspaceId: 'own', sessionId: 'source', readOnly: mode === 'read-only' })
+    const cap = createInternalMcpCapability({
+      workspaceId: 'own',
+      sessionId: 'source',
+      readOnly: mode === 'read-only',
+      restricted: mode === 'read-only',
+    })
     const key = credential()
     const listener = serve({ fetch: app.fetch, hostname: '127.0.0.1', port: 0 })
     if (!listener.listening) await new Promise<void>((resolve) => listener.once('listening', resolve))

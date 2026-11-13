@@ -17,7 +17,7 @@ import {
   EXTERNAL_TOOL_CATALOGUE,
 } from '../server/services/external-mcp-credentials-service.js'
 import { createInternalMcpCapability } from '../server/services/internal-mcp-capability-service.js'
-import { _setSettingsPath } from '../server/services/settings-service.js'
+import { _setSettingsPath, updateGlobalSettings } from '../server/services/settings-service.js'
 import { executeWorkspaceDialogueTool } from '../server/services/workspace-dialogue-service.js'
 
 vi.mock('../server/services/agent/orchestrator.js', () => ({
@@ -68,7 +68,12 @@ beforeEach(() => {
     allWorkspaces: true,
     tools: EXTERNAL_TOOL_CATALOGUE.map((tool) => tool.name),
   }).token
-  managedToken = createInternalMcpCapability({ workspaceId: 'a', sessionId: 'session-a', readOnly: false }).token
+  managedToken = createInternalMcpCapability({
+    workspaceId: 'a',
+    sessionId: 'session-a',
+    readOnly: false,
+    restricted: false,
+  }).token
   const db = getDb(join(directory, 'test.db'))
   runMigrations(db)
   for (const id of ['a', 'b'])
@@ -156,6 +161,40 @@ it(
   },
   STDIO_TEST_TIMEOUT_MS,
 )
+
+it('keeps workspace lifecycle tools available to granted external credentials while the agent switch is off', async () => {
+  updateGlobalSettings({ agentWorkspaceLifecycleEnabled: false })
+  const client = new Client({ name: 'external-lifecycle', version: '1' })
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL('http://localhost/api/mcp'), {
+      fetch: async (input, init) => app.fetch(new Request(input, init)),
+      requestInit: { headers: { Authorization: `Bearer ${mcpToken}` } },
+    }),
+  )
+  try {
+    const names = (await client.listTools()).tools.map((tool) => tool.name)
+    for (const name of [
+      'create_workspace',
+      'delete_workspace',
+      'archive_workspace',
+      'unarchive_workspace',
+      'purge_workspace_worktree',
+      'restore_workspace',
+    ])
+      expect(names).toContain(name)
+    const result = await client.callTool({ name: 'unarchive_workspace', arguments: { workspace_id: 'a' } })
+    // The call reaches the real backend route (unknown workspace -> 404 at the unarchive stage), not the agent gate.
+    expect(result.isError).toBe(true)
+    const off = result.structuredContent
+    expect(off).toMatchObject({ status: 404, stage: 'unarchive' })
+    updateGlobalSettings({ agentWorkspaceLifecycleEnabled: true })
+    const on = await client.callTool({ name: 'unarchive_workspace', arguments: { workspace_id: 'a' } })
+    expect(on.structuredContent).toEqual(off)
+  } finally {
+    updateGlobalSettings({ agentWorkspaceLifecycleEnabled: false })
+    await client.close()
+  }
+})
 
 it('rejects oversized MCP requests before tool dispatch', async () => {
   const response = await app.request('/api/mcp', {
@@ -335,6 +374,7 @@ it(
       workspaceId: 'a',
       sessionId: 'handoff-session',
       readOnly: true,
+      restricted: true,
       env: { KOBO_HANDOFF_ID: 'transfer-1', KOBO_HANDOFF_TOKEN: 'bound-token' },
     })
     const handoffApp = new Hono().route('/api/internal-mcp', internalMcp)
@@ -391,6 +431,7 @@ it(
       workspaceId: 'a',
       sessionId: 'review-session',
       readOnly: true,
+      restricted: true,
       env: { KOBO_FINAL_REVIEW_SESSION_ID: 'review-session', KOBO_FINAL_REVIEW_TOKEN: 'bound-token' },
     })
     const reportApp = new Hono().route('/api/internal-mcp', internalMcp)
@@ -452,6 +493,9 @@ it(
 it.each(['http', 'stdio-global', 'stdio-workspace'] as const)(
   'sends large inline attachments through %s with the shared schema',
   async (mode) => {
+    // The managed workspace session lists create_workspace only when agents may use lifecycle tools;
+    // the external modes keep working with the switch off.
+    updateGlobalSettings({ agentWorkspaceLifecycleEnabled: mode === 'stdio-workspace' })
     const server = serve({ fetch: app.fetch, port: 0, hostname: '127.0.0.1' })
     if (!server.listening) await once(server, 'listening')
     const address = server.address() as { port: number }

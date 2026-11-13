@@ -4,7 +4,7 @@ export function createMcpClientContext(
   name?: unknown,
   transport: 'http' | 'stdio' = 'http',
   encoding?: string,
-): MessageSource {
+): Extract<MessageSource, { kind: 'mcp' }> {
   if (encoding === 'uri' && typeof name === 'string') {
     try {
       name = decodeURIComponent(name)

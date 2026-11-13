@@ -153,6 +153,7 @@ it.each(['global', 'workspace', 'review', 'handoff', 'unscoped'])(
       workspaceId: 'w',
       sessionId: 's',
       readOnly: mode === 'review' || mode === 'handoff',
+      restricted: mode === 'review' || mode === 'handoff',
       env: {
         ...(mode !== 'unscoped' ? { KOBO_PROGRESS_SESSION_TOKEN: cap.token } : {}),
         ...(mode === 'review' ? { KOBO_FINAL_REVIEW_TOKEN: 'review', KOBO_FINAL_REVIEW_SESSION_ID: 's' } : {}),

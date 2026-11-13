@@ -3370,3 +3370,43 @@ it('stores default review instructions as a string and migrates older settings t
   expect(migrated.global.reviewDefaultInstructions).toBe('')
   expect(migrated.global.editorCommand).toBe('keep')
 })
+
+it('migrates v72 settings to v73 with Slack defaults', () => {
+  const migrated = runSettingsMigrations({ schemaVersion: 72, global: { editorCommand: 'keep' }, projects: [] })
+  expect(migrated.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
+  expect(SETTINGS_SCHEMA_VERSION).toBe(74)
+  expect(migrated.global.slackEnabled).toBe(false)
+  expect(migrated.global.slackAllowedUserIds).toEqual([])
+  expect(migrated.global.editorCommand).toBe('keep')
+})
+
+it('defaults the agent workspace lifecycle switch to false and ignores non-booleans', () => {
+  expect(getGlobalSettings().agentWorkspaceLifecycleEnabled).toBe(false)
+  updateGlobalSettings({ agentWorkspaceLifecycleEnabled: true })
+  expect(getGlobalSettings().agentWorkspaceLifecycleEnabled).toBe(true)
+  updateGlobalSettings({ agentWorkspaceLifecycleEnabled: 'false' } as unknown as Partial<GlobalSettings>)
+  expect(getGlobalSettings().agentWorkspaceLifecycleEnabled).toBe(true)
+  updateGlobalSettings({ agentWorkspaceLifecycleEnabled: false })
+  expect(getGlobalSettings().agentWorkspaceLifecycleEnabled).toBe(false)
+})
+
+it.each([undefined, false, true, 'true', 1])('migration v74 turns the lifecycle switch off (%s)', (value) => {
+  const migrated = runSettingsMigrations({
+    schemaVersion: 73,
+    global: { agentWorkspaceLifecycleEnabled: value, editorCommand: 'keep' },
+    projects: [],
+  })
+  expect(migrated.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
+  expect(migrated.global.agentWorkspaceLifecycleEnabled).toBe(false)
+  expect(migrated.global.editorCommand).toBe('keep')
+})
+
+it('validates and deduplicates slackAllowedUserIds on update', () => {
+  expect(() => updateGlobalSettings({ slackAllowedUserIds: ['U012AB', 'U012AB', 'bad id'] })).toThrow(
+    'Invalid Slack member ID: bad id',
+  )
+  expect(getGlobalSettings().slackAllowedUserIds).toEqual([])
+  const saved = updateGlobalSettings({ slackEnabled: true, slackAllowedUserIds: ['U012AB', 'U012AB', 'W0ABC'] })
+  expect(saved.slackEnabled).toBe(true)
+  expect(saved.slackAllowedUserIds).toEqual(['U012AB', 'W0ABC'])
+})

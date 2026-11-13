@@ -178,6 +178,18 @@ it('separates external clients from human turns and from each other', () => {
   expect(turns.map((turn) => turn.items.length)).toEqual([1, 2, 1, 1])
 })
 
+it('does not group user messages from different Slack authors', () => {
+  const base = { type: 'user' as const, sender: 'user', content: 'hello' }
+  const a = { kind: 'slack' as const, userName: 'Alice', userId: 'U1', channelId: 'C1', threadTs: '1.2' }
+  const b = { ...a, userName: 'Bob', userId: 'U2' }
+  const turns = groupIntoTurns([
+    { ...base, source: a },
+    { ...base, source: a },
+    { ...base, source: b },
+  ])
+  expect(turns.map((turn) => turn.items.length)).toEqual([2, 1])
+})
+
 describe('stable conversation turns during streaming', () => {
   it('retains completed turns across 100 deltas, including remapped user messages', () => {
     const history = Array.from({ length: 100 }, (_, i) => [user(`Question ${i}`), agentText(`Answer ${i}`)]).flat()

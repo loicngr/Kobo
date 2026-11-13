@@ -25,6 +25,7 @@ import type { ProgressBar } from '../../../shared/progress-bars'
 import type { ParallelReviewStatus } from '../../../shared/review'
 import type { ReviewReturnStatus } from '../../../shared/review-return'
 import type { SessionHandoff } from '../../../shared/session-handoff'
+import { isSlackQuestionMirror } from '../../../shared/slack-question-mirror'
 import { parseMessageSource } from '../utils/message-source'
 import type { DevServerStatus } from './dev-server'
 import { useDevServerStore } from './dev-server'
@@ -1645,6 +1646,28 @@ export const useWebSocketStore = defineStore('websocket', {
             workspaceStore.crons[wid] = crons
             const status = workspaceStore.autoLoopStates[wid]
             if (status) status.crons_count = crons.length
+          }
+          break
+        }
+
+        case 'workspace:slack-channel-updated': {
+          const { workspaceId, slackChannelId } = payload
+          if (typeof workspaceId === 'string' && (slackChannelId === null || typeof slackChannelId === 'string')) {
+            workspaceStore.updateWorkspaceFromEvent(workspaceId, { slackChannelId })
+            workspaceStore.archivedWorkspaces = workspaceStore.archivedWorkspaces.map((workspace) =>
+              workspace.id === workspaceId ? { ...workspace, slackChannelId } : workspace,
+            )
+          }
+          break
+        }
+
+        case 'workspace:slack-question-mirror-updated': {
+          const { workspaceId, slackQuestionMirror } = payload
+          if (typeof workspaceId === 'string' && isSlackQuestionMirror(slackQuestionMirror)) {
+            workspaceStore.updateWorkspaceFromEvent(workspaceId, { slackQuestionMirror })
+            workspaceStore.archivedWorkspaces = workspaceStore.archivedWorkspaces.map((workspace) =>
+              workspace.id === workspaceId ? { ...workspace, slackQuestionMirror } : workspace,
+            )
           }
           break
         }

@@ -48,6 +48,7 @@ Reference for Kōbō configuration and external integrations. The tables cover t
 - [Forge integration](#forge-integration)
 - [Notion integration](#notion-integration)
 - [Sentry integration](#sentry-integration)
+- [Slack integration](#slack-integration)
 - [Voice transcription](#voice-transcription)
 - [Skill suites](#skill-suites)
   - [superpowers](#superpowers)
@@ -912,7 +913,7 @@ The setting also lives in `settings.json` under `global`:
 
 ## External LLM access through MCP
 
-An external MCP client can connect to `http://127.0.0.1:3000/api/mcp` using Streamable HTTP (use your backend's configured port). It can create workspaces with the same options as the form, diagnose and check out existing PRs, discover workspaces, read their conversations, send messages and answer pending questions. Workspace-bound stdio, global stdio and HTTP share the creation contract, including brainstorm settings, final auto-loop review, workflow policy, imports, existing worktrees and inline attachments. All three transports also expose archive, disk-space purge, permanent deletion with explicit branch confirmation, unarchive and recovery of purged worktrees. See the [creation and PR guide](src/mcp-server/README.md#create_workspace) for fields, explicit checkout decisions and timeout/retry behavior.
+An external MCP client can connect to `http://127.0.0.1:3000/api/mcp` using Streamable HTTP (use your backend's configured port). It can create workspaces with the same options as the form, diagnose and check out existing PRs, discover workspaces, read their conversations, send messages and answer pending questions. Workspace-bound stdio, global stdio and HTTP share the creation contract, including brainstorm settings, final auto-loop review, workflow policy, imports, existing worktrees and inline attachments. All three transports also expose archive, disk-space purge, permanent deletion with explicit branch confirmation, unarchive and recovery of purged worktrees. For managed (workspace-bound) sessions, create, delete, archive, unarchive, purge and restore are available only when `agentWorkspaceLifecycleEnabled` is on (see [Agent access to workspace lifecycle tools](#agent-access-to-workspace-lifecycle-tools)); external credentials are unaffected. See the [creation and PR guide](src/mcp-server/README.md#create_workspace) for fields, explicit checkout decisions and timeout/retry behavior.
 
 Both `create_workspace` and `send_workspace_message` accept inline `attachments`
 with `{name, mime_type, data_base64}`: 10 files, 50 MiB decoded total, same formats
@@ -1647,6 +1648,37 @@ restarting MCP. When disabled, `ExitPlanMode` is denied; select permissions in
 Kōbō and relaunch manually instead. Disabling it does not put an already writable
 session back into Plan. Read-only reviews, handoff reports and stopped/replaced
 launches cannot use this setting to gain write access. Codex and Vibe are unaffected.
+
+#### Agent access to workspace lifecycle tools
+
+**Settings → Agents → Allow agents to manage workspaces** controls
+`agentWorkspaceLifecycleEnabled`, which defaults to **false**, including on
+existing installations (settings migration v74). While it is off, an agent launched
+by Kōbō cannot create, delete, archive, unarchive, purge or restore workspaces
+through the managed MCP, in any permission mode including Bypass: the six tools
+(`create_workspace`, `delete_workspace`, `archive_workspace`, `unarchive_workspace`,
+`purge_workspace_worktree`, `restore_workspace`) are hidden from the tool list and
+refused with `Workspace lifecycle tools are disabled for agents. An operator can
+enable them in Settings.` The setting is read at each tool call, but an agent reads
+its tool list once when its session starts. Turning the switch **off** therefore
+takes effect at the agent's next call (the call is refused); turning it **on**
+takes effect at the agent's next launch or resume. Enabling it never grants a tool
+that the launch would otherwise be denied (Plan, read-only and review launches stay
+refused). External MCP clients using a dedicated credential are not affected and
+keep their per-credential tool and workspace grants.
+
+**Limits of this switch.** It covers only the managed MCP that Kōbō gives to the
+agents it launches. It does not cover external MCP credentials. An agent launched
+by Kōbō also loads the MCP servers declared in the operator's own engine
+configuration (for Claude Code: user, project and local settings; Codex and Mistral
+Vibe run under the same OS account, environment and home directory, and Kōbō does
+not isolate them from their native configuration, so MCP servers declared there may
+also be loaded: treat them the same way), so an external Kōbō MCP server
+declared there with a credential that grants workspace lifecycle tools remains
+callable by that agent, in any permission mode. To keep the guarantee, do not
+declare such a credential in the configuration of the OS account that runs Kōbō's
+agents, or restrict it to read-only tools. An agent able to run shell commands is
+also not sandboxed from the local operator API (see [SECURITY.md](SECURITY.md)).
 
 #### Session watchdogs
 
@@ -2397,6 +2429,177 @@ Uses the direct saved connection when present. Otherwise reads `~/.claude.json` 
 3. The Sentry Short-ID (e.g. `ACME-API-3`) becomes the branch prefix (`fix/ACME-API-3--slug`), which means commit messages like `Fixes ACME-API-3` will auto-close the issue on merge.
 
 When Sentry is active, the workspace description field becomes optional; the extracted context is enough to start work.
+
+## Slack integration
+
+Links a Slack channel to a workspace so a person can drive its agent from Slack. A mention of the bot, or a reply inside a thread the bot already tracks, becomes a normal chat message in the workspace; the agent can answer in the thread through two MCP tools. It uses Slack Socket Mode (an outbound WebSocket opened by Kōbō), so no public URL, tunnel or inbound firewall rule is needed.
+
+Enable it in **Settings → Slack**. The same tab holds a setup guide that follows the steps below. Disabling the integration keeps the stored tokens, the allow-list and existing channel links, but disconnects from Slack and ignores inbound messages. Kōbō uses the official `@slack/socket-mode` and `@slack/web-api` packages.
+
+### Setup
+
+1. **Create the app.** Open <https://api.slack.com/apps>, click **Create new app**, choose **From scratch**, then **Paste a manifest**, pick your Slack workspace, select the JSON tab and paste the manifest below:
+
+   ```json
+   {
+     "display_information": {
+       "name": "Kobo",
+       "description": "Relie des canaux Slack aux agents d'un workspace Kobo",
+       "background_color": "#1a1a1f"
+     },
+     "features": {
+       "bot_user": {
+         "display_name": "Kobo",
+         "always_online": true
+       }
+     },
+     "oauth_config": {
+       "scopes": {
+         "bot": [
+           "app_mentions:read",
+           "channels:history",
+           "groups:history",
+           "channels:read",
+           "groups:read",
+           "chat:write",
+           "reactions:write",
+           "files:read",
+           "users:read"
+         ]
+       }
+     },
+     "settings": {
+       "event_subscriptions": {
+         "bot_events": [
+           "app_mention",
+           "message.channels",
+           "message.groups"
+         ]
+       },
+       "interactivity": {
+         "is_enabled": true
+       },
+       "org_deploy_enabled": false,
+       "socket_mode_enabled": true,
+       "is_hosted": false,
+       "token_rotation_enabled": false
+     }
+   }
+   ```
+
+2. **Generate the app token.** In **Basic Information**, under **App-Level Tokens**, generate a token with the scope `connections:write`. It starts with `xapp-`.
+   Interactivity is what lets the bot post answer buttons; Socket Mode needs no request URL for it. For an app created before buttons were added, open **Interactivity & Shortcuts** in the Slack app settings and turn **Interactivity** on, or paste the updated manifest under **App Manifest**.
+3. **Install the app.** In **Install App**, install it to the workspace. If installs need approval, wait for an admin. Copy the **Bot User OAuth Token** (`xoxb-…`). Leave token rotation and PKCE off.
+4. **Paste both tokens** in **Settings → Slack**, save them and enable the integration. The status line shows the bot and team names once connected.
+5. **Allow yourself.** Copy your member ID (Slack profile, then **...**, then **Copy member ID**; the format is `U…`) into **Allowed Slack member IDs** and save.
+6. **Invite the bot and link a channel.** Run `/invite @Kobo` in each channel to listen to, then pick that channel in the workspace configuration menu. A channel belongs to at most one workspace.
+
+### Tokens and settings
+
+The two tokens are stored under the `slack` key of `KOBO_HOME/integrations.json` (atomic write, mode `0600`), never in `settings.json`, and are excluded from settings exports. The API only returns configured/connected status, never a token. The `slackEnabled` flag and the `slackAllowedUserIds` list are ordinary global settings (settings migration v73). SQLite migration v62 adds the `workspaces.slack_channel_id` column and the `slack_messages` table.
+
+### Who can drive an agent
+
+The allow-list holds Slack member IDs. An **empty list allows nobody**. Messages from anyone else are ignored silently: no reaction, no reply, nothing stored. Only plain messages, file shares and thread broadcasts are processed; edits, deletions, joins and other subtypes are ignored.
+
+A message is addressed to the agent when it mentions the bot, or when it is a reply inside a thread Kōbō tracks (one that already holds an accepted message from an allowed user, or a post by the bot). Other channel messages are not delivered.
+
+### What happens to a message
+
+Delivery goes through the same path as a message typed in the Kōbō chat, so lifecycle, compaction and permission guards still apply, and the chat shows the message labelled with the Slack display name. Each message has a state in the local `slack_messages` table:
+
+| State | Meaning |
+|---|---|
+| `queued` | Accepted but not yet deliverable (agent busy, compacting, starting...). |
+| `dispatching` | Claimed for delivery. |
+| `delivered` | Accepted by the agent; the bot adds an `eyes` reaction. |
+| `rejected` | Refused: workspace archived or purged, queue full, expired after 24 hours, channel unlinked before delivery, or attachments sent to an auto-loop workspace. Kōbō posts a notice with the reason in the thread. A queued message whose sender was removed from the allow-list is also rejected, silently. |
+| `unknown` | Dispatch was interrupted before confirmation. It is **never retried automatically**. |
+| `context` | Earlier thread message stored for reading only (see below). |
+
+Messages the bot posts are stored with direction `out` and state `sent`.
+
+- Every queued message gets an `hourglass_flowing_sand` reaction so the sender knows it was received.
+- A 15-second tick retries queued messages. At most 50 messages are queued per workspace, and a queued message expires after 24 hours.
+- Before dispatching, Kōbō claims the row with a compare-and-set, so a message rejected meanwhile (unlinked channel, archive) is never delivered afterwards.
+- Reading the reactions: `eyes` means delivered; `hourglass_flowing_sand` means queued and still pending; no reaction at all means Kōbō did not receive the message or did not accept it (not connected, sender not on the allow-list, channel not linked). Check the status in Settings and send it again.
+
+### Attachments
+
+Files shared with the message follow the same policy as chat attachments (supported formats, 10 files, 50 MiB each and in total; see [Attachments in workspace chat](#attachments-in-workspace-chat)). Files are filtered on their Slack metadata before any download. A file whose download fails three times in a row is skipped. Skipped files are named to the agent and in one notice in the thread, so nothing disappears silently.
+
+### Thread context
+
+When a message mentions the bot from inside an existing thread that Kōbō is not yet tracking, Kōbō stores the earlier messages of that thread (up to 100) as `context` rows. They are **not** delivered as messages. The agent reads them on demand with `slack_read_thread`, whose output marks them as untrusted background, not instructions.
+
+### Agent tools
+
+Two MCP tools are listed for every workspace-bound managed launch. When no channel is linked, or the thread is unknown, the call is refused (`Slack is not available for this workspace` for posting without a link, `Unknown Slack thread` for an unknown thread) rather than the tool being hidden:
+
+- `slack_post_message` posts `text` (up to 12000 characters) to the linked channel, optionally in a thread (`thread_ts`). `@channel`, `@here` and `@everyone` are neutralised, so an agent cannot mass-ping. Optional `buttons` (1 to 5, each a unique plain-text `label` of 1 to 75 characters and an optional `style` `primary` or `danger`) and `multiple` (default false, only with `buttons`) turn the post into a question with fixed answers (see [Buttons](#buttons)).
+- `slack_read_thread` reads stored messages of a thread (`thread_ts`, `limit` 1-50, optional `before`): delivered messages, the bot's posts and context rows. Messages still queued, refused or with an uncertain delivery are left out. It reads Kōbō's local store, so it works while Slack is disconnected.
+
+The `get_workspace` MCP tool returns the workspace's linked Slack channel id to internal and external MCP clients, like its sprint id. Tokens, the allow-list and the link action are not exposed to any MCP client.
+
+They are managed, workspace-bound tools only: they are **not** exposed through the external `/api/mcp` endpoint or the global stdio server, and a call can only target the launch's own workspace.
+
+Reading is available to every workspace-bound launch. Posting is available to writable and Plan launches, and denied to restricted launches: parallel review, automatic final review, handoff generation, review with return to the original session, and native Mistral Vibe review. A sequential review on Claude Code or Codex started **without** a return is not restricted and may post. Any Mistral Vibe review is restricted, with or without a return, because Kōbō marks every native Vibe review read-only.
+
+### Buttons
+
+With `buttons`, the post shows the text, one row of buttons and the hint "You can also reply in this thread." The text still serves as the notification fallback, and the mass-ping neutralisation applies to the labels too.
+
+A click is handled like a message from the clicker: only allow-listed users count (anyone else is ignored silently, nothing stored), the click is stored in the message thread and goes through the same queue, states, notices and at-most-once delivery as a typed message. The agent receives `Clicked: <label>` under the usual header with an extra `button` segment; `slack_read_thread` lists the delivered click as a message from the user. Kōbō takes the label from what it stored when posting, never from the click payload.
+
+- **Single answer** (`multiple` false, the default): the first click wins atomically; later or repeated clicks are ignored. As soon as the click is accepted, the buttons and the hint are replaced by `Answered: <label> - <name>`.
+- **Multiple answers** (`multiple: true`): the buttons stay and every click is delivered; the bot adds `eyes` to its own message when a click reaches the agent.
+
+A single-answer message keeps its "Answered" line even when the click is later refused at delivery (the clicker was removed from the allow-list, the click waited more than 24 hours, or the workspace was archived), and the agent then receives nothing. People can still answer in plain text in the thread.
+
+A text reply in the thread keeps working as before and does not remove the buttons. A click is not a Slack message, so no reaction is ever put on it: a queued click shows no hourglass. A click on an archived workspace, or with a full queue, is refused with the usual notice in the thread and does not answer a single-answer message. SQLite migration v63 adds the button columns to `slack_messages`. Buttons need **Interactivity** enabled in the Slack app (setup step 1 above).
+
+#### Posting from Plan, per engine
+
+Plan stays conversation-only for files and commands; the Slack post is the one explicit exception, because it answers the person who wrote. What follows is what the code is expected to do. It has **not been verified against a live run**.
+
+- **Claude Code:** the Plan launch is not read-only for Kōbō's tool gate, so the call is allowed without a prompt (covered by a test). Not verified: that the Claude runtime in plan mode reaches that gate for this tool, and that the model chooses to call it.
+- **OpenAI Codex:** Kōbō's MCP tools are pre-approved and the post is made by the backend, the same path as other Plan-mode Kōbō MCP calls. Not verified: whether Codex's plan collaboration mode discourages the call.
+- **Mistral Vibe:** has no Plan mode. Ordinary Interactive/Strict/Bypass launches can post; every Vibe review cannot.
+
+### Mirrored blocking questions
+
+When the agent asks a blocking question (the question that puts the workspace in `awaiting-user`, such as Claude's AskUserQuestion), Kōbō can post it in the linked channel itself, and an allow-listed person can answer it there. The answer unblocks the agent exactly as if it had been given in the Kōbō question panel. Choose the mode per workspace with **Mirror blocking questions**, under the channel selector in the workspace configuration menu (shown once a channel is linked):
+
+- **Never** (default): nothing is posted.
+- **Only for conversations from Slack** (`slack-conversation`): posted only when the last message of the asking conversation came from Slack in the linked channel, in that message's thread.
+- **Always** (`always`): posted in that thread when there is one, otherwise as a new message in the channel, which becomes the thread.
+
+Only the current question of the main conversation is mirrored, one question per Slack message: when a tool call asks several questions, the next one is posted once the previous one is answered, and they are submitted together after the last answer. Questions asked by review sessions that Kōbō tracks are not mirrored: parallel reviews, the reviewer of a review that returns its report to the original conversation (auto-loop final reviews always do), and a running review launched with the review-only marker (any Mistral Vibe review). A review started without a return to the original conversation becomes the workspace's ordinary conversation, so its questions are mirrored.
+
+- **Single choice** (1 to 10 options): one button per option. Labels longer than 75 characters are shortened on the button; the full label is what the agent receives.
+- **Multiple choice** (1 to 10 options): checkboxes and a **Submit** button. Submit with nothing checked does nothing.
+- **More than 10 options, or none:** no controls; answer by replying in the thread.
+- **Free text:** a reply in the question's thread is taken as the answer when the engine accepts free text (Claude Code: always, as "Other"; OpenAI Codex: when the question allows "Other" or has no options; Mistral Vibe: free-text fields only). The hint under the question says whether a reply is accepted. A reply taken as an answer gets the `eyes` reaction and is not delivered as a chat message; otherwise a reply is an ordinary Slack message.
+
+Only allow-listed people can answer; anyone else is ignored. The first accepted answer wins; its controls are replaced by `Answered: <labels> - <name>` (or `Answered in the thread - <name>`). The answer is submitted once and never retried. If the engine refuses it, Kōbō replies `This answer was not accepted. Answer in Kōbō.`; if the question was answered in Kōbō first, its message shows `No longer pending - handled in Kōbō.`; on any other failure, `Kōbō could not submit this answer. Answer in Kōbō.`. In these three cases a reply taken as an answer loses its `eyes` reaction. While the next question of the same tool call is being posted, nothing can be answered: a reply sent in that moment is an ordinary Slack message. If that next question cannot be posted, Kōbō replies `Kōbō could not submit this answer. Answer in Kōbō.` and the question must be answered in Kōbō. A question answered elsewhere, cancelled, or whose agent stopped shows `No longer pending - handled in Kōbō.`, and later clicks are ignored. Unlinking the channel, switching to **Never**, archiving or purging closes the shown questions the same way. Pending questions do not survive a Kōbō restart: their messages show `No longer pending - Kōbō restarted.` and the question must be answered in Kōbō.
+
+Permission requests are only signalled: one notice in the thread names the tool (never its input) and says an approval is expected in Kōbō. A question asking for a secret value is never mirrored; one notice asks to enter it in Kōbō. SQLite migration v64 adds the `slack_question_mirror` column and the `slack_questions` table. Answering requires **Interactivity** in the Slack app, like buttons.
+
+What cannot be verified without a real Slack workspace: the rendering of checkboxes and the state carried by a real Submit click, and each engine's acceptance of answers given from Slack (covered only by tests with the documented question shapes).
+
+### Unlinking, archiving and deletion
+
+Unlinking or re-linking a channel deletes that channel's stored Slack messages and rejects its queued ones. Archiving a workspace keeps the link but rejects inbound messages. Deleting a workspace cascades its stored messages.
+
+### Limits
+
+- Messages sent while Kōbō is stopped or Slack is disconnected are **lost**: there is no catch-up. Resend them.
+- Run **one Kōbō instance per Slack app**. Two instances on the same app tokens split the events between them.
+- Slack rate limits apply; Kōbō does not retry beyond a small bounded number of attempts.
+
+### Security note
+
+An allow-listed Slack user drives the agent with the **workspace's permission mode, including Bypass**. The allow-list is an operator-level grant: add only people you would trust with a terminal on this machine, and prefer a restrictive permission mode for linked workspaces. File downloads are restricted to HTTPS Slack hosts. See [SECURITY.md](./SECURITY.md#slack-integration).
 
 ## Voice transcription
 

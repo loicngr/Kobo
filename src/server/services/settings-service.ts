@@ -329,6 +329,11 @@ export interface GlobalSettings {
   agentWatchdogEnabled: boolean
   forceImmediateMessages: boolean
   autoExitPlanMode?: boolean
+  /** Lets managed agents call the workspace lifecycle MCP tools (create, delete, archive, purge...). Off by default. */
+  agentWorkspaceLifecycleEnabled: boolean
+  slackEnabled: boolean
+  /** Slack member IDs allowed to talk to agents. */
+  slackAllowedUserIds: string[]
   /** Prefills "Additional instructions" each time the manual review dialog opens. */
   reviewDefaultInstructions?: string
   showProgressBars: boolean
@@ -1407,7 +1412,52 @@ const settingsMigrations: SettingsMigration[] = [
       if (typeof global.reviewDefaultInstructions !== 'string') global.reviewDefaultInstructions = ''
     },
   },
+  {
+    version: 73,
+    name: 'slack-integration-settings',
+    migrate: ({ global }) => {
+      global.slackEnabled = global.slackEnabled === true
+      global.slackAllowedUserIds = normalizeSlackUserIds(global.slackAllowedUserIds)
+    },
+  },
+  {
+    version: 74,
+    name: 'agent-workspace-lifecycle-switch',
+    migrate: ({ global }) => {
+      global.agentWorkspaceLifecycleEnabled = false
+    },
+  },
 ]
+
+const SLACK_MEMBER_ID = /^[UW][A-Z0-9]{2,}$/
+
+/** Thrown for a rejected Slack setting; the settings route maps it to 400. */
+export class InvalidSlackSettingsError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'InvalidSlackSettingsError'
+  }
+}
+
+/** Strict: rejects the whole update on the first bad entry (named in the message). */
+function parseSlackUserIds(value: unknown): string[] {
+  if (!Array.isArray(value)) throw new InvalidSlackSettingsError('Invalid Slack member IDs: expected an array')
+  const ids = [...new Set(value)]
+  for (const id of ids) {
+    if (typeof id !== 'string' || !SLACK_MEMBER_ID.test(id))
+      throw new InvalidSlackSettingsError(`Invalid Slack member ID: ${String(id)}`)
+  }
+  if (ids.length > 200) throw new InvalidSlackSettingsError('Too many Slack member IDs (max 200)')
+  return ids as string[]
+}
+
+/** Lenient: for stored data, drops anything malformed instead of failing the load. */
+function normalizeSlackUserIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return [...new Set(value)]
+    .filter((id): id is string => typeof id === 'string' && SLACK_MEMBER_ID.test(id))
+    .slice(0, 200)
+}
 
 /** Current settings schema version — always equals the highest migration version. */
 export const SETTINGS_SCHEMA_VERSION =
@@ -1501,6 +1551,9 @@ function defaultSettings(): Settings {
       agentWatchdogEnabled: false,
       forceImmediateMessages: false,
       autoExitPlanMode: false,
+      agentWorkspaceLifecycleEnabled: false,
+      slackEnabled: false,
+      slackAllowedUserIds: [],
       reviewDefaultInstructions: '',
       showProgressBars: true,
       stopDevServersOnShutdown: true,
@@ -1664,6 +1717,9 @@ export function runSettingsMigrations(raw: Record<string, unknown>): Settings {
   current.global.workflowPolicy = resolveWorkflowPolicy(current.global.workflowPolicy as Partial<WorkflowPolicy>)
   if (!isMemoryMode(current.global.memoryMode)) current.global.memoryMode = 'hybrid'
   current.global.autoExitPlanMode = current.global.autoExitPlanMode === true
+  current.global.agentWorkspaceLifecycleEnabled = current.global.agentWorkspaceLifecycleEnabled === true
+  current.global.slackEnabled = current.global.slackEnabled === true
+  current.global.slackAllowedUserIds = normalizeSlackUserIds(current.global.slackAllowedUserIds)
   current.global.memoryLimits = resolveMemoryLimits(current.global.memoryLimits)
   if (typeof current.global.forceImmediateMessages !== 'boolean') current.global.forceImmediateMessages = false
   if (typeof current.global.showProgressBars !== 'boolean') current.global.showProgressBars = true
@@ -2104,6 +2160,13 @@ export function updateGlobalSettings(input: Partial<GlobalSettings>): GlobalSett
   if ('reviewDefaultInstructions' in data && typeof data.reviewDefaultInstructions !== 'string') {
     delete (data as Record<string, unknown>).reviewDefaultInstructions
   }
+  if ('slackEnabled' in data && typeof data.slackEnabled !== 'boolean') {
+    delete (data as Record<string, unknown>).slackEnabled
+  }
+  if ('slackAllowedUserIds' in data) data.slackAllowedUserIds = parseSlackUserIds(data.slackAllowedUserIds)
+  if ('agentWorkspaceLifecycleEnabled' in data && typeof data.agentWorkspaceLifecycleEnabled !== 'boolean') {
+    delete (data as Record<string, unknown>).agentWorkspaceLifecycleEnabled
+  }
   if ('autoExitPlanMode' in data && typeof data.autoExitPlanMode !== 'boolean') {
     delete (data as Record<string, unknown>).autoExitPlanMode
   }
@@ -2180,6 +2243,9 @@ export function updateGlobalSettings(input: Partial<GlobalSettings>): GlobalSett
     'agentWatchdogEnabled',
     'forceImmediateMessages',
     'autoExitPlanMode',
+    'agentWorkspaceLifecycleEnabled',
+    'slackEnabled',
+    'slackAllowedUserIds',
     'reviewDefaultInstructions',
     'showProgressBars',
     'stopDevServersOnShutdown',

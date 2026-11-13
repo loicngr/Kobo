@@ -592,3 +592,18 @@ it('saves automatic Plan exit as an explicit global preference and restores its 
   await flushPromises()
   expect(toggle.props('modelValue')).toBe(true)
 })
+
+it('saves the agent workspace lifecycle switch as an explicit global preference, off by default', async () => {
+  const { wrapper, store, tab, vm } = await setup()
+  await tab('agents')
+  const toggle = wrapper.getComponent<typeof Field>('[data-test="agent-workspace-lifecycle"]')
+  expect(toggle.props('modelValue')).toBe(false)
+  expect(store.global.agentWorkspaceLifecycleEnabled).toBe(false)
+  toggle.vm.$emit('update:modelValue', true)
+  await flushPromises()
+  expect(hasUnsavedWork()).toBe(true)
+  await vm.savebarSave()
+  await flushPromises()
+  expect(store.global.agentWorkspaceLifecycleEnabled).toBe(true)
+  expect(hasUnsavedWork()).toBe(false)
+})

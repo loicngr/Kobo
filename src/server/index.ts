@@ -38,6 +38,7 @@ import pullRequestsRouter from './routes/pull-requests.js'
 import searchRouter from './routes/search.js'
 import sentryRouter from './routes/sentry.js'
 import settingsRouter from './routes/settings.js'
+import slackRouter from './routes/slack.js'
 import soundsRouter from './routes/sounds.js'
 import sprintsRouter from './routes/sprints.js'
 import templatesRouter from './routes/templates.js'
@@ -104,6 +105,7 @@ import { reconcileReviewReturns } from './services/review-return-service.js'
 import { startSearchIndex, stopSearchIndex } from './services/search-service.js'
 import { reconcileSessionHandoffs } from './services/session-handoff-service.js'
 import { getGlobalSettings, updateNetworkAccessSettings } from './services/settings-service.js'
+import { startSlack, stopSlack } from './services/slack/slack-service.js'
 import { reloadDefaultTemplates } from './services/templates-service.js'
 import { destroyAllTerminals } from './services/terminal-service.js'
 import { handleTerminalConnection } from './services/terminal-websocket-service.js'
@@ -265,6 +267,7 @@ app.route('/api/maintenance', maintenanceRouter)
 app.route('/api/engines', enginesRouter)
 app.route('/api/environment', environmentRouter)
 app.route('/api/integrations', integrationsRouter)
+app.route('/api/slack', slackRouter)
 app.route('/api/sounds', soundsRouter)
 app.route('/api/migration', migrationRouter)
 app.route('/api/voice', voiceRouter)
@@ -346,6 +349,7 @@ const server = serve(
     cronService.restoreOnBoot()
     startWatchdog()
     startUpdateChecker()
+    void startSlack()
     stopStartupSpinner()
     const settings = getGlobalSettings()
     console.log(
@@ -584,6 +588,7 @@ async function gracefulShutdown(signal: string, exitCode = 0): Promise<void> {
   const stopDevServersOnShutdown = getGlobalSettings().stopDevServersOnShutdown !== false
   stopUpdateChecker()
   const groupMessagesStopped = stopGroupMessageBatches()
+  const slackStopped = stopSlack()
 
   console.log(`\n[kobo] Received ${signal}, shutting down gracefully…`)
 
@@ -664,6 +669,7 @@ async function gracefulShutdown(signal: string, exitCode = 0): Promise<void> {
     try {
       const stopped = await Promise.allSettled([
         groupMessagesStopped,
+        slackStopped,
         stopWsEventsRetention(),
         stopSearchIndex(),
         dailyBackupScheduler.stop(),

@@ -323,3 +323,36 @@ it('never auto-exits a read-only review or an aborted request', async () => {
     }
   }
 })
+
+it('lets a Plan launch post to Slack while a read-only launch denies it', async () => {
+  for (const readOnly of [false, true]) {
+    const events: AgentEvent[] = []
+    await createClaudeCodeEngine().start(
+      {
+        workspaceId: 'slack-plan',
+        workingDir: '/tmp',
+        prompt: 'plan',
+        agentPermissionMode: 'plan',
+        readOnly,
+        backendUrl: 'http://localhost:3000',
+        koboHome: '/tmp/kobo',
+        settings: {} as never,
+        mcpServers: [{ name: 'kobo-tasks', command: 'node', args: [], env: { KOBO_SLACK_CHANNEL_ID: 'C1' } }],
+      },
+      (event) => events.push(event),
+    )
+    try {
+      const ctx = { signal: new AbortController().signal, toolUseID: 'slack' }
+      expect((await capturedCanUseTool!('mcp__kobo-tasks__slack_post_message', { text: 'hi' }, ctx)).behavior).toBe(
+        readOnly ? 'deny' : 'allow',
+      )
+      if (!readOnly)
+        expect(
+          (await capturedCanUseTool!('mcp__kobo-tasks__slack_read_thread', { thread_ts: '1' }, ctx)).behavior,
+        ).toBe('allow')
+      expect(events.some((event) => event.kind === 'session:user-input-requested')).toBe(false)
+    } finally {
+      releaseStream?.()
+    }
+  }
+})

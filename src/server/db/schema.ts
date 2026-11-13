@@ -10,6 +10,7 @@ import { initProgressBarSchema } from './progress-bar-schema.js'
 import { initReviewReturnSchema } from './review-return-schema.js'
 import { initSearchSchema } from './search-schema.js'
 import { initSessionHandoffSchema } from './session-handoff-schema.js'
+import { initSlackButtonsSchema, initSlackQuestionsSchema, initSlackSchema } from './slack-schema.js'
 import { initWorkspaceMessageBatchSchema } from './workspace-message-batch-schema.js'
 
 /** Create all tables and indexes for a fresh install. Not used for upgrades -- see migrations.ts. */
@@ -263,4 +264,7 @@ export function initSchema(db: Database.Database): void {
   initParallelReviewSchema(db)
   initPinnedMessageSchema(db)
   initBrowserSessionSchema(db)
+  initSlackSchema(db)
+  initSlackButtonsSchema(db)
+  initSlackQuestionsSchema(db)
 }

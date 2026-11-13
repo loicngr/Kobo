@@ -1,6 +1,9 @@
 const nativeDefaults = vi.hoisted(() => ({ permissionMode: 'interactive' }))
 vi.mock('../server/services/settings-service.js', () => ({
-  getGlobalSettings: () => ({ defaultPermissionModeByEngine: { 'mistral-vibe': nativeDefaults.permissionMode } }),
+  getGlobalSettings: () => ({
+    defaultPermissionModeByEngine: { 'mistral-vibe': nativeDefaults.permissionMode },
+    agentWorkspaceLifecycleEnabled: true,
+  }),
 }))
 
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -273,6 +276,7 @@ it.each(['', 'internal-workspace'])(
       workspaceId: workspaceId || 'unused',
       sessionId: 'test',
       readOnly: false,
+      restricted: false,
     })
     const client = new Client({ name: 'external-creation', version: '1' })
     try {

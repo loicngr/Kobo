@@ -126,6 +126,7 @@ it.each(['global', 'workspace', 'review', 'handoff'])(
       workspaceId: 'self',
       sessionId: 'session',
       readOnly: mode === 'review' || mode === 'handoff',
+      restricted: mode === 'review' || mode === 'handoff',
       env: {
         ...(mode === 'review' ? { KOBO_FINAL_REVIEW_TOKEN: 'review', KOBO_FINAL_REVIEW_SESSION_ID: 'session' } : {}),
         ...(mode === 'handoff' ? { KOBO_HANDOFF_ID: 'handoff', KOBO_HANDOFF_TOKEN: 'handoff' } : {}),

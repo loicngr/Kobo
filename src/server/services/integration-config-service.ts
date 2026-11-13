@@ -35,10 +35,33 @@ function validate(value: unknown): IntegrationConfig {
   return { command: value.command.trim(), args: value.args as string[], env: value.env as Record<string, string> }
 }
 
-function readConnections(): Partial<Record<IntegrationId, IntegrationConfig>> {
+/** Whole integrations.json, including keys this module does not own (e.g. `slack`). */
+export function readIntegrationsFile(): Record<string, unknown> {
   try {
     const raw: unknown = JSON.parse(fs.readFileSync(path.join(getKoboHome(), 'integrations.json'), 'utf8'))
     if (!isRecord(raw)) throw new Error('Invalid configuration')
+    return raw
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {}
+    throw new Error('Cannot read integration configuration')
+  }
+}
+
+/** Atomic 0600 write of the whole integrations.json. */
+export function writeIntegrationsFile(contents: Record<string, unknown>): void {
+  const home = ensureKoboHome()
+  const temporary = path.join(home, `integrations-${randomUUID()}.tmp`)
+  try {
+    fs.writeFileSync(temporary, JSON.stringify(contents, null, 2), { mode: 0o600, flag: 'wx' })
+    fs.renameSync(temporary, path.join(home, 'integrations.json'))
+  } finally {
+    if (fs.existsSync(temporary)) fs.unlinkSync(temporary)
+  }
+}
+
+function readConnections(): Partial<Record<IntegrationId, IntegrationConfig>> {
+  try {
+    const raw = readIntegrationsFile()
     const result: Partial<Record<IntegrationId, IntegrationConfig>> = {}
     for (const key of ['notion', 'sentry'] as const) if (raw[key] != null) result[key] = validate(raw[key])
     return result
@@ -60,15 +83,9 @@ export function getIntegrationStatus(integration: IntegrationId): { configured: 
 /** Local single-user configuration: commands are explicit user-authorized executable configuration. */
 export function saveIntegrationConfig(integration: IntegrationId, value: unknown): void {
   const entry = value === null ? null : validate(value)
-  const connections = readConnections()
-  if (entry) connections[integration] = entry
-  else delete connections[integration]
-  const home = ensureKoboHome()
-  const temporary = path.join(home, `integrations-${randomUUID()}.tmp`)
-  try {
-    fs.writeFileSync(temporary, JSON.stringify(connections, null, 2), { mode: 0o600, flag: 'wx' })
-    fs.renameSync(temporary, path.join(home, 'integrations.json'))
-  } finally {
-    if (fs.existsSync(temporary)) fs.unlinkSync(temporary)
-  }
+  readConnections() // still rejects a corrupt notion/sentry entry before rewriting
+  const file = readIntegrationsFile() // keeps keys owned by others (slack)
+  if (entry) file[integration] = entry
+  else delete file[integration]
+  writeIntegrationsFile(file)
 }

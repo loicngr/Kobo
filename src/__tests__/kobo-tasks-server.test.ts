@@ -968,6 +968,49 @@ describe('MCP server tool registration — global workspace tools', () => {
     }
   })
 
+  it('lists Slack tools only for workspace launches and drops posting from restricted report launches', async () => {
+    const db = new Database(':memory:')
+    try {
+      const slackTool = vi.fn(async () => ({ content: [{ type: 'text' as const, text: 'ok' }] }))
+      const context = { db, backendUrl: 'http://localhost', env: {}, backendRequest: vi.fn(), slackTool }
+      const names = (env: Record<string, string>, workspaceId?: string) =>
+        createManagedMcpDispatcher({ ...context, env, workspaceId })
+          .availableTools()
+          .map((tool) => tool.name)
+      expect(names({})).not.toContain('slack_read_thread')
+      expect(names({})).not.toContain('slack_post_message')
+      expect(names({}, 'own')).toEqual(expect.arrayContaining(['slack_read_thread', 'slack_post_message']))
+      const restrictedEnvs: Record<string, string>[] = [
+        { KOBO_HANDOFF_ID: 'h', KOBO_HANDOFF_TOKEN: 't' },
+        { KOBO_FINAL_REVIEW_TOKEN: 't', KOBO_FINAL_REVIEW_SESSION_ID: 's' },
+      ]
+      for (const env of restrictedEnvs) {
+        expect(names(env, 'own')).toContain('slack_read_thread')
+        expect(names(env, 'own')).not.toContain('slack_post_message')
+      }
+      const dispatcher = createManagedMcpDispatcher({ ...context, workspaceId: 'own' })
+      expect(await dispatcher.callTool('slack_post_message', { text: 'hi' })).toEqual({
+        content: [{ type: 'text', text: 'ok' }],
+      })
+      expect(slackTool).toHaveBeenCalledWith('slack_post_message', { text: 'hi' })
+      const unbound = (await createManagedMcpDispatcher(context).callTool('slack_read_thread', { thread_ts: '1' })) as {
+        isError?: boolean
+      }
+      expect(unbound.isError).toBe(true)
+      const finalReview = createManagedMcpDispatcher({
+        ...context,
+        workspaceId: 'own',
+        env: { KOBO_FINAL_REVIEW_TOKEN: 't', KOBO_FINAL_REVIEW_SESSION_ID: 's' },
+      })
+      expect(
+        ((await finalReview.callTool('slack_post_message', { text: 'hi' })) as { isError?: boolean }).isError,
+      ).toBe(true)
+      expect(slackTool).toHaveBeenCalledTimes(1)
+    } finally {
+      db.close()
+    }
+  })
+
   it('gates the exposed tool list on workspaceId being set', () => {
     const db = new Database(':memory:')
     try {

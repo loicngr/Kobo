@@ -14,6 +14,7 @@ import {
   revokeInternalMcpCapability,
 } from '../server/services/internal-mcp-capability-service.js'
 import { createProgressCapability } from '../server/services/progress-bar-runtime.js'
+import { _setSettingsPath, updateGlobalSettings } from '../server/services/settings-service.js'
 import { createSprint } from '../server/services/sprint-service.js'
 import { createIdleSession } from '../server/services/workspace-service.js'
 
@@ -50,6 +51,7 @@ it.each([true, false])(
       workspaceId: 'own',
       sessionId: session.id,
       readOnly,
+      restricted: readOnly,
       env: { KOBO_PROGRESS_SESSION_TOKEN: progress.token },
     })
     const listener = serve({ fetch: app.fetch, hostname: '127.0.0.1', port: 0 })
@@ -178,7 +180,12 @@ it.each([true, false])(
 )
 
 it('rejects caller supplied flags, targets and missing capabilities', async () => {
-  const cap = createInternalMcpCapability({ workspaceId: 'own', sessionId: 'session', readOnly: true })
+  const cap = createInternalMcpCapability({
+    workspaceId: 'own',
+    sessionId: 'session',
+    readOnly: true,
+    restricted: true,
+  })
   const response = await app.request('/api/internal-mcp', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Kobo-Mcp-Session': cap.token },
@@ -196,7 +203,12 @@ it('rejects caller supplied flags, targets and missing capabilities', async () =
 })
 
 it('rechecks launch revocation after receiving a request body', async () => {
-  const cap = createInternalMcpCapability({ workspaceId: 'own', sessionId: 'session', readOnly: false })
+  const cap = createInternalMcpCapability({
+    workspaceId: 'own',
+    sessionId: 'session',
+    readOnly: false,
+    restricted: false,
+  })
   let bodyStarted!: () => void
   const reading = new Promise<void>((resolve) => {
     bodyStarted = resolve
@@ -259,7 +271,12 @@ it('rejects invalid capabilities before consuming a large or slow body', async (
 })
 
 it('treats search query text as data rather than a request path', async () => {
-  const cap = createInternalMcpCapability({ workspaceId: 'own', sessionId: 'session', readOnly: true })
+  const cap = createInternalMcpCapability({
+    workspaceId: 'own',
+    sessionId: 'session',
+    readOnly: true,
+    restricted: true,
+  })
   try {
     const response = await app.request('/api/internal-mcp', {
       method: 'POST',
@@ -273,4 +290,37 @@ it('treats search query text as data rather than a request path', async () => {
   } finally {
     revokeInternalMcpCapability(cap.token)
   }
+})
+
+it('lists workspace lifecycle tools to a writable launch only while the agent switch is on', async () => {
+  _setSettingsPath(join(directory, 'settings.json'))
+  const covered = [
+    'create_workspace',
+    'delete_workspace',
+    'archive_workspace',
+    'unarchive_workspace',
+    'purge_workspace_worktree',
+    'restore_workspace',
+  ]
+  const cap = createInternalMcpCapability({
+    workspaceId: 'own',
+    sessionId: 'session',
+    readOnly: false,
+    restricted: false,
+  })
+  const list = async () => {
+    const response = await app.request('/api/internal-mcp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Kobo-Mcp-Session': cap.token },
+      body: JSON.stringify({ method: 'list' }),
+    })
+    return ((await response.json()) as { tools: { name: string }[] }).tools.map((tool) => tool.name)
+  }
+  const off = await list()
+  for (const name of covered) expect(off).not.toContain(name)
+  expect(off).toContain('add_workspace_tags')
+  updateGlobalSettings({ agentWorkspaceLifecycleEnabled: true })
+  const on = await list()
+  for (const name of covered) expect(on).toContain(name)
+  revokeInternalMcpCapability(cap.token)
 })
