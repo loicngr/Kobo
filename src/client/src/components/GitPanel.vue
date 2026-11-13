@@ -252,7 +252,7 @@
         </template>
 
         <q-btn
-          v-if="canMergeRequest"
+          v-if="mergingRequest ? !mergingAsAdmin : canMergeRequest"
           no-caps
           outline
           dense
@@ -267,10 +267,11 @@
         />
 
         <q-btn
-          v-if="canBypassMerge"
+          v-if="mergingRequest ? mergingAsAdmin : canBypassMerge"
           outline dense no-caps size="sm" color="kobo-danger" icon="policy"
           :label="$t('git.mergeBypassRequirements')"
           class="full-width q-mb-xs git-btn"
+          :loading="mergingRequest"
           :disable="isArchived || mergingRequest"
           data-testid="merge-bypass"
           @click="handleMergeRequest(true)"
@@ -831,6 +832,7 @@ const fetching = ref(false)
 const openingPr = ref(false)
 const changingBase = ref(false)
 const mergingRequest = ref(false)
+const mergingAsAdmin = ref(false)
 let panelUnmounted = false
 const showDiff = ref(false)
 // Exposed API surface of DiffViewer (see its `defineExpose`). Typed loosely
@@ -1983,6 +1985,7 @@ function handleMergeRequest(bypass = false) {
       $q.notify({ type: 'warning', message: t('git.mergeRevisionChanged') })
       return
     }
+    mergingAsAdmin.value = admin
     mergingRequest.value = true
     try {
       const res = await apiFetchResponse(`/api/workspaces/${workspace.id}/merge-pr`, {

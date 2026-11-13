@@ -154,10 +154,12 @@
 
     <q-separator dark />
 
+    <WorkspaceBulkActions :workspaces="bulkSelection" @clear="selectedIds = []" @completed="removeBulkSelection" />
     <!-- Scrollable groups -->
     <div
       class="col overflow-auto"
       role="listbox"
+      aria-multiselectable="true"
       :aria-label="$t('workspaceList.a11y.list')"
       @keydown.down.prevent="moveFocus(1)"
       @keydown.up.prevent="moveFocus(-1)"
@@ -210,6 +212,9 @@
                 :show-project-chip="false"
                 :border-color="attentionBorderColor(ws)"
                 @select="selectWorkspace"
+                :multi-selected="selectedIds.includes(ws.id)"
+                :selection-mode="bulkSelection.length > 0"
+                @toggle-selection="toggleBulkSelection"
                 @rename="renameWorkspace"
                 @edit-description="editDescription"
                 @copy-path="copyWorktreePath"
@@ -238,6 +243,9 @@
               :show-project-chip="flatten"
               :border-color="attentionBorderColor(ws)"
               @select="selectWorkspace"
+                :multi-selected="selectedIds.includes(ws.id)"
+                :selection-mode="bulkSelection.length > 0"
+                @toggle-selection="toggleBulkSelection"
               @rename="renameWorkspace"
               @edit-description="editDescription"
               @copy-path="copyWorktreePath"
@@ -306,6 +314,9 @@
                 :show-project-chip="false"
                 border-color="var(--kobo-success)"
                 @select="selectWorkspace"
+                :multi-selected="selectedIds.includes(ws.id)"
+                :selection-mode="bulkSelection.length > 0"
+                @toggle-selection="toggleBulkSelection"
                 @rename="renameWorkspace"
                 @edit-description="editDescription"
                 @copy-path="copyWorktreePath"
@@ -334,6 +345,9 @@
               :show-project-chip="flatten"
               border-color="var(--kobo-success)"
               @select="selectWorkspace"
+                :multi-selected="selectedIds.includes(ws.id)"
+                :selection-mode="bulkSelection.length > 0"
+                @toggle-selection="toggleBulkSelection"
               @rename="renameWorkspace"
               @edit-description="editDescription"
               @copy-path="copyWorktreePath"
@@ -402,6 +416,9 @@
                 :show-project-chip="false"
                 border-color="var(--kobo-border-strong)"
                 @select="selectWorkspace"
+                :multi-selected="selectedIds.includes(ws.id)"
+                :selection-mode="bulkSelection.length > 0"
+                @toggle-selection="toggleBulkSelection"
                 @rename="renameWorkspace"
                 @edit-description="editDescription"
                 @copy-path="copyWorktreePath"
@@ -430,6 +447,9 @@
               :show-project-chip="flatten"
               border-color="var(--kobo-border-strong)"
               @select="selectWorkspace"
+                :multi-selected="selectedIds.includes(ws.id)"
+                :selection-mode="bulkSelection.length > 0"
+                @toggle-selection="toggleBulkSelection"
               @rename="renameWorkspace"
               @edit-description="editDescription"
               @copy-path="copyWorktreePath"
@@ -505,6 +525,9 @@
             :show-project-chip="flatten"
             border-color="var(--kobo-border)"
             @select="selectWorkspace"
+                :multi-selected="selectedIds.includes(ws.id)"
+                :selection-mode="bulkSelection.length > 0"
+                @toggle-selection="toggleBulkSelection"
             @rename="renameWorkspace"
             @edit-description="editDescription"
             @copy-path="copyWorktreePath"
@@ -763,6 +786,7 @@ import { useQuasar } from 'quasar'
 import ActivityDigest from 'src/components/ActivityDigest.vue'
 import HelpMenu from 'src/components/HelpMenu.vue'
 import ManageTagsDialog from 'src/components/ManageTagsDialog.vue'
+import WorkspaceBulkActions from 'src/components/WorkspaceBulkActions.vue'
 import WorkspaceCard from 'src/components/WorkspaceCard.vue'
 import WorkspaceGroupMessageDialog from 'src/components/WorkspaceGroupMessageDialog.vue'
 import WorkspaceSortMenu from 'src/components/WorkspaceSortMenu.vue'
@@ -1430,8 +1454,42 @@ async function onUnarchiveClick(ws: Workspace, event: Event) {
   }
 }
 
+const selectedIds = ref<string[]>([])
+const bulkVisibleWorkspaces = computed(() => [
+  ...filteredNeedsAttention.value,
+  ...filteredRunning.value,
+  ...filteredIdle.value,
+  ...filteredArchived.value,
+])
+const bulkSelection = computed(() =>
+  selectedIds.value.flatMap((id) => {
+    const ws = bulkVisibleWorkspaces.value.find((item) => item.id === id)
+    return ws ? [ws] : []
+  }),
+)
+watch(
+  [() => sprints.active, searchQuery, favoritesOnly, tagFilter, searchArchived],
+  () => {
+    selectedIds.value = []
+  },
+  { deep: true, flush: 'sync' },
+)
+watch(bulkVisibleWorkspaces, (visible) => {
+  const ids = new Set(visible.map((ws) => ws.id))
+  selectedIds.value = selectedIds.value.filter((id) => ids.has(id))
+})
+function toggleBulkSelection(id: string) {
+  selectedIds.value = selectedIds.value.includes(id)
+    ? selectedIds.value.filter((value) => value !== id)
+    : [...selectedIds.value, id]
+}
+function removeBulkSelection(ids: string[]) {
+  selectedIds.value = selectedIds.value.filter((id) => !ids.includes(id))
+}
+
 let pendingSelection: { id: string; sprint: string } | null = null
 function selectWorkspace(id: string) {
+  selectedIds.value = []
   if (pendingSelection?.id === id && pendingSelection.sprint === sprints.active) return
   const selection = { id, sprint: sprints.active }
   pendingSelection = selection

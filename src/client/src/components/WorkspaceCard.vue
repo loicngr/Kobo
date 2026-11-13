@@ -3,20 +3,28 @@
     data-testid="workspace-card"
     :data-workspace-id="workspace.id"
     class="wl-item cursor-pointer q-pa-sm q-mx-xs rounded-borders"
-    :class="{ 'wl-item--selected': selected, 'wl-item--archived': variant === 'archived' }"
+    :class="{ 'wl-item--selected': selected, 'wl-item--archived': variant === 'archived', 'wl-item--multi-selected': multiSelected }"
     role="option"
     tabindex="0"
-    :aria-selected="selected"
+    :aria-selected="selectionMode ? !!multiSelected : selected"
     :aria-label="t('workspaceList.a11y.card', { name: workspace.name, status: statusLabel })"
     :style="[
       { borderLeft: `3px solid ${borderColor}` },
       workspace.favoritedAt ? { borderBottom: '2px solid var(--kobo-warning)' } : {},
     ]"
-    @click="emit('select', workspace.id)"
-    @keydown.enter.prevent="emit('select', workspace.id)"
-    @keydown.space.prevent="emit('select', workspace.id)"
+    @click="selectCard($event)"
+    @keydown.enter.prevent="selectCard($event)"
+    @keydown.space.prevent="selectCard($event)"
+    @pointerdown="startHold"
+    @pointermove="moveHold"
+    @pointerup="cancelHold"
+    @pointercancel="cancelHold"
+    @pointerleave="cancelHold"
+    @touchstart.capture.stop
+    @contextmenu.capture="onContextMenu"
     @contextmenu.prevent
   >
+    <q-icon v-if="multiSelected" name="check_circle" color="primary" class="float-right" />
     <WorkspaceContextMenu
       :workspace="workspace"
       :archived="variant === 'archived'"
@@ -101,13 +109,15 @@ import type { Workspace } from 'src/stores/workspace'
 import { useTimeAgo } from 'src/utils/formatters'
 import { projectColorFor, projectNameFor, projectTextColorFor } from 'src/utils/project-color'
 import { workspaceStatusKey } from 'src/utils/workspace-status'
-import { computed } from 'vue'
+import { computed, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 const props = defineProps<{
   workspace: Workspace
   variant: 'attention' | 'running' | 'idle' | 'archived'
   selected: boolean
+  multiSelected?: boolean
+  selectionMode?: boolean
   /** Render the project chip — only the flattened groups do, the grouped ones
    *  already carry a project label above the rows. */
   showProjectChip: boolean
@@ -117,6 +127,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   select: [id: string]
+  toggleSelection: [id: string]
   rename: [ws: Workspace]
   editDescription: [ws: Workspace]
   copyPath: [ws: Workspace]
@@ -133,6 +144,58 @@ const emit = defineEmits<{
   restoreWorktree: [ws: Workspace]
   delete: [ws: Workspace, event: Event]
 }>()
+
+let holdTimer: ReturnType<typeof setTimeout> | undefined
+let holdOrigin: { x: number; y: number; id: number } | undefined
+let suppressClick = false
+let touchInteraction = false
+function cancelHold() {
+  clearTimeout(holdTimer)
+  holdTimer = undefined
+  holdOrigin = undefined
+  document.removeEventListener('scroll', cancelHold, true)
+  window.removeEventListener('blur', cancelHold)
+}
+function startHold(event: PointerEvent) {
+  cancelHold()
+  suppressClick = false
+  touchInteraction = event.pointerType === 'touch'
+  if (event.button !== 0 || !event.isPrimary) return
+  holdOrigin = { x: event.clientX, y: event.clientY, id: event.pointerId }
+  document.addEventListener('scroll', cancelHold, true)
+  window.addEventListener('blur', cancelHold)
+  holdTimer = setTimeout(() => {
+    cancelHold()
+    suppressClick = true
+    if (!props.multiSelected) emit('toggleSelection', props.workspace.id)
+  }, 1000)
+}
+function moveHold(event: PointerEvent) {
+  if (
+    holdOrigin &&
+    (event.pointerId !== holdOrigin.id || Math.hypot(event.clientX - holdOrigin.x, event.clientY - holdOrigin.y) > 10)
+  )
+    cancelHold()
+}
+function onContextMenu(event: Event) {
+  if (touchInteraction) {
+    event.preventDefault()
+    event.stopImmediatePropagation()
+  }
+}
+onBeforeUnmount(cancelHold)
+
+function selectCard(event: MouseEvent | KeyboardEvent) {
+  if (event.type === 'click' && suppressClick) {
+    suppressClick = false
+    event.preventDefault()
+    return
+  }
+  if (props.selectionMode || event.ctrlKey || event.metaKey) {
+    event.preventDefault()
+    emit('toggleSelection', props.workspace.id)
+  } else emit('select', props.workspace.id)
+}
 
 const { t } = useI18n()
 const { timeAgo } = useTimeAgo()
@@ -207,4 +270,6 @@ const nameStyle = computed(() =>
   &:hover { opacity: 0.85; }
   &.wl-item--selected { opacity: 1; }
 }
+.wl-item { user-select: none; -webkit-touch-callout: none; }
+.wl-item--multi-selected { outline: 2px solid var(--q-primary); outline-offset: -2px; }
 </style>

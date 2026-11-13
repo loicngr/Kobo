@@ -1,4 +1,18 @@
 export default {
+  'bulk.actions': 'Actions groupées',
+  'bulk.selected': '{count} workspace(s) sélectionné(s)',
+  'bulk.clear': 'Effacer la sélection',
+  'bulk.fetch': 'Git · Fetch',
+  'bulk.pull': 'Git · Pull',
+  'bulk.merge': 'Git · Merge de la branche source',
+  'bulk.rebase': 'Git · Rebase sur la branche source',
+  'bulk.confirm': 'Appliquer cette action aux workspaces suivants :',
+  'bulk.deleteWarning':
+    'Suppression définitive des workspaces, de leur historique et de leurs worktrees. Les branches sont conservées. Workspaces concernés :',
+  'bulk.branches': 'Saisissez les branches ci-dessus, une par ligne',
+  'bulk.changed': 'Le workspace ou ses branches ont changé. Sélectionnez-le à nouveau.',
+  'bulk.result': '{done}/{total} actions réussies',
+
   'tools.group.session': 'Session',
   'tools.group.quality': 'Revue et qualité',
   'tools.group.project': 'Environnement du projet',

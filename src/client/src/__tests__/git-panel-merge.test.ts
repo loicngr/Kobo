@@ -372,6 +372,36 @@ describe('GitPanel PR merge confirmation', () => {
     expect(mocks.dialog).toHaveBeenCalledTimes(3)
   })
 
+  it.each([false, true])(
+    'keeps the merge loader until the response even after PR state changes (admin=%s)',
+    async (admin) => {
+      if (admin) {
+        store.prSnapshots['ws-a'] = { ...expected, readyToMerge: false, state: 'OPEN', mergeable: 'MERGEABLE' } as never
+        mountPanel()
+        await flushPromises()
+        await wrapper.get('[data-testid="merge-bypass"]').trigger('click')
+      } else await openDialog()
+      let finish!: (response: unknown) => void
+      mocks.api.mockReturnValueOnce(
+        new Promise((resolve) => {
+          finish = resolve
+        }),
+      )
+      const pending = confirm('merge')
+      await flushPromises()
+      store.prSnapshots['ws-a'] = { ...expected, readyToMerge: false, state: 'MERGED' } as never
+      await flushPromises()
+      const selector = admin ? '[data-testid="merge-bypass"]' : 'button[data-icon="merge"]'
+      expect(wrapper.get(selector).attributes('loading')).toBe('true')
+      expect(mocks.notify).not.toHaveBeenCalled()
+      finish({ ok: true, json: async () => ({ merged: true, branch: 'feature/a' }) })
+      await pending
+      await flushPromises()
+      expect(mocks.notify).toHaveBeenCalledWith(expect.objectContaining({ type: 'positive' }))
+      expect(wrapper.find(selector).exists()).toBe(false)
+    },
+  )
+
   it('offers branch deletion immediately while refreshed Git stats are still pending', async () => {
     await openDialog()
     let release!: (value: GitStats) => void

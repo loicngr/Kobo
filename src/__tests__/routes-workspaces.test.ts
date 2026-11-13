@@ -43,6 +43,7 @@ vi.mock('../server/services/worktree-restore-service.js', () => ({
 
 import { restorePurgedWorktree, WorktreeRestoreError } from '../server/services/worktree-restore-service.js'
 import {
+  deferUntilWorkspaceAvailable,
   isWorkspaceLifecycleBusy,
   reserveWorkspaceLifecycle,
   withWorkspaceLifecycleGuard,
@@ -1699,7 +1700,7 @@ describe('POST /api/workspaces', () => {
     )
   })
 
-  it('runs setup script when configured and continues on success', async () => {
+  it('excludes competing starts during creation and hands off to one initial agent', async () => {
     vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
     vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
       worktreePath: '/tmp/worktree',
@@ -1721,7 +1722,21 @@ describe('POST /api/workspaces', () => {
         notionInProgressStatus: '',
       }),
     )
-    vi.mocked(setupScriptService.runSetupScript).mockResolvedValue({ exitCode: 0 })
+    const retry = vi.fn(() => {
+      expect(agentManager.startAgent).toHaveBeenCalledOnce()
+    })
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockImplementationOnce(async () => {
+      expect(isWorkspaceLifecycleBusy('ws-1')).toBe(true)
+      return { worktreePath: '/tmp/worktree', base: 'origin', branchCreated: true }
+    })
+    vi.mocked(setupScriptService.runSetupScript).mockImplementationOnce(async () => {
+      expect(isWorkspaceLifecycleBusy('ws-1')).toBe(true)
+      expect(deferUntilWorkspaceAvailable('ws-1', retry)).toBe(true)
+      const competing = await app.request('/api/workspaces/ws-1/start', { method: 'POST' })
+      expect(competing.status).toBe(409)
+      expect(agentManager.startAgent).not.toHaveBeenCalled()
+      return { exitCode: 0 }
+    })
 
     const res = await app.request('/api/workspaces', {
       method: 'POST',
@@ -1735,6 +1750,9 @@ describe('POST /api/workspaces', () => {
     })
 
     expect(res.status).toBe(201)
+    expect(retry).toHaveBeenCalledOnce()
+    expect(isWorkspaceLifecycleBusy('ws-1')).toBe(false)
+    expect(agentManager.startAgent).toHaveBeenCalledOnce()
     expect(vi.mocked(setupScriptService.runSetupScript)).toHaveBeenCalledOnce()
   })
 

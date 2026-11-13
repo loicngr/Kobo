@@ -42,9 +42,10 @@
       @scroll="onScroll"
       @wheel.passive="cancelInitialSettle"
       @touchstart.passive="cancelInitialSettle"
+      @pointerdown.passive="cancelInitialSettle"
       @keydown="cancelInitialSettle"
     >
-      <div v-if="loadingOlder && !focusingHistory" class="text-center q-py-sm text-caption text-kobo-3">
+      <div v-if="loadingOlder && !focusingHistory" class="absolute-top text-center q-py-sm text-caption text-kobo-3" style="z-index: 1; pointer-events: none">
         <q-spinner size="sm" /> {{ $t('activity.loading_older') }}
       </div>
       <q-virtual-scroll
@@ -64,6 +65,7 @@
             :session-id="selectedSessionId"
             :pin-ready="turn.items.every((item) => !unpersistedItemKeys.has(itemKey(item)) && (item.type !== 'thinking' || !unpersistedItemKeys.has(`thinking:${item.messageId}`)))"
             :data-turn-index="index"
+            :data-turn-key="turnKey(turn)"
             :highlighted="turn.items.some((i) => i.eventIds?.includes(highlightedEventId ?? '') ?? false)"
             @scroll-to="onTurnScrollTo"
           />
@@ -364,6 +366,7 @@ const highlightedEventId = ref<string | null>(null)
 let initialScrollDone = false
 let initialAnchorWanted = true
 let lastMeasuredScrollSize: number | null = null
+let scrollInteraction = 0
 
 // Key pending requests by view so an old response cannot end the current loader.
 const pendingSessionFetches = ref(new Set<string>())
@@ -401,6 +404,7 @@ function onScroll(info: ScrollInfo) {
   queueLatestUserTurnVisibilityCheck()
   const previousSize = lastMeasuredScrollSize
   lastMeasuredScrollSize = info.verticalSize
+  if (loadingOlder.value) return
   // Images and virtual cards finish measuring after the first paint. Keep
   // a previously pinned feed pinned when its content grows; a user scroll
   // with the same content size still turns follow off normally.
@@ -512,19 +516,9 @@ async function loadOlder(): Promise<void> {
   const signal = olderRequest.begin()
   historyError.value = ''
   loadingOlder.value = true
+  stickToBottom.value = false
   try {
     const area = scrollRef.value
-    // Wait for Vue to render the "loading older messages…" DOM block so its
-    // height is included in `prevSize`. Without this, an empty fetch (new
-    // session, no history) would still produce a positive delta from the
-    // loader itself and the position-preserve branch below would push the
-    // user past the FETCH_MORE_THRESHOLD even though no content was actually
-    // prepended — making the top of the feed unreachable.
-    await nextTick()
-    if (!olderRequest.isCurrent(signal)) return
-    const prevSize = area?.getScroll().verticalSize ?? 0
-    const prevPos = area?.getScroll().verticalPosition ?? 0
-
     const params = new URLSearchParams({
       before,
       limit: '200',
@@ -534,6 +528,19 @@ async function loadOlder(): Promise<void> {
     if (!res.ok) throw await apiResponseError(res)
     const body = (await res.json()) as { events: FetchedEvent[]; hasMore: boolean }
     if (!olderRequest.isCurrent(signal)) return
+    // Capture at response time: the user can keep scrolling during the request.
+    const position = area?.getScroll()
+    const target = area?.getScrollTarget()
+    const viewportTop = target?.getBoundingClientRect().top ?? 0
+    const card = Array.from(target?.querySelectorAll<HTMLElement>('[data-turn-key]') ?? []).find(
+      (element) => element.getBoundingClientRect().bottom > viewportTop,
+    )
+    const anchorKey = card?.dataset.turnKey
+    const anchorItem = card ? turns.value[Number(card.dataset.turnIndex)]?.items[0] : undefined
+    const anchorItemKey = anchorItem ? itemKey(anchorItem) : undefined
+    const anchorBottomOffset = card ? card.getBoundingClientRect().bottom - viewportTop : 0
+    const anchorOffset = card ? card.getBoundingClientRect().top - viewportTop : 0
+    const interaction = scrollInteraction
     const fetched = body.events ?? []
 
     const agentEvents = fetched.filter((e) => e.type === 'agent:event' && e.workspaceId === workspaceId)
@@ -568,28 +575,35 @@ async function loadOlder(): Promise<void> {
       }
     }
 
-    // Preserve the user's visual position AND push them below the
-    // fetch-more threshold so the next scroll event doesn't immediately
-    // re-trigger loadOlder. This matters on small-batch fetches where the
-    // newly-inserted content is shorter than the threshold.
-    //
-    // When NOTHING was actually prepended (server returned 0 events because
-    // `hasMore` was already false on this session), do NOT touch the scroll.
-    // The min-clamp `Math.max(prevPos, FETCH_MORE_THRESHOLD_PX + 50)` would
-    // otherwise hijack the scroll: on a short feed, `setScrollPosition(250)`
-    // gets clamped by q-scroll-area to `verticalSize - verticalContainerSize`,
-    // which can equal max-scroll (= bottom) — so the user trying to read the
-    // top of the feed gets yanked to the bottom on every loadOlder cycle.
-    // Skipping is safe: `currentHasMoreOlder()` returns false after this
-    // empty response, so onScroll won't re-trigger loadOlder on its own.
+    if (fetched.length === 0) return
     await nextTick()
-    if (area && olderRequest.isCurrent(signal)) {
-      const newSize = area.getScroll().verticalSize
-      const delta = newSize - prevSize
-      if (delta > 0) {
-        const desired = Math.max(prevPos + delta, FETCH_MORE_THRESHOLD_PX + 50)
-        area.setScrollPosition('vertical', desired, 0)
+    if (!area || !olderRequest.isCurrent(signal) || interaction !== scrollInteraction) return
+    const anchorIndex = anchorItemKey
+      ? turns.value.findIndex((turn) => turn.items.some((item) => itemKey(item) === anchorItemKey))
+      : -1
+    if (anchorIndex >= 0) {
+      const restoredKey = turnKey(turns.value[anchorIndex]!)
+      // Index-based measurements no longer describe the same turns after a prepend.
+      virtualScrollRef.value?.reset()
+      await nextTick()
+      if (!olderRequest.isCurrent(signal) || interaction !== scrollInteraction) return
+      virtualScrollRef.value?.scrollTo(anchorIndex, 'start')
+      for (let frame = 0; frame < SETTLE_STABLE_FRAMES; frame++) {
+        await nextFrame()
+        if (!olderRequest.isCurrent(signal) || interaction !== scrollInteraction) return
+        const anchor = Array.from(target?.querySelectorAll<HTMLElement>('[data-turn-key]') ?? []).find(
+          (element) => element.dataset.turnKey === restoredKey,
+        )
+        if (!anchor || !target) continue
+        // A prepended fragment may extend the same turn upwards; its bottom remains the stable edge.
+        const bounds = anchor.getBoundingClientRect()
+        const edge = restoredKey === anchorKey ? bounds.top - anchorOffset : bounds.bottom - anchorBottomOffset
+        const delta = edge - target.getBoundingClientRect().top
+        if (Math.abs(delta) > 1) area.setScrollPosition('vertical', area.getScroll().verticalPosition + delta, 0)
       }
+    } else if (position) {
+      const delta = area.getScroll().verticalSize - position.verticalSize
+      if (delta !== 0) area.setScrollPosition('vertical', Math.max(0, position.verticalPosition + delta), 0)
     }
   } catch (err) {
     if (isAbortError(err) || !olderRequest.isCurrent(signal)) return
@@ -605,30 +619,25 @@ async function loadOlder(): Promise<void> {
 
 async function scrollToBottom(duration = 0) {
   const view = feedView()
+  const interaction = scrollInteraction
   await nextTick()
-  if (view !== feedView()) return
+  if (view !== feedView() || interaction !== scrollInteraction) return
   const area = scrollRef.value
   if (!area) return
   const scroll = area.getScroll()
   area.setScrollPosition('vertical', scroll.verticalSize, duration)
 }
 
-// Coalesce streaming scrolls: animate the first one after a quiet period,
-// snap the rest within a burst. Avoids stacked animations on per-delta events.
+// Coalesce live updates without an animation that would fight subsequent user scrolling.
 let pendingScrollFrame: number | null = null
-let lastScrollAt = 0
-const SCROLL_BURST_WINDOW_MS = 180
 
 function requestStreamScrollToBottom() {
   if (pendingScrollFrame != null) return
-  const now = performance.now()
-  const inBurst = now - lastScrollAt < SCROLL_BURST_WINDOW_MS
   const view = feedView()
   pendingScrollFrame = requestAnimationFrame(() => {
     pendingScrollFrame = null
-    if (view !== feedView()) return
-    lastScrollAt = performance.now()
-    void scrollToBottom(inBurst ? 0 : 180)
+    if (view !== feedView() || !stickToBottom.value || loadingOlder.value) return
+    void scrollToBottom(0)
   })
 }
 
@@ -791,9 +800,10 @@ async function focusHistoryEvent(event: Event): Promise<void> {
 }
 
 // Handle on the virtual list, used to scroll by index instead of by pixel.
-const virtualScrollRef = ref<{ scrollTo(index: number, edge?: 'start' | 'center' | 'end' | 'end-force'): void } | null>(
-  null,
-)
+const virtualScrollRef = ref<{
+  reset(): void
+  scrollTo(index: number, edge?: 'start' | 'center' | 'end' | 'end-force'): void
+} | null>(null)
 // The QScrollArea's inner scrollable element — QVirtualScroll needs an
 // explicit scroll target when it does not own its own scroller.
 const scrollTargetEl = ref<Element | null>(null)
@@ -893,12 +903,13 @@ async function goToPreviousUserMessage(): Promise<void> {
         if (walkWorkspaceId !== props.workspaceId) return
         if (!currentHasMoreOlder()) break
         const before = turns.value.length
+        const previousIndex = firstVisibleTurnIndex.value
         await loadOlderOnce()
         await nextTick()
         if (walkWorkspaceId !== props.workspaceId) return
         // Older turns are prepended, so the current position shifts down by
         // however many turns were added.
-        firstVisibleTurnIndex.value += turns.value.length - before
+        firstVisibleTurnIndex.value = previousIndex + turns.value.length - before
         target = findPreviousUserTurnIndex(turns.value, firstVisibleTurnIndex.value)
         if (target >= 0) break
       }
@@ -958,6 +969,12 @@ async function armInitialScroll() {
 // The user taking over (wheel, touch, keyboard) ends the settling instead of
 // fighting their reading position.
 function cancelInitialSettle() {
+  scrollInteraction++
+  stickToBottom.value = false
+  if (pendingScrollFrame !== null) {
+    cancelAnimationFrame(pendingScrollFrame)
+    pendingScrollFrame = null
+  }
   initialAnchorWanted = false
   if (initialScrollDone) return
   settleToken++
@@ -1193,6 +1210,7 @@ async function handleScrollToBottomClick() {
   width: 100%;
 }
 .activity-feed-scroll {
+  overflow-anchor: none;
   flex: 1;
   min-height: 0;
   height: 100%;

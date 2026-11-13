@@ -1127,7 +1127,13 @@ export const useWorkspaceStore = defineStore('workspace', {
 
     async deleteWorkspace(
       id: string,
-      options?: { deleteLocalBranch?: boolean; deleteRemoteBranch?: boolean },
+      options?: {
+        deleteLocalBranch?: boolean
+        deleteRemoteBranch?: boolean
+        confirmationBranch?: string
+        expectedArchivedAt?: string | null
+        expectedSprintId?: string | null
+      },
     ): Promise<{ warnings: string[] }> {
       try {
         const res = await apiFetchResponse(`/api/workspaces/${id}`, {

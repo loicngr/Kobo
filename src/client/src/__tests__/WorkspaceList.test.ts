@@ -420,3 +420,35 @@ it('does not restart an in-flight selection on repeated clicks and permits retry
   await flushPromises()
   expect(push).toHaveBeenCalledTimes(2)
 })
+
+it('clears bulk selection when changing sprint and does not restore it on return', async () => {
+  const store = useWorkspaceStore()
+  store.workspaces = [makeWorkspace()]
+  const sprints = useSprintStore()
+  sprints.setActive(ALL_SPRINTS)
+  wrapper = mountList()
+  await flushPromises()
+  wrapper.findComponent({ name: 'WorkspaceCard' }).vm.$emit('toggleSelection', 'ws-1')
+  await wrapper.vm.$nextTick()
+  expect(wrapper.findComponent({ name: 'WorkspaceBulkActions' }).props('workspaces')).toHaveLength(1)
+  sprints.setActive('another-sprint')
+  await wrapper.vm.$nextTick()
+  expect(wrapper.findComponent({ name: 'WorkspaceBulkActions' }).props('workspaces')).toEqual([])
+  sprints.setActive(ALL_SPRINTS)
+  await wrapper.vm.$nextTick()
+  expect(wrapper.findComponent({ name: 'WorkspaceBulkActions' }).props('workspaces')).toEqual([])
+})
+
+it('clears bulk selection when the search filter changes', async () => {
+  const store = useWorkspaceStore()
+  store.workspaces = [makeWorkspace()]
+  useSprintStore().setActive(ALL_SPRINTS)
+  wrapper = mountList()
+  await flushPromises()
+  wrapper.findComponent({ name: 'WorkspaceCard' }).vm.$emit('toggleSelection', 'ws-1')
+  await wrapper.vm.$nextTick()
+  expect(wrapper.findComponent({ name: 'WorkspaceBulkActions' }).props('workspaces')).toHaveLength(1)
+  wrapper.findComponent({ name: 'QInput' }).vm.$emit('update:modelValue', 'Test')
+  await wrapper.vm.$nextTick()
+  expect(wrapper.findComponent({ name: 'WorkspaceBulkActions' }).props('workspaces')).toEqual([])
+})

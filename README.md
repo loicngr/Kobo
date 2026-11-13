@@ -60,6 +60,8 @@ Worktrees isolate checkouts. They do **not** isolate processes, credentials, por
 
 Create a workspace from a prompt, a Notion page, a Sentry issue or an existing pull/merge request. Add screenshots, text files or PDFs to the mission or chat. Organize workspaces into sprints, use tags and status filters, send group instructions, or compare two workspaces side by side. Each workspace belongs to at most one sprint.
 
+Ctrl+click (Cmd+click on macOS), or hold the left mouse button or a finger on a workspace card for one second, to start selecting without opening it. Once selection is active, clicks/taps toggle cards; use the clear button to return to navigation. Moving or scrolling cancels a pending hold. Changing sprint or filters clears the selection. The bulk-actions bar can archive, free disk space, delete, export events as one CSV per workspace, run setup, launch reviews with shared settings and instructions, or fetch/pull/merge/rebase. Merge and rebase use each workspace's source branch, not its PR. Actions run sequentially; failures remain selected and are reported with the workspace name. Deletion requires typing the selected branch names and preserves Git branches. Browsers may request permission for multiple CSV downloads.
+
 The interface surfaces pending questions, CI failures, requested changes and merge readiness. Live output, reasoning, tool activity and agent-reported progress help you see what each session is doing. Search conversations globally, pin useful messages, and use the command palette to navigate.
 
 ### Review and deliver changes

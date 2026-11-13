@@ -1,4 +1,17 @@
 export default {
+  'bulk.actions': 'Acciones múltiples',
+  'bulk.selected': '{count} espacio(s) seleccionado(s)',
+  'bulk.clear': 'Borrar selección',
+  'bulk.fetch': 'Git · Fetch',
+  'bulk.pull': 'Git · Pull',
+  'bulk.merge': 'Git · Fusionar rama de origen',
+  'bulk.rebase': 'Git · Rebase sobre rama de origen',
+  'bulk.confirm': 'Aplicar esta acción a los siguientes espacios:',
+  'bulk.deleteWarning':
+    'Eliminar definitivamente los espacios, su historial y sus worktrees. Se conservan las ramas. Espacios afectados:',
+  'bulk.branches': 'Introduce las ramas anteriores, una por línea',
+  'bulk.changed': 'El espacio o sus ramas han cambiado. Selecciónalo de nuevo.',
+  'bulk.result': '{done}/{total} acciones completadas',
   'tools.group.session': 'Sesión',
   'tools.group.quality': 'Revisión y calidad',
   'tools.group.project': 'Entorno del proyecto',

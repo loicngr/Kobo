@@ -15,6 +15,7 @@ const i18n = createI18n({ legacy: false, locale: 'en', messages: { en } })
 // Content height reported by the stub; a test can make it grow after each
 // scroll, as QVirtualScroll does once it measures the real item heights.
 let stubScrollSize = 1000
+let stubScrollPosition = 0
 let onStubScroll: (() => void) | null = null
 
 const QScrollAreaStub = defineComponent({
@@ -25,7 +26,7 @@ const QScrollAreaStub = defineComponent({
     const api = {
       getScroll: () => ({
         verticalSize: stubScrollSize,
-        verticalPosition: 0,
+        verticalPosition: stubScrollPosition,
         verticalContainerSize: 400,
       }),
       getScrollTarget: () => root.value ?? document.createElement('div'),
@@ -43,7 +44,7 @@ const QVirtualScrollStub = defineComponent({
   props: { items: { type: Array, default: () => [] } },
   emits: ['virtual-scroll'],
   setup(props, { slots, expose }) {
-    expose({ scrollTo: vi.fn() })
+    expose({ scrollTo: vi.fn(), reset: vi.fn() })
     // Render everything: virtualisation is a rendering strategy, not a
     // behaviour this suite asserts on.
     return () =>
@@ -579,9 +580,11 @@ describe('ActivityFeed.vue', () => {
   })
 
   afterEach(() => {
+    vi.restoreAllMocks()
     vi.useRealTimers()
     vi.unstubAllGlobals()
     stubScrollSize = 1000
+    stubScrollPosition = 0
     onStubScroll = null
   })
 
@@ -989,6 +992,114 @@ describe('ActivityFeed.vue', () => {
     await flushPromises()
     await nextTick()
     expect(wrapper.find('.q-spinner').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it.each(['none', 'turn', 'merged'])(
+    'preserves the current reading position when history arrives late (anchor=%s)',
+    async (mode) => {
+      const anchored = mode !== 'none'
+      const stream = useAgentStreamStore()
+      stream.reset(
+        'slow',
+        [{ kind: 'message:text', messageId: 'current', text: 'current', streaming: false }],
+        ['2026-01-01T00:00:02Z'],
+        { oldestId: 'current', hasMoreOlder: true, eventIds: ['current'], sessionIds: [null] },
+      )
+      let finish!: (response: Response) => void
+      vi.mocked(fetch).mockReturnValueOnce(
+        new Promise((resolve) => {
+          finish = resolve
+        }),
+      )
+      const wrapper = mount(ActivityFeed, {
+        props: { workspaceId: 'slow' },
+        global: { plugins: [i18n], stubs: globalStubs },
+      })
+      await vi.advanceTimersByTimeAsync(250)
+      const area = wrapper.findComponent(QScrollAreaStub)
+      const api = area.vm.$.exposed!
+      stubScrollPosition = 100
+      const scroll = api.setScrollPosition as ReturnType<typeof vi.fn>
+      scroll.mockClear()
+      let top = 50
+      let height = 800
+      if (anchored) {
+        const key = wrapper.get('[data-turn-key]').attributes('data-turn-key')
+        const measure = HTMLElement.prototype.getBoundingClientRect
+        vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+          return this.dataset.turnKey === key || (mode === 'merged' && this.dataset.turnKey?.startsWith('agent:'))
+            ? ({ top, bottom: top + height } as DOMRect)
+            : measure.call(this)
+        })
+        scroll.mockImplementation((_axis, next) => {
+          top -= next - stubScrollPosition
+          stubScrollPosition = next
+        })
+      }
+      area.vm.$emit('scroll', { verticalPosition: 100, verticalSize: 1000, verticalContainerSize: 400 })
+      await flushPromises()
+      stubScrollPosition = 450
+      await area.trigger('wheel')
+      const prepend = stream.prepend.bind(stream)
+      vi.spyOn(stream, 'prepend').mockImplementation((...args) => {
+        prepend(...args)
+        stubScrollSize = 1400
+        if (mode === 'merged') height += 400
+        else top += 400
+      })
+      finish(
+        new Response(
+          JSON.stringify({
+            events: [
+              {
+                id: 'old',
+                workspaceId: 'slow',
+                type: mode === 'merged' ? 'agent:event' : 'user:message',
+                payload:
+                  mode === 'merged'
+                    ? { kind: 'message:text', messageId: 'old', text: 'old', streaming: false }
+                    : { content: 'old' },
+                sessionId: null,
+                createdAt: '2026-01-01T00:00:01Z',
+              },
+            ],
+            hasMore: false,
+          }),
+        ),
+      )
+      await flushPromises()
+      await vi.advanceTimersByTimeAsync(100)
+      expect(scroll).toHaveBeenCalledExactlyOnceWith('vertical', 850, 0)
+      if (anchored) {
+        const virtual = wrapper.findComponent(QVirtualScrollStub).vm.$.exposed!
+        expect(virtual.reset).toHaveBeenCalledOnce()
+        expect(virtual.scrollTo).toHaveBeenLastCalledWith(mode === 'merged' ? 0 : 1, 'start')
+      }
+      wrapper.unmount()
+    },
+  )
+
+  it('cancels a queued live follow when the user takes over scrolling', async () => {
+    const stream = useAgentStreamStore()
+    stream.reset(
+      'follow',
+      [{ kind: 'message:text', messageId: 'current', text: 'current', streaming: false }],
+      ['2026-01-01T00:00:02Z'],
+    )
+    const wrapper = mount(ActivityFeed, {
+      props: { workspaceId: 'follow' },
+      global: { plugins: [i18n], stubs: globalStubs },
+    })
+    await vi.advanceTimersByTimeAsync(250)
+    const area = wrapper.findComponent(QScrollAreaStub)
+    const scroll = area.vm.$.exposed?.setScrollPosition as ReturnType<typeof vi.fn>
+    scroll.mockClear()
+    stream.append('follow', { kind: 'message:text', messageId: 'new', text: 'new', streaming: false }, 'new', 'new')
+    await nextTick()
+    await area.trigger('wheel')
+    await vi.advanceTimersByTimeAsync(300)
+    expect(scroll).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 

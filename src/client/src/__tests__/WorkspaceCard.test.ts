@@ -1,10 +1,12 @@
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createI18n } from 'vue-i18n'
 import WorkspaceCard from '../components/WorkspaceCard.vue'
 import en from '../i18n/en'
 import type { Workspace } from '../stores/workspace'
+
+afterEach(() => vi.useRealTimers())
 
 const i18n = createI18n({ legacy: false, locale: 'en', messages: { en } })
 const stubs = {
@@ -20,6 +22,7 @@ const stubs = {
     template: '<div class="labels-stub" />',
   },
   AutoLoopChip: { template: '<div class="autoloop-stub" />' },
+  'q-icon': true,
   'q-chip': { template: '<span class="q-chip"><slot /></span>' },
   'q-tooltip': { template: '<span><slot /></span>' },
 }
@@ -99,6 +102,115 @@ describe('WorkspaceCard.vue', () => {
     await root.trigger('keydown', { key: ' ' })
     await root.trigger('click')
     expect(card.emitted('select')).toHaveLength(3)
+  })
+
+  it('toggles bulk selection with Ctrl/Cmd without navigating, including keyboard', async () => {
+    const card = mountCard({ multiSelected: true, selectionMode: true })
+    const root = card.get('[data-testid="workspace-card"]')
+    await root.trigger('click', { ctrlKey: true })
+    await root.trigger('click', { metaKey: true })
+    await root.trigger('keydown', { key: ' ', ctrlKey: true })
+    expect(card.emitted('select')).toBeUndefined()
+    expect(card.emitted('toggleSelection')).toEqual([['ws-1'], ['ws-1'], ['ws-1']])
+    expect(root.attributes('aria-selected')).toBe('true')
+  })
+
+  it.each(['mouse', 'touch'])(
+    'selects after one second with %s and consumes the release click',
+    async (pointerType) => {
+      vi.useFakeTimers()
+      const card = mountCard()
+      const root = card.get('[data-testid="workspace-card"]')
+      await root.trigger('pointerdown', {
+        pointerType,
+        button: 0,
+        isPrimary: true,
+        pointerId: 1,
+        clientX: 10,
+        clientY: 10,
+      })
+      await vi.advanceTimersByTimeAsync(999)
+      expect(card.emitted('toggleSelection')).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(1)
+      expect(card.emitted('toggleSelection')).toEqual([['ws-1']])
+      await root.trigger('pointerup')
+      await root.trigger('click')
+      expect(card.emitted('select')).toBeUndefined()
+      expect(card.emitted('toggleSelection')).toHaveLength(1)
+      card.unmount()
+    },
+  )
+
+  it.each(['pointerup', 'pointercancel', 'pointerleave', 'pointermove', 'scroll', 'blur'])(
+    'cancels the hold on %s',
+    async (event) => {
+      vi.useFakeTimers()
+      const card = mountCard()
+      const root = card.get('[data-testid="workspace-card"]')
+      await root.trigger('pointerdown', { button: 0, isPrimary: true, pointerId: 1, clientX: 0, clientY: 0 })
+      await vi.advanceTimersByTimeAsync(500)
+      if (event === 'scroll') document.dispatchEvent(new Event('scroll'))
+      else if (event === 'blur') window.dispatchEvent(new Event('blur'))
+      else await root.trigger(event, { pointerId: 1, clientX: 20, clientY: 0 })
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(card.emitted('toggleSelection')).toBeUndefined()
+      card.unmount()
+    },
+  )
+
+  it('keeps short clicks and right-clicks out of long-press selection', async () => {
+    vi.useFakeTimers()
+    const card = mountCard()
+    const root = card.get('[data-testid="workspace-card"]')
+    await root.trigger('pointerdown', { button: 2, isPrimary: true })
+    await vi.advanceTimersByTimeAsync(2100)
+    expect(card.emitted('toggleSelection')).toBeUndefined()
+    await root.trigger('pointerdown', { button: 0, isPrimary: true })
+    await vi.advanceTimersByTimeAsync(100)
+    await root.trigger('pointerup')
+    await root.trigger('click')
+    expect(card.emitted('select')).toEqual([['ws-1']])
+    card.unmount()
+  })
+
+  it('toggles on a simple tap in selection mode without confusing the active workspace', async () => {
+    const card = mountCard({ selectionMode: true, selected: true, multiSelected: false })
+    const root = card.get('[data-testid="workspace-card"]')
+    expect(root.attributes('aria-selected')).toBe('false')
+    await root.trigger('click')
+    expect(card.emitted('toggleSelection')).toEqual([['ws-1']])
+    expect(card.emitted('select')).toBeUndefined()
+    card.unmount()
+  })
+
+  it('suppresses touch context menus while retaining mouse right-click menus', async () => {
+    vi.useFakeTimers()
+    const card = mountCard()
+    const root = card.get('[data-testid="workspace-card"]')
+    const menuTouch = vi.fn()
+    const menuContext = vi.fn()
+    root.element.addEventListener('touchstart', menuTouch)
+    root.element.addEventListener('contextmenu', menuContext)
+    await root.trigger('pointerdown', { pointerType: 'touch', button: 0, isPrimary: true })
+    await root.trigger('touchstart')
+    await root.trigger('contextmenu')
+    expect(menuTouch).not.toHaveBeenCalled()
+    expect(menuContext).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(card.emitted('toggleSelection')).toEqual([['ws-1']])
+    await root.trigger('pointerdown', { pointerType: 'mouse', button: 2, isPrimary: true })
+    await root.trigger('contextmenu')
+    expect(menuContext).toHaveBeenCalledOnce()
+    card.unmount()
+  })
+
+  it('cancels a pending hold on unmount', async () => {
+    vi.useFakeTimers()
+    const card = mountCard()
+    await card.get('[data-testid="workspace-card"]').trigger('pointerdown', { button: 0, isPrimary: true })
+    card.unmount()
+    await vi.advanceTimersByTimeAsync(2100)
+    expect(card.emitted('toggleSelection')).toBeUndefined()
   })
 
   it('relays the copy workspace ID action from its context menu', async () => {

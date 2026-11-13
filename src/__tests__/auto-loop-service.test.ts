@@ -117,6 +117,28 @@ describe('auto-loop-service', () => {
     expect(svc.getAutomaticAdmissionStatus('missing').reason).toBe('not-found')
   })
 
+  it.each([false, true])('defers creation-time auto-loop until setup finishes (failed=%s)', async (failed) => {
+    const svc = await import('../server/services/auto-loop-service.js')
+    const { getDb } = await import('../server/db/index.js')
+    const orch = await import('../server/services/agent/orchestrator.js')
+    const { reserveWorkspaceLifecycle } = await import('../server/utils/workspace-lifecycle-guard.js')
+    getDb().prepare("UPDATE workspaces SET auto_loop=1, status='extracting' WHERE id=?").run(wsId)
+    const reservation = reserveWorkspaceLifecycle(wsId, 'creation')
+    try {
+      svc.resumeWaitingWorkspaces()
+      expect(orch.startAgent).not.toHaveBeenCalled()
+      expect(svc.getAutomaticAdmissionStatus(wsId).reason).toBe('lifecycle')
+      if (failed) svc.block(wsId, 'Setup failed')
+      else vi.mocked(orch.hasController).mockImplementation((id) => id === wsId)
+    } finally {
+      reservation.release()
+    }
+    await Promise.resolve()
+    expect(orch.startAgent).not.toHaveBeenCalled()
+    expect(svc.getAutomaticAdmissionStatus(wsId).reason).toBe(failed ? 'blocked' : 'active-session')
+    vi.mocked(orch.hasController).mockReturnValue(false)
+  })
+
   it('blocks autonomous grooming in Plan without changing stored permissions', async () => {
     const svc = await import('../server/services/auto-loop-service.js')
     const { getDb } = await import('../server/db/index.js')

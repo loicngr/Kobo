@@ -4,6 +4,7 @@
       <q-card-section>
         <div class="text-h6">{{ $t(scheduled ? 'autoLoop.finalReview.title' : 'review.title') }}</div>
         <div class="text-body2 text-kobo-2 q-mt-xs">{{ $t(scheduled ? 'autoLoop.finalReview.description' : 'review.subtitle') }}</div>
+        <slot name="context" />
       </q-card-section>
 
       <q-separator dark />

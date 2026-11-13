@@ -31,6 +31,7 @@ import { withGitRepoLock } from '../utils/git-repo-lock.js'
 import {
   assertWorkspaceLifecycleAvailable,
   isWorkspaceLifecycleBusy,
+  reserveWorkspaceLifecycle,
   workspaceLifecycleReason,
 } from '../utils/workspace-lifecycle-guard.js'
 import autoLoopMessagesRoutes from './auto-loop-messages.js'
@@ -660,6 +661,7 @@ app.post('/', workspaceCreationMaintenance, migrationGuard, creationBodyLimit, a
   // every `emitCreateProgress` call below via the assignment-expression
   // argument, so it always reflects the last beat actually emitted.
   let creationId: string | undefined
+  let creationReservation: ReturnType<typeof reserveWorkspaceLifecycle> | undefined
   let currentStep: CreateWorkspaceStep = 'validate'
   // The workspace row, as soon as it exists, so the outermost catch can undo a
   // creation that broke on a step with no handler of its own. Only `name` ever
@@ -1167,6 +1169,7 @@ app.post('/', workspaceCreationMaintenance, migrationGuard, creationBodyLimit, a
         ...(useReusedWorktree ? {} : { worktreesPath: globalSettings.worktreesPath }),
       })
       createdWorkspace = workspace
+      creationReservation = reserveWorkspaceLifecycle(workspace.id, 'creation')
       if (body.autoLoopFinalReview !== undefined)
         finalReviewService.configureFinalReview(workspace.id, body.autoLoopFinalReview)
 
@@ -1771,6 +1774,7 @@ Once the brainstorming + planning steps above are complete and you have a saved 
       }
 
       if (setupScriptFailed) {
+        autoLoopService.block(workspace.id, 'Setup failed; fix the setup script and retry the initial launch.')
         wsService.emit(workspace.id, 'setup:output', {
           text:
             '[kobo] Setup script failed — the agent was NOT started. Your initial prompt has been saved. ' +
@@ -1798,6 +1802,8 @@ Once the brainstorming + planning steps above are complete and you have a saved 
             body.autoLoop === true && body.brainstormReasoningEffort
               ? body.brainstormReasoningEffort
               : workspace.reasoningEffort
+          // Handoff is synchronous: no automatic retry can run before the controller is registered.
+          creationReservation?.release()
           agentManager.startAgent(
             workspace.id,
             worktreePath,
@@ -1829,6 +1835,8 @@ Once the brainstorming + planning steps above are complete and you have a saved 
       // branch it was already sitting on. `deleteWorkspaceWithSideEffects`
       // already guards the worktree via `worktreeOwned`; the branch flag is
       // ours to set.
+      // The rollback acquires its own guard synchronously before its first await.
+      creationReservation?.release()
       const rollbackWarnings = await rollbackFailedCreation(workspace, {
         deleteLocalBranch: createdBranch,
         removeWorktree: createdWorktree,
@@ -1890,6 +1898,8 @@ Once the brainstorming + planning steps above are complete and you have a saved 
     // reported error.
     if (createdWorkspace) {
       emitCreateProgress(creationId, 'rollback')
+      // The rollback acquires its own guard synchronously before its first await.
+      creationReservation?.release()
       const rollbackWarnings = await rollbackFailedCreation(createdWorkspace, {
         deleteLocalBranch: createdBranch,
         removeWorktree: createdWorktree,
@@ -1913,6 +1923,8 @@ Once the brainstorming + planning steps above are complete and you have a saved 
     }
     emitCreateFailed(creationId, currentStep, message)
     return c.json({ error: message, step: currentStep }, err instanceof AttachmentRequestError ? 400 : 500)
+  } finally {
+    creationReservation?.release()
   }
 })
 

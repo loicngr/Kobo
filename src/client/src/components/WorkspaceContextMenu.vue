@@ -178,6 +178,7 @@ import { useSettingsStore } from 'src/stores/settings'
 import { useSprintStore } from 'src/stores/sprints'
 import { useWorkspaceStore, type Workspace } from 'src/stores/workspace'
 import { apiFetchResponse, apiResponseError } from 'src/utils/api'
+import { exportWorkspaceEvents } from 'src/utils/export-workspace-events'
 import { DEFAULT_TOAST_TIMEOUT_MS } from 'src/utils/notification-timeout'
 import { isChangesRequestedBlocking, isCiFailed } from 'src/utils/pr-status'
 import { isWorkspacePane, splitWorkspaceQuery } from 'src/utils/split-workspace'
@@ -233,21 +234,7 @@ async function exportEvents() {
     group: false,
   })
   try {
-    const res = await apiFetchResponse(`/api/workspaces/${props.workspace.id}/events.csv`)
-    if (!res.ok) throw await apiResponseError(res)
-    const blob = await res.blob()
-    const url = URL.createObjectURL(blob)
-    const slug = props.workspace.name
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${slug || 'workspace'}-events.csv`
-    document.body.appendChild(a)
-    a.click()
-    a.remove()
-    URL.revokeObjectURL(url)
+    await exportWorkspaceEvents(props.workspace)
   } catch (err) {
     console.error('[WorkspaceContextMenu] export events failed:', err)
     $q.notify({ type: 'negative', message: t('contextMenu.exportEventsError'), position: 'top' })
