@@ -4,6 +4,10 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads released version sections.
 
+## 2.1.45
+
+- feat(slack): add button closing, file uploads and delivery feedback
+
 ## 2.1.44
 
 - feat(slack): add Slack channel integration and agent lifecycle switch
