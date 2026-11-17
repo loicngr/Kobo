@@ -4,15 +4,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createI18n } from 'vue-i18n'
 import SlackSettings from '../components/SlackSettings.vue'
 import en from '../i18n/en'
-import { useSlackStore } from '../stores/slack'
+import { type SlackStatus, useSlackStore } from '../stores/slack'
 
 const i18n = createI18n({ legacy: false, locale: 'en', messages: { en } })
 
-async function mountWith(configured: boolean) {
+async function mountWith(configured: boolean, extra: Partial<SlackStatus> = {}) {
   const pinia = createPinia()
   setActivePinia(pinia)
   const slack = useSlackStore()
-  const status = { configured, enabled: true, connected: false }
+  const status: SlackStatus = { configured, enabled: true, connected: false, allowListEmpty: false, ...extra }
   vi.spyOn(slack, 'fetchStatus').mockImplementation(async () => {
     slack.status = status
   })
@@ -43,5 +43,25 @@ describe('SlackSettings', () => {
       expect(input.attributes('autocomplete')).toBe('new-password')
       expect(input.attributes('type')).toBe('password')
     }
+  })
+
+  it('warns when the allow-list is empty', async () => {
+    expect((await mountWith(true)).find('[data-test="slack-allow-list-empty"]').exists()).toBe(false)
+    const wrapper = await mountWith(true, { allowListEmpty: true })
+    expect(wrapper.find('[data-test="slack-allow-list-empty"]').text()).toBe(en['slack.allowListEmpty'])
+  })
+
+  it('describes the last inbound message', async () => {
+    const at = new Date().toISOString()
+    const ignored = await mountWith(true, { lastInbound: { at, outcome: 'ignored', reason: 'not-allowed' } })
+    expect(ignored.find('[data-test="slack-last-inbound"]').text()).toBe(
+      en['slack.lastInbound.line']
+        .replace('{time}', en['common.justNow'])
+        .replace('{outcome}', en['slack.lastInbound.ignoredNotAllowed']),
+    )
+    const uncertain = await mountWith(true, { lastInbound: { at, outcome: 'uncertain' } })
+    expect(uncertain.find('[data-test="slack-last-inbound"]').text()).toContain(en['slack.lastInbound.uncertain'])
+    const none = await mountWith(true)
+    expect(none.find('[data-test="slack-last-inbound"]').text()).toBe(en['slack.lastInbound.none'])
   })
 })

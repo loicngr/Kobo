@@ -236,6 +236,64 @@ describe('slack message store', () => {
       expect(store.countQueuedSlackMessages('wsA')).toBe(2)
     })
 
+    it('closing is a compare-and-set that works for both kinds and stops later clicks', () => {
+      store.insertSlackMessage(bot({ multiple: true }))
+      store.insertSlackMessage(bot({ ts: '2.1' }))
+      expect(store.recordSlackClick(click({ multiple: true }), '2.0', true)).toBe(true)
+      expect(store.closeSlackButtonMessage('C1', '2.0', 'wsA')).not.toBeNull()
+      expect(store.closeSlackButtonMessage('C1', '2.0', 'wsA')).toBeNull()
+      expect(store.getSlackButtonMessage('C1', '2.0')?.answered).toBe(true)
+      expect(store.recordSlackClick(click({ ts: '3.1-U1', multiple: true }), '2.0', true)).toBe(false)
+      expect(store.closeSlackButtonMessage('C1', '2.1', 'wsA')).not.toBeNull()
+      expect(store.recordSlackClick(click({ ts: '3.2-U1', clickOf: '2.1' }), '2.1', true)).toBe(false)
+      // The click queued before the first close was rejected by it.
+      expect(store.countQueuedSlackMessages('wsA')).toBe(0)
+    })
+
+    it('F7: closing rejects the queued clicks of that message in the same step, a lost close rejects nothing', () => {
+      store.insertSlackMessage(bot({ multiple: true }))
+      store.insertSlackMessage(bot({ ts: '2.1', multiple: true }))
+      store.recordSlackClick(click({ ts: '3.1-U1', multiple: true }), '2.0', true)
+      store.recordSlackClick(click({ ts: '3.2-U1', multiple: true }), '2.0', true)
+      store.recordSlackClick(click({ ts: '3.3-U1', multiple: true, clickOf: '2.1' }), '2.1', true)
+      store.setSlackMessageState('C1', '3.2-U1', 'dispatching')
+      const state = (ts: string) => getDb().prepare('SELECT state FROM slack_messages WHERE ts = ?').get(ts)
+      expect(store.closeSlackButtonMessage('C1', '2.0', 'wsA')).toEqual(['3.1-U1'])
+      expect([state('3.1-U1'), state('3.2-U1'), state('3.3-U1')]).toEqual([
+        { state: 'rejected' },
+        { state: 'dispatching' },
+        { state: 'queued' },
+      ])
+      store.recordSlackClick(click({ ts: '3.4-U1', multiple: true, clickOf: '2.1' }), '2.1', true)
+      expect(store.closeSlackButtonMessage('C1', '2.0', 'wsA')).toBeNull()
+      expect(state('3.4-U1')).toEqual({ state: 'queued' })
+    })
+
+    it('reopening requeues exactly the clicks its close rejected, if still rejected', () => {
+      store.insertSlackMessage(bot({ multiple: true }))
+      store.recordSlackClick(click({ ts: '3.1-U1', multiple: true }), '2.0', true)
+      store.recordSlackClick(click({ ts: '3.2-U1', multiple: true }), '2.0', true)
+      const state = (ts: string) =>
+        (getDb().prepare('SELECT state FROM slack_messages WHERE ts = ?').get(ts) as { state: string }).state
+      const at = '2026-11-16T10:00:00.000Z'
+      const rejected = store.closeSlackButtonMessage('C1', '2.0', 'wsA', at)
+      expect(rejected).toEqual(['3.1-U1', '3.2-U1'])
+      store.setSlackMessageState('C1', '3.2-U1', 'unknown') // changed meanwhile: left alone
+      store.reopenSlackButtonMessage('C1', '2.0', 'wsA', at, rejected ?? [])
+      expect([state('3.1-U1'), state('3.2-U1')]).toEqual(['queued', 'unknown'])
+      expect(store.getSlackButtonMessage('C1', '2.0')?.answered).toBe(false)
+    })
+
+    it('does not close a plain, foreign or unlinked message', () => {
+      store.insertSlackMessage(bot())
+      store.insertSlackMessage(msg({ ts: '2.5', direction: 'out', state: 'sent' }))
+      expect(store.closeSlackButtonMessage('C1', '2.5', 'wsA')).toBeNull()
+      expect(store.closeSlackButtonMessage('C1', '2.0', 'wsB')).toBeNull()
+      getDb().prepare("UPDATE workspaces SET slack_channel_id = NULL WHERE id = 'wsA'").run()
+      expect(store.closeSlackButtonMessage('C1', '2.0', 'wsA')).toBeNull()
+      expect(store.getSlackButtonMessage('C1', '2.0')?.answered).toBe(false)
+    })
+
     it('refuses a click on an unknown, foreign or unlinked message', () => {
       store.insertSlackMessage(bot())
       store.insertSlackMessage(msg({ ts: '2.5', direction: 'out', state: 'sent' }))

@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { apiFetch } from 'src/utils/api'
+import type { SlackIgnoreReason, SlackInboundOutcome } from '../../../shared/slack-inbound-outcome'
 import type { SlackQuestionMirror } from '../../../shared/slack-question-mirror'
 
 export type SlackErrorCode =
@@ -17,7 +18,11 @@ export interface SlackStatus {
   botName?: string
   teamName?: string
   error?: SlackErrorCode
+  allowListEmpty: boolean
+  lastInbound?: SlackInboundOutcome
 }
+
+export type { SlackIgnoreReason, SlackInboundOutcome }
 
 export interface SlackChannel {
   id: string

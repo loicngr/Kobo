@@ -7,6 +7,7 @@ const web = vi.hoisted(() => ({
   reactions: { add: vi.fn(), remove: vi.fn() },
   users: { conversations: vi.fn(), info: vi.fn() },
   conversations: { replies: vi.fn() },
+  filesUploadV2: vi.fn(),
 }))
 const sock = await vi.hoisted(async () => {
   const { EventEmitter } = await import('node:events')
@@ -50,6 +51,7 @@ vi.mock('@slack/web-api', () => ({
     reactions = web.reactions
     users = web.users
     conversations = web.conversations
+    filesUploadV2 = web.filesUploadV2
   },
   LogLevel: { ERROR: 'error' },
 }))
@@ -832,5 +834,64 @@ describe('question controls', () => {
     }
     expect(clicks).toEqual([])
     expect(questions).toEqual([])
+  })
+})
+
+describe('uploadFile', () => {
+  it('uploads the bytes into the thread with the V2 helper and a longer bounded wait', async () => {
+    web.filesUploadV2.mockResolvedValue({ ok: true, files: [] })
+    const api = createSlackApi(creds)
+    const data = Buffer.from('report')
+    await api.uploadFile('C1', '1.1', 'report.txt', data)
+    expect(web.filesUploadV2).toHaveBeenCalledWith({
+      channel_id: 'C1',
+      thread_ts: '1.1',
+      file: data,
+      filename: 'report.txt',
+    })
+    expect(webCtor).toHaveBeenCalledWith(
+      'xoxb-secret-token',
+      expect.objectContaining({ timeout: 120_000, retryConfig: { retries: 0 } }),
+    )
+  })
+
+  it('maps a missing scope and hides the raw error', async () => {
+    web.filesUploadV2.mockRejectedValue(platformError('missing_scope'))
+    const err = await createSlackApi(creds)
+      .uploadFile('C1', '1.1', 'a.txt', Buffer.from('x'))
+      .catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(SlackApiError)
+    expect((err as SlackApiError).code).toBe('missing_scope')
+    expect(String((err as Error).message)).not.toContain('xoxb')
+  })
+
+  it('maps any other failure to a code', async () => {
+    web.filesUploadV2.mockRejectedValue(new Error('No upload url found for file xoxb-secret-token'))
+    const err = await createSlackApi(creds)
+      .uploadFile('C1', '1.1', 'a.txt', Buffer.from('x'))
+      .catch((e: unknown) => e)
+    expect((err as SlackApiError).code).toBe('unknown')
+    expect(String((err as Error).message)).not.toContain('xoxb')
+  })
+
+  it('bounds the whole upload of one file with a single deadline', async () => {
+    vi.useFakeTimers()
+    try {
+      web.filesUploadV2.mockReturnValue(new Promise(() => undefined))
+      const pending = createSlackApi(creds)
+        .uploadFile('C1', '1.1', 'a.txt', Buffer.from('x'))
+        .catch((e: unknown) => e)
+      await vi.advanceTimersByTimeAsync(119_999)
+      let settled = false
+      void pending.then(() => {
+        settled = true
+      })
+      await Promise.resolve()
+      expect(settled).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(((await pending) as SlackApiError).code).toBe('network')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

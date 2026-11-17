@@ -2879,6 +2879,22 @@ export default {
   'slack.status.notConfigured': 'Keine Tokens konfiguriert',
   'slack.status.disabled': 'Integration deaktiviert',
   'slack.status.unavailable': 'Status nicht verfügbar',
+  'slack.refreshStatus': 'Slack-Status aktualisieren',
+  'slack.allowListEmpty':
+    'Niemand ist zugelassen, daher wird jede Slack-Nachricht und jeder Klick ignoriert. Fügen Sie unten mindestens eine Mitglieds-ID hinzu und speichern Sie die Liste.',
+  'slack.lastInbound.none':
+    'Seit dem Start von Kōbō wurde keine an Kōbō gerichtete Nachricht und kein Klick empfangen.',
+  'slack.lastInbound.line': 'Letzte an Kōbō gerichtete Nachricht oder letzter Klick, {time}: {outcome}',
+  'slack.lastInbound.delivered': 'an den Agenten zugestellt.',
+  'slack.lastInbound.queued': 'in der Warteschlange für den Agenten.',
+  'slack.lastInbound.rejected': 'nicht zugestellt, beachten Sie den Hinweis in Slack.',
+  'slack.lastInbound.uncertain': 'die Zustellung konnte nicht bestätigt werden und wurde nicht wiederholt.',
+  'slack.lastInbound.ignoredNotAllowed': 'ignoriert, der Autor steht nicht in der Zulassungsliste.',
+  'slack.lastInbound.ignoredChannelNotLinked': 'ignoriert, der Kanal ist mit keinem Workspace verknüpft.',
+  'slack.lastInbound.ignoredUnsupported':
+    'ignoriert, Erwähnung ohne Text oder Datei, oder Klick auf eine unbekannte oder geschlossene Nachricht.',
+  'slack.guideFilesWrite':
+    'App erstellt, bevor Agenten Dateien senden konnten? Fügen Sie unter "OAuth & Permissions" den Bot-Scope "files:write" hinzu und installieren Sie die App neu, was die Zustimmung eines Admins erfordern kann.',
   'slack.error.invalid_auth': 'Slack hat die Tokens abgelehnt. Prüfen Sie, ob sie korrekt und nicht widerrufen sind.',
   'slack.error.missing_scope':
     'Der Slack-App fehlt ein erforderlicher Scope. Erstellen Sie sie anhand des Manifests neu.',
@@ -2891,7 +2907,7 @@ export default {
   'slack.guideStep1Body':
     'Öffnen Sie https://api.slack.com/apps, klicken Sie auf "Create new app", wählen Sie "From scratch", dann "Paste a manifest" und Ihren Slack-Workspace, öffnen Sie den Tab JSON und fügen Sie das Manifest unten ein.',
   'slack.guideInteractivity':
-    'App vor Einführung der Schaltflächen erstellt? Öffne in den Einstellungen der Slack-App "Interactivity & Shortcuts" und aktiviere "Interactivity" (im Socket Mode ist keine URL nötig), oder füge das aktualisierte Manifest unter "App Manifest" ein.',
+    'App vor Einführung der Schaltflächen erstellt? Öffnen Sie in den Einstellungen der Slack-App "Interactivity & Shortcuts" und aktivieren Sie "Interactivity" (im Socket Mode ist keine URL nötig), oder fügen Sie das aktualisierte Manifest unter "App Manifest" ein.',
   'slack.guideStep2Title': '2. App-Token erzeugen',
   'slack.guideStep2Body':
     'Erzeugen Sie unter "Basic Information" bei "App-Level Tokens" ein Token mit dem Scope connections:write. Es beginnt mit xapp-.',

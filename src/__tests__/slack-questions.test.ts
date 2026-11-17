@@ -62,6 +62,7 @@ function fakeApi(over: Partial<Record<keyof SlackApi, (...args: never[]) => unkn
     threadReplies: async () => [],
     userName: async (id: string) => (id === 'U1' ? 'alice' : id),
     downloadFile: async () => Buffer.from(''),
+    uploadFile: async () => undefined,
     ...over,
   }
   const api = {} as Record<string, unknown>
@@ -503,6 +504,20 @@ describe('answering from Slack', () => {
     await idle()
     expect(answer).toHaveBeenCalledTimes(1)
     expect(deliver).not.toHaveBeenCalled()
+  })
+
+  it('a text answer keeps its eyes when the workspace turns idle', async () => {
+    const { calls } = await mirrored([question([claudeMulti])])
+    await svc.handleSlackEvent(reply('Olives'))
+    await idle()
+    getDb().prepare("UPDATE workspaces SET status = 'idle' WHERE id = 'wsA'").run()
+    const now = Date.now()
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now + 16_000)
+    await svc.runSlackTick()
+    await idle()
+    clock.mockRestore()
+    expect(ofFn(calls, 'removeReaction')).not.toContainEqual(['C1', '1731600900.000001', 'eyes'])
+    expect(ofFn(calls, 'addReaction')).not.toContainEqual(['C1', '1731600900.000001', 'white_check_mark'])
   })
 
   it('a text reply when free text is not allowed stays an ordinary inbound message', async () => {

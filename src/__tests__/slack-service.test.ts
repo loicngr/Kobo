@@ -54,6 +54,7 @@ function fakeApi(over: Partial<Record<keyof SlackApi, (...args: never[]) => unkn
     threadReplies: async () => [],
     userName: async (id: string) => (id === 'U1' ? 'alice' : id),
     downloadFile: async () => Buffer.from('png-bytes'),
+    uploadFile: async () => undefined,
     ...over,
   }
   const api = {} as Record<string, unknown>
@@ -990,6 +991,226 @@ describe('slack service buttons', () => {
     expect(deliver).toHaveBeenCalledTimes(2)
   })
 
+  describe('slack_close_buttons', () => {
+    const NOT_AVAILABLE = 'Slack is not available for this workspace'
+
+    it('closes an unanswered single-answer message; later clicks are ignored silently', async () => {
+      const { api, calls } = fakeApi()
+      await postButtons(api)
+      await expect(svc.closeSlackButtons('wsA', BOT_TS)).resolves.toEqual({ closed: true })
+      expect(updates(calls)).toEqual([['C1', BOT_TS, 'Pick one', 'Answered in the thread.']])
+      calls.length = 0
+      await svc.handleSlackClick(click())
+      expect(deliver).not.toHaveBeenCalled()
+      expect(calls.filter((c) => c.fn !== 'userName')).toEqual([])
+      expect(clickRows()).toEqual([])
+    })
+
+    it('shows the neutralised, trimmed note instead of the default line', async () => {
+      const { api, calls } = fakeApi()
+      await postButtons(api)
+      await svc.closeSlackButtons('wsA', BOT_TS, 'Done <!channel> thanks')
+      expect(updates(calls)).toEqual([['C1', BOT_TS, 'Pick one', 'Done channel thanks']])
+    })
+
+    it('loses against a click that already answered: closed false, no Slack update', async () => {
+      const { api, calls } = fakeApi()
+      await postButtons(api)
+      await svc.handleSlackClick(click())
+      calls.length = 0
+      await expect(svc.closeSlackButtons('wsA', BOT_TS)).resolves.toEqual({ closed: false })
+      expect(updates(calls)).toEqual([])
+    })
+
+    it('two racing closes give one winner and one Slack update', async () => {
+      const { api, calls } = fakeApi()
+      await postButtons(api)
+      const results = await Promise.all([svc.closeSlackButtons('wsA', BOT_TS), svc.closeSlackButtons('wsA', BOT_TS)])
+      expect(results.filter((r) => r.closed)).toHaveLength(1)
+      expect(updates(calls)).toHaveLength(1)
+    })
+
+    it('closes a multiple-answer message: earlier clicks were delivered, later ones are ignored', async () => {
+      const { api, calls } = fakeApi()
+      await postButtons(api, true)
+      await svc.handleSlackClick(click())
+      expect(deliver).toHaveBeenCalledTimes(1)
+      await expect(svc.closeSlackButtons('wsA', BOT_TS)).resolves.toEqual({ closed: true })
+      expect(updates(calls)).toEqual([['C1', BOT_TS, 'Pick one', 'Answered in the thread.']])
+      await svc.handleSlackClick(click({ index: 1, actionTs: '1731600006.000001' }))
+      expect(deliver).toHaveBeenCalledTimes(1)
+      expect(clickRows()).toHaveLength(1)
+    })
+
+    it('F7: a close discards queued clicks of the message, silently, and ignores later clicks', async () => {
+      const { api, calls } = fakeApi()
+      await postButtons(api, true)
+      deliver.mockRejectedValue(new Error('busy'))
+      await svc.handleSlackClick(click())
+      expect(clickRows().map((r) => r.state)).toEqual(['queued'])
+      calls.length = 0
+      await expect(svc.closeSlackButtons('wsA', BOT_TS)).resolves.toEqual({ closed: true })
+      await svc.handleSlackClick(click({ index: 1, actionTs: '1731600006.000001' }))
+      expect(clickRows().map((r) => r.state)).toEqual(['rejected'])
+      deliver.mockReset()
+      deliver.mockImplementation(async (_ws, msg, hooks) => {
+        hooks?.beforeDispatch?.()
+        hooks?.persist?.({ content: msg.content }, 's1')
+        return {}
+      })
+      await svc.drainSlackQueue('wsA')
+      expect(deliver).not.toHaveBeenCalled()
+      expect(posts(calls)).toEqual([])
+      expect(clickReactions(calls)).toEqual([])
+    })
+
+    it('F7: a click already being delivered when the close runs is still delivered once', async () => {
+      const { api } = fakeApi()
+      await postButtons(api, true)
+      let release!: () => void
+      const gate = new Promise<void>((r) => {
+        release = r
+      })
+      deliver.mockImplementation(async (_ws, msg, hooks) => {
+        hooks?.beforeDispatch?.()
+        await gate
+        hooks?.persist?.({ content: msg.content }, 's1')
+        return {}
+      })
+      const pending = svc.handleSlackClick(click())
+      await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1))
+      expect(clickRows().map((r) => r.state)).toEqual(['dispatching'])
+      await expect(svc.closeSlackButtons('wsA', BOT_TS)).resolves.toEqual({ closed: true })
+      release()
+      await pending
+      expect(deliver).toHaveBeenCalledTimes(1)
+      expect(clickRows().map((r) => r.state)).toEqual(['delivered'])
+    })
+
+    it('F7: a failed Slack update requeues the discarded clicks and keeps the buttons open', async () => {
+      const { api } = fakeApi({
+        replaceButtons: async () => {
+          throw new Error('boom')
+        },
+      })
+      await postButtons(api, true)
+      deliver.mockRejectedValue(new Error('busy'))
+      await svc.handleSlackClick(click())
+      await expect(svc.closeSlackButtons('wsA', BOT_TS)).rejects.toThrow('Slack request failed')
+      await svc._waitForSlackIdle()
+      expect(clickRows().map((r) => r.state)).toEqual(['queued']) // the agent is still busy
+      expect(store.getSlackButtonMessage('C1', BOT_TS)?.answered).toBe(false)
+      await svc.handleSlackClick(click({ index: 1, actionTs: '1731600006.000001' }))
+      expect(clickRows().map((r) => r.state)).toEqual(['queued', 'queued'])
+    })
+
+    it('F7: the display name is resolved only for allow-listed users, before the message look-up', async () => {
+      const { api, calls } = fakeApi()
+      await postButtons(api)
+      calls.length = 0
+      await svc.handleSlackClick(click({ user: 'U9' }))
+      expect(calls).toEqual([])
+      await svc.handleSlackClick(click())
+      expect(calls.map((c) => c.fn)[0]).toBe('userName')
+    })
+
+    it('refuses an unknown, button-less, foreign or no-longer-linked message and changes nothing', async () => {
+      const { api, calls } = fakeApi()
+      await postButtons(api)
+      store.insertSlackMessage({
+        channelId: 'C1',
+        ts: '1731600001.000001',
+        threadTs: '1731600001.000001',
+        workspaceId: 'wsA',
+        userId: 'UBOT',
+        userName: 'kobo',
+        text: 'plain',
+        direction: 'out',
+        state: 'sent',
+        files: [],
+      })
+      wsRow('wsC', 'C3')
+      store.insertSlackMessage({
+        channelId: 'C3',
+        ts: '1731600002.000001',
+        threadTs: '1731600002.000001',
+        workspaceId: 'wsC',
+        userId: 'UBOT',
+        userName: 'kobo',
+        text: 'other',
+        direction: 'out',
+        state: 'sent',
+        files: [],
+        buttons: ['A'],
+        multiple: false,
+      })
+      calls.length = 0
+      for (const ts of ['1731699999.000001', '1731600001.000001', '1731600002.000001'])
+        await expect(svc.closeSlackButtons('wsA', ts)).rejects.toThrow('Unknown Slack message')
+      await svc.linkSlackChannel('wsA', 'C2')
+      await expect(svc.closeSlackButtons('wsA', BOT_TS)).rejects.toThrow('Unknown Slack message')
+      // Re-linking deletes the old channel's stored messages.
+      expect(store.getSlackButtonMessage('C1', BOT_TS)).toBeUndefined()
+      await svc.linkSlackChannel('wsA', null)
+      await expect(svc.closeSlackButtons('wsA', BOT_TS)).rejects.toThrow(NOT_AVAILABLE)
+      expect(updates(calls)).toEqual([])
+    })
+
+    it('F6: neutralises the note once and uses the default line only without a note', async () => {
+      const { api, calls } = fakeApi()
+      await postButtons(api)
+      await svc.closeSlackButtons('wsA', BOT_TS, '<!<!channel>> go')
+      expect(String(updates(calls)[0]![3])).not.toContain('<!channel>')
+    })
+
+    it('is not available while Slack is disabled', async () => {
+      const { api } = fakeApi()
+      await postButtons(api)
+      settings = makeGlobalSettings({ slackEnabled: false, slackAllowedUserIds: ['U1'] })
+      await expect(svc.closeSlackButtons('wsA', BOT_TS)).rejects.toThrow(NOT_AVAILABLE)
+      expect(store.getSlackButtonMessage('C1', BOT_TS)?.answered).toBe(false)
+    })
+
+    it('F2: a failed Slack update reopens the row, fails with a fixed error, and can be retried', async () => {
+      let fail = true
+      const { api, calls } = fakeApi({
+        replaceButtons: async () => {
+          if (fail) throw new Error('xoxb-secret')
+        },
+      })
+      await postButtons(api, true)
+      await expect(svc.closeSlackButtons('wsA', BOT_TS)).rejects.toThrow('Slack request failed')
+      expect(store.getSlackButtonMessage('C1', BOT_TS)?.answered).toBe(false)
+      await svc.handleSlackClick(click())
+      expect(deliver).toHaveBeenCalledTimes(1)
+      fail = false
+      await expect(svc.closeSlackButtons('wsA', BOT_TS)).resolves.toEqual({ closed: true })
+      expect(store.getSlackButtonMessage('C1', BOT_TS)?.answered).toBe(true)
+      expect(updates(calls)).toHaveLength(2)
+    })
+
+    it('F2: the revert only undoes this close', async () => {
+      let release!: () => void
+      const gate = new Promise<void>((r) => {
+        release = r
+      })
+      const { api } = fakeApi({
+        replaceButtons: async () => {
+          await gate
+          throw new Error('boom')
+        },
+      })
+      await postButtons(api, true)
+      const pending = svc.closeSlackButtons('wsA', BOT_TS)
+      const settled = expect(pending).rejects.toThrow('Slack request failed')
+      // Someone else re-closes with another value between the failed update and the revert.
+      getDb().prepare("UPDATE slack_messages SET answered_at = 'other' WHERE ts = ?").run(BOT_TS)
+      release()
+      await settled
+      expect(store.getSlackButtonMessage('C1', BOT_TS)?.answered).toBe(true)
+    })
+  })
+
   it('neutralises channel pings in button labels', async () => {
     const { api, calls } = fakeApi()
     await postButtons(api, false, ['<!channel> go', '<!here|here>'])
@@ -1053,5 +1274,807 @@ describe('slack service polish', () => {
     release()
     await stopping
     expect(stopped).toBe(true)
+  })
+})
+
+describe('slack service working reactions', () => {
+  const realNow = Date.now
+  const later = () => vi.spyOn(Date, 'now').mockReturnValue(realNow() + 16_000)
+  const status = (s: string) => getDb().prepare('UPDATE workspaces SET status = ? WHERE id = ?').run(s, 'wsA')
+  const swaps = (calls: Call[]) =>
+    calls
+      .filter((c) => c.fn === 'addReaction' || c.fn === 'removeReaction')
+      .filter((c) => c.args[2] !== 'eyes' || c.fn === 'removeReaction')
+      .filter((c) => c.args[2] !== 'hourglass_flowing_sand')
+      .map((c) => [c.fn, ...c.args])
+
+  afterEach(() => vi.restoreAllMocks())
+
+  it('keeps eyes while busy, swaps to white_check_mark once when idle', async () => {
+    const { api, calls } = fakeApi()
+    await start(api)
+    status('executing')
+    await svc.handleSlackEvent(mention())
+    later()
+    await svc.runSlackTick()
+    expect(swaps(calls)).toEqual([])
+    status('idle')
+    await svc.runSlackTick()
+    expect(swaps(calls)).toEqual([
+      ['removeReaction', 'C1', '1731500000.000100', 'eyes'],
+      ['addReaction', 'C1', '1731500000.000100', 'white_check_mark'],
+    ])
+    await svc.runSlackTick()
+    expect(swaps(calls)).toHaveLength(2)
+  })
+
+  it.each([
+    ['completed', 'white_check_mark'],
+    ['error', 'warning'],
+    ['quota', 'warning'],
+  ])('status %s gives %s', async (s, name) => {
+    const { api, calls } = fakeApi()
+    await start(api)
+    await svc.handleSlackEvent(mention())
+    status(s)
+    later()
+    await svc.runSlackTick()
+    expect(reactions(calls, 'addReaction')).toContainEqual(['C1', '1731500000.000100', name])
+  })
+
+  it('awaiting-user leaves eyes', async () => {
+    const { api, calls } = fakeApi()
+    await start(api)
+    await svc.handleSlackEvent(mention())
+    status('awaiting-user')
+    later()
+    await svc.runSlackTick()
+    expect(swaps(calls)).toEqual([])
+  })
+
+  it('swaps every message delivered in the turn', async () => {
+    const { api, calls } = fakeApi()
+    await start(api)
+    await svc.handleSlackEvent(mention())
+    await svc.handleSlackEvent(mention({ ts: '1731500000.000200' }))
+    status('idle')
+    later()
+    await svc.runSlackTick()
+    expect(reactions(calls, 'addReaction').filter((a) => a[2] === 'white_check_mark')).toEqual([
+      ['C1', '1731500000.000100', 'white_check_mark'],
+      ['C1', '1731500000.000200', 'white_check_mark'],
+    ])
+  })
+
+  it('a message delivered less than one tick ago is not swapped yet', async () => {
+    const { api, calls } = fakeApi()
+    await start(api)
+    status('idle')
+    await svc.handleSlackEvent(mention())
+    await svc.runSlackTick()
+    expect(swaps(calls)).toEqual([])
+    later()
+    await svc.runSlackTick()
+    expect(reactions(calls, 'addReaction')).toContainEqual(['C1', '1731500000.000100', 'white_check_mark'])
+  })
+
+  it('a click row is never swapped', async () => {
+    const { api, calls } = fakeApi()
+    await start(api)
+    await svc.postSlackFromAgent('wsA', 'Pick one', undefined, { buttons: [{ label: 'Yes' }], multiple: true })
+    await svc.handleSlackClick({
+      channel: 'C1',
+      messageTs: '1731600000.000001',
+      user: 'U1',
+      actionTs: '1731600005.000001',
+      index: 0,
+    })
+    expect(deliver).toHaveBeenCalledTimes(1)
+    status('idle')
+    later()
+    await svc.runSlackTick()
+    expect(swaps(calls)).toEqual([])
+  })
+
+  it('a rejecting reaction call does not throw and is not retried', async () => {
+    const { api, calls } = fakeApi({
+      removeReaction: async () => {
+        throw new Error('boom')
+      },
+      addReaction: async (_c: never, _t: never, name: never) => {
+        if (name === 'white_check_mark') throw new Error('boom')
+      },
+    })
+    await start(api)
+    await svc.handleSlackEvent(mention())
+    status('idle')
+    later()
+    await expect(svc.runSlackTick()).resolves.toBeUndefined()
+    await svc.runSlackTick()
+    expect(reactions(calls, 'addReaction').filter((a) => a[2] === 'white_check_mark')).toHaveLength(1)
+  })
+
+  it('unlinking forgets the workspace list', async () => {
+    const { api, calls } = fakeApi()
+    await start(api)
+    await svc.handleSlackEvent(mention())
+    await svc.linkSlackChannel('wsA', null)
+    status('idle')
+    later()
+    await svc.runSlackTick()
+    expect(reactions(calls, 'addReaction').filter((a) => a[2] === 'white_check_mark')).toEqual([])
+  })
+})
+
+describe('slack service inbound diagnostics', () => {
+  it('an author outside the allow-list sets lastInbound ignored/not-allowed and stores nothing', async () => {
+    const { api, calls } = fakeApi()
+    await start(api)
+    expect(svc.getSlackStatus().lastInbound).toBeUndefined()
+    calls.length = 0
+    await svc.handleSlackEvent(mention({ user: 'U9', text: '<@UBOT> secret words' }))
+    expect(calls).toEqual([])
+    expect(rows()).toEqual([])
+    const status = svc.getSlackStatus()
+    expect(status.lastInbound).toEqual({ at: expect.any(String), outcome: 'ignored', reason: 'not-allowed' })
+    expect(JSON.stringify(status)).not.toMatch(/U9|secret|C1/)
+  })
+
+  it('a delivered message sets delivered; the bot own message leaves it unchanged', async () => {
+    const { api } = fakeApi()
+    await start(api)
+    await svc.handleSlackEvent(mention())
+    const seen = svc.getSlackStatus().lastInbound
+    expect(seen).toEqual({ at: expect.any(String), outcome: 'delivered' })
+    await svc.handleSlackEvent(mention({ user: 'UBOT', ts: '1731500000.000300', text: 'agent post' }))
+    await svc.handleSlackEvent({ type: 'message', channel: 'C1', ts: '1731500000.000400', subtype: 'message_changed' })
+    expect(svc.getSlackStatus().lastInbound).toBe(seen)
+  })
+
+  it('a click from outside the allow-list is recorded without any API call', async () => {
+    const { api, calls } = fakeApi()
+    await start(api)
+    calls.length = 0
+    await svc.handleSlackClick({ channel: 'C1', messageTs: '1.1', user: 'U9', actionTs: '2.2', index: 0 })
+    expect(calls).toEqual([])
+    expect(svc.getSlackStatus().lastInbound).toEqual({
+      at: expect.any(String),
+      outcome: 'ignored',
+      reason: 'not-allowed',
+    })
+  })
+
+  it('a click on an unknown message is unsupported', async () => {
+    const { api } = fakeApi()
+    await start(api)
+    await svc.handleSlackClick({ channel: 'C1', messageTs: '1.1', user: 'U1', actionTs: '2.2', index: 0 })
+    expect(svc.getSlackStatus().lastInbound?.reason).toBe('unsupported-message')
+  })
+
+  it('an uncertain delivery is reported as uncertain, not rejected', async () => {
+    deliver.mockImplementationOnce(async (_ws, _msg, hooks) => {
+      hooks?.beforeDispatch?.()
+      throw new Error('engine lost')
+    })
+    const { api } = fakeApi()
+    await start(api)
+    await svc.handleSlackEvent(mention())
+    expect(rows()[0]!.state).toBe('unknown')
+    expect(svc.getSlackStatus().lastInbound).toEqual({ at: expect.any(String), outcome: 'uncertain' })
+  })
+
+  it('allowListEmpty follows the enabled allow-list', async () => {
+    expect(svc.getSlackStatus().allowListEmpty).toBe(false)
+    settings = makeGlobalSettings({ slackEnabled: true, slackAllowedUserIds: [] })
+    expect(svc.getSlackStatus().allowListEmpty).toBe(true)
+    settings = makeGlobalSettings({ slackEnabled: false, slackAllowedUserIds: [] })
+    expect(svc.getSlackStatus().allowListEmpty).toBe(false)
+  })
+})
+
+describe('slack service files', () => {
+  const POSTED = '1731600000.000001'
+  let worktree: string
+  const uploads = (calls: Call[]) => calls.filter((c) => c.fn === 'uploadFile').map((c) => c.args)
+
+  beforeEach(() => {
+    worktree = path.join(tmpDir, 'wt')
+    fs.mkdirSync(path.join(worktree, 'out'), { recursive: true })
+    fs.writeFileSync(path.join(worktree, 'out', 'a.txt'), 'alpha')
+    fs.writeFileSync(path.join(worktree, 'b.png'), 'beta')
+    getDb().prepare('UPDATE workspaces SET worktree_path = ? WHERE id = ?').run(worktree, 'wsA')
+  })
+
+  it('posts the text first, then uploads each file into its thread', async () => {
+    const { api, calls } = fakeApi()
+    await start(api)
+    await expect(svc.postSlackFromAgent('wsA', 'Here', undefined, { files: ['out/a.txt', 'b.png'] })).resolves.toEqual({
+      ts: POSTED,
+      files: 2,
+    })
+    expect(calls.map((c) => c.fn).filter((fn) => fn === 'postMessage' || fn === 'uploadFile')).toEqual([
+      'postMessage',
+      'uploadFile',
+      'uploadFile',
+    ])
+    expect(uploads(calls)).toEqual([
+      ['C1', POSTED, 'a.txt', Buffer.from('alpha')],
+      ['C1', POSTED, 'b.png', Buffer.from('beta')],
+    ])
+    expect(rows().map((r) => [r.ts, r.text])).toEqual([[POSTED, 'Here']])
+  })
+
+  it('uploads into the given thread for a threaded reply', async () => {
+    const { api, calls } = fakeApi()
+    await start(api)
+    await svc.handleSlackEvent(mention())
+    await svc.postSlackFromAgent('wsA', 'Here', '1731500000.000100', { files: ['b.png'] })
+    expect(uploads(calls)).toEqual([['C1', '1731500000.000100', 'b.png', Buffer.from('beta')]])
+  })
+
+  it('refuses paths outside the worktree, missing files and directories before posting', async () => {
+    const outside = path.join(tmpDir, 'secret.txt')
+    fs.writeFileSync(outside, 'secret')
+    fs.symlinkSync(tmpDir, path.join(worktree, 'up'))
+    fs.symlinkSync(outside, path.join(worktree, 'leak.txt'))
+    const { api, calls } = fakeApi()
+    await start(api)
+    for (const p of ['../secret.txt', 'up/secret.txt', 'leak.txt', outside, 'missing.txt', 'out']) {
+      await expect(svc.postSlackFromAgent('wsA', 'x', undefined, { files: [p] })).rejects.toThrow(
+        `Slack file not found in the worktree: ${p}`,
+      )
+    }
+    expect(posts(calls)).toEqual([])
+  })
+
+  it('refuses a file over 20 MiB and a total over 50 MiB', async () => {
+    const big = (name: string, bytes: number) => fs.truncateSync(path.join(worktree, name), bytes)
+    for (const name of ['big', 'f1', 'f2', 'f3']) fs.writeFileSync(path.join(worktree, name), '')
+    big('big', 20 * 1024 * 1024 + 1)
+    for (const name of ['f1', 'f2', 'f3']) big(name, 18 * 1024 * 1024)
+    const { api, calls } = fakeApi()
+    await start(api)
+    await expect(svc.postSlackFromAgent('wsA', 'x', undefined, { files: ['big'] })).rejects.toThrow(
+      'Slack file is too large: big',
+    )
+    await expect(svc.postSlackFromAgent('wsA', 'x', undefined, { files: ['f1', 'f2', 'f3'] })).rejects.toThrow(
+      'Slack file is too large: f3',
+    )
+    expect(posts(calls)).toEqual([])
+  })
+
+  it('an upload failure after the first file names the count and keeps the text row', async () => {
+    let n = 0
+    const { api } = fakeApi({
+      uploadFile: async () => {
+        if (n++) throw new Error('raw slack text xoxb-t')
+      },
+    })
+    await start(api)
+    const err = await svc
+      .postSlackFromAgent('wsA', 'Here', undefined, { files: ['out/a.txt', 'b.png'] })
+      .catch((e: Error) => e)
+    expect(err).toBeInstanceOf(svc.SlackFileError)
+    expect((err as Error).message).toBe(
+      'Slack file upload failed after 1 of 2 files; the text is posted (ts 1731600000.000001), do not post it again',
+    )
+    expect(rows().map((r) => r.ts)).toEqual([POSTED])
+    expect(n).toBe(2)
+  })
+
+  it('reads at most the limit plus one byte from one handle, whatever its stat said', async () => {
+    const fsp = (await import('node:fs/promises')).default
+    const limit = 20 * 1024 * 1024
+    fs.writeFileSync(path.join(worktree, 'grows'), '')
+    fs.truncateSync(path.join(worktree, 'grows'), limit + 5 * 1024 * 1024)
+    let read = 0
+    const open = fsp.open.bind(fsp)
+    const spy = vi.spyOn(fsp, 'open').mockImplementation(async (...args: Parameters<typeof fsp.open>) => {
+      const fh = await open(...args)
+      const stat = fh.stat.bind(fh)
+      const readFh = fh.read.bind(fh) as (...a: unknown[]) => Promise<{ bytesRead: number }>
+      Object.assign(fh, {
+        stat: async () => Object.assign(await stat(), { size: 10 }), // the file grew after the stat
+        read: async (...a: unknown[]) => {
+          const res = await readFh(...a)
+          read += res.bytesRead
+          return res
+        },
+      })
+      return fh
+    })
+    const { api, calls } = fakeApi()
+    await start(api)
+    try {
+      await expect(svc.postSlackFromAgent('wsA', 'x', undefined, { files: ['grows'] })).rejects.toThrow(
+        'Slack file is too large: grows',
+      )
+    } finally {
+      spy.mockRestore()
+    }
+    expect(read).toBeGreaterThan(0)
+    expect(read).toBeLessThanOrEqual(limit + 1)
+    expect(posts(calls)).toEqual([])
+  })
+
+  it.skipIf(process.platform === 'win32')('refuses a FIFO without blocking', async () => {
+    const { execFileSync } = await import('node:child_process')
+    execFileSync('mkfifo', [path.join(worktree, 'pipe')])
+    const { api } = fakeApi()
+    await start(api)
+    await expect(svc.postSlackFromAgent('wsA', 'x', undefined, { files: ['pipe'] })).rejects.toThrow(
+      'Slack file not found in the worktree: pipe',
+    )
+  })
+
+  it('a stop during the first of three uploads abandons it at once and starts no other', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    const { api, calls } = fakeApi({ uploadFile: () => gate })
+    fs.writeFileSync(path.join(worktree, 'c.md'), 'gamma')
+    await start(api)
+    const posting = svc
+      .postSlackFromAgent('wsA', 'Here', undefined, { files: ['out/a.txt', 'b.png', 'c.md'] })
+      .catch((e: Error) => e)
+    await vi.waitFor(() => expect(uploads(calls)).toHaveLength(1))
+    // The held upload never settles before the stop resolves.
+    await svc.stopSlack()
+    expect(((await posting) as Error).message).toBe(
+      'Slack file upload failed after 0 of 3 files; the text is posted (ts 1731600000.000001), do not post it again',
+    )
+    expect(uploads(calls)).toHaveLength(1)
+    release()
+  })
+
+  it('an upload that hits its deadline gives the count error', async () => {
+    const { SlackApiError } = await import('../server/services/slack/slack-api.js')
+    const { api } = fakeApi({
+      uploadFile: async () => {
+        throw new SlackApiError('network')
+      },
+    })
+    await start(api)
+    await expect(svc.postSlackFromAgent('wsA', 'Here', undefined, { files: ['b.png'] })).rejects.toThrow(
+      'Slack file upload failed after 0 of 1 files; the text is posted (ts 1731600000.000001), do not post it again',
+    )
+  })
+
+  it('a missing scope maps to the files:write error', async () => {
+    const { SlackApiError } = await import('../server/services/slack/slack-api.js')
+    const { api } = fakeApi({
+      uploadFile: async () => {
+        throw new SlackApiError('missing_scope')
+      },
+    })
+    await start(api)
+    await expect(svc.postSlackFromAgent('wsA', 'Here', undefined, { files: ['b.png'] })).rejects.toThrow(
+      'The Slack app lacks the files:write permission; the text is posted (ts 1731600000.000001), do not post it again',
+    )
+  })
+})
+
+describe('slack service working reactions, fix round 1', () => {
+  const R1 = '1731500000.000100'
+  const R2 = '1731500000.000200'
+  const R3 = '1731500000.000300'
+  let clock = 0
+  const status = (id: string, s: string) => getDb().prepare('UPDATE workspaces SET status = ? WHERE id = ?').run(s, id)
+  const finals = (calls: Call[], ts: string) =>
+    reactions(calls, 'addReaction').filter((a) => a[1] === ts && a[2] !== 'eyes' && a[2] !== 'hourglass_flowing_sand')
+  function gated() {
+    let release!: () => void
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    return { gate, release }
+  }
+
+  beforeEach(() => {
+    clock = Date.now()
+    vi.spyOn(Date, 'now').mockImplementation(() => clock)
+    getDb().prepare("UPDATE workspaces SET slack_channel_id = 'C2' WHERE id = 'wsB'").run()
+  })
+  afterEach(() => vi.restoreAllMocks())
+
+  it('overlapping ticks swap each row once and keep a row delivered meanwhile', async () => {
+    const { gate, release } = gated()
+    const { api, calls } = fakeApi({
+      removeReaction: async (_c: never, ts: never, name: never) => {
+        if (ts === R1 && name === 'eyes') await gate
+      },
+    })
+    await start(api)
+    await svc.handleSlackEvent(mention({ ts: R1 }))
+    await svc.handleSlackEvent(mention({ channel: 'C2', ts: R2 }))
+    status('wsA', 'idle')
+    status('wsB', 'idle')
+    clock += 16_000
+    const tickA = svc.runSlackTick()
+    await vi.waitFor(() => expect(reactions(calls, 'removeReaction')).toContainEqual(['C1', R1, 'eyes']))
+    await svc.runSlackTick() // tick B handles wsB meanwhile
+    await svc.handleSlackEvent(mention({ channel: 'C2', ts: R3 })) // delivered while tick A is held
+    release()
+    await tickA
+    expect(finals(calls, R1)).toHaveLength(1)
+    expect(finals(calls, R2)).toHaveLength(1)
+    expect(finals(calls, R3)).toHaveLength(0)
+    clock += 16_000
+    await svc.runSlackTick()
+    expect(finals(calls, R3)).toEqual([['C2', R3, 'white_check_mark']])
+  })
+
+  it('an unlink during a held swap adds no reaction to the rows it forgot', async () => {
+    const { gate, release } = gated()
+    const { api, calls } = fakeApi({
+      removeReaction: async (_c: never, ts: never, name: never) => {
+        if (ts === R1 && name === 'eyes') await gate
+      },
+    })
+    await start(api)
+    await svc.handleSlackEvent(mention({ ts: R1 }))
+    await svc.handleSlackEvent(mention({ channel: 'C2', ts: R2 }))
+    status('wsA', 'idle')
+    status('wsB', 'idle')
+    clock += 16_000
+    const tick = svc.runSlackTick()
+    await vi.waitFor(() => expect(reactions(calls, 'removeReaction')).toContainEqual(['C1', R1, 'eyes']))
+    await svc.linkSlackChannel('wsB', null)
+    release()
+    await tick
+    // R1 was already taken by the tick: its swap completes. R2 was forgotten by the unlink.
+    expect(finals(calls, R1)).toEqual([['C1', R1, 'white_check_mark']])
+    expect(reactions(calls, 'removeReaction')).not.toContainEqual(['C2', R2, 'eyes'])
+    expect(finals(calls, R2)).toEqual([])
+  })
+
+  it('a stop during a swap issues no further reaction call', async () => {
+    const reaction = gated()
+    const post = gated()
+    const { api, calls } = fakeApi({
+      removeReaction: async (_c: never, ts: never, name: never) => {
+        if (ts === R1 && name === 'eyes') await reaction.gate
+      },
+      postMessage: async () => {
+        await post.gate
+        return '1731600000.000001'
+      },
+    })
+    await start(api)
+    await svc.handleSlackEvent(mention({ ts: R1 }))
+    await svc.handleSlackEvent(mention({ ts: R2 }))
+    status('wsA', 'idle')
+    clock += 16_000
+    const tick = svc.runSlackTick()
+    await vi.waitFor(() => expect(reactions(calls, 'removeReaction')).toContainEqual(['C1', R1, 'eyes']))
+    // A tracked agent post keeps the API alive while the stop waits for it.
+    const posting = svc.postSlackFromAgent('wsA', 'x').catch(() => undefined)
+    await vi.waitFor(() => expect(posts(calls)).toHaveLength(1))
+    const stopped = svc.stopSlack()
+    reaction.release()
+    await tick
+    post.release()
+    await posting
+    await stopped
+    // The row in flight completes its pair, so it never ends with no reaction at all.
+    expect(finals(calls, R1)).toEqual([['C1', R1, 'white_check_mark']])
+    expect(reactions(calls, 'removeReaction')).not.toContainEqual(['C1', R2, 'eyes'])
+    expect(finals(calls, R2)).toEqual([])
+  })
+})
+
+describe('slack service fix round 2', () => {
+  const BOT_TS = '1731600000.000001'
+  let worktree: string
+  const fsp = async () => (await import('node:fs/promises')).default
+
+  beforeEach(() => {
+    worktree = path.join(tmpDir, 'wt2')
+    fs.mkdirSync(worktree, { recursive: true })
+    fs.writeFileSync(path.join(worktree, 'b.png'), 'beta')
+    getDb().prepare('UPDATE workspaces SET worktree_path = ? WHERE id = ?').run(worktree, 'wsA')
+  })
+  afterEach(() => vi.restoreAllMocks())
+
+  describe('R2: a reverted close requeues the clicks it rejected', () => {
+    const click = (actionTs: string) => ({ channel: 'C1', messageTs: BOT_TS, user: 'U1', actionTs, index: 0 })
+    async function twoQueuedClicks(api: SlackApi) {
+      await start(api)
+      await svc.postSlackFromAgent('wsA', 'Pick', undefined, { buttons: [{ label: 'Yes' }], multiple: true })
+      deliver.mockImplementation(async () => {
+        throw new Error('busy') // refused before dispatch: the clicks stay queued
+      })
+      await svc.handleSlackClick(click('1731600005.000001'))
+      await svc.handleSlackClick(click('1731600005.000002'))
+      expect(store.countQueuedSlackMessages('wsA')).toBe(2)
+      deliver.mockReset()
+      deliver.mockImplementation(async (_ws, msg, hooks) => {
+        hooks?.beforeDispatch?.()
+        hooks?.persist?.({ content: msg.content, sender: 'user', source: msg.source }, 's1')
+        return { sessionId: 's1' }
+      })
+    }
+
+    it('close fails: both queued clicks are delivered once afterwards', async () => {
+      const { api } = fakeApi({
+        replaceButtons: async () => {
+          throw new Error('boom')
+        },
+      })
+      await twoQueuedClicks(api)
+      await expect(svc.closeSlackButtons('wsA', BOT_TS)).rejects.toThrow('Slack request failed')
+      await svc._waitForSlackIdle()
+      await svc.runSlackTick()
+      expect(deliver).toHaveBeenCalledTimes(2)
+      expect(rows("ts LIKE '%-%'").map((r) => r.state)).toEqual(['delivered', 'delivered'])
+    })
+
+    it('close succeeds: the dropped clicks stay silent', async () => {
+      const { api, calls } = fakeApi()
+      await twoQueuedClicks(api)
+      const before = posts(calls).length
+      await expect(svc.closeSlackButtons('wsA', BOT_TS)).resolves.toEqual({ closed: true })
+      await svc.runSlackTick()
+      expect(deliver).not.toHaveBeenCalled()
+      expect(posts(calls)).toHaveLength(before)
+    })
+  })
+
+  it('R4: an unlink while the files are read posts nothing', async () => {
+    const f = await fsp()
+    let release!: () => void
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    const open = f.open.bind(f)
+    vi.spyOn(f, 'open').mockImplementation(async (...args: Parameters<typeof f.open>) => {
+      await gate
+      return open(...args)
+    })
+    const { api, calls } = fakeApi()
+    await start(api)
+    const posting = svc.postSlackFromAgent('wsA', 'Here', undefined, { files: ['b.png'] }).catch((e: Error) => e)
+    await vi.waitFor(() => expect(f.open).toHaveBeenCalled())
+    await svc.linkSlackChannel('wsA', null)
+    release()
+    expect(((await posting) as Error).message).toBe('Slack is not available for this workspace')
+    expect(posts(calls)).toEqual([])
+    expect(rows()).toEqual([])
+  })
+
+  it('R5: an empty file is refused before posting', async () => {
+    fs.writeFileSync(path.join(worktree, 'empty.txt'), '')
+    const { api, calls } = fakeApi()
+    await start(api)
+    await expect(svc.postSlackFromAgent('wsA', 'x', undefined, { files: ['empty.txt'] })).rejects.toThrow(
+      'Slack file is empty: empty.txt',
+    )
+    expect(posts(calls)).toEqual([])
+  })
+
+  it('R9: a handle that is not the file the path resolves to is refused', async () => {
+    const f = await fsp()
+    const open = f.open.bind(f)
+    vi.spyOn(f, 'open').mockImplementation(async (...args: Parameters<typeof f.open>) => {
+      const fh = await open(...args)
+      const stat = fh.stat.bind(fh)
+      Object.assign(fh, { stat: async () => Object.assign(await stat(), { ino: (await stat()).ino + 1 }) })
+      return fh
+    })
+    const { api, calls } = fakeApi()
+    await start(api)
+    await expect(svc.postSlackFromAgent('wsA', 'x', undefined, { files: ['b.png'] })).rejects.toThrow(
+      'Slack file not found in the worktree: b.png',
+    )
+    expect(posts(calls)).toEqual([])
+  })
+
+  describe('R6: lastInbound follows its row', () => {
+    async function queued(api: SlackApi) {
+      await start(api)
+      deliver.mockImplementationOnce(async () => {
+        throw new Error('busy')
+      })
+      await svc.handleSlackEvent(mention())
+      const seen = svc.getSlackStatus().lastInbound
+      expect(seen?.outcome).toBe('queued')
+      return seen!.at
+    }
+
+    it('queued then delivered by a later drain', async () => {
+      const { api } = fakeApi()
+      const at = await queued(api)
+      await svc.runSlackTick()
+      expect(svc.getSlackStatus().lastInbound).toEqual({ at, outcome: 'delivered' })
+    })
+
+    it('queued then expired', async () => {
+      const { api } = fakeApi()
+      const at = await queued(api)
+      getDb().prepare("UPDATE slack_messages SET created_at = '2000-01-01T00:00:00.000Z'").run()
+      await svc.runSlackTick()
+      expect(svc.getSlackStatus().lastInbound).toEqual({ at, outcome: 'rejected' })
+    })
+
+    it('a newer inbound is not overwritten by an older row', async () => {
+      const { api } = fakeApi()
+      await queued(api)
+      await svc.handleSlackClick({ channel: 'C1', messageTs: '1.1', user: 'U9', actionTs: '2.2', index: 0 })
+      await svc.runSlackTick()
+      expect(rows()[0]!.state).toBe('delivered')
+      expect(svc.getSlackStatus().lastInbound).toMatchObject({ outcome: 'ignored', reason: 'not-allowed' })
+    })
+  })
+
+  it('R7: with an empty allow-list a mention shows not-allowed, chatter around it changes nothing', async () => {
+    settings = makeGlobalSettings({ slackEnabled: true, slackAllowedUserIds: [] })
+    const { api, calls } = fakeApi()
+    await start(api)
+    calls.length = 0
+    const chatter = async (n: number) => {
+      await svc.handleSlackEvent(mention({ ts: `1731500002.00000${n}`, text: 'just chatting' }))
+      await svc.handleSlackEvent(mention({ ts: `1731500003.00000${n}`, user: 'U9', text: 'hello all' }))
+      await svc.handleSlackEvent(mention({ ts: `1731500004.00000${n}`, subtype: 'channel_join', text: 'joined' }))
+      await svc.handleSlackEvent(mention({ ts: `1731500005.00000${n}`, user: 'UOTHER', bot_id: 'B9' }))
+    }
+    await chatter(1)
+    expect(svc.getSlackStatus().lastInbound).toBeUndefined()
+    await svc.handleSlackEvent(mention())
+    const seen = svc.getSlackStatus().lastInbound
+    expect(seen).toEqual({ at: expect.any(String), outcome: 'ignored', reason: 'not-allowed' })
+    await chatter(2)
+    expect(svc.getSlackStatus().lastInbound).toBe(seen)
+    expect(calls).toEqual([])
+    expect(rows()).toEqual([])
+  })
+
+  describe('R8: the reaction list is bounded and cleared on stop', () => {
+    const later = () => {
+      const now = Date.now()
+      vi.spyOn(Date, 'now').mockReturnValue(now + 16_000)
+    }
+    const idle = () => getDb().prepare("UPDATE workspaces SET status = 'idle' WHERE id = 'wsA'").run()
+    const finals = (calls: Call[]) => reactions(calls, 'addReaction').filter((a) => a[2] === 'white_check_mark')
+
+    it('a stop forgets the list', async () => {
+      const { api, calls } = fakeApi()
+      await start(api)
+      await svc.handleSlackEvent(mention())
+      await svc.stopSlack()
+      await start(api)
+      idle()
+      later()
+      await svc.runSlackTick()
+      expect(finals(calls)).toEqual([])
+    })
+
+    it('keeps at most 200 rows per workspace, dropping the oldest', async () => {
+      const { api, calls } = fakeApi()
+      await start(api)
+      const ts = (i: number) => `1731500001.${String(i).padStart(6, '0')}`
+      for (let i = 0; i < 201; i++) await svc.handleSlackEvent(mention({ ts: ts(i) }))
+      idle()
+      later()
+      await svc.runSlackTick()
+      const swapped = finals(calls).map((a) => a[1])
+      expect(swapped).toHaveLength(200)
+      expect(swapped).not.toContain(ts(0))
+      expect(swapped).toContain(ts(200))
+    }, 30_000)
+  })
+})
+
+describe('slack service task 13 minors', () => {
+  const BOT_TS = '1731600000.000001'
+  const OTHER = 'Slack is not available for this workspace'
+  let worktree: string
+  const gated = () => {
+    let release!: () => void
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    return { gate, release }
+  }
+
+  beforeEach(() => {
+    worktree = path.join(tmpDir, 'wt13')
+    fs.mkdirSync(worktree, { recursive: true })
+    fs.writeFileSync(path.join(worktree, 'a.txt'), 'alpha')
+    fs.writeFileSync(path.join(worktree, 'b.png'), 'beta')
+    getDb().prepare('UPDATE workspaces SET worktree_path = ? WHERE id = ?').run(worktree, 'wsA')
+  })
+  afterEach(() => vi.restoreAllMocks())
+
+  describe('M1: a close settles the lastInbound of a click it rejects', () => {
+    async function queuedClick(api: SlackApi) {
+      await start(api)
+      await svc.postSlackFromAgent('wsA', 'Pick', undefined, { buttons: [{ label: 'Yes' }], multiple: true })
+      deliver.mockImplementation(async () => {
+        throw new Error('busy')
+      })
+      await svc.handleSlackClick({
+        channel: 'C1',
+        messageTs: BOT_TS,
+        user: 'U1',
+        actionTs: '1731600005.000001',
+        index: 0,
+      })
+      const seen = svc.getSlackStatus().lastInbound
+      expect(seen?.outcome).toBe('queued')
+      return seen!.at
+    }
+
+    it('a successful close makes it rejected, keeping its time', async () => {
+      const { api } = fakeApi()
+      const at = await queuedClick(api)
+      await expect(svc.closeSlackButtons('wsA', BOT_TS)).resolves.toEqual({ closed: true })
+      expect(svc.getSlackStatus().lastInbound).toEqual({ at, outcome: 'rejected' })
+    })
+
+    it('a close whose Slack update fails leaves it queued', async () => {
+      const { api } = fakeApi({
+        replaceButtons: async () => {
+          throw new Error('boom')
+        },
+      })
+      const at = await queuedClick(api)
+      await expect(svc.closeSlackButtons('wsA', BOT_TS)).rejects.toThrow('Slack request failed')
+      expect(svc.getSlackStatus().lastInbound).toEqual({ at, outcome: 'queued' })
+    })
+  })
+
+  it('M2: an unlink between two uploads stops the remaining files', async () => {
+    const { gate, release } = gated()
+    let n = 0
+    const { api, calls } = fakeApi({ uploadFile: () => (n++ ? undefined : gate) })
+    await start(api)
+    const posting = svc
+      .postSlackFromAgent('wsA', 'Here', undefined, { files: ['a.txt', 'b.png'] })
+      .catch((e: Error) => e)
+    await vi.waitFor(() => expect(calls.filter((c) => c.fn === 'uploadFile')).toHaveLength(1))
+    await svc.linkSlackChannel('wsA', null)
+    release()
+    expect(((await posting) as Error).message).toBe(
+      `Slack file upload failed after 1 of 2 files; the text is posted (ts ${BOT_TS}), do not post it again`,
+    )
+    expect(calls.filter((c) => c.fn === 'uploadFile')).toHaveLength(1)
+  })
+
+  it('M3: a restart during the file read posts nothing on either client', async () => {
+    const f = (await import('node:fs/promises')).default
+    const { gate, release } = gated()
+    const open = f.open.bind(f)
+    vi.spyOn(f, 'open').mockImplementation(async (...args: Parameters<typeof f.open>) => {
+      await gate
+      return open(...args)
+    })
+    const first = fakeApi()
+    const second = fakeApi()
+    let n = 0
+    await svc.startSlack(() => (n++ ? second.api : first.api))
+    const posting = svc.postSlackFromAgent('wsA', 'Here', undefined, { files: ['b.png'] }).catch((e: Error) => e)
+    await vi.waitFor(() => expect(f.open).toHaveBeenCalled())
+    // The restart waits for tracked work, so the read is released while it runs.
+    const restarting = svc.restartSlack()
+    release()
+    await restarting
+    expect(((await posting) as Error).message).toBe(OTHER)
+    expect(posts(first.calls)).toEqual([])
+    expect(posts(second.calls)).toEqual([])
+  })
+
+  it('M4: a failed record after the post still tells the agent the ts, and uploads nothing', async () => {
+    const { api, calls } = fakeApi({
+      postMessage: async () => {
+        getDb().prepare("DELETE FROM workspaces WHERE id = 'wsA'").run() // the record can no longer be stored
+        return BOT_TS
+      },
+    })
+    await start(api)
+    await expect(svc.postSlackFromAgent('wsA', 'Here', undefined, { files: ['b.png'] })).rejects.toThrow(
+      `Slack message was posted but could not be recorded; the text is posted (ts ${BOT_TS}), do not post it again`,
+    )
+    expect(calls.filter((c) => c.fn === 'uploadFile')).toEqual([])
   })
 })

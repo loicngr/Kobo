@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../server/services/slack/slack-service.js', () => ({
+  SlackFileError: class SlackFileError extends Error {},
+  closeSlackButtons: vi.fn(),
   postSlackFromAgent: vi.fn(),
   readSlackThread: vi.fn(),
 }))
@@ -8,10 +10,17 @@ vi.mock('../server/services/slack/slack-service.js', () => ({
 import { EXTERNAL_TOOL_CATALOGUE } from '../server/services/external-mcp-credentials-service.js'
 import { executeSlackTool } from '../server/services/slack/slack-mcp-service.js'
 import type { SlackMessageRow } from '../server/services/slack/slack-message-store.js'
-import { postSlackFromAgent, readSlackThread } from '../server/services/slack/slack-service.js'
+import {
+  closeSlackButtons,
+  postSlackFromAgent,
+  readSlackThread,
+  SlackFileError,
+} from '../server/services/slack/slack-service.js'
+import { neutraliseSlackMentions } from '../shared/slack-tools.js'
 
 const post = vi.mocked(postSlackFromAgent)
 const read = vi.mocked(readSlackThread)
+const close = vi.mocked(closeSlackButtons)
 const text = (result: { content: unknown[] }) => (result.content[0] as { text: string }).text
 
 function row(over: Partial<SlackMessageRow>): SlackMessageRow {
@@ -100,6 +109,28 @@ describe('executeSlackTool', () => {
     expect(JSON.stringify(result)).not.toMatch(/url/i)
   })
 
+  it('F3: shows the ts and the open or closed state of agent-posted button messages only', async () => {
+    read.mockReturnValue([
+      row({ ts: '1.1', direction: 'out', state: 'sent', text: 'pick', buttons: ['A'], buttonsClosed: false }),
+      row({ ts: '1.2', direction: 'out', state: 'sent', text: 'old', buttons: ['A'], buttonsClosed: true }),
+      row({ ts: '1.3', direction: 'out', state: 'sent', text: 'plain or mirrored question' }),
+      row({ ts: '1.4', text: 'Clicked: A', clickOf: '1.1' }),
+    ])
+    const out = JSON.parse(
+      text(await executeSlackTool('slack_read_thread', { thread_ts: '1.1' }, 'ws'))
+        .split('\n')
+        .slice(1)
+        .join('\n'),
+    )
+    expect(out.map((m: { ts: string; buttons?: string }) => [m.ts, m.buttons])).toEqual([
+      ['1.1', 'open'],
+      ['1.2', 'closed'],
+      ['1.3', undefined],
+      ['1.4', undefined],
+    ])
+    expect(JSON.stringify(out)).not.toMatch(/url/i)
+  })
+
   it('passes limit and before, and validates the limit range', async () => {
     read.mockReturnValue([])
     await executeSlackTool('slack_read_thread', { thread_ts: '1.1', limit: 50, before: '1.9' }, 'ws')
@@ -169,6 +200,76 @@ describe('executeSlackTool', () => {
     const names = EXTERNAL_TOOL_CATALOGUE.map((tool) => tool.name)
     expect(names).not.toContain('slack_post_message')
     expect(names).not.toContain('slack_read_thread')
+    expect(names).not.toContain('slack_close_buttons')
+  })
+
+  describe('slack_close_buttons', () => {
+    const call = (args: Record<string, unknown>) => executeSlackTool('slack_close_buttons', args, 'ws')
+
+    it('forwards the ts and no note by default', async () => {
+      close.mockResolvedValue({ closed: true })
+      const result = await call({ message_ts: '1.1' })
+      expect(close).toHaveBeenCalledWith('ws', '1.1', undefined)
+      expect(text(result)).toBe('{"closed":true}')
+    })
+
+    it('forwards the trimmed note; the service neutralises it once', async () => {
+      close.mockResolvedValue({ closed: false })
+      const result = await call({ message_ts: '1.1', note: '  Done <!channel> ok  ' })
+      expect(close).toHaveBeenCalledWith('ws', '1.1', 'Done <!channel> ok')
+      expect(text(result)).toBe('{"closed":false}')
+    })
+
+    it('collapses newlines and control characters of the note into single spaces', async () => {
+      close.mockResolvedValue({ closed: true })
+      await call({ message_ts: '1.1', note: 'ok\nthen\tdone\r\n\u0007end' })
+      expect(close).toHaveBeenCalledWith('ws', '1.1', 'ok then done end')
+      const result = await call({ message_ts: '1.1', note: '\n\r\n\t' })
+      expect(text(result)).toBe('Slack note must be 1 to 150 characters')
+    })
+
+    it.each([
+      [{}, 'Missing argument: message_ts'],
+      [{ message_ts: '  ' }, 'Invalid argument: message_ts'],
+      [{ message_ts: '1.1', workspace_id: 'ws' }, 'Unknown argument: workspace_id'],
+      [{ message_ts: '1.1', other: 1 }, 'Unknown argument: other'],
+      [{ message_ts: '1.1', note: '   ' }, 'Slack note must be 1 to 150 characters'],
+      [{ message_ts: '1.1', note: 'x'.repeat(151) }, 'Slack note must be 1 to 150 characters'],
+      [{ message_ts: '1.1', note: 5 }, 'Slack note must be 1 to 150 characters'],
+    ])('refuses %j with %s', async (args, message) => {
+      const result = await call(args)
+      expect(result.isError).toBe(true)
+      expect(text(result)).toBe(message)
+      expect(close).not.toHaveBeenCalled()
+    })
+
+    it('accepts a 150-character note and returns the fixed errors only', async () => {
+      close.mockResolvedValue({ closed: true })
+      expect((await call({ message_ts: '1.1', note: 'x'.repeat(150) })).isError).toBeFalsy()
+      close.mockRejectedValue(new Error('Unknown Slack message'))
+      expect(text(await call({ message_ts: '9.9' }))).toBe('Unknown Slack message')
+      close.mockRejectedValue(new Error('xoxb-secret'))
+      expect(text(await call({ message_ts: '9.9' }))).toBe('Slack request failed')
+    })
+  })
+})
+
+describe('F1: neutraliseSlackMentions', () => {
+  it.each([
+    '<!<!channel>>',
+    '<!<!here>here>',
+    '<!subteam^S1<!channel>>',
+    '<<!!channel>>',
+    '<!<!<!everyone>>>',
+    '<<!!subteam^S1>>',
+  ])('leaves no mass ping in %s', (input) => {
+    const out = neutraliseSlackMentions(input)
+    expect(out).not.toMatch(/<!(channel|here|everyone)>|<!subteam\^/)
+    expect(neutraliseSlackMentions(out)).toBe(out)
+  })
+  it('leaves plain text and the single-pass cases unchanged', () => {
+    expect(neutraliseSlackMentions('hello <@U1> <#C1> a < b > c')).toBe('hello <@U1> <#C1> a < b > c')
+    expect(neutraliseSlackMentions('x <!channel> y <!here|here>')).toBe('x channel y here')
   })
 })
 
@@ -181,5 +282,57 @@ describe('button label neutralisation order', () => {
     )
     expect(result.isError).toBe(true)
     expect((result.content[0] as { text: string }).text).toBe('Slack button labels must be unique')
+  })
+})
+
+describe('slack_post_message files', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('forwards worktree paths and returns the upload count', async () => {
+    post.mockResolvedValue({ ts: '2', files: 2 })
+    const result = await executeSlackTool('slack_post_message', { text: 'hi', files: ['a.txt', 'b/c.png'] }, 'ws')
+    expect(post).toHaveBeenCalledWith('ws', 'hi', undefined, { files: ['a.txt', 'b/c.png'] })
+    expect(JSON.parse(text(result))).toEqual({ ts: '2', files: 2 })
+  })
+
+  it('refuses more than 5 files, invalid entries and buttons with files', async () => {
+    const many = await executeSlackTool(
+      'slack_post_message',
+      { text: 'hi', files: ['1', '2', '3', '4', '5', '6'] },
+      'ws',
+    )
+    expect(text(many)).toBe('Slack files are limited to 5')
+    for (const files of [[], [''], [3], 'a.txt']) {
+      const bad = await executeSlackTool('slack_post_message', { text: 'hi', files }, 'ws')
+      expect(text(bad)).toBe('Invalid argument: files')
+    }
+    const both = await executeSlackTool(
+      'slack_post_message',
+      { text: 'hi', files: ['a.txt'], buttons: [{ label: 'Yes' }] },
+      'ws',
+    )
+    expect(text(both)).toBe('Slack files cannot be combined with buttons')
+    expect(post).not.toHaveBeenCalled()
+  })
+
+  it('returns the fixed file errors of the service', async () => {
+    post.mockRejectedValue(
+      new SlackFileError(
+        'Slack file upload failed after 1 of 2 files; the text is posted (ts 2), do not post it again',
+      ),
+    )
+    const result = await executeSlackTool('slack_post_message', { text: 'hi', files: ['a', 'b'] }, 'ws')
+    expect(result.isError).toBe(true)
+    expect(text(result)).toBe(
+      'Slack file upload failed after 1 of 2 files; the text is posted (ts 2), do not post it again',
+    )
+  })
+
+  it('returns the fixed record error with the posted ts', async () => {
+    const msg = 'Slack message was posted but could not be recorded; the text is posted (ts 2), do not post it again'
+    post.mockRejectedValue(new SlackFileError(msg))
+    const result = await executeSlackTool('slack_post_message', { text: 'hi' }, 'ws')
+    expect(result.isError).toBe(true)
+    expect(text(result)).toBe(msg)
   })
 })

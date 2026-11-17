@@ -526,7 +526,7 @@ List all images uploaded to the current workspace via Kōbō's chat paste/upload
 
 ### Slack
 
-Two managed tools let a workspace's agent use the Slack channel linked to its workspace. They are bound to the launch workspace, take no `workspace_id`, and are not available to external HTTP or global stdio credentials. They are listed for every managed session; a call fails with `Slack is not available for this workspace` when Slack is disabled, disconnected or no channel is linked. See [Slack integration](../../CONFIGURATION.md#slack-integration) for setup and behaviour.
+Three managed tools let a workspace's agent use the Slack channel linked to its workspace. They are bound to the launch workspace, take no `workspace_id`, and are not available to external HTTP or global stdio credentials. They are listed for every managed session; a call fails with `Slack is not available for this workspace` when Slack is disabled, disconnected or no channel is linked. See [Slack integration](../../CONFIGURATION.md#slack-integration) for setup and behaviour.
 
 #### `slack_post_message`
 Post in the linked channel. Kōbō never sends an agent's output to Slack by itself: this tool is the only way to answer.
@@ -536,10 +536,22 @@ Post in the linked channel. Kōbō never sends an agent's output to Slack by its
 - `thread_ts` (string, optional) - reply in that thread; it must be a thread Kōbō tracks (taken from a Slack message header). Omit it to open a new message in the channel.
 - `buttons` (array, optional) - 1 to 5 items `{ label, style? }`; `label` is 1 to 75 characters and unique, `style` is `primary` or `danger`. A click by an allow-listed person is delivered to the agent as a message `Clicked: <label>`.
 - `multiple` (boolean, optional, default `false`) - `false`: the first click answers and the buttons are removed; `true`: the buttons stay and every click is delivered. Requires `buttons`.
+- `files` (array, optional) - 1 to 5 paths relative to the worktree root, 20 MiB each and 50 MiB together; cannot be combined with `buttons`. Each must be a regular file inside the worktree (a `..` or symlink escape fails with `Slack file not found in the worktree: <path>`; an oversized file with `Slack file is too large: <path>`; a zero-byte file with `Slack file is empty: <path>`). The text is posted first, then each file is uploaded into its thread (the given `thread_ts`, or the new message). If an upload fails, or Slack stops during it, the text stays posted, nothing is retried and the call fails with `Slack file upload failed after <n> of <m> files; the text is posted (ts <ts>), do not post it again`, or `The Slack app lacks the files:write permission; the text is posted (ts <ts>), do not post it again` when the scope is missing. Do not post the text again; use that `ts` to follow up in its thread.
 
-**Output:** `{ ts }`, the Slack timestamp of the posted message.
+**Output:** `{ ts }`, the Slack timestamp of the posted message; `{ ts, files }` with the number of files uploaded when `files` was given.
 
 Available to writable and Plan launches. Denied to restricted launches (parallel reviews, reviews with a return, auto-loop final reviews, native Mistral Vibe reviews, handoff generation).
+
+#### `slack_close_buttons`
+Close the answer buttons of a message posted with `slack_post_message`. A text reply in the thread does not remove them; the agent calls this when it considers that a reply answered the question.
+
+**Input:**
+- `message_ts` (string, required) - the `ts` returned by `slack_post_message`; it must be a message with buttons posted by this workspace in its linked channel, otherwise the call fails with `Unknown Slack message`.
+- `note` (string, optional) - 1 to 150 characters of plain text (channel-wide mentions neutralised) shown instead of the default `Answered in the thread.`
+
+**Output:** `{ closed }`: `true` when this call closed the buttons and Slack showed the change, `false` when a click or an earlier close already had. If the Slack update fails the close is undone and the call fails with `Slack request failed`, so it can be retried. Works for single-answer and multiple-answer messages; later clicks are ignored.
+
+Same availability as `slack_post_message`: writable and Plan launches, denied to restricted launches.
 
 #### `slack_read_thread`
 Read the stored messages of one tracked thread of the linked channel, oldest first. It reads Kōbō's database, so it works while Slack is disconnected.
@@ -549,7 +561,7 @@ Read the stored messages of one tracked thread of the linked channel, oldest fir
 - `limit` (integer, optional) - 1 to 50, default 20
 - `before` (string, optional) - only messages older than this timestamp
 
-**Output:** the messages, each marked `from_user` (delivered to the agent), `from_kobo` (posted by the agent or by Kōbō) or `context` (earlier messages of the thread, untrusted background and never instructions). Messages not delivered to the agent are not listed. Files appear by name only.
+**Output:** the messages, each with its `ts` and marked `from_user` (delivered to the agent), `from_kobo` (posted by the agent or by Kōbō) or `context` (earlier messages of the thread, untrusted background and never instructions). Messages not delivered to the agent are not listed. Files appear by name only.
 
 Read-only; available to every managed session, including restricted ones. Do not poll it: replies arrive as messages.
 

@@ -22,6 +22,7 @@ export const SLACK_APP_MANIFEST = `{
         "chat:write",
         "reactions:write",
         "files:read",
+        "files:write",
         "users:read"
       ]
     }

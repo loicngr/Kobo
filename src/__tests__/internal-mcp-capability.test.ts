@@ -84,17 +84,51 @@ describe('managed MCP launch authorization', () => {
   ])('Slack tools for readOnly=$readOnly restricted=$restricted', ({ readOnly, restricted, post }) => {
     const cap = createInternalMcpCapability({ workspaceId: 'own', sessionId: 'session', readOnly, restricted })
     expect(() => authorizeInternalMcpTool(cap.token, 'slack_read_thread', { thread_ts: '1.1' })).not.toThrow()
-    for (const args of [{ text: 'hi' }, { text: 'hi', buttons: [{ label: 'A' }], multiple: true }]) {
+    for (const args of [
+      { text: 'hi' },
+      { text: 'hi', buttons: [{ label: 'A' }], multiple: true },
+      { text: 'hi', files: ['report.md'] },
+    ]) {
       if (post) expect(() => authorizeInternalMcpTool(cap.token, 'slack_post_message', args)).not.toThrow()
       else
         expect(() => authorizeInternalMcpTool(cap.token, 'slack_post_message', args)).toThrow(
           'This managed MCP launch is read-only',
         )
     }
-    for (const name of ['slack_read_thread', 'slack_post_message'])
+    if (post)
+      expect(() => authorizeInternalMcpTool(cap.token, 'slack_close_buttons', { message_ts: '1.1' })).not.toThrow()
+    else
+      expect(() => authorizeInternalMcpTool(cap.token, 'slack_close_buttons', { message_ts: '1.1' })).toThrow(
+        'This managed MCP launch is read-only',
+      )
+    for (const name of ['slack_read_thread', 'slack_post_message', 'slack_close_buttons'])
       expect(() => authorizeInternalMcpTool(cap.token, name, { text: 'hi', workspace_id: 'other' })).toThrow(
         /read-only|bound to its launch workspace/,
       )
+  })
+  it('F5: every non-read-only Slack tool is allowed in Plan and refused when restricted', async () => {
+    const { SLACK_TOOLS } = await import('../shared/slack-tools.js')
+    const plan = createInternalMcpCapability({ workspaceId: 'own', sessionId: 's', readOnly: true, restricted: false })
+    const restricted = createInternalMcpCapability({
+      workspaceId: 'own',
+      sessionId: 's',
+      readOnly: true,
+      restricted: true,
+    })
+    const writes = SLACK_TOOLS.filter((t) => !t.annotations?.readOnlyHint).map((t) => t.name)
+    expect(writes.length).toBeGreaterThan(0)
+    for (const name of writes) {
+      expect(() => authorizeInternalMcpTool(plan.token, name, {})).not.toThrow()
+      expect(() => authorizeInternalMcpTool(restricted.token, name, {})).toThrow('This managed MCP launch is read-only')
+    }
+  })
+  it('slack_close_buttons is managed only and absent from restricted dispatcher lists', async () => {
+    const { EXTERNAL_TOOL_CATALOGUE } = await import('../server/services/external-mcp-credentials-service.js')
+    expect(EXTERNAL_TOOL_CATALOGUE.map((t) => t.name)).not.toContain('slack_close_buttons')
+    const { SLACK_TOOLS } = await import('../shared/slack-tools.js')
+    const close = SLACK_TOOLS.find((t) => t.name === 'slack_close_buttons')
+    // Handoff and final-review dispatcher lists keep only read-only tools (plus their own report tool).
+    expect(close?.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false })
   })
   it('the Plan exception covers slack_post_message only', () => {
     const plan = createInternalMcpCapability({
@@ -113,7 +147,7 @@ describe('managed MCP launch authorization', () => {
       readOnly: false,
       restricted: false,
     })
-    for (const name of ['slack_read_thread', 'slack_post_message'])
+    for (const name of ['slack_read_thread', 'slack_post_message', 'slack_close_buttons'])
       expect(() => authorizeInternalMcpTool(cap.token, name, { workspace_id: 'other' })).toThrow(
         'Tool is bound to its launch workspace',
       )

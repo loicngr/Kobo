@@ -1,3 +1,6 @@
+import { constants as fsConstants } from 'node:fs'
+import fs from 'node:fs/promises'
+import path from 'node:path'
 import {
   attachmentFormat,
   MAX_ATTACHMENT_BYTES,
@@ -5,10 +8,12 @@ import {
   MAX_ATTACHMENTS_BYTES,
 } from '../../../shared/attachments.js'
 import type { McpAttachment } from '../../../shared/mcp-attachments.js'
+import type { SlackIgnoreReason, SlackInboundOutcome } from '../../../shared/slack-inbound-outcome.js'
 import type { SlackQuestionMirror } from '../../../shared/slack-question-mirror.js'
 import { neutraliseSlackMentions as neutralise, type SlackButton } from '../../../shared/slack-tools.js'
 import type { MessageSource } from '../../../shared/workspace-message-types.js'
 import { getDb } from '../../db/index.js'
+import { resolvePathInside } from '../../utils/safe-path.js'
 import { withWorkspaceLifecycleGuard } from '../../utils/workspace-lifecycle-guard.js'
 import {
   answerPendingQuestion,
@@ -36,6 +41,7 @@ import { getSlackCredentials } from './slack-credentials.js'
 import { classifyInbound, type InboundEvent } from './slack-inbound.js'
 import {
   claimSlackMessageForDispatch,
+  closeSlackButtonMessage,
   countQueuedSlackMessages,
   countThreadMessagesBefore,
   expireQueuedSlackMessages,
@@ -51,6 +57,7 @@ import {
   promoteSlackContextMessage,
   reconcileSlackMessages,
   recordSlackClick,
+  reopenSlackButtonMessage,
   type SlackFileRef,
   type SlackMessageRow,
   setSlackMessageState,
@@ -92,6 +99,10 @@ export interface SlackStatus {
   botName?: string
   teamName?: string
   error?: SlackErrorCode
+  /** Enabled with nobody allowed: every message and click is ignored. */
+  allowListEmpty: boolean
+  /** The most recent addressed inbound message or click seen by this process. No id, name, channel or text. */
+  lastInbound?: SlackInboundOutcome
 }
 
 const NOTICE = {
@@ -123,6 +134,8 @@ let generation = 0
 let timer: ReturnType<typeof setInterval> | null = null
 let lifecycle: Promise<void> = Promise.resolve()
 let lastFastReconnect = 0
+/** Aborted when a stop begins; renewed by each start. */
+let stopSignal = new AbortController()
 const active = new Set<Promise<unknown>>()
 const drains = new Map<string, Promise<void>>()
 const hourglassed = new Set<string>()
@@ -135,6 +148,28 @@ const rowKey = (row: { channelId: string; ts: string }) => `${row.channelId}:${r
 /** One question-mirror pass per workspace at a time; a change during a pass schedules one more. */
 const mirrorRuns = new Map<string, { again: boolean }>()
 let unsubscribePending: (() => void) | null = null
+let lastInbound: SlackInboundOutcome | undefined
+/** Private: the stored row `lastInbound` describes, so its later transitions update it. Never exposed. */
+let lastInboundRow: string | undefined
+function saw(outcome: SlackInboundOutcome['outcome'], reason?: SlackIgnoreReason, row?: ReactableRow): void {
+  lastInbound = { at: new Date().toISOString(), outcome, ...(reason ? { reason } : {}) }
+  lastInboundRow = row ? rowKey(row) : undefined
+}
+/** A stored row left the queue: `lastInbound` follows it while it still describes that row, keeping its time. */
+function settled(row: ReactableRow, outcome: SlackInboundOutcome['outcome']): void {
+  if (lastInbound && lastInboundRow === rowKey(row)) lastInbound = { ...lastInbound, outcome }
+}
+/** The reaction that replaces `eyes` once the agent has finished; other statuses keep `eyes`. */
+const FINAL_REACTION: Record<string, string> = {
+  idle: 'white_check_mark',
+  completed: 'white_check_mark',
+  error: 'warning',
+  quota: 'warning',
+}
+// shortcut: in-memory only, a restart leaves eyes on messages being worked on; persist if that matters.
+/** Delivered inbound rows still carrying `eyes`, per workspace, with their delivery time. */
+const MAX_WORKING = 200
+const working = new Map<string, { channelId: string; ts: string; at: number }[]>()
 
 /** Logs carry only a code or an error name: Slack payloads, tokens and URLs never reach them. */
 function errorCode(err: unknown): string {
@@ -231,6 +266,7 @@ async function doStart(createApi: typeof createSlackApi, gen: number): Promise<v
   const credentials = getSlackCredentials()
   if (!getGlobalSettings().slackEnabled || !credentials) return
   stopping = false
+  stopSignal = new AbortController()
   api = createApi(credentials)
   if (!reconciled) {
     // Only rows left by a previous process can be dispatching before the first start.
@@ -258,6 +294,8 @@ async function doStop(): Promise<void> {
   connected = false
   lastError = undefined
   channelNames.clear()
+  // The next start may use another app or channel: never swap reactions on messages of this one.
+  working.clear()
   if (a) await a.disconnect().catch((err) => console.warn(`[slack] disconnect failed: ${errorCode(err)}`))
 }
 
@@ -269,12 +307,14 @@ export function startSlack(createApi: typeof createSlackApi = createSlackApi): P
 export function stopSlack(): Promise<void> {
   generation++
   stopping = true
+  stopSignal.abort()
   return serialize(doStop)
 }
 
 export function restartSlack(): Promise<void> {
   const gen = ++generation
   stopping = true
+  stopSignal.abort()
   return serialize(async () => {
     await doStop()
     await doStart(createApiFn, gen)
@@ -282,12 +322,16 @@ export function restartSlack(): Promise<void> {
 }
 
 export function getSlackStatus(): SlackStatus {
+  const settings = getGlobalSettings()
+  const enabled = settings.slackEnabled === true
   return {
     configured: getSlackCredentials() !== null,
-    enabled: getGlobalSettings().slackEnabled === true,
+    enabled,
     connected,
     ...(connected && identity ? { botName: identity.botName, teamName: identity.teamName } : {}),
     ...(!connected && lastError ? { error: lastError } : {}),
+    allowListEmpty: enabled && !settings.slackAllowedUserIds?.length,
+    ...(lastInbound ? { lastInbound } : {}),
   }
 }
 
@@ -310,12 +354,23 @@ async function processEvent(event: InboundEvent, a: SlackApi, bot: SlackIdentity
     workspaceId,
     isTrackedThread,
   })
-  if (decision.action === 'ignore') return
-  if (decision.action === 'notify-unlinked') return notifyUnlinked(event, decision.threadTs)
+  if (decision.action === 'ignore') {
+    // Only messages addressed to Kōbō carry a reason: chatter, edits, joins, other bots and the bot's own posts
+    // must not hide the outcome of the last message sent to it.
+    if (decision.reason) saw('ignored', decision.reason)
+    return
+  }
+  if (decision.action === 'notify-unlinked') {
+    saw('ignored', 'channel-not-linked')
+    return notifyUnlinked(event, decision.threadTs)
+  }
   const userId = event.user as string // classifyInbound only delivers authored messages
   const userName = await safeUserName(a, userId)
   const ws = workspaceId ? getWorkspace(workspaceId) : null
-  if (!ws) return notifyUnlinked(event, decision.threadTs)
+  if (!ws) {
+    saw('ignored', 'channel-not-linked')
+    return notifyUnlinked(event, decision.threadTs)
+  }
   const files = event.files ?? []
   if (
     !ws.archivedAt &&
@@ -323,7 +378,7 @@ async function processEvent(event: InboundEvent, a: SlackApi, bot: SlackIdentity
     decision.text &&
     (await takeTextAnswer(event, decision, ws.id, userName))
   )
-    return
+    return saw('delivered')
   const reason =
     ws.archivedAt || ws.worktreePurgedAt
       ? NOTICE.archived
@@ -345,7 +400,10 @@ async function processEvent(event: InboundEvent, a: SlackApi, bot: SlackIdentity
   }
   if (reason) {
     // A redelivered event for an already-stored message stays fully silent.
-    if (store({ ...row, state: 'rejected' })) await notice(row.channelId, row.threadTs, reason)
+    if (store({ ...row, state: 'rejected' })) {
+      saw('rejected')
+      await notice(row.channelId, row.threadTs, reason)
+    }
     return
   }
   const context = decision.fetchContext ? await fetchContext(a, row) : []
@@ -353,6 +411,7 @@ async function processEvent(event: InboundEvent, a: SlackApi, bot: SlackIdentity
   // (channel, ts) is the single dedupe point between redeliveries.
   if (!store({ ...row, state: 'queued' })) return
   for (const contextRow of context) insertSlackMessage(contextRow)
+  saw('queued', undefined, row)
   await drainSlackQueue(ws.id)
   if (getSlackMessageState(row.channelId, row.ts) === 'queued') await hourglass(row)
 }
@@ -367,15 +426,19 @@ export function handleSlackClick(click: SlackClick): Promise<void> {
 async function processClick(click: SlackClick, a: SlackApi): Promise<void> {
   const settings = getGlobalSettings()
   // Silent for everyone else: nothing stored, nothing posted, no API call.
-  if (!settings.slackEnabled || !settings.slackAllowedUserIds.includes(click.user)) return
+  if (!settings.slackEnabled) return
+  // In memory only: no API call and no database write for someone outside the allow-list.
+  if (!settings.slackAllowedUserIds.includes(click.user)) return saw('ignored', 'not-allowed')
+  // Resolved before the look-up: no await between the open check and recordSlackClick.
+  const userName = await safeUserName(a, click.user)
   const workspaceId = getWorkspaceIdForSlackChannel(click.channel)
   const message = workspaceId ? getSlackButtonMessage(click.channel, click.messageTs) : undefined
   // The label comes from what Kōbō stored, never from the payload.
   const label = message?.workspaceId === workspaceId ? message?.buttons[click.index] : undefined
-  if (!message || label === undefined || (!message.multiple && message.answered)) return
+  if (!workspaceId) return saw('ignored', 'channel-not-linked')
+  if (!message || label === undefined || message.answered) return saw('ignored', 'unsupported-message')
   const ws = getWorkspace(message.workspaceId)
-  if (!ws) return
-  const userName = await safeUserName(a, click.user)
+  if (!ws) return saw('ignored', 'channel-not-linked')
   const reason =
     ws.archivedAt || ws.worktreePurgedAt
       ? NOTICE.archived
@@ -397,8 +460,13 @@ async function processClick(click: SlackClick, a: SlackApi): Promise<void> {
     multiple: message.multiple,
   }
   // One synchronous call: the single-answer compare-and-set and the row insert cannot interleave.
-  if (!recordSlackClick({ ...row, state: reason ? 'rejected' : 'queued' }, message.ts, !reason)) return
-  if (reason) return notice(row.channelId, row.threadTs, reason)
+  if (!recordSlackClick({ ...row, state: reason ? 'rejected' : 'queued' }, message.ts, !reason))
+    return saw('ignored', 'unsupported-message')
+  if (reason) {
+    saw('rejected')
+    return notice(row.channelId, row.threadTs, reason)
+  }
+  saw('queued', undefined, row)
   if (!message.multiple)
     // Best effort and tracked, but never awaited: a slow Slack API must not delay delivery.
     void track(
@@ -521,8 +589,9 @@ function forget(row: { channelId: string; ts: string }): void {
 }
 
 /** The row ended without delivery (rejected, unknown, expired, unlinked). */
-async function leftQueue(row: ReactableRow): Promise<void> {
+async function leftQueue(row: ReactableRow, outcome: 'rejected' | 'uncertain' = 'rejected'): Promise<void> {
   forget(row)
+  settled(row, outcome)
   if (row.clickOf === undefined) await unreact(row.channelId, row.ts, HOURGLASS)
 }
 
@@ -659,7 +728,7 @@ async function deliverRow(a: SlackApi, row: SlackMessageRow): Promise<'done' | '
       if (!dispatched) return block(row)
       // Possibly delivered: never retried automatically.
       setSlackMessageState(row.channelId, row.ts, 'unknown')
-      await leftQueue(row)
+      await leftQueue(row, 'uncertain')
       await notice(row.channelId, row.threadTs, NOTICE.uncertain)
       return 'done'
     }
@@ -673,7 +742,12 @@ async function deliverRow(a: SlackApi, row: SlackMessageRow): Promise<'done' | '
     markSlackMessageDelivered(row.channelId, row.ts)
   }
   forget(row)
+  settled(row, 'delivered')
   if (row.clickOf === undefined) {
+    const list = working.get(row.workspaceId) ?? []
+    list.push({ channelId: row.channelId, ts: row.ts, at: Date.now() })
+    if (list.length > MAX_WORKING) list.shift() // the oldest simply keeps eyes
+    working.set(row.workspaceId, list)
     await unreact(row.channelId, row.ts, HOURGLASS)
     await react(row.channelId, row.ts, 'eyes')
   } else if (row.multiple) await react(row.channelId, row.clickOf, 'eyes') // idempotent on the bot message
@@ -696,8 +770,41 @@ export async function runSlackTick(): Promise<void> {
     await Promise.all(listWorkspacesWithQueuedSlackMessages().map((id) => drainSlackQueue(id)))
     if (stopping) return
     await Promise.all(listSlackQuestionWorkspaces().map((id) => scheduleQuestionMirror(id)))
+    if (stopping) return
+    await settleWorkingReactions()
   } catch (err) {
     console.error(`[slack] queue timer failed: ${errorCode(err)}`)
+  }
+}
+
+/** Swaps `eyes` for the final reaction once the workspace is no longer busy. Best effort, never retried. */
+async function settleWorkingReactions(): Promise<void> {
+  // A row delivered within the last tick may have restarted an idle agent that is not busy yet.
+  const cutoff = Date.now() - TICK_MS
+  for (const workspaceId of [...working.keys()]) {
+    if (stopping) return
+    // Read and take the rows in one synchronous step: a concurrent tick, a new delivery or an unlink
+    // during the awaits below then sees the current list, never a stale copy.
+    const list = working.get(workspaceId)
+    if (!list) continue
+    const ws = getWorkspace(workspaceId)
+    if (!ws) {
+      working.delete(workspaceId)
+      continue
+    }
+    const final = FINAL_REACTION[ws.status]
+    if (!final) continue
+    const done = list.filter((r) => r.at <= cutoff)
+    if (!done.length) continue
+    const rest = list.filter((r) => r.at > cutoff)
+    if (rest.length) working.set(workspaceId, rest)
+    else working.delete(workspaceId)
+    for (const r of done) {
+      // Rows not swapped yet keep eyes, like after a restart.
+      if (stopping) return
+      await unreact(r.channelId, r.ts, 'eyes')
+      await react(r.channelId, r.ts, final)
+    }
   }
 }
 
@@ -714,6 +821,7 @@ export async function linkSlackChannel(workspaceId: string, channelId: string | 
     setWorkspaceSlackChannel(workspaceId, channelId),
   )
   broadcastAll('workspace:slack-channel-updated', { workspaceId, slackChannelId: channelId })
+  working.delete(workspaceId)
   for (const row of dropped) {
     await leftQueue(row)
     await notice(row.channelId, row.threadTs, NOTICE.unlinkedQueued)
@@ -737,35 +845,187 @@ function linkedChannel(workspaceId: string): { channelId: string; a: SlackApi; b
   return { channelId, a, bot }
 }
 
+/** Settles with `p`, or rejects as soon as a stop begins; an abandoned `p` keeps a no-op catch. */
+function untilStopped<T>(p: Promise<T>): Promise<T> {
+  p.catch(() => undefined)
+  const signal = stopSignal.signal
+  return new Promise<T>((resolve, reject) => {
+    const onStop = () => reject(new Error('Slack is stopping'))
+    if (signal.aborted) return onStop()
+    signal.addEventListener('abort', onStop, { once: true })
+    p.then(resolve, reject).finally(() => signal.removeEventListener('abort', onStop))
+  })
+}
+
+/** A fixed, agent-facing error about files sent to Slack; never carries Slack error text. */
+export class SlackFileError extends Error {}
+
+const SLACK_FILE_BYTES = 20 * 1024 * 1024
+const SLACK_FILES_BYTES = 50 * 1024 * 1024
+const READ_CHUNK = 1024 * 1024
+const NO_FOLLOW = fsConstants.O_NOFOLLOW ?? 0
+const NON_BLOCK = fsConstants.O_NONBLOCK ?? 0
+
+/** Reads worktree files for upload; a path escaping the worktree ('..' or a symlink) is "not found". */
+async function readWorktreeFiles(workspaceId: string, paths: string[]): Promise<{ name: string; data: Buffer }[]> {
+  const root = getWorkspace(workspaceId)?.worktreePath
+  const out: { name: string; data: Buffer }[] = []
+  let total = 0
+  for (const p of paths) {
+    const notFound = () => new SlackFileError(`Slack file not found in the worktree: ${p}`)
+    const tooLarge = () => new SlackFileError(`Slack file is too large: ${p}`)
+    if (!root) throw notFound()
+    const limit = Math.min(SLACK_FILE_BYTES, SLACK_FILES_BYTES - total)
+    let fh: fs.FileHandle
+    try {
+      // The resolved leaf is opened with O_NOFOLLOW (a leaf swapped for a symlink fails), O_NONBLOCK keeps
+      // a FIFO from blocking. A parent swapped for a symlink before the open is caught just below.
+      fh = await fs.open(resolvePathInside(root, p), fsConstants.O_RDONLY | NO_FOLLOW | NON_BLOCK)
+    } catch {
+      throw notFound()
+    }
+    const chunks: Buffer[] = []
+    let size = 0
+    try {
+      const stat = await fh.stat().catch(() => null)
+      if (!stat?.isFile()) throw notFound()
+      // Guarantee: the opened file is the very file (same device and inode) that the path resolves to,
+      // inside the worktree, after the open. A hard link inside the worktree counts as a worktree file.
+      const resolved = await Promise.resolve()
+        .then(() => fs.stat(resolvePathInside(root, p)))
+        .catch(() => null)
+      if (resolved?.dev !== stat.dev || resolved.ino !== stat.ino) throw notFound()
+      if (stat.size > limit) throw tooLarge()
+      // Never more than limit + 1 bytes, whatever the stat said: the file may grow meanwhile.
+      for (;;) {
+        const chunk = Buffer.alloc(Math.min(READ_CHUNK, limit + 1 - size))
+        const { bytesRead } = await fh.read(chunk, 0, chunk.length, null).catch(() => {
+          throw notFound()
+        })
+        if (!bytesRead) break
+        chunks.push(chunk.subarray(0, bytesRead))
+        size += bytesRead
+        if (size > limit) throw tooLarge()
+      }
+    } finally {
+      await fh.close().catch(() => undefined)
+    }
+    if (!size) throw new SlackFileError(`Slack file is empty: ${p}`)
+    total += size
+    out.push({ name: path.basename(p), data: Buffer.concat(chunks, size) })
+  }
+  return out
+}
+
 export function postSlackFromAgent(
   workspaceId: string,
   text: string,
   threadTs?: string,
-  options?: { buttons: SlackButton[]; multiple: boolean },
-): Promise<{ ts: string }> {
+  options?: { buttons: SlackButton[]; multiple: boolean } | { files: string[] },
+): Promise<{ ts: string; files?: number }> {
   return track(
     (async () => {
       const { channelId, a, bot } = linkedChannel(workspaceId)
       if (threadTs !== undefined && !isTrackedThread(channelId, threadTs)) throw new Error('Unknown Slack thread')
+      // Read before posting: a refused file leaves nothing posted.
+      const files = options && 'files' in options ? await readWorktreeFiles(workspaceId, options.files) : undefined
+      // The link may have changed during the read: post nothing to a channel the workspace no longer holds.
+      // Still the same channel and the same client (a restart during the read swaps it).
+      const unchanged = () => {
+        try {
+          const now = linkedChannel(workspaceId)
+          return now.channelId === channelId && now.a === a
+        } catch {
+          return false
+        }
+      }
+      if (files) {
+        if (!unchanged()) throw new Error('Slack is not available for this workspace')
+        if (threadTs !== undefined && !isTrackedThread(channelId, threadTs)) throw new Error('Unknown Slack thread')
+      }
       const clean = neutralise(text)
-      const buttons = options?.buttons.map((b) => ({ ...b, label: neutralise(b.label) }))
+      const buttons =
+        options && 'buttons' in options ? options.buttons.map((b) => ({ ...b, label: neutralise(b.label) })) : undefined
       const ts = buttons
         ? await a.postMessage(channelId, clean, threadTs, buttons)
         : await a.postMessage(channelId, clean, threadTs)
-      insertSlackMessage({
-        channelId,
-        ts,
-        threadTs: threadTs ?? ts,
-        workspaceId,
-        userId: bot.botUserId,
-        userName: bot.botName,
-        text: clean,
-        direction: 'out',
-        state: 'sent',
-        files: [],
-        ...(buttons ? { buttons: buttons.map((b) => b.label), multiple: options?.multiple === true } : {}),
-      })
-      return { ts }
+      // The agent must not post the text again when only what follows failed.
+      const posted = `; the text is posted (ts ${ts}), do not post it again`
+      try {
+        insertSlackMessage({
+          channelId,
+          ts,
+          threadTs: threadTs ?? ts,
+          workspaceId,
+          userId: bot.botUserId,
+          userName: bot.botName,
+          text: clean,
+          direction: 'out',
+          state: 'sent',
+          files: [],
+          ...(buttons && options && 'multiple' in options
+            ? { buttons: buttons.map((b) => b.label), multiple: options.multiple === true }
+            : {}),
+        })
+      } catch (err) {
+        console.warn(`[slack] record failed: ${errorCode(err)}`)
+        throw new SlackFileError(`Slack message was posted but could not be recorded${posted}`)
+      }
+      if (!files) return { ts }
+      // The text stays posted whatever happens next; nothing is retried.
+      let sent = 0
+      const failed = () =>
+        new SlackFileError(`Slack file upload failed after ${sent} of ${files.length} files${posted}`)
+      for (const file of files) {
+        // An unlink, re-link or restart since the text was posted: the files must not go to that channel.
+        if (!unchanged()) throw failed()
+        try {
+          // A stop abandons the file in flight at once: Slack never holds up stop, restart or shutdown.
+          await untilStopped(a.uploadFile(channelId, threadTs ?? ts, file.name, file.data))
+        } catch (err) {
+          console.warn(`[slack] file upload failed: ${errorCode(err)}`)
+          if (err instanceof SlackApiError && err.code === 'missing_scope')
+            throw new SlackFileError(`The Slack app lacks the files:write permission${posted}`)
+          throw failed()
+        }
+        sent++
+      }
+      return { ts, files: sent }
+    })(),
+  )
+}
+
+/**
+ * Closes the buttons of a message this workspace posted; false when a click or an earlier close won.
+ * The outcome reflects Slack: when the update fails the close is undone and the call fails, so it can be retried.
+ */
+export function closeSlackButtons(workspaceId: string, messageTs: string, note?: string): Promise<{ closed: boolean }> {
+  return track(
+    (async () => {
+      const { channelId, a } = linkedChannel(workspaceId)
+      const message = getSlackButtonMessage(channelId, messageTs)
+      if (message?.workspaceId !== workspaceId) throw new Error('Unknown Slack message')
+      // Synchronous from the look-up to here: the compare-and-set decides the single winner.
+      const at = new Date().toISOString()
+      const rejected = closeSlackButtonMessage(channelId, messageTs, workspaceId, at)
+      if (!rejected) return { closed: false }
+      try {
+        await a.replaceButtons(
+          channelId,
+          messageTs,
+          message.text,
+          note === undefined ? 'Answered in the thread.' : neutralise(note),
+        )
+      } catch (err) {
+        console.warn(`[slack] update failed: ${errorCode(err)}`)
+        reopenSlackButtonMessage(channelId, messageTs, workspaceId, at, rejected)
+        // The requeued clicks are delivered as if the close never happened.
+        if (rejected.length) void drainSlackQueue(workspaceId)
+        throw new Error('Slack request failed')
+      }
+      // The clicks the close rejected left the queue.
+      for (const ts of rejected) settled({ channelId, ts }, 'rejected')
+      return { closed: true }
     })(),
   )
 }
@@ -948,7 +1208,8 @@ export function handleSlackQuestionAction(action: SlackQuestionAction): Promise<
 async function processQuestionAction(action: SlackQuestionAction, a: SlackApi): Promise<void> {
   const settings = getGlobalSettings()
   // Silent for everyone else: nothing stored, nothing posted, controls untouched.
-  if (!settings.slackEnabled || !settings.slackAllowedUserIds.includes(action.user)) return
+  if (!settings.slackEnabled) return
+  if (!settings.slackAllowedUserIds.includes(action.user)) return saw('ignored', 'not-allowed')
   // Resolved first: no await may sit between the head check and the compare-and-set.
   const by = await safeUserName(a, action.user)
   const row = getSlackQuestionByMessage(action.channel, action.messageTs)
@@ -962,6 +1223,7 @@ async function processQuestionAction(action: SlackQuestionAction, a: SlackApi): 
   if (!values.length || values.some((v) => v === undefined) || (!q.multiple && values.length !== 1)) return
   const answer: CollectedAnswer = { values: values as string[], text: false, by }
   if (!claimSlackQuestionAnswer(row, answer, row.questionIndex === questions.length - 1)) return
+  saw('delivered')
   await answered(row, questions, answer, action.user)
 }
 

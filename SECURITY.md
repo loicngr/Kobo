@@ -125,6 +125,8 @@ The allow-list of Slack member IDs (`slackAllowedUserIds`) is an operator-level 
 
 Earlier thread messages stored as context are untrusted background and are marked as such when an agent reads them with `slack_read_thread`. The Slack tools are managed and workspace-bound, are not exposed to external MCP clients, and posting is refused in restricted review and handoff launches. Agent posts neutralise `@channel`, `@here` and `@everyone`. When a workspace's question mirror setting allows it, an allow-listed Slack user can answer that workspace agent's blocking question from Slack; approvals of permission requests and secret values always stay in Kōbō.
 
+An agent allowed to post to Slack can also send files of its own worktree to the linked channel; paths are confined to the worktree, including through symlinks, and the file content is never logged.
+
 File downloads are restricted to HTTPS Slack hosts, with every redirect re-validated so the bearer token is never sent elsewhere. Tokens, raw Slack errors and Slack file URLs are not written to logs, HTTP responses, chat events or tool results. Messages sent while Kōbō is offline are lost, not replayed. Run one Kōbō instance per Slack app. See [CONFIGURATION.md](./CONFIGURATION.md#slack-integration).
 
 ## Development checks

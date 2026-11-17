@@ -11,7 +11,29 @@
         data-test="slack-enabled"
         @update:model-value="toggleEnabled"
       />
-      <div class="text-caption q-mt-sm" role="status" data-test="slack-status">{{ statusLine }}</div>
+      <div class="row items-center no-wrap q-gutter-x-xs q-mt-sm">
+        <div class="text-caption" role="status" data-test="slack-status">{{ statusLine }}</div>
+        <q-btn
+          flat
+          dense
+          round
+          size="sm"
+          icon="refresh"
+          :aria-label="$t('slack.refreshStatus')"
+          :disable="busy"
+          data-test="slack-refresh-status"
+          @click="refreshStatus"
+        />
+      </div>
+      <div
+        v-if="slack.status?.allowListEmpty"
+        class="text-caption text-kobo-warning q-mt-xs"
+        role="alert"
+        data-test="slack-allow-list-empty"
+      >{{ $t('slack.allowListEmpty') }}</div>
+      <div v-if="slack.status?.enabled" class="text-caption text-kobo-3 q-mt-xs" data-test="slack-last-inbound">
+        {{ lastInboundLine }}
+      </div>
     </div>
 
     <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
@@ -116,6 +138,7 @@
               <pre class="q-pa-sm rounded-borders bg-black text-kobo-2 overflow-auto text-caption" data-test="slack-manifest">{{ manifest }}</pre>
               <q-btn flat dense no-caps icon="content_copy" :label="$t('common.copy')" class="q-mb-sm" data-test="slack-copy-manifest" @click="copyManifest" />
               <div class="q-mb-xs" data-test="slack-guide-interactivity">{{ $t('slack.guideInteractivity') }}</div>
+              <div class="q-mb-xs" data-test="slack-guide-files-write">{{ $t('slack.guideFilesWrite') }}</div>
             </template>
             <div class="q-mb-md" />
           </template>
@@ -131,14 +154,16 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { SLACK_APP_MANIFEST } from '../../../shared/slack-manifest'
 import { useSettingsStore } from '../stores/settings'
-import { type SlackErrorCode, useSlackStore } from '../stores/slack'
+import { type SlackErrorCode, type SlackIgnoreReason, type SlackInboundOutcome, useSlackStore } from '../stores/slack'
 import { ApiError } from '../utils/api'
 import { copyToClipboard } from '../utils/clipboard'
+import { useTimeAgo } from '../utils/formatters'
 
 const $q = useQuasar()
 const { t } = useI18n()
 const settings = useSettingsStore()
 const slack = useSlackStore()
+const { timeAgo } = useTimeAgo()
 
 const manifest = SLACK_APP_MANIFEST
 const guideSteps = [1, 2, 3, 4, 5, 6, 7]
@@ -163,6 +188,27 @@ const statusLine = computed(() => {
   if (!s.enabled) return t('slack.status.disabled')
   if (s.connected) return t('slack.status.connected', { bot: s.botName ?? '', team: s.teamName ?? '' })
   return s.error ? t(`slack.error.${s.error satisfies SlackErrorCode}`) : t('slack.status.disconnected')
+})
+
+// `satisfies`: a new server value fails the type check instead of rendering a raw key.
+const IGNORED_KEYS = {
+  'not-allowed': 'ignoredNotAllowed',
+  'channel-not-linked': 'ignoredChannelNotLinked',
+  'unsupported-message': 'ignoredUnsupported',
+} satisfies Record<SlackIgnoreReason, string>
+const OUTCOME_KEYS = {
+  delivered: 'delivered',
+  queued: 'queued',
+  rejected: 'rejected',
+  uncertain: 'uncertain',
+} satisfies Record<Exclude<SlackInboundOutcome['outcome'], 'ignored'>, string>
+
+const lastInboundLine = computed(() => {
+  const last = slack.status?.lastInbound
+  if (!last) return t('slack.lastInbound.none')
+  const key =
+    last.outcome === 'ignored' ? IGNORED_KEYS[last.reason ?? 'unsupported-message'] : OUTCOME_KEYS[last.outcome]
+  return t('slack.lastInbound.line', { time: timeAgo(last.at), outcome: t(`slack.lastInbound.${key}`) })
 })
 
 async function refreshStatus() {

@@ -60,6 +60,7 @@ function fakeApi(): { api: SlackApi; reactions: string[][] } {
     threadReplies: async () => [],
     userName: async () => 'alice',
     downloadFile: async () => PNG,
+    uploadFile: async () => undefined,
   }
   return { api, reactions }
 }

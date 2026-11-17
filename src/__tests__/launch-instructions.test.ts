@@ -151,6 +151,9 @@ describe('Slack launch instructions', () => {
     expect(plan).toContain('slack_post_message')
     expect(plan).toContain('slack_read_thread')
     expect(plan).toContain('mrkdwn')
+    expect(plan).toContain('slack_close_buttons')
+    expect(plan).toContain("closing a question's buttons are permitted in Plan launches too")
+    expect(plan).toContain("find a question's `ts` and whether its buttons are open")
     expect(plan).not.toContain('C123')
     // Kōbō never relays the agent's output; its only automatic posts are mirrored questions and approval notices.
     expect(plan).not.toContain('Nothing is sent to Slack automatically')
@@ -163,6 +166,7 @@ describe('Slack launch instructions', () => {
     ]) {
       expect(restricted).toContain('slack_read_thread')
       expect(restricted).not.toContain('slack_post_message')
+      expect(restricted).not.toContain('slack_close_buttons')
     }
     const unlinked = prompt({})
     expect(unlinked).not.toContain('slack_post_message')

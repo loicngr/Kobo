@@ -24,6 +24,8 @@ export interface SlackMessageRow {
   createdAt: string
   /** Labels of the buttons on a bot message, in posting order. */
   buttons?: string[]
+  /** On a bot message with buttons: true once answered or closed. */
+  buttonsClosed?: boolean
   /** Set on a bot message with buttons and on its click rows. */
   multiple?: boolean
   /** On a click row: the ts of the clicked bot message. The row ts is not a real Slack ts. */
@@ -43,6 +45,7 @@ interface DbRow {
   files: string
   created_at: string
   buttons: string | null
+  answered_at: string | null
   buttons_multiple: number
   click_of: string | null
 }
@@ -78,7 +81,7 @@ function toRow(r: DbRow): SlackMessageRow {
     state: r.state,
     files: parseFiles(r.files),
     createdAt: r.created_at,
-    ...(r.buttons !== null ? { buttons: parseLabels(r.buttons) } : {}),
+    ...(r.buttons !== null ? { buttons: parseLabels(r.buttons), buttonsClosed: r.answered_at !== null } : {}),
     ...(r.buttons !== null || r.click_of !== null ? { multiple: r.buttons_multiple === 1 } : {}),
     ...(r.click_of !== null ? { clickOf: r.click_of } : {}),
   }
@@ -238,12 +241,72 @@ export function getSlackButtonMessage(
   }
 }
 
+/**
+ * Closes the buttons of a message of this workspace and channel, once. Returns the ts of the queued clicks
+ * it rejected, or null when the message was already answered or closed.
+ */
+export function closeSlackButtonMessage(
+  channelId: string,
+  ts: string,
+  workspaceId: string,
+  at = new Date().toISOString(),
+): string[] | null {
+  const db = getDb()
+  // One transaction: the queued clicks of this message are rejected with the close, so no drain can deliver them.
+  return db.transaction(() => {
+    const won =
+      db
+        .prepare(
+          `UPDATE slack_messages SET answered_at = ?, updated_at = ? WHERE channel_id = ? AND ts = ? AND workspace_id = ?
+           AND direction = 'out' AND buttons IS NOT NULL AND answered_at IS NULL
+           AND EXISTS (SELECT 1 FROM workspaces WHERE id = ? AND slack_channel_id = ?)`,
+        )
+        .run(at, at, channelId, ts, workspaceId, workspaceId, channelId).changes === 1
+    if (!won) return null
+    return (
+      db
+        .prepare(
+          "UPDATE slack_messages SET state = 'rejected', updated_at = ? WHERE channel_id = ? AND workspace_id = ? AND click_of = ? AND state = 'queued' RETURNING ts",
+        )
+        .all(at, channelId, workspaceId, ts) as { ts: string }[]
+    )
+      .map((r) => r.ts)
+      .sort()
+  })()
+}
+
+/**
+ * Undoes a close made with exactly this `at`; a close or answer by anyone else is left alone. In the same
+ * transaction, the clicks that close rejected go back to queued, each only while it is still rejected.
+ */
+export function reopenSlackButtonMessage(
+  channelId: string,
+  ts: string,
+  workspaceId: string,
+  at: string,
+  rejectedClicks: string[],
+): void {
+  const db = getDb()
+  db.transaction(() => {
+    const reopened = db
+      .prepare(
+        'UPDATE slack_messages SET answered_at = NULL WHERE channel_id = ? AND ts = ? AND workspace_id = ? AND answered_at = ?',
+      )
+      .run(channelId, ts, workspaceId, at).changes
+    if (!reopened) return
+    const requeue = db.prepare(
+      "UPDATE slack_messages SET state = 'queued', updated_at = ? WHERE channel_id = ? AND ts = ? AND workspace_id = ? AND click_of = ? AND state = 'rejected'",
+    )
+    const now = new Date().toISOString()
+    for (const click of rejectedClicks) requeue.run(now, channelId, click, workspaceId, ts)
+  })()
+}
+
 const LOST_CLICK = Symbol('lost click')
 
 /**
  * Stores a click row for the bot message `messageTs`, only while that message still belongs to the
- * row workspace, the workspace still holds the channel and, for a single-answer message, it is not
- * answered yet. With `claimAnswer`, a single-answer message is answered by compare-and-set in the
+ * row workspace, the workspace still holds the channel and it is not answered or closed yet. With `claimAnswer`, a single-answer message is answered by compare-and-set in the
  * same transaction: of two racing clicks only one can win. Returns false for a losing, repeated or
  * stale click; nothing is stored then.
  */
@@ -259,9 +322,7 @@ export function recordSlackClick(
   try {
     return db.transaction(() => {
       const message = db
-        .prepare(
-          `SELECT buttons_multiple FROM slack_messages WHERE ${owned} AND (buttons_multiple = 1 OR answered_at IS NULL)`,
-        )
+        .prepare(`SELECT buttons_multiple FROM slack_messages WHERE ${owned} AND answered_at IS NULL`)
         .get(...params) as { buttons_multiple: number } | undefined
       if (!message) return false
       if (!insertSlackMessage(row)) return false

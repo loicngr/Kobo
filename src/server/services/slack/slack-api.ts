@@ -74,12 +74,16 @@ export interface SlackApi {
   threadReplies(channelId: string, threadTs: string, limit: number): Promise<InboundEvent[]>
   userName(userId: string): Promise<string>
   downloadFile(file: SlackFileRef): Promise<Buffer>
+  /** Uploads one file as a reply in a thread of the channel. */
+  uploadFile(channelId: string, threadTs: string, filename: string, data: Buffer): Promise<void>
 }
 
 const AUTH_ERRORS = new Set(['invalid_auth', 'not_authed', 'account_inactive', 'token_revoked'])
 const CHANNEL_ERRORS = new Set(['not_in_channel', 'channel_not_found'])
 const MAX_REDIRECTS = 3
 const START_TIMEOUT_MS = 20_000
+/** One deadline for the three steps of a file upload (URL, bytes, completion). */
+const UPLOAD_DEADLINE_MS = 120_000
 
 // The Slack clients log through console by default and may echo request details.
 const silentLogger: Logger = {
@@ -311,6 +315,14 @@ export function createSlackApi(credentials: SlackCredentials): SlackApi {
     retryConfig: { retries: 2 },
     rejectRateLimitedCalls: true,
   })
+  // A file of up to 20 MiB needs more than the 15 seconds given to ordinary calls. No retry: a lost
+  // completeUploadExternal response would share the file twice, and a stop must not wait for retries.
+  const uploads = new WebClient(credentials.botToken, {
+    logger: silentLogger,
+    timeout: UPLOAD_DEADLINE_MS,
+    retryConfig: { retries: 0 },
+    rejectRateLimitedCalls: true,
+  })
   let socket: SocketModeClient | null = null
   const names = new Map<string, string>()
 
@@ -474,6 +486,25 @@ export function createSlackApi(credentials: SlackCredentials): SlackApi {
       }
       names.set(userId, name)
       return name
+    },
+
+    async uploadFile(channelId, threadTs, filename, data) {
+      // A Buffer, never a string: the helper reads a string `file` as a local path.
+      let deadline: ReturnType<typeof setTimeout> | undefined
+      const upload = call(() =>
+        uploads.filesUploadV2({ channel_id: channelId, thread_ts: threadTs, file: data, filename }),
+      )
+      upload.catch(() => undefined) // an abandoned upload may still settle after the deadline
+      try {
+        await Promise.race([
+          upload,
+          new Promise<never>((_, reject) => {
+            deadline = setTimeout(() => reject(new SlackApiError('network')), UPLOAD_DEADLINE_MS)
+          }),
+        ])
+      } finally {
+        clearTimeout(deadline)
+      }
     },
 
     async downloadFile(file) {

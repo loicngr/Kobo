@@ -2872,6 +2872,21 @@ export default {
   'slack.status.notConfigured': 'Aucun token configuré',
   'slack.status.disabled': 'Intégration désactivée',
   'slack.status.unavailable': 'Statut indisponible',
+  'slack.refreshStatus': 'Actualiser le statut Slack',
+  'slack.allowListEmpty':
+    "Personne n'est autorisé : chaque message et chaque clic Slack est ignoré. Ajoutez au moins un ID de membre ci-dessous et enregistrez la liste.",
+  'slack.lastInbound.none': 'Aucun message ni clic adressé à Kōbō depuis son démarrage.',
+  'slack.lastInbound.line': 'Dernier message ou clic adressé à Kōbō, {time} : {outcome}',
+  'slack.lastInbound.delivered': "transmis à l'agent.",
+  'slack.lastInbound.queued': "en file d'attente pour l'agent.",
+  'slack.lastInbound.rejected': "non transmis, voir l'avis dans Slack.",
+  'slack.lastInbound.uncertain': "la transmission n'a pas pu être confirmée et n'a pas été retentée.",
+  'slack.lastInbound.ignoredNotAllowed': "ignoré, l'auteur n'est pas dans la liste autorisée.",
+  'slack.lastInbound.ignoredChannelNotLinked': "ignoré, le canal n'est lié à aucun workspace.",
+  'slack.lastInbound.ignoredUnsupported':
+    'ignoré, mention sans texte ni fichier, ou clic sur un message inconnu ou fermé.',
+  'slack.guideFilesWrite':
+    'Application créée avant que les agents puissent envoyer des fichiers ? Ajoutez le scope bot "files:write" dans "OAuth & Permissions" puis réinstallez l\'application, ce qui peut nécessiter l\'accord d\'un administrateur.',
   'slack.error.invalid_auth': "Slack a refusé les tokens. Vérifiez qu'ils sont corrects et non révoqués.",
   'slack.error.missing_scope': "Il manque un scope requis à l'application Slack. Recréez-la à partir du manifeste.",
   'slack.error.not_in_channel': "Le bot n'est pas membre du canal. Invitez-le avec /invite.",

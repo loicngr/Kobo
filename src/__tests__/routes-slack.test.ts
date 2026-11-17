@@ -7,6 +7,7 @@ vi.mock('../server/services/slack/slack-service.js', () => ({
     connected: true,
     botName: 'kobo',
     teamName: 'acme',
+    allowListEmpty: false,
   })),
   restartSlack: vi.fn(async () => undefined),
   listSlackChannels: vi.fn(async () => [{ id: 'C1', name: 'general', workspaceId: null }]),
@@ -38,6 +39,35 @@ describe('slack routes', () => {
     const res = await app.request('/status')
     expect(res.status).toBe(200)
     expect((await res.json()).connected).toBe(true)
+  })
+
+  it('GET /status carries the allow-list warning and the last inbound outcome, nothing identifying', async () => {
+    vi.mocked(getSlackStatus).mockReturnValueOnce({
+      configured: true,
+      enabled: true,
+      connected: true,
+      allowListEmpty: true,
+      lastInbound: { at: '2026-11-16T10:00:00.000Z', outcome: 'ignored', reason: 'not-allowed' },
+    })
+    const res = await app.request('/status')
+    const body = await res.json()
+    expect(body.allowListEmpty).toBe(true)
+    expect(body.lastInbound).toEqual({ at: '2026-11-16T10:00:00.000Z', outcome: 'ignored', reason: 'not-allowed' })
+    expect(Object.keys(body.lastInbound).sort()).toEqual(['at', 'outcome', 'reason'])
+  })
+
+  it('GET /status passes an uncertain outcome through', async () => {
+    vi.mocked(getSlackStatus).mockReturnValueOnce({
+      configured: true,
+      enabled: true,
+      connected: true,
+      allowListEmpty: false,
+      lastInbound: { at: '2026-11-16T10:00:00.000Z', outcome: 'uncertain' },
+    })
+    expect((await (await app.request('/status')).json()).lastInbound).toEqual({
+      at: '2026-11-16T10:00:00.000Z',
+      outcome: 'uncertain',
+    })
   })
 
   it('PUT /credentials saves, restarts and never echoes a token', async () => {

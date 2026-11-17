@@ -2823,6 +2823,21 @@ export default {
   'slack.status.notConfigured': 'No tokens configured',
   'slack.status.disabled': 'Integration disabled',
   'slack.status.unavailable': 'Status unavailable',
+  'slack.refreshStatus': 'Refresh the Slack status',
+  'slack.allowListEmpty':
+    'Nobody is allowed, so every Slack message and click is ignored. Add at least one member ID below and save the list.',
+  'slack.lastInbound.none': 'No message or click addressed to Kōbō since it started.',
+  'slack.lastInbound.line': 'Last message or click addressed to Kōbō, {time}: {outcome}',
+  'slack.lastInbound.delivered': 'delivered to the agent.',
+  'slack.lastInbound.queued': 'queued, waiting for the agent.',
+  'slack.lastInbound.rejected': 'not delivered, see the notice in Slack.',
+  'slack.lastInbound.uncertain': 'delivery could not be confirmed and was not retried.',
+  'slack.lastInbound.ignoredNotAllowed': 'ignored, the author is not in the allow-list.',
+  'slack.lastInbound.ignoredChannelNotLinked': 'ignored, the channel is not linked to a workspace.',
+  'slack.lastInbound.ignoredUnsupported':
+    'ignored, a mention with no text or file, or a click on an unknown or closed message.',
+  'slack.guideFilesWrite':
+    'App created before agents could send files? Add the "files:write" bot scope under "OAuth & Permissions" and reinstall the app, which may need an admin\'s approval.',
   'slack.error.invalid_auth': 'Slack rejected the tokens. Check that they are correct and not revoked.',
   'slack.error.missing_scope': 'The Slack app is missing a required scope. Recreate it from the manifest.',
   'slack.error.not_in_channel': 'The bot is not a member of the channel. Invite it with /invite.',

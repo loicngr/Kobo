@@ -48,6 +48,10 @@ const readTools = new Set([
   ...WORKSPACE_CREATION_TOOLS.filter((t) => t.annotations?.readOnlyHint).map((t) => t.name),
   ...SLACK_TOOLS.filter((t) => t.annotations?.readOnlyHint).map((t) => t.name),
 ])
+/** Slack tools that write: allowed in Plan (they answer the person in the linked channel), never when restricted. */
+const slackWriteTools: ReadonlySet<string> = new Set(
+  SLACK_TOOLS.filter((t) => !t.annotations?.readOnlyHint).map((t) => t.name),
+)
 const writeTools = new Set([
   ...MANAGED_SPRINT_TOOLS.filter((t) => !t.annotations?.readOnlyHint).map((t) => t.name),
   ...WORKSPACE_OBSERVATION_TOOLS.filter((t) => !t.annotations?.readOnlyHint).map((t) => t.name),
@@ -74,7 +78,7 @@ const writeTools = new Set([
   ...WORKSPACE_CREATION_TOOLS.map((t) => t.name),
   ...WORKSPACE_LIFECYCLE_TOOLS.map((t) => t.name),
   ...WORKSPACE_GROUP_MESSAGE_TOOLS.map((t) => t.name),
-  ...SLACK_TOOLS.filter((t) => !t.annotations?.readOnlyHint).map((t) => t.name),
+  ...slackWriteTools,
 ])
 const externalTools = new Set([
   ...EXTERNAL_MCP_TOOLS.map((t) => t.name),
@@ -127,13 +131,13 @@ export function authorizeInternalMcpTool(
       capability.env.KOBO_FINAL_REVIEW_SESSION_ID === capability.sessionId) ||
     (name === 'submit_session_handoff' && capability.env.KOBO_HANDOFF_TOKEN && capability.env.KOBO_HANDOFF_ID)
   const progress = isProgressBarTool(name) && capability.env.KOBO_PROGRESS_SESSION_TOKEN
-  // Plan may answer its linked Slack channel; restricted launches never post.
-  const planSlackPost = name === 'slack_post_message' && !capability.restricted
+  // Plan may answer its linked Slack channel; restricted launches never write to it.
+  const planSlackWrite = slackWriteTools.has(name) && !capability.restricted
   if (!report && !progress && !readTools.has(name) && !writeTools.has(name))
     throw new Error(`Unknown or unavailable tool: ${name}`)
   if (
-    (capability.readOnly && !readTools.has(name) && !report && !progress && !planSlackPost) ||
-    (capability.restricted && name === 'slack_post_message')
+    (capability.readOnly && !readTools.has(name) && !report && !progress && !planSlackWrite) ||
+    (capability.restricted && slackWriteTools.has(name))
   )
     throw new Error('This managed MCP launch is read-only')
   // Read per call so a settings change reaches running sessions; never widens the rules above.

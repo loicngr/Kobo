@@ -2859,6 +2859,21 @@ export default {
   'slack.status.notConfigured': 'Sin tokens configurados',
   'slack.status.disabled': 'Integración desactivada',
   'slack.status.unavailable': 'Estado no disponible',
+  'slack.refreshStatus': 'Actualizar el estado de Slack',
+  'slack.allowListEmpty':
+    'Nadie está autorizado, así que se ignora cada mensaje y cada clic de Slack. Añada al menos un ID de miembro abajo y guarde la lista.',
+  'slack.lastInbound.none': 'No se ha recibido ningún mensaje ni clic dirigido a Kōbō desde que arrancó.',
+  'slack.lastInbound.line': 'Último mensaje o clic dirigido a Kōbō, {time}: {outcome}',
+  'slack.lastInbound.delivered': 'entregado al agente.',
+  'slack.lastInbound.queued': 'en cola, esperando al agente.',
+  'slack.lastInbound.rejected': 'no entregado, consulte el aviso en Slack.',
+  'slack.lastInbound.uncertain': 'no se pudo confirmar la entrega y no se reintentó.',
+  'slack.lastInbound.ignoredNotAllowed': 'ignorado, el autor no está en la lista de autorizados.',
+  'slack.lastInbound.ignoredChannelNotLinked': 'ignorado, el canal no está vinculado a ningún workspace.',
+  'slack.lastInbound.ignoredUnsupported':
+    'ignorado, mención sin texto ni archivo, o clic en un mensaje desconocido o cerrado.',
+  'slack.guideFilesWrite':
+    '¿Aplicación creada antes de que los agentes pudieran enviar archivos? Añada el scope de bot "files:write" en "OAuth & Permissions" y reinstale la aplicación, lo que puede requerir la aprobación de un administrador.',
   'slack.error.invalid_auth': 'Slack rechazó los tokens. Compruebe que son correctos y que no han sido revocados.',
   'slack.error.missing_scope':
     'A la aplicación de Slack le falta un scope necesario. Vuelva a crearla a partir del manifiesto.',
@@ -2871,7 +2886,7 @@ export default {
   'slack.guideStep1Body':
     'Abra https://api.slack.com/apps, haga clic en "Create new app", elija "From scratch", luego "Paste a manifest", seleccione su workspace de Slack, abra la pestaña JSON y pegue el manifiesto de abajo.',
   'slack.guideInteractivity':
-    '¿Creaste la aplicación antes de que existieran los botones? Abre "Interactivity & Shortcuts" en los ajustes de la aplicación de Slack y activa "Interactivity" (en Socket Mode no hace falta ninguna URL), o pega el manifiesto actualizado en "App Manifest".',
+    '¿Creó la aplicación antes de que existieran los botones? Abra "Interactivity & Shortcuts" en los ajustes de la aplicación de Slack y active "Interactivity" (en Socket Mode no hace falta ninguna URL), o pegue el manifiesto actualizado en "App Manifest".',
   'slack.guideStep2Title': '2. Generar el token de aplicación',
   'slack.guideStep2Body':
     'En "Basic Information", en "App-Level Tokens", genere un token con el scope connections:write. Empieza por xapp-.',
