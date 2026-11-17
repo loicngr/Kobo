@@ -14,11 +14,13 @@ import {
   reportUpdateTrigger,
   requestUpdate,
   resetUpdateTriggerForTests,
+  stopAgentsAllowed,
   UpdateTriggerError,
 } from '../server/services/update-trigger-service.js'
 
 const T0 = 1_000_000
 const input = { skipBackup: false, stopAgents: false }
+const ALL = { skipBackup: true, stopAgents: true }
 
 function codeOf(fn: () => unknown): string | undefined {
   try {
@@ -49,7 +51,7 @@ describe('update trigger service', () => {
   })
 
   it('refuses when Kōbō is not idle for an update unless stopAgents is set', () => {
-    pollUpdateTrigger(T0)
+    pollUpdateTrigger(T0, ALL)
     idleForUpdate.mockReturnValue(false)
     expect(getUpdateTriggerState(T0).busy).toBe(true)
     expect(codeOf(() => requestUpdate(input, T0))).toBe('busy')
@@ -93,10 +95,10 @@ describe('update trigger service', () => {
   })
 
   it('hands a request out exactly once and records accepted', () => {
-    pollUpdateTrigger(T0)
+    pollUpdateTrigger(T0, ALL)
     const req = requestUpdate({ skipBackup: true, stopAgents: false }, T0)
     expect(getUpdateTriggerState(T0).pending).toBe(true)
-    expect(pollUpdateTrigger(T0)).toEqual(req)
+    expect(pollUpdateTrigger(T0, ALL)).toEqual(req)
     const state = getUpdateTriggerState(T0)
     expect(state.status?.phase).toBe('accepted')
     expect(state.pending).toBe(false)
@@ -164,13 +166,13 @@ describe('update trigger service', () => {
     pollUpdateTrigger(T0)
     expect(isStopAgentsRequest('nope')).toBe(false)
     const plain = requestUpdate(input, T0)
-    pollUpdateTrigger(T0)
+    pollUpdateTrigger(T0, ALL)
     expect(isStopAgentsRequest(plain.id)).toBe(false)
     reportUpdateTrigger(plain.id, 'complete', undefined, T0)
 
     const forced = requestUpdate({ skipBackup: false, stopAgents: true }, T0)
     expect(isStopAgentsRequest(forced.id)).toBe(false) // not handed out yet
-    pollUpdateTrigger(T0)
+    pollUpdateTrigger(T0, ALL)
     expect(isStopAgentsRequest(forced.id)).toBe(true)
     reportUpdateTrigger(forced.id, 'refused', 'busy', T0)
     expect(isStopAgentsRequest(forced.id)).toBe(false)
@@ -223,6 +225,77 @@ describe('update trigger service', () => {
       reportUpdateTrigger('r9', 'complete', undefined, T0)
       pollUpdateTrigger(T0)
       expect(() => requestUpdate(input, T0)).not.toThrow()
+    })
+  })
+
+  describe('host options advertised by the poll', () => {
+    it('allows neither option for an older script that sends no query parameters', () => {
+      pollUpdateTrigger(T0)
+      expect(getUpdateTriggerState(T0)).toMatchObject({ allowSkipBackup: false, allowStopAgents: false })
+      expect(codeOf(() => requestUpdate({ skipBackup: true, stopAgents: false }, T0))).toBe('not-allowed')
+      expect(codeOf(() => requestUpdate({ skipBackup: false, stopAgents: true }, T0))).toBe('not-allowed')
+      expect(codeOf(() => requestUpdate(input, T0))).toBeUndefined()
+    })
+
+    it('allows each option only when the last poll did', () => {
+      pollUpdateTrigger(T0, { skipBackup: true, stopAgents: false })
+      expect(getUpdateTriggerState(T0)).toMatchObject({ allowSkipBackup: true, allowStopAgents: false })
+      expect(codeOf(() => requestUpdate({ skipBackup: false, stopAgents: true }, T0))).toBe('not-allowed')
+      expect(requestUpdate({ skipBackup: true, stopAgents: false }, T0).skipBackup).toBe(true)
+      pollUpdateTrigger(T0, { skipBackup: false, stopAgents: true })
+      expect(stopAgentsAllowed()).toBe(true)
+      pollUpdateTrigger(T0)
+      expect(stopAgentsAllowed()).toBe(false)
+    })
+
+    it('hands an older script (no query parameters) a request with both options masked', () => {
+      // A caller of the operator API spoofs a poll that allows both, then requests both.
+      pollUpdateTrigger(T0, ALL)
+      const spoofed = requestUpdate(ALL, T0)
+      expect(spoofed).toMatchObject({ skipBackup: true, stopAgents: true })
+      // The real updater, an older script or one without the flags, takes it.
+      expect(pollUpdateTrigger(T0 + 60_000)).toEqual({ ...spoofed, skipBackup: false, stopAgents: false })
+      expect(isStopAgentsRequest(spoofed.id)).toBe(false)
+    })
+
+    it('masks each option by the poll that takes the request', () => {
+      pollUpdateTrigger(T0, ALL)
+      const req = requestUpdate(ALL, T0)
+      expect(pollUpdateTrigger(T0, { skipBackup: true, stopAgents: false })).toMatchObject({
+        skipBackup: true,
+        stopAgents: false,
+      })
+      expect(isStopAgentsRequest(req.id)).toBe(false)
+    })
+
+    it('hands the options unchanged to a poll that allows them', () => {
+      pollUpdateTrigger(T0, ALL)
+      const req = requestUpdate(ALL, T0)
+      expect(pollUpdateTrigger(T0, ALL)).toEqual(req)
+      expect(isStopAgentsRequest(req.id)).toBe(true)
+    })
+
+    it('reports neither option while the trigger is not available', () => {
+      pollUpdateTrigger(T0, ALL)
+      expect(getUpdateTriggerState(T0 + 180_001)).toMatchObject({
+        available: false,
+        allowSkipBackup: false,
+        allowStopAgents: false,
+      })
+    })
+
+    it('checks pending, in-progress and unavailable before not-allowed, and not-allowed before busy', () => {
+      const skip = { skipBackup: true, stopAgents: false }
+      expect(codeOf(() => requestUpdate(skip, T0))).toBe('unavailable')
+      pollUpdateTrigger(T0)
+      requestUpdate(input, T0)
+      expect(codeOf(() => requestUpdate(skip, T0))).toBe('pending')
+      pollUpdateTrigger(T0)
+      expect(codeOf(() => requestUpdate(skip, T0))).toBe('in-progress')
+      resetUpdateTriggerForTests()
+      pollUpdateTrigger(T0)
+      idleForUpdate.mockReturnValue(false)
+      expect(codeOf(() => requestUpdate({ skipBackup: false, stopAgents: true }, T0))).toBe('not-allowed')
     })
   })
 })

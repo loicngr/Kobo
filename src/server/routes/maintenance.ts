@@ -24,6 +24,7 @@ import {
   pollUpdateTrigger,
   reportUpdateTrigger,
   requestUpdate,
+  stopAgentsAllowed,
   UpdateTriggerError,
 } from '../services/update-trigger-service.js'
 import { preserveForUpdateMaintenance } from '../services/wakeup-service.js'
@@ -82,7 +83,9 @@ app.post('/update-trigger', async (c) => {
 
 app.get('/update-trigger/poll', (c) => {
   try {
-    return c.json({ protocol: 1, request: pollUpdateTrigger() })
+    // `1` means the host opted in; anything else, absent included (an older updater), means not allowed.
+    const allowed = { skipBackup: c.req.query('skipBackup') === '1', stopAgents: c.req.query('stopAgents') === '1' }
+    return c.json({ protocol: 1, request: pollUpdateTrigger(Date.now(), allowed) })
   } catch (err) {
     return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
   }
@@ -95,6 +98,11 @@ app.post('/update-trigger/stop-agents', async (c) => {
       return c.json({ error: 'Expected an id and a 32-character update reservation identifier' }, 400)
     if (!isStopAgentsRequest(body.id))
       return c.json({ error: 'Unknown update request or agents not to be stopped' }, 409)
+    if (!stopAgentsAllowed())
+      return c.json(
+        { error: 'The host updater does not allow stopping agents', code: 'not-allowed', stopped: 0, unconfirmed: 0 },
+        409,
+      )
     const owner = body.owner
     // This call only ever works on a reservation it creates: an existing one (even the same
     // owner's, e.g. an overlapping retry) is never reused, extended or released here.

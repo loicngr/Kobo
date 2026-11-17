@@ -2426,6 +2426,9 @@ export default {
   'updateTrigger.agentsRunning': 'Laufende Agents: {count}. Für die Aktualisierung müssen sie gestoppt werden.',
   'updateTrigger.workspaceMarkedRunning':
     'Ein Workspace ist noch als laufend markiert, obwohl kein Agent läuft. Für die Aktualisierung müssen Sie den Stopp unten bestätigen.',
+  'updateTrigger.backupAlways': 'Dieser Server sichert die Daten vor der Aktualisierung immer.',
+  'updateTrigger.stopNotAllowed':
+    'Dieser Server erlaubt nicht, die Agents für eine Aktualisierung zu stoppen: Warten Sie, bis sie fertig sind, oder stoppen Sie sie, und versuchen Sie es dann erneut.',
   'updateTrigger.stopAgents': 'Laufende Agents stoppen und aktualisieren',
   'updateTrigger.stopAgentsWarning':
     'Aktivieren Sie das Kontrollkästchen, um zu bestätigen, dass die laufenden Agents gestoppt werden dürfen.',
@@ -2453,6 +2456,8 @@ export default {
   'updateTrigger.result.lost':
     'Die Aktualisierung meldet sich nicht mehr. Prüfen Sie den Server, bevor Sie eine weitere starten.',
   'updateTrigger.result.completeNoVersion': 'Die Aktualisierung ist abgeschlossen.',
+  'updateTrigger.error.notAllowed':
+    'Dieser Server erlaubt diese Aktualisierungsoption nicht. Laden Sie die Seite neu und versuchen Sie es erneut.',
   'updateTrigger.error.unavailable':
     'Der Update-Auslöser des Servers antwortet nicht. Möglicherweise ist er nicht installiert.',
   'updateTrigger.error.network':

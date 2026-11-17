@@ -688,7 +688,8 @@ systemd timer on the host runs `kobo-update --serve-ui-request` every minute; th
 script asks the running container (`docker exec`, using the network token inside the
 container) whether a request is waiting, and runs the normal update when one is. The
 request carries two booleans (back up, stop agents) and nothing else: no version,
-command or path. The timer only polls: it starts an update only when a request was made
+command or path; an updater of this version or later honours them only with its own
+options, and Kōbō hands an older one neither (see below). The timer only polls: it starts an update only when a request was made
 through the operator API, which is what the click on the changelog page does (an
 agent with shell access in the container can make the same call, see the security
 notes), and nothing updates Kōbō on a schedule. See
@@ -709,7 +710,50 @@ For a manual layout where the script sits in the deployment directory:
 sudo /opt/kobo/kobo-update --install-ui-trigger --directory /opt/kobo
 ```
 
-This writes `kobo-ui-update.service` and `kobo-ui-update.timer` under
+Two host-side options decide what a request from the interface may do. Both are off
+by default:
+
+- `--allow-skip-backup` lets a request skip the backup. Without it the updater always
+  backs up, whatever the request says, and the dialog offers no choice.
+- `--allow-stop-agents` lets a request stop running agents. Without it a busy Kōbō
+  refuses the update, as a command-line run does, and the dialog offers no stop box.
+
+Add the ones you want to the install command, for example:
+
+```bash
+sudo /opt/kobo/bin/kobo-update --install-ui-trigger --directory /opt/kobo --allow-stop-agents
+```
+
+They are written into the service's `ExecStart`, and the updater enforces them on the
+host whatever Kōbō answers. To change them, run `--install-ui-trigger` again with the
+wanted options.
+
+These options, and their enforcement on the host, exist only in the updater script of
+the version that introduced them or later. Updating Kōbō never replaces the host's
+`bin/kobo-update`, so a host can still run the 2.1.46 script after Kōbō itself was
+updated. That script obeys whatever Kōbō hands it, and it does not know the options:
+`--install-ui-trigger --allow-...` exits with status 2 (unknown option). Kōbō hands
+such a script neither option: its poll advertises none, and a request taken by a poll
+that does not allow an option loses that option. In that state the protection rests on
+Kōbō, not on the host.
+
+> **Upgrading from 2.1.46**
+>
+> Once Kōbō runs a newer version, the dialog changes even though the trigger still
+> works: there is no backup checkbox (a backup is always made) and no stop-agents
+> checkbox (a busy Kōbō cannot be updated from the interface). To choose these options
+> again:
+>
+> 1. Update Kōbō, from the interface or with `kobo-update`.
+> 2. Replace the operator script `kobo-update`, and `kobo-vps-entrypoint` beside it,
+>    with those of the new version (see [Update with kobo-update](#update-with-kobo-update)
+>    and [Prepare the host and image](#1-prepare-the-host-and-image)).
+> 3. Run `--install-ui-trigger` again with the wanted options, for example
+>    `sudo /opt/kobo/bin/kobo-update --install-ui-trigger --directory /opt/kobo --allow-stop-agents`.
+> 4. Check the unit with `systemctl cat kobo-ui-update.service`: the options end its
+>    `ExecStart` line.
+
+The install command writes `kobo-ui-update.service` and `kobo-ui-update.timer` under
 `/etc/systemd/system`, then runs `systemctl daemon-reload` and
 `systemctl enable --now kobo-ui-update.timer`. The service runs the script as the
 owner of the deployment directory, which must be able to run `docker` and
@@ -733,10 +777,21 @@ The installer refuses, and writes nothing, when:
   by group or others (the timer runs the file every minute as the stack owner, so
   nobody else may be able to change it); the same two rules apply to the script's
   own directory;
+- a directory above the script, up to `/`, is not owned by root or by the stack
+  owner, or is writable by group or others (a world-writable directory with the
+  sticky bit, such as `/tmp`, is refused too); the message names the directory. With
+  the script inside the deployment directory, as in both layouts above, this means the
+  deployment directory and every directory above it must not be group-writable. This
+  is stricter than 2.1.46, which checked only the script and its own directory: a
+  deployment or home directory in mode 775 or 770 with a private group is now refused
+  (`chmod g-w` on that directory fixes it);
 - the script is not executable or has no `#!` first line.
 
-Only the script and its own directory are checked, not the directories above them:
-keep the whole path under root or the stack owner. Running the install with `sudo`
+A directory above the script that cannot be read stops the install before anything is
+written.
+
+Every directory from the script up to `/` is checked, because whoever can write one
+of them can replace what the timer runs. Running the install with `sudo`
 executes a file owned by the stack owner as root, so install only a script you trust.
 
 The units record the resolved absolute paths of the script and the stack. Run the
@@ -754,12 +809,17 @@ timer has polled Kōbō within the last 3 minutes and no other update is in prog
 It ignores the update banner's dismissed version. The update starts **within about
 a minute** of the click, at the next poll. The dialog offers:
 
-- **Back up the data before updating**, ticked by default. Unticking it is the
-  `--skip-backup` mode described above: no `kobo.tar.gz`, no recovery point for
-  that update, though the migration test on a database copy still runs.
+- **Back up the data before updating**, ticked by default, only when the trigger was
+  installed with `--allow-skip-backup`. Unticking it is the `--skip-backup` mode
+  described above: no `kobo.tar.gz`, no recovery point for that update, though the
+  migration test on a database copy still runs. Otherwise the dialog says **This
+  server always backs up the data before updating.**
 - When Kōbō is not idle for an update, by the same rule as the updater's reservation
   (live agents, a running session, or a workspace marked as extracting, brainstorming,
-  executing or compacting), the **Stop the running agents and update** box. The
+  executing or compacting), the **Stop the running agents and update** box, only when
+  the trigger was installed with `--allow-stop-agents`. Without that option **Update
+  now** stays disabled and the dialog says **This server does not allow stopping the
+  agents for an update: wait for them or stop them, then retry.** The
   dialog says **Running agents: N. Updating requires stopping them.**, or, when no
   agent runs, **A workspace is still marked as running, although no agent is
   running. Updating requires confirming the stop below.** **Update now** stays
@@ -773,7 +833,11 @@ Agents are stopped only **once the new image is built**, so the service and its
 agents run normally during the build. The stop uses the same cause as a normal
 shutdown, so auto-loop intent and scheduled wakeups, cron and quota retries are kept.
 Kōbō first closes agent admission, then stops every agent, and proceeds only if
-every stop is confirmed. An unconfirmed stop, a session handoff in progress, or a
+every stop is confirmed. Before stopping the container, the updater (of the version
+that introduced the host options, or later) then checks on
+its own, inside the container, that no agent session is still recorded as running,
+and refuses the update otherwise (a workspace status left behind is not counted:
+startup reconciliation settles it). An unconfirmed stop, a session handoff in progress, or a
 workspace creation or PR checkout in flight refuses the update: Kōbō keeps running
 and admission reopens.
 

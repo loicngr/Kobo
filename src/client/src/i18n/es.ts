@@ -2409,6 +2409,9 @@ export default {
   'updateTrigger.agentsRunning': 'Agentes en ejecución: {count}. La actualización requiere detenerlos.',
   'updateTrigger.workspaceMarkedRunning':
     'Un workspace sigue marcado como en ejecución, aunque no hay ningún agente en ejecución. Para actualizar, confirme la detención a continuación.',
+  'updateTrigger.backupAlways': 'Este servidor siempre hace una copia de seguridad de los datos antes de actualizar.',
+  'updateTrigger.stopNotAllowed':
+    'Este servidor no permite detener los agentes para una actualización: espere a que terminen o deténgalos y vuelva a intentarlo.',
   'updateTrigger.stopAgents': 'Detener los agentes en ejecución y actualizar',
   'updateTrigger.stopAgentsWarning': 'Marque la casilla para confirmar que los agentes en ejecución pueden detenerse.',
   'updateTrigger.confirm': 'Actualizar ahora',
@@ -2434,6 +2437,8 @@ export default {
   'updateTrigger.reason.unknown': 'Actualización rechazada por un motivo desconocido.',
   'updateTrigger.result.lost': 'La actualización dejó de informar. Revise el servidor antes de iniciar otra.',
   'updateTrigger.result.completeNoVersion': 'La actualización ha terminado.',
+  'updateTrigger.error.notAllowed':
+    'Este servidor no permite esta opción de actualización. Recargue la página y vuelva a intentarlo.',
   'updateTrigger.error.unavailable':
     'El activador de actualizaciones del servidor no responde. Puede que no esté instalado.',
   'updateTrigger.error.network':

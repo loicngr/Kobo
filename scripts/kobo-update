@@ -90,6 +90,8 @@ UNSAFE_UNIT_PATH = re.compile(r'[\s"\'\\\\%$]')
 UNIT_USER = re.compile(r'[A-Za-z_][A-Za-z0-9_.-]*\$?')
 REPORT_REASONS = ('busy', 'already-running', 'interrupted-update', 'legacy-runtime', 'unknown')
 FINAL_PHASES = ('complete', 'up-to-date', 'refused', 'aborted', 'recovery-required')
+# Advertises the host options (two booleans, as 0 or 1); nothing in the path comes from data.
+POLL_PATH = 'update-trigger/poll?skipBackup=%d&stopAgents=%d'
 
 
 class UpdateError(Exception):
@@ -564,6 +566,11 @@ class Updater:
         body = body if isinstance(body, dict) else {}
         status = (reply or {}).get('status')
         if status == 200 and body.get('reserved') is True and type(body.get('unconfirmed')) is int and body['unconfirmed'] == 0:
+            # Second, host-evaluated confirmation before the container is stopped. Workspace statuses
+            # are not used: after a forced stop one can still say running until startup reconciliation.
+            sessions = json.loads(self.run(['docker', 'exec', self.container, 'node', '-e', BUSY_JS]))['sessions']
+            if type(sessions) is not int or sessions != 0:  # null, false, 0.0 or [] are not a confirmed zero
+                raise UpdateError(BUSY_MESSAGE, code='busy')
             return
         if status == 409 and body.get('code') == 'conflict':
             raise UpdateError('Another update is already running.', code='already-running')
@@ -640,12 +647,15 @@ After recovery and health verification, set state.json phase to complete or abor
 ''')
 
 
-def unit_files(stack, script, user):
+def unit_files(stack, script, user, *, allow_skip_backup=False, allow_stop_agents=False):
     if not UNIT_USER.fullmatch(user):
         raise UpdateError('The stack directory owner has a user name that cannot be used in a systemd unit.')
     for path in (stack, script):
         if UNSAFE_UNIT_PATH.search(str(path)):
             raise UpdateError(f'Unsupported path for a systemd unit (spaces, quotes, backslash, % or $): {path}')
+    # Host-side opt-ins: the only way to let a request from Kōbō skip the backup or stop agents.
+    options = ''.join(f' {flag}' for flag, given in (('--allow-skip-backup', allow_skip_backup),
+                                                     ('--allow-stop-agents', allow_stop_agents)) if given)
     return {
         f'{UNIT_NAME}.service': f"""[Unit]
 Description=Run a Kōbō update requested from the web interface
@@ -656,7 +666,7 @@ Type=oneshot
 User={user}
 WorkingDirectory={stack}
 Environment=PYTHONDONTWRITEBYTECODE=1
-ExecStart={script} --serve-ui-request --directory {stack}
+ExecStart={script} --serve-ui-request --directory {stack}{options}
 TimeoutStopSec=600
 KillMode=mixed
 """,
@@ -697,7 +707,10 @@ def check_script(script, uid):
     """The timer runs this file every minute as the stack owner: nobody else may be able to change it."""
     if not script.is_file():
         raise UpdateError(f'The updater script was not found: {script}')
-    for path, what in ((script, 'script'), (script.parent, 'script directory')):
+    # Every directory above it too: whoever can write one of them can swap what the timer runs.
+    # `script` is resolved, so no component is a symlink.
+    for path, what in ((script, 'script'), (script.parent, 'script directory'),
+                       *((ancestor, 'ancestor directory') for ancestor in script.parent.parents)):
         st = path.stat()
         if st.st_uid not in (0, uid):
             raise UpdateError(f'The {what} {path} must be owned by root or by the stack owner.')
@@ -718,7 +731,7 @@ def check_script(script, uid):
             raise UpdateError(f'The updater script has no #! first line: {script}')
 
 
-def install_ui_trigger(stack, unit_dir=UNIT_DIR, *, script=None):
+def install_ui_trigger(stack, unit_dir=UNIT_DIR, *, script=None, allow_skip_backup=False, allow_stop_agents=False):
     require_root()
     if not unit_dir.is_dir() or not shutil.which('systemctl'):
         raise UpdateError(f'This host does not use systemd (no systemctl or no {unit_dir}): cannot install the trigger.')
@@ -733,7 +746,7 @@ def install_ui_trigger(stack, unit_dir=UNIT_DIR, *, script=None):
     except KeyError:
         raise UpdateError(f'The stack directory owner (uid {uid}) has no user entry.')
     script = Path(script or __file__).resolve()
-    files = unit_files(stack, script, user)
+    files = unit_files(stack, script, user, allow_skip_backup=allow_skip_backup, allow_stop_agents=allow_stop_agents)
     check_script(script, uid)
     paths = {unit_dir / name: text for name, text in files.items()}
     previous = {path: path.read_bytes() if path.exists() else None for path in paths}
@@ -781,7 +794,7 @@ def update_lock(directory):
         yield
 
 
-def serve_ui_request(stack):
+def serve_ui_request(stack, allow_skip_backup=False, allow_stop_agents=False):
     """Timer entry point: run the update the web UI asked for, if any. Silent otherwise; 1 while recovery is needed."""
     # A failed unit is the operator's only signal when the web interface is down: keep it failed,
     # without polling, until the operator ends the recovery (unreadable states are left to execute()).
@@ -818,13 +831,16 @@ def serve_ui_request(stack):
             return 0
         if not updater.locate():
             return 0
-        reply = updater.trigger('GET', 'update-trigger/poll')
+        reply = updater.trigger('GET', POLL_PATH % (allow_skip_backup, allow_stop_agents))
         body = reply.get('body') if reply and reply.get('status') == 200 else None
         request = body.get('request') if isinstance(body, dict) else None
         if not isinstance(request, dict) or not isinstance(request.get('id'), str):
             return 0
-        updater.ui = {'id': request['id'], 'skipBackup': request.get('skipBackup') is True,
-                      'stopAgents': request.get('stopAgents') is True}
+        # The host options decide, whatever Kōbō answers: without them the backup is made and a
+        # busy Kōbō refuses the update (ordinary idle checks, no forced stop).
+        updater.ui = {'id': request['id'],
+                      'skipBackup': allow_skip_backup and request.get('skipBackup') is True,
+                      'stopAgents': allow_stop_agents and request.get('stopAgents') is True}
         try:
             updater.execute('latest', skip_backup=updater.ui['skipBackup'])
         except (Exception, KeyboardInterrupt) as e:
@@ -853,6 +869,12 @@ def main():
                        help='run the update requested from the Kōbō web interface, if any (for a timer)')
     parser.add_argument('--directory', type=Path, default=Path.cwd(),
                         help='deployment directory containing compose.yaml and .env (default: current directory)')
+    parser.add_argument('--allow-skip-backup', action='store_true',
+                        help='with --install-ui-trigger or --serve-ui-request: let a request from the web interface '
+                             'skip the backup')
+    parser.add_argument('--allow-stop-agents', action='store_true',
+                        help='with --install-ui-trigger or --serve-ui-request: let a request from the web interface '
+                             'stop running agents')
     parser.add_argument('--skip-backup', action='store_true',
                         help='deploy without creating the kobo.tar.gz backup: no Kōbō data recovery point for this '
                              'update (the migration test on a database copy still runs)')
@@ -864,14 +886,18 @@ def main():
                            ('--uninstall-ui-trigger', args.uninstall_ui_trigger)):
         if selected and (args.skip_backup or args.version != 'latest'):
             parser.error(f'{flag} does not take --skip-backup or a version')
+    for flag, given in (('--allow-skip-backup', args.allow_skip_backup), ('--allow-stop-agents', args.allow_stop_agents)):
+        if given and not (args.install_ui_trigger or args.serve_ui_request):
+            parser.error(f'{flag} only applies to --install-ui-trigger or --serve-ui-request')
     os.umask(0o077)
     for sig in (signal.SIGTERM, signal.SIGHUP):
         signal.signal(sig, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
     if args.serve_ui_request:
-        return serve_ui_request(args.directory)
+        return serve_ui_request(args.directory, args.allow_skip_backup, args.allow_stop_agents)
     try:
         if args.install_ui_trigger:
-            install_ui_trigger(args.directory)
+            install_ui_trigger(args.directory, allow_skip_backup=args.allow_skip_backup,
+                               allow_stop_agents=args.allow_stop_agents)
         elif args.uninstall_ui_trigger:
             uninstall_ui_trigger()
         else:

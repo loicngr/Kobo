@@ -32,6 +32,8 @@ const base: UpdateTriggerState = {
   status: null,
   runningAgents: 0,
   busy: false,
+  allowSkipBackup: true,
+  allowStopAgents: true,
 }
 const at = '2026-11-17T10:00:00.000Z'
 const slot = { template: '<div><slot /></div>' }
@@ -111,6 +113,41 @@ describe('UpdateTriggerDialog', () => {
     expect(confirm(w).attributes('disabled')).toBeUndefined()
     await confirm(w).trigger('click')
     expect(start).toHaveBeenCalledWith({ skipBackup: false, stopAgents: true })
+  })
+
+  describe('host options', () => {
+    it('always backs up, saying so, when the server does not allow skipping the backup', async () => {
+      const { trigger } = setup({ ...base, allowSkipBackup: false })
+      const start = vi.spyOn(trigger, 'start').mockResolvedValue()
+      const w = mountDialog()
+      expect(w.find('[data-test="update-backup"]').exists()).toBe(false)
+      expect(w.text()).toContain(en['updateTrigger.backupAlways'])
+      await confirm(w).trigger('click')
+      expect(start).toHaveBeenCalledWith({ skipBackup: false, stopAgents: false })
+    })
+
+    it('offers the backup choice only when the server allows skipping it', () => {
+      setup(base)
+      const w = mountDialog()
+      expect(w.find('[data-test="update-backup"]').exists()).toBe(true)
+      expect(w.text()).not.toContain(en['updateTrigger.backupAlways'])
+    })
+
+    it('blocks a busy update, without the stop box, when the server does not allow stopping agents', () => {
+      setup({ ...base, runningAgents: 1, busy: true, allowStopAgents: false })
+      const w = mountDialog()
+      expect(w.find('[data-test="update-stop-agents"]').exists()).toBe(false)
+      expect(w.text()).toContain(en['updateTrigger.stopNotAllowed'])
+      expect(w.text()).toContain(en['updateTrigger.agentsRunning'].replace('{count}', '1'))
+      expect(confirm(w).attributes('disabled')).toBeDefined()
+    })
+
+    it('lets an idle update through when the server does not allow stopping agents', () => {
+      setup({ ...base, allowStopAgents: false })
+      const w = mountDialog()
+      expect(w.text()).not.toContain(en['updateTrigger.stopNotAllowed'])
+      expect(confirm(w).attributes('disabled')).toBeUndefined()
+    })
   })
 
   it('does not ask about agents when none run', () => {
@@ -214,6 +251,7 @@ describe('UpdateTriggerDialog', () => {
     ['pending', 'updateTrigger.reason.alreadyRunning'],
     ['in-progress', 'updateTrigger.reason.alreadyRunning'],
     ['unavailable', 'updateTrigger.error.unavailable'],
+    ['not-allowed', 'updateTrigger.error.notAllowed'],
   ] as const)('shows the text of the %s refusal and keeps the form', async (code, key) => {
     const { trigger } = setup(base)
     vi.spyOn(trigger, 'start').mockRejectedValue(Object.assign(new Error('x'), { code }))
@@ -223,6 +261,18 @@ describe('UpdateTriggerDialog', () => {
     expect(w.find('[role="alert"]').text()).toBe(en[key])
     expect(confirm(w).exists()).toBe(true)
   })
+
+  it.each(['constructor', 'toString', 'something-new'])(
+    'shows the generic refusal text for the unknown code %s',
+    async (code) => {
+      const { trigger } = setup(base)
+      vi.spyOn(trigger, 'start').mockRejectedValue(Object.assign(new Error('x'), { code }))
+      const w = mountDialog()
+      await confirm(w).trigger('click')
+      await flushPromises()
+      expect(w.find('[role="alert"]').text()).toBe(en['updateTrigger.reason.unknown'])
+    },
+  )
 
   it('says the outcome is unknown after a network failure, unless a refresh then shows an update under way', async () => {
     const { trigger } = setup(base)

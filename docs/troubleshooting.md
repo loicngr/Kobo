@@ -44,6 +44,15 @@ the optional HTTPS preview gateway; the browser's localhost is your PC.
 For framing refusals, expired preview tickets, mixed-content errors and HMR/API
 configuration, use the [preview troubleshooting table](./dev-server-preview.md#troubleshooting).
 
+## The Update Kōbō button is missing or limited
+
+The button on the changelog page exists only on a VPS Docker deployment whose host
+trigger is installed, and only while a newer release is known. If it never appears,
+check on the host that `kobo-ui-update.timer` is active and that the deployment
+directory's owner can run `docker`. If the dialog offers no backup choice or no way
+to stop running agents, the host does not allow that option. See
+[Update from the interface](./deployment-vps.md#update-from-the-interface).
+
 ## Backup and restore
 
 Daily and pre-migration SQLite snapshots are not a backup of settings, private integration configuration, repositories or uncommitted worktree changes.

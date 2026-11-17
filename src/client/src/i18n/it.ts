@@ -2404,6 +2404,9 @@ export default {
   'updateTrigger.agentsRunning': 'Agenti in esecuzione: {count}. Per aggiornare è necessario fermarli.',
   'updateTrigger.workspaceMarkedRunning':
     "Un workspace risulta ancora in esecuzione, anche se nessun agente è attivo. Per aggiornare è necessario confermare l'arresto qui sotto.",
+  'updateTrigger.backupAlways': "Questo server esegue sempre il backup dei dati prima dell'aggiornamento.",
+  'updateTrigger.stopNotAllowed':
+    'Questo server non consente di fermare gli agenti per un aggiornamento: attendi che terminino o fermali, poi riprova.',
   'updateTrigger.stopAgents': 'Ferma gli agenti in esecuzione e aggiorna',
   'updateTrigger.stopAgentsWarning':
     'Seleziona la casella per confermare che gli agenti in esecuzione possono essere fermati.',
@@ -2430,6 +2433,8 @@ export default {
   'updateTrigger.reason.unknown': 'Aggiornamento rifiutato per un motivo sconosciuto.',
   'updateTrigger.result.lost': "L'aggiornamento non dà più notizie. Controlla il server prima di avviarne un altro.",
   'updateTrigger.result.completeNoVersion': "L'aggiornamento è completato.",
+  'updateTrigger.error.notAllowed':
+    'Questo server non consente questa opzione di aggiornamento. Ricarica la pagina e riprova.',
   'updateTrigger.error.unavailable':
     'Il trigger di aggiornamento del server non risponde. Potrebbe non essere installato.',
   'updateTrigger.error.network':

@@ -2379,6 +2379,9 @@ export default {
   'updateTrigger.agentsRunning': 'Running agents: {count}. Updating requires stopping them.',
   'updateTrigger.workspaceMarkedRunning':
     'A workspace is still marked as running, although no agent is running. Updating requires confirming the stop below.',
+  'updateTrigger.backupAlways': 'This server always backs up the data before updating.',
+  'updateTrigger.stopNotAllowed':
+    'This server does not allow stopping the agents for an update: wait for them or stop them, then retry.',
   'updateTrigger.stopAgents': 'Stop the running agents and update',
   'updateTrigger.stopAgentsWarning': 'Tick the box to confirm that the running agents may be stopped.',
   'updateTrigger.confirm': 'Update now',
@@ -2403,6 +2406,7 @@ export default {
   'updateTrigger.reason.unknown': 'The update was refused for an unknown reason.',
   'updateTrigger.result.lost': 'The update stopped reporting. Check the server before starting another one.',
   'updateTrigger.result.completeNoVersion': 'The update is complete.',
+  'updateTrigger.error.notAllowed': 'This server does not allow that update option. Reload the page and try again.',
   'updateTrigger.error.unavailable': 'The update trigger of the server is not answering. It may not be installed.',
   'updateTrigger.error.network':
     'Kōbō could not be reached and the outcome is unknown. Check this page again before retrying.',

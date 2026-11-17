@@ -42,6 +42,7 @@ class Simulated(m.Updater):
         self.poll_reply = {'status': 200, 'body': {'protocol': 1, 'request': None}}
         self.stop_reply = {'status': 200, 'body': {'protocol': 1, 'stopped': 0, 'unconfirmed': 0, 'reserved': True}}
         self.report_reply = {'status': 200, 'body': {}}
+        self.counts = {'sessions': 0, 'workspaces': 0}  # what BUSY_JS reports inside the container
 
     def locate(self):
         if not self.locatable or self.running is None:
@@ -51,7 +52,7 @@ class Simulated(m.Updater):
 
     def trigger(self, method, path, body=None, timeout=10):
         self.trigger_calls.append((method, path, body, timeout))
-        if path == 'update-trigger/poll':
+        if path.startswith('update-trigger/poll?'):
             return self.poll_reply
         if path == 'update-trigger/stop-agents':
             self.events.append('stop-agents')
@@ -91,6 +92,11 @@ class Simulated(m.Updater):
         return 'kobo:new'
 
     def run(self, args, **kwargs):
+        if m.BUSY_JS in args:
+            self.events.append('host-check')
+            if isinstance(self.counts, BaseException):
+                raise self.counts
+            return self.counts if isinstance(self.counts, str) else json.dumps(self.counts)
         if '--format' in args and 'config' in args:
             return json.dumps({'changed': True} if self.fail == 'env-changed' else self.config_snapshot)
         if 'stop' in args:
@@ -620,14 +626,14 @@ class UiRequestTests(unittest.TestCase):
         quiet.start()
         self.addCleanup(quiet.stop)
 
-    def serve(self, fail=None, request=REQUEST, installed='2.1.16', expected=0, **attrs):
+    def serve(self, fail=None, request=REQUEST, installed='2.1.16', expected=0, allow=(True, True), **attrs):
         u = Simulated(self.stack, fail, installed)
         for key, value in attrs.items():
             setattr(u, key, value)
         if request is not None:
             u.poll_reply = {'status': 200, 'body': {'protocol': 1, 'request': request}}
         with patch.object(m, 'Updater', lambda stack: u):
-            self.assertEqual(m.serve_ui_request(self.stack), expected)
+            self.assertEqual(m.serve_ui_request(self.stack, *allow), expected)
         return u
 
     def test_serve_without_request_does_nothing(self):
@@ -829,6 +835,80 @@ class UiRequestTests(unittest.TestCase):
         # Unchanged wording, including the double period main() has always printed for this message.
         say.assert_called_with('Stopped: ' + 'Update reservation POST refused (HTTP 409).' + '.')
 
+    def test_poll_advertises_the_host_options(self):
+        for allow in ((False, False), (True, False), (False, True), (True, True)):
+            with self.subTest(allow=allow):
+                u = self.serve(request=None, allow=allow)
+                self.assertEqual(u.trigger_calls[0][:2],
+                                 ('GET', f'update-trigger/poll?skipBackup={int(allow[0])}&stopAgents={int(allow[1])}'))
+
+    def test_skip_backup_is_ignored_without_the_host_option(self):
+        u = self.serve(request={**REQUEST, 'skipBackup': True}, allow=(False, True))
+        self.assertIs(u.state['backup_skipped'], False)
+        self.assertIs(u.state['backup_complete'], True)
+        self.assertEqual(u.state['phase'], 'complete')
+
+    def test_stop_agents_is_ignored_without_the_host_option(self):
+        u = self.serve('busy', request={**REQUEST, 'stopAgents': True}, allow=(True, False))
+        self.assertEqual(u.reports[-1], ('refused', 'busy'))
+        self.assertNotIn('stop-agents', u.events)
+        self.assertEqual([c for c in u.trigger_calls if c[1] == 'update-trigger/stop-agents'], [])
+        u = self.serve(request={**REQUEST, 'stopAgents': True}, allow=(True, False))
+        self.assertEqual(u.state['phase'], 'complete')
+        self.assertIn('POST', u.maintenance_calls)
+        self.assertNotIn('stop-agents', u.events)
+
+    def test_host_check_after_a_forced_stop_refuses_while_a_session_runs(self):
+        u = self.serve(request={**REQUEST, 'stopAgents': True}, counts={'sessions': 1, 'workspaces': 0})
+        self.assertNotIn('stop', u.events)
+        self.assertEqual(u.maintenance_calls.count('DELETE'), 1)
+        self.assertEqual(u.reports[-1], ('refused', 'busy'))
+        self.assertEqual(u.state['phase'], 'aborted')
+
+    def test_host_check_requires_an_integer_zero(self):
+        for sessions in (None, False, 0.0, [], '0', {}):
+            with self.subTest(sessions=sessions):
+                u = self.serve(request={**REQUEST, 'stopAgents': True}, counts={'sessions': sessions, 'workspaces': 0})
+                self.assertNotIn('stop', u.events)
+                self.assertEqual(u.maintenance_calls.count('DELETE'), 1)
+                self.assertEqual(u.reports[-1], ('refused', 'busy'))
+                self.assertEqual(u.state['phase'], 'aborted')
+
+    def test_host_check_failure_releases_the_reservation_without_stopping(self):
+        for counts in (m.UpdateError('Failed: docker (code 1). See the private update log.'), 'not json',
+                       '{"workspaces": 0}'):
+            with self.subTest(counts=counts):
+                u = self.serve(request={**REQUEST, 'stopAgents': True}, counts=counts)
+                self.assertIn('host-check', u.events)
+                self.assertNotIn('stop', u.events)
+                self.assertEqual(u.maintenance_calls.count('DELETE'), 1)
+                self.assertEqual(u.state['phase'], 'aborted')
+
+    def test_host_check_after_a_forced_stop_ignores_workspace_statuses(self):
+        u = self.serve(request={**REQUEST, 'stopAgents': True}, counts={'sessions': 0, 'workspaces': 2})
+        self.assertEqual(u.state['phase'], 'complete')
+        self.assertIn('stop', u.events)
+
+    def test_main_passes_the_host_options(self):
+        for extra, allow in (([], (False, False)), (['--allow-skip-backup'], (True, False)),
+                             (['--allow-stop-agents'], (False, True)),
+                             (['--allow-skip-backup', '--allow-stop-agents'], (True, True))):
+            with self.subTest(extra=extra), patch.object(m, 'serve_ui_request', return_value=0) as serve, \
+                    patch.object(m.signal, 'signal'), patch.object(m.os, 'umask'), \
+                    patch.object(sys, 'argv', ['kobo-update', '--serve-ui-request', '--directory', str(self.stack),
+                                               *extra]):
+                self.assertEqual(m.main(), 0)
+            serve.assert_called_once_with(self.stack, *allow)
+
+    def test_host_options_need_the_trigger_modes(self):
+        for extra in ([], ['--check'], ['--prepare'], ['--uninstall-ui-trigger']):
+            for flag in ('--allow-skip-backup', '--allow-stop-agents'):
+                with self.subTest(extra=extra, flag=flag):
+                    result = subprocess.run([sys.executable, str(path), flag, *extra],
+                                            capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 2)
+                    self.assertIn(flag, result.stderr)
+
     def test_main_propagates_serve_exit_code(self):
         for code in (0, 1):
             with patch.object(m, 'serve_ui_request', return_value=code), patch.object(m.signal, 'signal'), \
@@ -851,7 +931,8 @@ class UiRequestTests(unittest.TestCase):
     def test_forced_stop_skips_idle_and_stops_agents(self):
         u = self.serve('busy', request={**REQUEST, 'stopAgents': True})
         self.assertEqual(u.state['phase'], 'complete')
-        self.assertEqual(u.events, ['build', 'stop-agents', 'stop', 'backup', 'migration', 'start-new', 'verify'])
+        self.assertEqual(u.events, ['build', 'stop-agents', 'host-check', 'stop', 'backup', 'migration', 'start-new',
+                                    'verify'])
         stops = [c for c in u.trigger_calls if c[1] == 'update-trigger/stop-agents']
         self.assertEqual(stops, [('POST', 'update-trigger/stop-agents',
                                   {'id': 'r1', 'owner': u.maintenance_owner}, 60)])
@@ -1037,6 +1118,39 @@ DISABLE = ['systemctl', 'disable', '--now', 'kobo-ui-update.timer']
 
 class InstallTests(unittest.TestCase):
     def setUp(self):
+        self.fresh()
+        real_stat = Path.stat
+
+        def fake_stat(path, *args, **kwargs):
+            st = real_stat(path, *args, **kwargs)
+            where = os.path.realpath(path)
+            fake = self.fake.get(where)
+            tree = os.path.realpath(self.tmp.name)
+            if fake is None and (where == '/' or tree.startswith(where + '/')):
+                fake = {'uid': 0, 'mode': stat_module.S_IFDIR | 0o755}  # the host's directories above the test tree
+            if not fake:
+                return st
+            fields = list(st)
+            for key, index in (('uid', stat_module.ST_UID), ('mode', stat_module.ST_MODE)):
+                if key in fake:
+                    fields[index] = fake[key]
+            return os.stat_result(fields)
+
+        for target, new in (
+                (Path, {'stat': fake_stat}),
+                (m.os, {'geteuid': lambda: self.euid}),
+                (m, {'owner_uid': lambda stack: self.uid}),
+                (m.pwd, {'getpwuid': self.getpwuid}),
+                (m.subprocess, {'run': self.systemctl}),
+                (m.shutil, {'which': lambda name: '/usr/bin/' + name}),
+                (m, {'say': lambda message: self.said.append(message)})):
+            for name, value in new.items():
+                patcher = patch.object(target, name, value)
+                patcher.start()
+                self.addCleanup(patcher.stop)
+
+    def fresh(self):
+        """A new stack and clean recorded state; the patches of setUp read these attributes."""
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         root = Path(self.tmp.name)
@@ -1053,17 +1167,8 @@ class InstallTests(unittest.TestCase):
         self.uid = os.getuid() or 1000  # files made by the test are owned by us (or by root, also accepted)
         self.euid = 0
         self.said = []
-        for target, new in (
-                (m.os, {'geteuid': lambda: self.euid}),
-                (m, {'owner_uid': lambda stack: self.uid}),
-                (m.pwd, {'getpwuid': self.getpwuid}),
-                (m.subprocess, {'run': self.systemctl}),
-                (m.shutil, {'which': lambda name: '/usr/bin/' + name}),
-                (m, {'say': lambda message: self.said.append(message)})):
-            for name, value in new.items():
-                patcher = patch.object(target, name, value)
-                patcher.start()
-                self.addCleanup(patcher.stop)
+        # Ownership and modes a test cannot set (no chown): realpath -> {'uid', 'mode'} overrides.
+        self.fake = {}
 
     def make_script(self, path, mode=0o755, content=b'#!/usr/bin/env python3\n'):
         path.write_bytes(content)
@@ -1099,6 +1204,58 @@ class InstallTests(unittest.TestCase):
         files = m.unit_files(Path('/srv/kobo'), Path('/srv/kobo/bin/kobo-update'), 'deploy')
         self.assertEqual(files, {'kobo-ui-update.service': SERVICE, 'kobo-ui-update.timer': TIMER})
 
+    def test_unit_files_with_both_host_options(self):
+        files = m.unit_files(Path('/srv/kobo'), Path('/srv/kobo/bin/kobo-update'), 'deploy',
+                             allow_skip_backup=True, allow_stop_agents=True)
+        self.assertEqual(files['kobo-ui-update.service'], SERVICE.replace(
+            '--directory /srv/kobo\n', '--directory /srv/kobo --allow-skip-backup --allow-stop-agents\n'))
+        one = m.unit_files(Path('/srv/kobo'), Path('/srv/kobo/bin/kobo-update'), 'deploy', allow_stop_agents=True)
+        self.assertIn('--directory /srv/kobo --allow-stop-agents\n', one['kobo-ui-update.service'])
+
+    def test_install_writes_the_host_options(self):
+        m.install_ui_trigger(self.stack, self.units, script=self.script, allow_skip_backup=True)
+        service = (self.units / 'kobo-ui-update.service').read_text()
+        self.assertIn(f'--directory {self.stack.resolve()} --allow-skip-backup\n', service)
+        self.assertNotIn('--allow-stop-agents', service)
+
+    def test_reinstall_without_an_option_removes_it(self):
+        m.install_ui_trigger(self.stack, self.units, script=self.script, allow_stop_agents=True)
+        self.assertIn('--allow-stop-agents', (self.units / 'kobo-ui-update.service').read_text())
+        m.install_ui_trigger(self.stack, self.units, script=self.script)
+        self.assertNotIn('--allow-', (self.units / 'kobo-ui-update.service').read_text())
+
+    def test_failed_reinstall_restores_the_previous_units_with_their_options(self):
+        m.install_ui_trigger(self.stack, self.units, script=self.script, allow_skip_backup=True,
+                             allow_stop_agents=True)
+        before = {p.name: p.read_text() for p in self.units.iterdir()}
+        self.assertIn('--allow-skip-backup --allow-stop-agents', before['kobo-ui-update.service'])
+        self.systemctl_fails = 'enable'
+        with self.assertRaises(m.UpdateError):
+            m.install_ui_trigger(self.stack, self.units, script=self.script)
+        self.assertEqual({p.name: p.read_text() for p in self.units.iterdir()}, before)
+
+    def test_ancestor_directories_must_be_trustworthy(self):
+        # The script's grandparent is the root of the test tree.
+        cases = [('group-writable', {'mode': stat_module.S_IFDIR | 0o775}, 'writable by group or others'),
+                 ('world-writable sticky', {'uid': 0, 'mode': stat_module.S_IFDIR | 0o1777},
+                  'writable by group or others'),
+                 ('third owner', {'uid': self.uid + 1}, 'owned by')]
+        for name, fake, word in cases:
+            with self.subTest(name):
+                self.fresh()
+                root = os.path.realpath(self.tmp.name)
+                self.fake[root] = fake
+                with self.assertRaises(m.UpdateError) as caught:
+                    self.install()
+                self.assertIn(word, str(caught.exception))
+                self.assertIn(f'directory {root} ', str(caught.exception))
+                self.assert_untouched()
+
+    def test_root_owned_ancestors_are_accepted(self):
+        self.fake[os.path.realpath(self.tmp.name)] = {'uid': 0, 'mode': stat_module.S_IFDIR | 0o755}
+        self.install()
+        self.assertEqual(self.calls, [RELOAD, ENABLE])
+
     def test_unit_files_for_both_layouts(self):
         resolved = self.stack.resolve()
         for script in (resolved / 'bin' / 'kobo-update', resolved / 'kobo-update'):
@@ -1128,18 +1285,18 @@ class InstallTests(unittest.TestCase):
                  ('no compose', lambda: (self.stack / 'compose.yaml').unlink(), 'compose.yaml')]
         for name, arrange, word in cases:
             with self.subTest(name):
-                self.setUp()
+                self.fresh()
                 arrange()
                 self.refused(word)
 
     def test_user_name_is_validated(self):
         for bad in ('a%b', 'evil\nExecStart=/bin/sh', '', '1abc', 'a b', 'deploy\n'):
             with self.subTest(bad):
-                self.setUp()
+                self.fresh()
                 self.owner = bad
                 self.refused('user')
         for good in ('deploy', '_svc', 'a.b-c_d', 'machine$'):
-            self.setUp()
+            self.fresh()
             self.owner = good
             self.install()
 
@@ -1174,20 +1331,8 @@ class InstallTests(unittest.TestCase):
 
     def owned_by(self, uid):
         """The script and its directory as if `uid` owned them: a test cannot chown."""
-        real = Path.stat
-        mine = {os.path.realpath(self.script), os.path.realpath(self.stack)}
-
-        def stat(path, *args, **kwargs):
-            st = real(path, *args, **kwargs)
-            if os.path.realpath(path) not in mine:
-                return st
-            fields = list(st)
-            fields[stat_module.ST_UID] = uid
-            return os.stat_result(fields)
-
-        patcher = patch.object(Path, 'stat', stat)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        for owned in (self.script, self.stack):
+            self.fake[os.path.realpath(owned)] = {'uid': uid}
 
     def test_script_must_be_executable_by_the_unit_user(self):
         # The check runs as root, for whom any exec bit is enough; the unit runs as the stack owner.
@@ -1196,7 +1341,7 @@ class InstallTests(unittest.TestCase):
                  (0, 0o750, 'readable and executable by others'), (0, 0o701, 'readable and executable by others')]
         for owner, mode, word in cases:
             with self.subTest(owner=owner, mode=oct(mode)):
-                self.setUp()
+                self.fresh()
                 self.owned_by(owner)
                 self.script.chmod(mode)
                 if word:
@@ -1221,7 +1366,7 @@ class InstallTests(unittest.TestCase):
     def test_systemctl_failure_cleans_up_a_first_install(self):
         for failing in ('daemon-reload', 'enable'):
             with self.subTest(failing):
-                self.setUp()
+                self.fresh()
                 self.systemctl_fails = failing
                 with self.assertRaises(m.UpdateError) as caught:
                     self.install()
@@ -1229,7 +1374,7 @@ class InstallTests(unittest.TestCase):
                 self.assertIn('systemctl status kobo-ui-update.timer', str(caught.exception))
                 self.assertEqual(sorted(self.units.iterdir()), [])
                 self.assertEqual(self.calls[-2:], [DISABLE, RELOAD])
-        self.setUp()
+        self.fresh()
         with patch.object(m.subprocess, 'run', side_effect=FileNotFoundError('systemctl')):
             with self.assertRaises(m.UpdateError) as caught:
                 self.install()
@@ -1290,7 +1435,12 @@ class InstallTests(unittest.TestCase):
         with patch.object(sys, 'argv', argv), patch.object(m.signal, 'signal'), \
                 patch.object(m, 'install_ui_trigger') as install:
             self.assertEqual(m.main(), 0)
-        install.assert_called_once_with(self.stack)
+        install.assert_called_once_with(self.stack, allow_skip_backup=False, allow_stop_agents=False)
+        argv = ['kobo-update', '--install-ui-trigger', '--directory', str(self.stack), '--allow-stop-agents']
+        with patch.object(sys, 'argv', argv), patch.object(m.signal, 'signal'), \
+                patch.object(m, 'install_ui_trigger') as install:
+            self.assertEqual(m.main(), 0)
+        install.assert_called_once_with(self.stack, allow_skip_backup=False, allow_stop_agents=True)
         argv = ['kobo-update', '--uninstall-ui-trigger', '--directory', str(self.stack)]
         with patch.object(sys, 'argv', argv), patch.object(m.signal, 'signal'), \
                 patch.object(m, 'uninstall_ui_trigger') as uninstall:

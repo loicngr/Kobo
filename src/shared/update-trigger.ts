@@ -25,6 +25,8 @@ export const UPDATE_TRIGGER_REASONS = [
   'unknown',
 ] as const
 export type UpdateTriggerReason = (typeof UPDATE_TRIGGER_REASONS)[number]
+/** Codes of a refused `POST /api/maintenance/update-trigger` (HTTP 409). */
+export type UpdateTriggerErrorCode = 'unavailable' | 'pending' | 'in-progress' | 'not-allowed' | 'busy'
 
 export interface UpdateTriggerRequest {
   id: string
@@ -48,4 +50,7 @@ export interface UpdateTriggerState {
   runningAgents: number
   /** Not idle for an update by the reservation's own rule (live agents, running sessions or busy workspaces). */
   busy: boolean
+  /** Host-side opt-ins advertised by the last poll (`--allow-skip-backup`, `--allow-stop-agents`); false while unavailable. */
+  allowSkipBackup: boolean
+  allowStopAgents: boolean
 }

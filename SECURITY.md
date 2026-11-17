@@ -109,13 +109,32 @@ adds a request channel from the operator API to a host updater. The trust bounda
 - **New capability.** An agent able to run shell commands in the container can already
   reach the loopback operator API, so it can now make the host updater build an image,
   stop and replace the container, which it could not do before. It cannot choose what
-  is deployed (always the latest stable release), but it can request an update without
-  a backup and with the other agents stopped. The updater runs as the stack owner, who
-  needs Docker access and is therefore root-equivalent on the host. Treat an update
-  request as an operator action.
+  is deployed (always the latest stable release). Without host options, a request can
+  only start a backed-up update, and only when Kōbō is idle: the updater refuses a busy
+  Kōbō as a command-line run does. Skipping the backup and stopping agents each need an
+  explicit host-side opt-in on the unit (`--allow-skip-backup`, `--allow-stop-agents`
+  in its `ExecStart`, both off by default), which the updater enforces whatever Kōbō
+  answers. With stopping allowed, after Kōbō confirmed the agent stops, the updater
+  re-checks inside the container that no agent session is still recorded as running
+  before it stops the container. That check runs inside the container and is only as
+  trustworthy as the container: it protects against a forged or mistaken `200` from
+  `stop-agents`, not against a compromised container.
+- **Which script enforces this.** The host options, and their enforcement on the host,
+  exist only in the updater script of the version that introduced them or later.
+  Updating Kōbō does not replace the host's `bin/kobo-update`; a host still running the
+  2.1.46 script obeys whatever Kōbō hands it and accepts no option on its unit. Kōbō of
+  this version hands such a script neither option: a request is handed out with its
+  options masked by those of the poll that takes it, and that script's poll advertises
+  none. In that state the protection rests on the backend, not on the host. Replace the
+  operator scripts and reinstall the trigger to get the host-side guarantees (see the
+  [VPS guide](./docs/deployment-vps.md#install-the-trigger-once-with-sudo)).
+- **Host privileges.** The updater runs as the stack owner, who needs Docker
+  access and is therefore root-equivalent on the host. Treat an update request as an
+  operator action.
 - **What the request carries.** Only two booleans (back up, stop agents): no version,
   command or path. From the poll reply the host accepts nothing except a string request
-  id and those two booleans (each honoured only when exactly `true`), echoes the id
+  id and those two booleans (each honoured only when exactly `true`, and by an updater
+  of this version only when the matching host option allows it), echoes the id
   back in its status reports, and executes nothing taken from the reply. From the
   `stop-agents` reply it reads `reserved` and `unconfirmed`: the container is stopped
   only when `reserved` is `true` and `unconfirmed` is the integer `0`; any other reply
@@ -128,8 +147,8 @@ adds a request channel from the operator API to a host updater. The trust bounda
   migrates the data directory, exactly as a manual `kobo-update` does.)
 - **The script the timer runs.** The timer runs it every minute as the stack owner, so
   the installer refuses a script or script directory not owned by root or the stack
-  owner, or writable by group or others. Ancestors of the script's directory are not
-  checked. Never mount the deployment directory or its `bin/` into the container, and
+  owner, or writable by group or others, and so is any directory above them up to `/`
+  (a sticky world-writable directory such as `/tmp` included). Never mount the deployment directory or its `bin/` into the container, and
   keep it outside `KOBO_PROJECTS_DIR`, which `docker-compose.vps.yml` bind-mounts.
   With the guided installer, agents run by default under the same numeric uid as the
   stack owner: `KOBO_UID` defaults to the installing user, who also creates and owns
@@ -145,10 +164,20 @@ adds a request channel from the operator API to a host updater. The trust bounda
 - **Availability signal.** The button appears while anything has polled
   `GET /api/maintenance/update-trigger/poll` within 180 seconds. That is an ordinary
   operator route: anything able to call the operator API, an agent with shell access
-  included, can make the button appear and can take a pending request.
-- **Impersonating the updater.** The same caller can play the updater: `poll`, then
-  `POST /api/maintenance/update-trigger` with `stopAgents: true`, `poll` again to take
-  that request, then `stop-agents`. This stops every agent with no update at all and
+  included, can make the button appear and can take a pending request. The poll also
+  carries the host options (`skipBackup` and `stopAgents` query parameters, `1` meaning
+  allowed, absent meaning not allowed), and the backend trusts the last poll: a spoofed
+  poll can advertise options the host did not allow, or hide allowed ones. That changes
+  what the dialog offers and what the backend accepts, but a request accepted that way
+  is handed to the real updater with its options masked by the real updater's own poll,
+  and an updater of this version also applies its own options.
+- **Impersonating the updater.** The same caller can play the updater: `poll` with
+  `stopAgents=1`, then `POST /api/maintenance/update-trigger` with `stopAgents: true`,
+  `poll` again with `stopAgents=1` to take that request with the option kept (a poll
+  without it masks the option, and `stop-agents` then answers 409), then
+  `stop-agents`. Kōbō performs that stop itself
+  without involving the host, so the host options do not prevent it: it stops every
+  agent with no update at all and
   holds an update-maintenance reservation, so no agent can start, until its owner
   releases it or Kōbō restarts; the reservation does not expire. The marginal power is
   small: the operator API already lets such a caller stop agents. Because the real

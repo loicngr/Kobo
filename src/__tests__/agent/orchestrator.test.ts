@@ -442,9 +442,9 @@ describe('Orchestrator - forced stop for an update', () => {
   async function handedOutRequest(): Promise<string> {
     const trigger = await import('../../server/services/update-trigger-service.js')
     trigger.resetUpdateTriggerForTests()
-    trigger.pollUpdateTrigger()
+    trigger.pollUpdateTrigger(Date.now(), { skipBackup: false, stopAgents: true })
     const { id } = trigger.requestUpdate({ skipBackup: false, stopAgents: true })
-    trigger.pollUpdateTrigger()
+    trigger.pollUpdateTrigger(Date.now(), { skipBackup: false, stopAgents: true })
     return id
   }
 
@@ -665,17 +665,34 @@ describe('Orchestrator - forced stop for an update', () => {
     const trigger = await import('../../server/services/update-trigger-service.js')
     getDb().prepare("UPDATE workspaces SET status = 'executing'").run()
     trigger.resetUpdateTriggerForTests()
-    trigger.pollUpdateTrigger()
+    trigger.pollUpdateTrigger(Date.now(), { skipBackup: false, stopAgents: true })
     expect(trigger.getUpdateTriggerState()).toMatchObject({ busy: true, runningAgents: 0 })
     expect(() => trigger.requestUpdate({ skipBackup: false, stopAgents: false })).toThrow(trigger.UpdateTriggerError)
     const { id } = trigger.requestUpdate({ skipBackup: false, stopAgents: true })
-    trigger.pollUpdateTrigger()
+    trigger.pollUpdateTrigger(Date.now(), { skipBackup: false, stopAgents: true })
 
     const res = await maintenanceCall('POST', '/update-trigger/stop-agents', { id, owner })
 
     expect(await res.json()).toEqual({ protocol: 1, stopped: 0, unconfirmed: 0, reserved: true })
     expect(res.status).toBe(200)
     expect(maintenance.isUpdateMaintenanceActive()).toBe(true)
+  })
+
+  it('neutralises a request accepted under a spoofed poll once an older updater takes it', async () => {
+    await twoWorkspaces()
+    const maintenance = await import('../../server/services/update-maintenance-service.js')
+    const trigger = await import('../../server/services/update-trigger-service.js')
+    const { default: app } = await import('../../server/routes/maintenance.js')
+    trigger.resetUpdateTriggerForTests()
+    await app.request('/update-trigger/poll?skipBackup=1&stopAgents=1')
+    const { id } = trigger.requestUpdate({ skipBackup: true, stopAgents: true })
+
+    const polled = await (await app.request('/update-trigger/poll')).json()
+
+    expect(polled.request).toMatchObject({ id, skipBackup: false, stopAgents: false })
+    const res = await maintenanceCall('POST', '/update-trigger/stop-agents', { id, owner })
+    expect(res.status).toBe(409)
+    expect(maintenance.isUpdateMaintenanceActive()).toBe(false)
   })
 
   it('releases nothing on success', async () => {

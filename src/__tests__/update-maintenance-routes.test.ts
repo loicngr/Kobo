@@ -14,6 +14,7 @@ vi.mock('../server/services/update-trigger-service.js', async (importOriginal) =
   pollUpdateTrigger: vi.fn(),
   reportUpdateTrigger: vi.fn(),
   isStopAgentsRequest: vi.fn(),
+  stopAgentsAllowed: vi.fn(),
 }))
 
 const owner = 'a'.repeat(32)
@@ -179,7 +180,16 @@ describe('update trigger routes', () => {
 
   it('returns the state', async () => {
     const svc = await service()
-    const state = { available: true, pending: false, inProgress: false, status: null, runningAgents: 0, busy: false }
+    const state = {
+      available: true,
+      pending: false,
+      inProgress: false,
+      status: null,
+      runningAgents: 0,
+      busy: false,
+      allowSkipBackup: false,
+      allowStopAgents: false,
+    }
     vi.mocked(svc.getUpdateTriggerState).mockReturnValue(state)
     const res = await call('GET', '/update-trigger')
     expect(res.status).toBe(200)
@@ -207,15 +217,18 @@ describe('update trigger routes', () => {
     },
   )
 
-  it.each(['unavailable', 'pending', 'in-progress', 'busy'] as const)('maps %s to 409 with its code', async (code) => {
-    const svc = await service()
-    vi.mocked(svc.requestUpdate).mockImplementation(() => {
-      throw new svc.UpdateTriggerError(code)
-    })
-    const res = await call('POST', '/update-trigger', { skipBackup: false, stopAgents: false })
-    expect(res.status).toBe(409)
-    expect(await res.json()).toEqual({ error: new svc.UpdateTriggerError(code).message, code })
-  })
+  it.each(['unavailable', 'pending', 'in-progress', 'not-allowed', 'busy'] as const)(
+    'maps %s to 409 with its code',
+    async (code) => {
+      const svc = await service()
+      vi.mocked(svc.requestUpdate).mockImplementation(() => {
+        throw new svc.UpdateTriggerError(code)
+      })
+      const res = await call('POST', '/update-trigger', { skipBackup: false, stopAgents: false })
+      expect(res.status).toBe(409)
+      expect(await res.json()).toEqual({ error: new svc.UpdateTriggerError(code).message, code })
+    },
+  )
 
   it('hands the polled request out', async () => {
     const svc = await service()
@@ -223,6 +236,29 @@ describe('update trigger routes', () => {
     vi.mocked(svc.pollUpdateTrigger).mockReturnValueOnce(request).mockReturnValueOnce(null)
     expect(await (await call('GET', '/update-trigger/poll')).json()).toEqual({ protocol: 1, request })
     expect(await (await call('GET', '/update-trigger/poll')).json()).toEqual({ protocol: 1, request: null })
+  })
+
+  it.each([
+    ['', { skipBackup: false, stopAgents: false }],
+    ['?skipBackup=1&stopAgents=0', { skipBackup: true, stopAgents: false }],
+    ['?skipBackup=0&stopAgents=1', { skipBackup: false, stopAgents: true }],
+    ['?skipBackup=1&stopAgents=1', { skipBackup: true, stopAgents: true }],
+    ['?skipBackup=true&stopAgents=yes', { skipBackup: false, stopAgents: false }],
+  ])('passes the host options of the poll %j, anything but 1 meaning not allowed', async (query, allowed) => {
+    const svc = await service()
+    vi.mocked(svc.pollUpdateTrigger).mockReturnValue(null)
+    expect((await call('GET', `/update-trigger/poll${query}`)).status).toBe(200)
+    expect(svc.pollUpdateTrigger).toHaveBeenCalledWith(expect.any(Number), allowed)
+  })
+
+  it('refuses stop-agents with not-allowed when the last poll did not allow it, without reserving', async () => {
+    const svc = await service()
+    vi.mocked(svc.isStopAgentsRequest).mockReturnValue(true)
+    vi.mocked(svc.stopAgentsAllowed).mockReturnValue(false)
+    const res = await call('POST', '/update-trigger/stop-agents', { id: 'req1', owner: 'c'.repeat(32) })
+    expect(res.status).toBe(409)
+    expect(await res.json()).toMatchObject({ code: 'not-allowed', stopped: 0, unconfirmed: 0 })
+    expect(await (await call('GET', '/update')).json()).toEqual({ protocol: 1, active: false })
   })
 
   it('records a report', async () => {

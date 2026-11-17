@@ -2421,6 +2421,9 @@ export default {
   'updateTrigger.agentsRunning': 'Agents en cours : {count}. La mise à jour nécessite de les arrêter.',
   'updateTrigger.workspaceMarkedRunning':
     "Un workspace est encore marqué comme en cours, bien qu'aucun agent ne tourne. La mise à jour nécessite de confirmer l'arrêt ci-dessous.",
+  'updateTrigger.backupAlways': 'Ce serveur sauvegarde toujours les données avant la mise à jour.',
+  'updateTrigger.stopNotAllowed':
+    "Ce serveur n'autorise pas l'arrêt des agents pour une mise à jour : attendez qu'ils terminent ou arrêtez-les, puis réessayez.",
   'updateTrigger.stopAgents': 'Arrêter les agents en cours et mettre à jour',
   'updateTrigger.stopAgentsWarning': 'Cochez la case pour confirmer que les agents en cours peuvent être arrêtés.',
   'updateTrigger.confirm': 'Mettre à jour maintenant',
@@ -2448,6 +2451,8 @@ export default {
   'updateTrigger.result.lost':
     "La mise à jour ne donne plus de nouvelles. Vérifiez le serveur avant d'en lancer une autre.",
   'updateTrigger.result.completeNoVersion': 'La mise à jour est terminée.',
+  'updateTrigger.error.notAllowed':
+    "Ce serveur n'autorise pas cette option de mise à jour. Rechargez la page et réessayez.",
   'updateTrigger.error.unavailable':
     "Le déclencheur de mise à jour du serveur ne répond pas. Il n'est peut-être pas installé.",
   'updateTrigger.error.network':

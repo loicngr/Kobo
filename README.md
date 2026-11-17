@@ -172,7 +172,7 @@ Agents and project commands run with the server account's privileges and the sel
 | [Getting started](./docs/getting-started.md) | Requirements, first-run setup and your first mission. |
 | [Configuration](./CONFIGURATION.md) | Settings, engines, integrations, automation and environment variables. |
 | [Dev-server previews](./docs/dev-server-preview.md) | Layouts, mobile behavior, local/Docker setup and authenticated remote previews. |
-| [VPS deployment](./docs/deployment-vps.md) | Installation, HTTPS, credentials, backups and updates. |
+| [VPS deployment](./docs/deployment-vps.md) | Installation, HTTPS, credentials, backups and updates, from a terminal or from the interface. |
 | [VPS projects and skills](./docs/vps-projects-and-skills.md) | Project environments, remote dev servers and container-side tools. |
 | [MCP](./src/mcp-server/README.md) | Agent tools, external clients and scoped authorization. |
 | [Troubleshooting](./docs/troubleshooting.md) | Environment checks, recovery and common problems. |

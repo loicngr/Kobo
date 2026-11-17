@@ -16,6 +16,8 @@ const base: UpdateTriggerState = {
   status: null,
   runningAgents: 0,
   busy: false,
+  allowSkipBackup: true,
+  allowStopAgents: true,
 }
 const at = '2026-11-17T10:00:00.000Z'
 const restarting = { ...base, inProgress: true, status: { id: 'req-1', phase: 'restarting', updatedAt: at } } as const

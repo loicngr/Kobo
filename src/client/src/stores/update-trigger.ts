@@ -4,6 +4,7 @@ import { apiFetch } from 'src/utils/api'
 import { computed, ref } from 'vue'
 import {
   UPDATE_TRIGGER_TERMINAL,
+  type UpdateTriggerErrorCode,
   type UpdateTriggerPhase,
   type UpdateTriggerReason,
   type UpdateTriggerState,
@@ -71,6 +72,15 @@ export const REASON_KEY = {
   'legacy-runtime': 'updateTrigger.reason.legacyRuntime',
   unknown: 'updateTrigger.reason.unknown',
 } as const satisfies Record<UpdateTriggerReason, string>
+
+/** Text of a refused request; a new server code fails type-checking here until it has one. */
+export const ERROR_KEY = {
+  busy: REASON_KEY.busy,
+  pending: REASON_KEY['already-running'],
+  'in-progress': REASON_KEY['already-running'],
+  unavailable: 'updateTrigger.error.unavailable',
+  'not-allowed': 'updateTrigger.error.notAllowed',
+} as const satisfies Record<UpdateTriggerErrorCode, string>
 
 interface Stored {
   id: string
@@ -266,6 +276,8 @@ export const useUpdateTriggerStore = defineStore('update-trigger', () => {
       available: true,
       runningAgents: 0,
       busy: false,
+      allowSkipBackup: false,
+      allowStopAgents: false,
       ...state.value,
       pending: true,
       inProgress: false,
