@@ -1084,6 +1084,8 @@ Checks share one request across browser tabs, have a five-second deadline, and d
 
 These checks report availability only: they do not install packages or restart Kōbō automatically.
 
+On a VPS Docker deployment, an operator can opt in to updating from the changelog page (**Update Kōbō** button). It needs a one-time `sudo <stack>/bin/kobo-update --install-ui-trigger --directory <stack>` on the host, always installs the latest stable release, and offers no recovery from the interface. There is no Kōbō setting for it: see [Update from the interface](./docs/deployment-vps.md#update-from-the-interface) and its [trust boundary](./SECURITY.md#update-from-the-interface).
+
 ## Network access
 
 By default, Kōbō binds its HTTP and WebSocket server to `127.0.0.1` (localhost

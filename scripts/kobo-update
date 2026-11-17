@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Update a standalone Kōbō Compose deployment. Python 3.10+; standard library only."""
 import argparse
+import contextlib
 import fcntl
 import json
 import os
 from pathlib import Path
+import pwd
 import re
 import shutil
 import signal
@@ -64,10 +66,36 @@ const body = await r.json().catch(() => ({}));
 console.log(JSON.stringify({status:r.status, protocol:body.protocol}));
 })().catch(() => process.exit(1));
 """
+TRIGGER_JS = r"""
+(async () => {
+const fs = require('fs');
+const token = JSON.parse(fs.readFileSync('/root/.config/kobo/settings.json','utf8')).global.networkAccessToken;
+if (!token) throw new Error('Missing network token');
+const [method, path, body, timeout] = process.argv.slice(1);
+const options = {method, headers:{'X-Kobo-Token':token,'Content-Type':'application/json'}, signal:AbortSignal.timeout(Number(timeout) || 10000)};
+if (body) options.body = body;
+const r = await fetch(`http://127.0.0.1:${process.env.SERVER_PORT || 3000}/api/maintenance/${path}`,options);
+console.log(JSON.stringify({status:r.status, body:await r.json().catch(() => ({}))}));
+})().catch(() => process.exit(1));
+"""
+BUSY_MESSAGE = 'Kōbō is busy: wait for agents or stop them in the UI, then retry.'
+# Updater phase -> phase reported to Kōbō; 'prepared' is never reported.
+# 'reserving' is not reported: the restart is announced once the reservation is obtained.
+REPORTED_PHASES = {'building': 'building', 'stopping': 'restarting',
+                   'backed-up': 'restarting', 'backup-skipped': 'restarting', 'launching': 'restarting',
+                   'complete': 'complete', 'aborted': 'aborted', 'recovery-required': 'recovery-required'}
+UNIT_NAME = 'kobo-ui-update'
+UNIT_DIR = Path('/etc/systemd/system')
+UNSAFE_UNIT_PATH = re.compile(r'[\s"\'\\\\%$]')
+UNIT_USER = re.compile(r'[A-Za-z_][A-Za-z0-9_.-]*\$?')
+REPORT_REASONS = ('busy', 'already-running', 'interrupted-update', 'legacy-runtime', 'unknown')
+FINAL_PHASES = ('complete', 'up-to-date', 'refused', 'aborted', 'recovery-required')
 
 
 class UpdateError(Exception):
-    pass
+    def __init__(self, message, code=None):
+        super().__init__(message)
+        self.code = code
 
 
 def atomic_write(path, data, mode=0o600):
@@ -120,6 +148,11 @@ class Updater:
         self.public_url = None
         self.maintenance_owner = uuid.uuid4().hex
 
+    # UI-requested run: {'id', 'skipBackup', 'stopAgents'}; None for every command-line run.
+    ui = None
+    reported = None  # last phase sent, to never repeat it
+    refused = None  # code of a coded refusal that ends before the container was stopped
+
     def command_environment(self, args):
         env = os.environ.copy()
         if args[:2] == ['docker', 'compose']:
@@ -161,11 +194,54 @@ class Updater:
     def record(self, phase, **values):
         self.state.update(values, phase=phase)
         atomic_write(self.job / 'state.json', json.dumps(self.state, indent=2).encode())
+        # A SIGTERM during the docker exec of a terminal report turns the phase into recovery-required
+        # although the update finished: conservative, accepted.
+        if phase == 'aborted' and self.refused:
+            self.report('refused', self.refused)
+        elif phase in REPORTED_PHASES:
+            self.report(REPORTED_PHASES[phase])
+
+    def forced_stop(self):
+        return bool(self.ui and self.ui['stopAgents'])
+
+    def trigger(self, method, path, body=None, timeout=10):
+        """Call /api/maintenance/<path> inside the container; None on any failure."""
+        try:
+            return json.loads(self.run(['docker', 'exec', self.container, 'node', '-e', TRIGGER_JS, method, path,
+                                        json.dumps(body) if body is not None else '', str(timeout * 1000)],
+                                       timeout=timeout + 20))
+        except Exception:
+            return None
+
+    def report(self, phase, reason=None):
+        if not self.ui or phase == self.reported:
+            return
+        self.reported = phase
+        if reason is not None and reason not in REPORT_REASONS:
+            reason = 'unknown'  # never send a value Kōbō does not know
+        if phase in FINAL_PHASES:
+            # `up` recreates the container when the image changes: send to the one running now.
+            # No single container found keeps the previous id: the report stays best effort.
+            self.locate()
+        self.trigger('POST', 'update-trigger/report',
+                     {'id': self.ui['id'], 'phase': phase, **({'reason': reason} if reason else {})})
+
+    def locate(self):
+        try:
+            ids = self.run(self.compose('ps', '-q', 'kobo')).splitlines()
+        except Exception:
+            return False
+        if len(ids) != 1:
+            return False
+        self.container = ids[0]
+        return True
 
     def idle(self):
+        if self.forced_stop():
+            return  # agents are stopped by Kōbō itself after the build
         counts = json.loads(self.run(['docker', 'exec', self.container, 'node', '-e', BUSY_JS]))
         if counts['sessions'] or counts['workspaces']:
-            raise UpdateError('Kōbō is busy: wait for agents or stop them in the UI, then retry.')
+            raise UpdateError(BUSY_MESSAGE, code='busy')
 
     def maintenance(self, method):
         reply = json.loads(self.run(['docker', 'exec', self.container, 'node', '-e',
@@ -173,9 +249,11 @@ class Updater:
         if method == 'DELETE' and reply['status'] == 409:
             return  # Our reservation was never acquired or has already been released.
         if reply['status'] == 404 or (reply['status'] == 200 and reply.get('protocol') != 1):
-            raise UpdateError('Runtime lacks atomic update reservation. Use --prepare and perform the first upgrade manually; see the VPS guide.')
+            raise UpdateError('Runtime lacks atomic update reservation. Use --prepare and perform the first upgrade manually; see the VPS guide.', code='legacy-runtime')
         if reply['status'] != 200:
-            raise UpdateError(f'Update reservation {method} refused (HTTP {reply["status"]}).')
+            # A 409 on POST: an agent started after the idle check.
+            busy = 'busy' if method == 'POST' and reply['status'] == 409 else None
+            raise UpdateError(f'Update reservation {method} refused (HTTP {reply["status"]}).', code=busy)
 
     def inspect(self):
         ids = self.run(self.compose('ps', '-q', 'kobo')).splitlines()
@@ -359,7 +437,7 @@ class Updater:
         self.skip_backup = skip_backup and not (check_only or prepare_only)
         for state in (self.stack / 'updates').glob('*/state.json'):
             if json.loads(state.read_text())['phase'] not in {'complete','prepared','aborted'}:
-                raise UpdateError(f'Interrupted update requires review: {state}. See RECOVERY.md in that directory.')
+                raise UpdateError(f'Interrupted update requires review: {state}. See RECOVERY.md in that directory.', code='interrupted-update')
         old_tag = self.inspect()
         version, sha = self.resolve(requested)
         say(f'Installed: {self.installed} — target: {version} ({sha[:12]}).')
@@ -370,6 +448,7 @@ class Updater:
             return
         if version == self.installed and not prepare_only:
             say('This version is already installed. Nothing to do.')
+            self.report('up-to-date')
             return
         if self.skip_backup:
             say('WARNING: --skip-backup: no kobo.tar.gz archive will be created. '
@@ -386,7 +465,9 @@ class Updater:
                     backup_archive=None if self.skip_backup else 'kobo.tar.gz',
                     backup_scope=None if self.skip_backup else '/root/.config/kobo',
                     backup_skipped=self.skip_backup,
-                    backup_complete=False, new_version_start_attempted=False)
+                    backup_complete=False, new_version_start_attempted=False,
+                    # A UI run only: lets a later timer run re-send a recovery-required report.
+                    **({'ui_request_id': self.ui['id']} if self.ui else {}))
         self.recovery_notes()
         stopped = False
         launching = False
@@ -409,7 +490,10 @@ class Updater:
             self.record('reserving', image=image)
             # Set before sending: a lost response can still mean the server acquired our reservation.
             maintenance_requested = True
-            self.maintenance('POST')
+            if self.forced_stop():
+                self.stop_agents()  # also takes the reservation, so no maintenance('POST')
+            else:
+                self.maintenance('POST')
             self.record('stopping')
             stopped = True  # Also recover if the stop command itself fails/interruption arrives.
             say('Stopping Kōbō, SKIPPING the backup (--skip-backup) and testing migrations on a database copy…'
@@ -438,7 +522,7 @@ class Updater:
             self.record('complete')
             say(f'Kōbō {version} is up to date. No backup was created (--skip-backup).' if self.skip_backup
                 else f'Kōbō {version} is up to date. Backup: {self.job / "kobo.tar.gz"}')
-        except BaseException:
+        except BaseException as e:
             if stopped and not launching:
                 # Only safe before any process from the new version has used production data.
                 try:
@@ -465,11 +549,28 @@ class Updater:
                 try:
                     if maintenance_requested:
                         self.maintenance('DELETE')
+                    self.refused = e.code if isinstance(e, UpdateError) else None
                     self.record('aborted')
                 except BaseException:
                     self.record('recovery-required')
                     say(f'Update reservation may still be active. Instructions: {self.job / "RECOVERY.md"}')
             raise
+
+    def stop_agents(self):
+        self.report('stopping-agents')
+        reply = self.trigger('POST', 'update-trigger/stop-agents',
+                             {'id': self.ui['id'], 'owner': self.maintenance_owner}, 60)
+        body = (reply or {}).get('body')
+        body = body if isinstance(body, dict) else {}
+        status = (reply or {}).get('status')
+        if status == 200 and body.get('reserved') is True and type(body.get('unconfirmed')) is int and body['unconfirmed'] == 0:
+            return
+        if status == 409 and body.get('code') == 'conflict':
+            raise UpdateError('Another update is already running.', code='already-running')
+        if status == 409 and body.get('code') == 'busy':
+            raise UpdateError(BUSY_MESSAGE, code='busy')
+        # No code, another status, a lost or malformed reply (e.g. Kōbō restarted and forgot the request).
+        raise UpdateError('The request to stop the agents was not accepted by Kōbō', code='unknown')
 
     def recovery_notes(self):
         import shlex
@@ -539,12 +640,217 @@ After recovery and health verification, set state.json phase to complete or abor
 ''')
 
 
+def unit_files(stack, script, user):
+    if not UNIT_USER.fullmatch(user):
+        raise UpdateError('The stack directory owner has a user name that cannot be used in a systemd unit.')
+    for path in (stack, script):
+        if UNSAFE_UNIT_PATH.search(str(path)):
+            raise UpdateError(f'Unsupported path for a systemd unit (spaces, quotes, backslash, % or $): {path}')
+    return {
+        f'{UNIT_NAME}.service': f"""[Unit]
+Description=Run a Kōbō update requested from the web interface
+After=docker.service
+
+[Service]
+Type=oneshot
+User={user}
+WorkingDirectory={stack}
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart={script} --serve-ui-request --directory {stack}
+TimeoutStopSec=600
+KillMode=mixed
+""",
+        f'{UNIT_NAME}.timer': f"""[Unit]
+Description=Poll Kōbō for an update requested from the web interface
+
+[Timer]
+OnBootSec=1min
+OnUnitInactiveSec=1min
+AccuracySec=5s
+Unit={UNIT_NAME}.service
+
+[Install]
+WantedBy=timers.target
+""",
+    }
+
+
+def owner_uid(stack):
+    return os.stat(stack).st_uid
+
+
+def systemctl(*args):
+    try:
+        ok = subprocess.run(['systemctl', *args], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            timeout=60, check=False).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        ok = False
+    return ok
+
+
+def require_root():
+    if os.geteuid() != 0:
+        raise UpdateError('Run this once with sudo: it writes systemd units.')
+
+
+def check_script(script, uid):
+    """The timer runs this file every minute as the stack owner: nobody else may be able to change it."""
+    if not script.is_file():
+        raise UpdateError(f'The updater script was not found: {script}')
+    for path, what in ((script, 'script'), (script.parent, 'script directory')):
+        st = path.stat()
+        if st.st_uid not in (0, uid):
+            raise UpdateError(f'The {what} {path} must be owned by root or by the stack owner.')
+        if st.st_mode & 0o022:
+            raise UpdateError(f'The {what} {path} must not be writable by group or others.')
+    # Checked as root, for whom any exec bit is enough. The unit runs the script as the stack owner:
+    # owned by the stack owner, it needs the owner's read and exec bits; owned by root, it needs the
+    # read and exec bits for others. Group membership is not resolved: group bits never count.
+    st = script.stat()
+    if st.st_uid == uid:
+        if st.st_mode & 0o500 != 0o500:
+            raise UpdateError(f'The updater script is not executable: chmod +x {script}')
+    elif st.st_mode & 0o005 != 0o005:
+        raise UpdateError(f'The updater script is not executable by the stack owner: a root-owned script must be '
+                          f'readable and executable by others (chmod o+rx {script}).')
+    with script.open('rb') as f:
+        if f.read(2) != b'#!':
+            raise UpdateError(f'The updater script has no #! first line: {script}')
+
+
+def install_ui_trigger(stack, unit_dir=UNIT_DIR, *, script=None):
+    require_root()
+    if not unit_dir.is_dir() or not shutil.which('systemctl'):
+        raise UpdateError(f'This host does not use systemd (no systemctl or no {unit_dir}): cannot install the trigger.')
+    stack = Path(stack).resolve()
+    if not (stack / 'compose.yaml').is_file():
+        raise UpdateError(f'No compose.yaml in {stack}.')
+    uid = owner_uid(stack)
+    if uid == 0:
+        raise UpdateError('The stack directory is owned by root: the updater would run as root. Use the deployment user.')
+    try:
+        user = pwd.getpwuid(uid).pw_name
+    except KeyError:
+        raise UpdateError(f'The stack directory owner (uid {uid}) has no user entry.')
+    script = Path(script or __file__).resolve()
+    files = unit_files(stack, script, user)
+    check_script(script, uid)
+    paths = {unit_dir / name: text for name, text in files.items()}
+    previous = {path: path.read_bytes() if path.exists() else None for path in paths}
+    try:
+        for path, text in paths.items():
+            atomic_write(path, text.encode(), 0o644)
+        if not (systemctl('daemon-reload') and systemctl('enable', '--now', f'{UNIT_NAME}.timer')):
+            raise UpdateError(f'systemctl failed: the trigger was not installed. '
+                              f'Run "systemctl status {UNIT_NAME}.timer" to see why.')
+    except BaseException:
+        # Best effort, never replaces the original error: restore a previous install, drop a new one.
+        for path, old in previous.items():
+            try:
+                if old is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    atomic_write(path, old, 0o644)
+            except Exception:
+                pass
+        if previous[unit_dir / f'{UNIT_NAME}.timer'] is None:
+            systemctl('disable', '--now', f'{UNIT_NAME}.timer')
+        systemctl('daemon-reload')
+        raise
+    say(f'Update trigger installed: Kōbō is polled every minute, as {user}.')
+    say(f'Remove it with: sudo {script} --uninstall-ui-trigger')
+
+
+def uninstall_ui_trigger(unit_dir=UNIT_DIR):
+    require_root()
+    systemctl('disable', '--now', f'{UNIT_NAME}.timer')  # fine when the unit is not loaded
+    for name in (f'{UNIT_NAME}.timer', f'{UNIT_NAME}.service'):
+        (unit_dir / name).unlink(missing_ok=True)
+    if not systemctl('daemon-reload'):
+        raise UpdateError('systemctl daemon-reload failed.')
+    say('Update trigger removed.')
+
+
+@contextlib.contextmanager
+def update_lock(directory):
+    with (directory / '.update.lock').open('a') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise UpdateError('Another update is already running.', code='already-running')
+        yield
+
+
+def serve_ui_request(stack):
+    """Timer entry point: run the update the web UI asked for, if any. Silent otherwise; 1 while recovery is needed."""
+    # A failed unit is the operator's only signal when the web interface is down: keep it failed,
+    # without polling, until the operator ends the recovery (unreadable states are left to execute()).
+    recovery = []
+    for state in sorted(Path(stack).glob('updates/*/state.json')):
+        try:
+            values = json.loads(state.read_text())
+            phase = values.get('phase')
+        except (OSError, ValueError, AttributeError):
+            continue
+        if phase == 'recovery-required':
+            recovery.append((state.parent.name, values.get('ui_request_id')))
+    if recovery:
+        for _, request_id in recovery:
+            if isinstance(request_id, str):
+                # The report sent at the failure is lost if the new version was not answering yet.
+                # Kōbō adopts it only while it tracks nothing else, so repeating it is harmless.
+                updater = Updater(stack)
+                updater.ui = {'id': request_id, 'skipBackup': False, 'stopAgents': False}
+                updater.report('recovery-required')
+        say(f'Update {recovery[0][0]} requires recovery: see RECOVERY.md in its directory.')
+        return 1
+    updater = Updater(stack)
+    with contextlib.ExitStack() as held:
+        try:
+            # Before polling: the poll settles an unfinished status, which is only right while no
+            # update runs. A held lock means one does; the request stays pending for the next run.
+            held.enter_context(update_lock(updater.stack))
+        except UpdateError:
+            return 0
+        except OSError:
+            # Typically a lock left root-owned by a past `sudo kobo-update`: say so, do not fail the unit.
+            say('Cannot open the update lock in the stack directory; check its owner.')
+            return 0
+        if not updater.locate():
+            return 0
+        reply = updater.trigger('GET', 'update-trigger/poll')
+        body = reply.get('body') if reply and reply.get('status') == 200 else None
+        request = body.get('request') if isinstance(body, dict) else None
+        if not isinstance(request, dict) or not isinstance(request.get('id'), str):
+            return 0
+        updater.ui = {'id': request['id'], 'skipBackup': request.get('skipBackup') is True,
+                      'stopAgents': request.get('stopAgents') is True}
+        try:
+            updater.execute('latest', skip_backup=updater.ui['skipBackup'])
+        except (Exception, KeyboardInterrupt) as e:
+            say(f'Stopped: {str(e) if isinstance(e, UpdateError) else type(e).__name__}.')
+            if updater.reported not in FINAL_PHASES:  # otherwise record() already reported the outcome
+                phase = updater.state.get('phase')
+                if phase == 'recovery-required':
+                    updater.report('recovery-required')
+                elif phase in (None, 'building', 'reserving'):  # the container was never stopped
+                    updater.report('refused', (e.code if isinstance(e, UpdateError) else None) or 'unknown')
+    # A failed unit is the operator's only signal when the web interface is down.
+    return 1 if updater.state.get('phase') == 'recovery-required' else 0
+
+
 def main():
     parser = argparse.ArgumentParser(description='Update a Kōbō VPS Compose stack (latest stable release by default).')
     parser.add_argument('version', nargs='?', default='latest', help='latest, 2.1.16 or v2.1.16')
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument('--check', action='store_true', help='check without building or interrupting the service')
     modes.add_argument('--prepare', action='store_true', help='build and test the image without deploying')
+    modes.add_argument('--install-ui-trigger', action='store_true',
+                       help='install the systemd timer that runs updates requested from the web interface (sudo)')
+    modes.add_argument('--uninstall-ui-trigger', action='store_true',
+                       help='remove that systemd timer (sudo)')
+    modes.add_argument('--serve-ui-request', action='store_true',
+                       help='run the update requested from the Kōbō web interface, if any (for a timer)')
     parser.add_argument('--directory', type=Path, default=Path.cwd(),
                         help='deployment directory containing compose.yaml and .env (default: current directory)')
     parser.add_argument('--skip-backup', action='store_true',
@@ -553,16 +859,24 @@ def main():
     args = parser.parse_args()
     if args.skip_backup and (args.check or args.prepare):
         parser.error('--skip-backup only applies to a real deployment, not --check or --prepare')
+    for flag, selected in (('--serve-ui-request', args.serve_ui_request),
+                           ('--install-ui-trigger', args.install_ui_trigger),
+                           ('--uninstall-ui-trigger', args.uninstall_ui_trigger)):
+        if selected and (args.skip_backup or args.version != 'latest'):
+            parser.error(f'{flag} does not take --skip-backup or a version')
     os.umask(0o077)
     for sig in (signal.SIGTERM, signal.SIGHUP):
         signal.signal(sig, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
+    if args.serve_ui_request:
+        return serve_ui_request(args.directory)
     try:
-        with (args.directory / '.update.lock').open('a') as lock:
-            try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                raise UpdateError('Another update is already running.')
-            Updater(args.directory).execute(args.version, args.check, args.prepare, args.skip_backup)
+        if args.install_ui_trigger:
+            install_ui_trigger(args.directory)
+        elif args.uninstall_ui_trigger:
+            uninstall_ui_trigger()
+        else:
+            with update_lock(args.directory):
+                Updater(args.directory).execute(args.version, args.check, args.prepare, args.skip_backup)
     except (Exception, KeyboardInterrupt) as e:
         message = str(e) if isinstance(e, UpdateError) else type(e).__name__
         say(f'Stopped: {message}.')

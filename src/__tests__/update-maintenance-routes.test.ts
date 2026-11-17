@@ -7,6 +7,14 @@ import type { SessionController } from '../server/services/agent/session-control
 import { releaseUpdateMaintenance } from '../server/services/update-maintenance-service.js'
 
 vi.mock('../server/services/websocket-service.js', () => ({ emit: vi.fn(), emitEphemeral: vi.fn() }))
+vi.mock('../server/services/update-trigger-service.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../server/services/update-trigger-service.js')>()),
+  getUpdateTriggerState: vi.fn(),
+  requestUpdate: vi.fn(),
+  pollUpdateTrigger: vi.fn(),
+  reportUpdateTrigger: vi.fn(),
+  isStopAgentsRequest: vi.fn(),
+}))
 
 const owner = 'a'.repeat(32)
 let directory: string
@@ -148,5 +156,114 @@ describe('update maintenance HTTP reservation', () => {
     } finally {
       agents._getControllers().delete('closing')
     }
+  })
+})
+
+describe('update trigger routes', () => {
+  async function call(method: string, path: string, body?: unknown) {
+    const { default: app } = await import('../server/routes/maintenance.js')
+    return app.request(path, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    })
+  }
+
+  async function service() {
+    return await import('../server/services/update-trigger-service.js')
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('returns the state', async () => {
+    const svc = await service()
+    const state = { available: true, pending: false, inProgress: false, status: null, runningAgents: 0, busy: false }
+    vi.mocked(svc.getUpdateTriggerState).mockReturnValue(state)
+    const res = await call('GET', '/update-trigger')
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual(state)
+  })
+
+  it('accepts a request with 202 and its id', async () => {
+    const svc = await service()
+    vi.mocked(svc.requestUpdate).mockReturnValue({
+      id: 'req1',
+      skipBackup: true,
+      stopAgents: false,
+      requestedAt: '2026-01-01T00:00:00.000Z',
+    })
+    const res = await call('POST', '/update-trigger', { skipBackup: true, stopAgents: false })
+    expect(res.status).toBe(202)
+    expect(await res.json()).toEqual({ id: 'req1' })
+    expect(svc.requestUpdate).toHaveBeenCalledWith({ skipBackup: true, stopAgents: false })
+  })
+
+  it.each([{ skipBackup: 'yes', stopAgents: false }, { skipBackup: true }, {}])(
+    'rejects a non-boolean body %j',
+    async (body) => {
+      expect((await call('POST', '/update-trigger', body)).status).toBe(400)
+    },
+  )
+
+  it.each(['unavailable', 'pending', 'in-progress', 'busy'] as const)('maps %s to 409 with its code', async (code) => {
+    const svc = await service()
+    vi.mocked(svc.requestUpdate).mockImplementation(() => {
+      throw new svc.UpdateTriggerError(code)
+    })
+    const res = await call('POST', '/update-trigger', { skipBackup: false, stopAgents: false })
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ error: new svc.UpdateTriggerError(code).message, code })
+  })
+
+  it('hands the polled request out', async () => {
+    const svc = await service()
+    const request = { id: 'req1', skipBackup: false, stopAgents: true, requestedAt: '2026-01-01T00:00:00.000Z' }
+    vi.mocked(svc.pollUpdateTrigger).mockReturnValueOnce(request).mockReturnValueOnce(null)
+    expect(await (await call('GET', '/update-trigger/poll')).json()).toEqual({ protocol: 1, request })
+    expect(await (await call('GET', '/update-trigger/poll')).json()).toEqual({ protocol: 1, request: null })
+  })
+
+  it('records a report', async () => {
+    const svc = await service()
+    vi.mocked(svc.reportUpdateTrigger).mockReturnValue(true)
+    const res = await call('POST', '/update-trigger/report', { id: 'req1', phase: 'refused', reason: 'busy' })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ protocol: 1 })
+    expect(svc.reportUpdateTrigger).toHaveBeenCalledWith('req1', 'refused', 'busy')
+  })
+
+  it('rejects values outside the fixed sets', async () => {
+    expect((await call('POST', '/update-trigger/report', { id: 'req1', phase: 'nope' })).status).toBe(400)
+    expect(
+      (await call('POST', '/update-trigger/report', { id: 'req1', phase: 'refused', reason: 'nope' })).status,
+    ).toBe(400)
+    expect((await call('POST', '/update-trigger/report', { phase: 'refused' })).status).toBe(400)
+  })
+
+  it('refuses stop-agents for a request without stopAgents, without reserving', async () => {
+    const svc = await service()
+    vi.mocked(svc.isStopAgentsRequest).mockReturnValue(false)
+    const res = await call('POST', '/update-trigger/stop-agents', { id: 'req1', owner: 'c'.repeat(32) })
+    expect(res.status).toBe(409)
+    expect(svc.isStopAgentsRequest).toHaveBeenCalledWith('req1')
+    expect(await (await call('GET', '/update')).json()).toEqual({ protocol: 1, active: false })
+  })
+
+  it.each([
+    {},
+    { id: 'req1' },
+    { id: 'req1', owner: 'short' },
+    { id: 'req1', owner: 'C'.repeat(32) },
+    { owner: 'c'.repeat(32) },
+  ])('rejects a malformed stop-agents body %j', async (body) => {
+    expect((await call('POST', '/update-trigger/stop-agents', body)).status).toBe(400)
+  })
+
+  it('answers 409 for an unknown report id', async () => {
+    const svc = await service()
+    vi.mocked(svc.reportUpdateTrigger).mockReturnValue(false)
+    expect((await call('POST', '/update-trigger/report', { id: 'old', phase: 'building' })).status).toBe(409)
   })
 })

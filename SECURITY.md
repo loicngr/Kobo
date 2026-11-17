@@ -100,6 +100,70 @@ their authentication, API URLs and data sources. A worktree does not isolate a
 database, and the preview is not a public sharing feature. See the
 [preview guide](./docs/dev-server-preview.md) for deployment and limitations.
 
+## Update from the interface
+
+The optional **Update Kōbō** button (VPS Docker deployments, see
+[Update from the interface](./docs/deployment-vps.md#update-from-the-interface))
+adds a request channel from the operator API to a host updater. The trust boundary:
+
+- **New capability.** An agent able to run shell commands in the container can already
+  reach the loopback operator API, so it can now make the host updater build an image,
+  stop and replace the container, which it could not do before. It cannot choose what
+  is deployed (always the latest stable release), but it can request an update without
+  a backup and with the other agents stopped. The updater runs as the stack owner, who
+  needs Docker access and is therefore root-equivalent on the host. Treat an update
+  request as an operator action.
+- **What the request carries.** Only two booleans (back up, stop agents): no version,
+  command or path. From the poll reply the host accepts nothing except a string request
+  id and those two booleans (each honoured only when exactly `true`), echoes the id
+  back in its status reports, and executes nothing taken from the reply. From the
+  `stop-agents` reply it reads `reserved` and `unconfirmed`: the container is stopped
+  only when `reserved` is `true` and `unconfirmed` is the integer `0`; any other reply
+  refuses the update.
+- **How the host reaches Kōbō.** Only through `docker exec` into the container. The
+  in-container snippet reads the network token from `settings.json` in the Kōbō home,
+  as the existing update-maintenance calls already do; nothing else from the data
+  directory is read or written to exchange requests or reports. Nothing runs as root
+  except the one-time unit installation. (The update itself still archives and
+  migrates the data directory, exactly as a manual `kobo-update` does.)
+- **The script the timer runs.** The timer runs it every minute as the stack owner, so
+  the installer refuses a script or script directory not owned by root or the stack
+  owner, or writable by group or others. Ancestors of the script's directory are not
+  checked. Never mount the deployment directory or its `bin/` into the container, and
+  keep it outside `KOBO_PROJECTS_DIR`, which `docker-compose.vps.yml` bind-mounts.
+  With the guided installer, agents run by default under the same numeric uid as the
+  stack owner: `KOBO_UID` defaults to the installing user, who also creates and owns
+  the deployment directory. The protection is therefore that the deployment directory
+  and its `bin/` are not mounted in the container: `docker-compose.vps.yml` mounts only
+  the `kobo-home` volume and `KOBO_PROJECTS_DIR` (by default `<stack>/projects`, a
+  subdirectory that does not expose its parent), and the optional GitHub App helpers
+  are single files mounted read-only. An added mount of the deployment directory would
+  let an agent rewrite what the timer executes. With the opt-in Docker socket the
+  trigger adds nothing an agent could not already do.
+- **`sudo` install.** Running the installer with `sudo` executes a file owned by the
+  stack owner as root. Install only a script you trust.
+- **Availability signal.** The button appears while anything has polled
+  `GET /api/maintenance/update-trigger/poll` within 180 seconds. That is an ordinary
+  operator route: anything able to call the operator API, an agent with shell access
+  included, can make the button appear and can take a pending request.
+- **Impersonating the updater.** The same caller can play the updater: `poll`, then
+  `POST /api/maintenance/update-trigger` with `stopAgents: true`, `poll` again to take
+  that request, then `stop-agents`. This stops every agent with no update at all and
+  holds an update-maintenance reservation, so no agent can start, until its owner
+  releases it or Kōbō restarts; the reservation does not expire. The marginal power is
+  small: the operator API already lets such a caller stop agents. Because the real
+  updater polls only between updates, a poll also forgets an unfinished status: a
+  spoofed poll during a real update makes the page lose track of it, can make its
+  `stop-agents` call be refused (which refuses the update before the container is
+  stopped) and lets a new request be queued, which the updater's lock keeps from
+  running before the current update ends. A forged `report`
+  changes what the page shows and can make the real updater's `stop-agents` call or
+  reports be refused (a refused `stop-agents` refuses that update before the container
+  is stopped); it cannot start an update, stop the container or change what is
+  deployed.
+- Request and status are held in memory by the backend and carry only fixed phases and
+  reasons, never free text, log lines or credentials. They are not exposed to MCP.
+
 ## Data and credentials
 
 KOBO_HOME stores conversations, workspaces, backups and settings. Direct integration

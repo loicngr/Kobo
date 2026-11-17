@@ -1,3 +1,4 @@
+import { anchorPresent } from './dom'
 import type { TourDefinition } from './types'
 
 export const healthTour: TourDefinition = {
@@ -24,5 +25,14 @@ export const changelogTour: TourDefinition = {
   id: 'changelog',
   route: 'changelog',
   i18nKey: 'tours.changelog',
-  steps: [{ id: 'changelog-list', anchor: 'changelog-list', i18nKey: 'tours.changelog.list' }],
+  steps: [
+    { id: 'changelog-list', anchor: 'changelog-list', i18nKey: 'tours.changelog.list' },
+    {
+      id: 'changelog-update',
+      anchor: 'changelog-update',
+      i18nKey: 'tours.changelog.update',
+      gate: 'dom',
+      when: () => anchorPresent('changelog-update'),
+    },
+  ],
 }

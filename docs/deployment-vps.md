@@ -561,7 +561,9 @@ a named volume mounted at `/root`, and an HTTPS proxy hostname in the service
 environment. It reads the Compose project name, hostname and volume rather than
 assuming a particular server. It uses the local Docker daemon; do not point it
 at a remote Docker context. It requires network access to npm, GitHub and image
-build dependencies. It does not update Traefik or install a scheduled auto-updater.
+build dependencies. It does not update Traefik or install a scheduled auto-updater. (The optional
+[interface trigger](#update-from-the-interface) installs a polling timer, but never
+starts an update without a click.)
 
 Keep `kobo-vps-entrypoint` beside `kobo-update` when updating the operator scripts (the guided installer places both in `bin/`). This is required even when building an older release.
 
@@ -669,6 +671,223 @@ For troubleshooting, start with `docker compose ps`, the private update log and
 `docker compose logs --tail 100 kobo`. A Traefik 404/502 calls for checking the
 shared network, hostname, resolver and container health before restoring data.
 The application update banner only reports releases; it does not run this script.
+The optional [interface button](#update-from-the-interface) does, through a host timer
+you install yourself.
+
+## Update from the interface
+
+Once a host timer is installed, the changelog page can show an **Update Kōbō**
+button. It runs the same `kobo-update` as above on the host, without a terminal. It
+always deploys the **latest stable release**: there is no version choice, no
+`--check`/`--prepare`, and no recovery from the interface. A failed update that needs
+recovery is handled on the host, as described in
+[Backups and failed updates](#backups-and-failed-updates).
+
+The browser never talks to the host. Kōbō only records the request in memory. A
+systemd timer on the host runs `kobo-update --serve-ui-request` every minute; the
+script asks the running container (`docker exec`, using the network token inside the
+container) whether a request is waiting, and runs the normal update when one is. The
+request carries two booleans (back up, stop agents) and nothing else: no version,
+command or path. The timer only polls: it starts an update only when a request was made
+through the operator API, which is what the click on the changelog page does (an
+agent with shell access in the container can make the same call, see the security
+notes), and nothing updates Kōbō on a schedule. See
+[SECURITY.md](../SECURITY.md#update-from-the-interface).
+
+### Install the trigger (once, with sudo)
+
+Run it as root, naming the deployment directory. For the layout created by the
+guided installer:
+
+```bash
+sudo /opt/kobo/bin/kobo-update --install-ui-trigger --directory /opt/kobo
+```
+
+For a manual layout where the script sits in the deployment directory:
+
+```bash
+sudo /opt/kobo/kobo-update --install-ui-trigger --directory /opt/kobo
+```
+
+This writes `kobo-ui-update.service` and `kobo-ui-update.timer` under
+`/etc/systemd/system`, then runs `systemctl daemon-reload` and
+`systemctl enable --now kobo-ui-update.timer`. The service runs the script as the
+owner of the deployment directory, which must be able to run `docker` and
+`docker compose`. Nothing else is installed or run as root. Remove it with:
+
+```bash
+sudo /opt/kobo/bin/kobo-update --uninstall-ui-trigger
+```
+
+The installer refuses, and writes nothing, when:
+
+- it is not run as root;
+- the host has no `systemctl` or no `/etc/systemd/system`;
+- the deployment directory has no `compose.yaml`;
+- the deployment directory is owned by root (the updater would run as root: use the
+  deployment user), or its owner's uid has no user entry, or the owner's user name
+  does not match `[A-Za-z_][A-Za-z0-9_.-]*` (optionally ending in `$`);
+- the stack path or the script path contains whitespace, a quote, a backslash, `%`
+  or `$`;
+- the script is missing, is not owned by root or by the stack owner, or is writable
+  by group or others (the timer runs the file every minute as the stack owner, so
+  nobody else may be able to change it); the same two rules apply to the script's
+  own directory;
+- the script is not executable or has no `#!` first line.
+
+Only the script and its own directory are checked, not the directories above them:
+keep the whole path under root or the stack owner. Running the install with `sudo`
+executes a file owned by the stack owner as root, so install only a script you trust.
+
+The units record the resolved absolute paths of the script and the stack. Run the
+install command again if either moves, and after a recovery that recreates the home
+volume or moves the stack. Running it again replaces the units in place; a failed
+install restores the previous ones.
+
+The trigger serves one stack per host: the unit names are fixed, so installing it for
+a second deployment directory replaces the units of the first one.
+
+### What happens on click
+
+The button appears on the changelog page only when a newer release exists, the host
+timer has polled Kōbō within the last 3 minutes and no other update is in progress.
+It ignores the update banner's dismissed version. The update starts **within about
+a minute** of the click, at the next poll. The dialog offers:
+
+- **Back up the data before updating**, ticked by default. Unticking it is the
+  `--skip-backup` mode described above: no `kobo.tar.gz`, no recovery point for
+  that update, though the migration test on a database copy still runs.
+- When Kōbō is not idle for an update, by the same rule as the updater's reservation
+  (live agents, a running session, or a workspace marked as extracting, brainstorming,
+  executing or compacting), the **Stop the running agents and update** box. The
+  dialog says **Running agents: N. Updating requires stopping them.**, or, when no
+  agent runs, **A workspace is still marked as running, although no agent is
+  running. Updating requires confirming the stop below.** **Update now** stays
+  disabled until the box is ticked (the dialog says **Tick the box to confirm that the
+  running agents may be stopped.**). Kōbō's own refusal of an update request in that
+  state is the backstop, and the updater checks again before stopping if agents
+  started during the build. With the box ticked, a workspace status left behind
+  without an agent does not block the update.
+
+Agents are stopped only **once the new image is built**, so the service and its
+agents run normally during the build. The stop uses the same cause as a normal
+shutdown, so auto-loop intent and scheduled wakeups, cron and quota retries are kept.
+Kōbō first closes agent admission, then stops every agent, and proceeds only if
+every stop is confirmed. An unconfirmed stop, a session handoff in progress, or a
+workspace creation or PR checkout in flight refuses the update: Kōbō keeps running
+and admission reopens.
+
+A refusal after the stop does not undo it. Stopped manual sessions stay stopped,
+with their pending questions and permission requests discarded. Auto-loop workspaces
+and pending review returns restart on their own when admission reopens. A sequential
+review resumed this way is told that Kōbō was restarted although it was not, because
+the stop reuses the shutdown cause (known limit). A parallel
+review still reviewing is marked interrupted; one that already saved its report is
+recovered as ready or completed. If the old container was already stopped and the
+update then aborts, the updater restarts the previous version: anything not
+persisted is lost as in any restart, and the page shows **The update was aborted.
+Kōbō keeps running on the previous version.**
+
+### What the page shows
+
+Progress appears in the dialog and under the changelog header, and survives a page
+reload in the same tab (the request is remembered in `sessionStorage`). Status is only
+followed while the changelog page is open. The lines are:
+
+- **Waiting for the updater: the server starts the update within about a minute**;
+- **Building the new version**;
+- **Stopping the running agents** (only when you chose to stop them);
+- **Restarting Kōbō**, then **Reconnecting to Kōbō** while the server is away. You
+  may have to sign in again after the restart.
+
+Results:
+
+- **Kōbō was updated to version X.** Success is announced when the updater's final
+  `complete` report arrives and the running version changed (without a changed
+  version the line is **The update is complete.**). If that report never arrives, for
+  example because the restart lost it, success is announced only after a 5-minute
+  grace, and only when the running version changed. The grace counts from the last
+  time the update was seen in progress, restarts when status requests succeed again
+  after failing, and counts from the click for an update never seen in progress (for
+  example when the tab stayed hidden during the whole update). A failed update whose
+  final report reaches Kōbō is shown as failed, even if a newer version is running.
+  A `recovery-required` report sent while the new version is not answering yet (for
+  example migrations still running when the 180-second start wait ends) is sent again
+  by every following timer run, so it arrives once Kōbō answers. It cannot arrive
+  while Kōbō is not running at all, but the page cannot be reached then either. A
+  page that announced success after the grace, before the report arrived, changes to
+  the failure when the report is adopted, unless the message was closed first; the
+  failed `kobo-ui-update.service` described below remains the signal on the host.
+- **Kōbō is already up to date.**
+- A refusal with its reason: **The update was refused: Kōbō is busy.**, **...another
+  update is already running.**, **...a previous update was interrupted and needs a
+  manual recovery.**, **...this installation cannot be updated from the interface.**
+  or **The update was refused for an unknown reason.**
+- **The update was aborted. Kōbō keeps running on the previous version.**
+- **The update failed and needs a manual recovery on the host. See the update
+  logs.**
+
+Two states mean the outcome is unknown. **The update did not start, or its report
+was lost. Check the host before trying again.** appears when the request was never
+seen in progress and Kōbō knows nothing about it (for example no poll reached it
+within 3 minutes) while the version did not change. **The update stopped reporting.
+Check the server before starting another one.** appears when the status went stale,
+when Kōbō has known nothing about the request for 5 minutes after it was last seen in
+progress without a version change, or after 10 minutes of failing status requests.
+In both cases check the host with `journalctl -u kobo-ui-update.service` and the
+job's `RECOVERY.md` before retrying. While Kōbō is stopped for a long backup, the page
+can show **The update stopped reporting.** and it changes to the result when the final
+report is adopted, unless that message was closed first. When an update was started
+from another tab or by another operator, the page shows only **An update is in
+progress.**
+
+### See what happened on the host
+
+```bash
+systemctl status kobo-ui-update.timer
+journalctl -u kobo-ui-update.service
+ls /opt/kobo/updates/
+```
+
+A run that gets past the prerequisite checks uses the usual job directory
+`<stack>/updates/<timestamp>-<id>/` with its private log, `state.json` and
+`RECOVERY.md`. A run refused by those checks (Kōbō busy, an interrupted earlier
+update, the runtime check, or already up to date) creates none. A run takes the
+update lock before polling: while another update holds it (for example a
+command-line `kobo-update`), the run exits silently without polling, and the request
+stays pending for a later run (Kōbō drops it after 3 minutes). Because the updater
+polls only between updates, a poll that finds an unfinished status forgets it: an
+update whose final report was lost no longer blocks a new request, and the page
+treats it as unknown to Kōbō (see above). The service exits with a failure only while a job is in `recovery-required`, so
+a failed `kobo-ui-update.service` means the host needs attention even when the web
+interface is down. It stays failed, and prints that job's directory name each minute,
+for as long as any job's `state.json` says `recovery-required`; in that state it
+neither polls Kōbō nor starts an update, and re-sends the job's `recovery-required`
+report when the job was started from the interface. To clear it, follow the job's `RECOVERY.md`
+(see [Backups and failed updates](#backups-and-failed-updates)) and, once the service
+is verified healthy, set that `state.json` phase to `complete` or `aborted`, as
+`RECOVERY.md` describes. Refusals and aborted updates exit successfully and are reported to the
+page instead.
+
+If the stack owner cannot use Docker (not in the `docker` group, or the group is not
+visible to the unit), each timer run exits silently: the script prints nothing in the journal and the
+button never appears. Check with `sudo -u <owner> docker ps`.
+
+### Limits
+
+- The service runs under the stack owner's account, so Docker authentication for
+  registry pulls and builds comes from that account's Docker configuration.
+  Credential helpers that need a desktop keyring or login session, and rootless
+  Docker, have not been tested and are not expected to work.
+- Stopping the service or rebooting during an update goes through the updater's
+  normal interruption and recovery path (`TimeoutStopSec=600`, `KillMode=mixed`):
+  read `RECOVERY.md` as for any interrupted update.
+- The running Kōbō must already include this feature and the atomic update
+  reservation (`protocol: 1`); otherwise the timer stays silent or the update is
+  refused with the legacy-runtime reason.
+- Not validated end to end: the systemd integration and the in-container calls are
+  covered by deterministic tests only (patched `systemctl` and Docker). No real
+  systemd unit, Docker daemon or VPS was exercised.
 
 ## Embedded application previews
 

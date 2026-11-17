@@ -660,3 +660,28 @@ it('keeps an unknown Mistral quota reset null and does not query another provide
   expect(loop.getStatus(id).auto_loop).toBe(true)
   expect(poller.refreshNow).not.toHaveBeenCalled()
 })
+
+describe('update reservation', () => {
+  it('keeps a waiting loop parked while an update reservation is held and starts it after release', async () => {
+    const maintenance = await import('../server/services/update-maintenance-service.js')
+    const { setRuntime } = await import('../server/services/auto-loop-state-service.js')
+    // The state a forced stop leaves behind: status normalized to idle, loop intent kept.
+    db.prepare("UPDATE workspaces SET status='idle' WHERE id=?").run(id)
+    setRuntime(id, { state: 'waiting' })
+    expect(maintenance.acquireUpdateMaintenance('f'.repeat(32), () => true)).toBe('acquired')
+
+    orch.notifyCapacityAvailable(id)
+    loop.resumeWaitingWorkspaces()
+    await vi.advanceTimersByTimeAsync(1)
+    await flush()
+    expect(starts).not.toHaveBeenCalled()
+    expect(loop.getStatus(id).auto_loop).toBe(true)
+
+    expect(maintenance.releaseUpdateMaintenance('f'.repeat(32))).toBe(true)
+    orch.resumeAfterUpdateMaintenance()
+    await vi.advanceTimersByTimeAsync(1)
+    await flush()
+    expect(starts).toHaveBeenCalledTimes(1)
+    expect(orch.hasController(id)).toBe(true)
+  })
+})

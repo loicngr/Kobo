@@ -9,6 +9,15 @@
       <TourReplayButton tour-id="changelog" class="q-ml-xs" />
     </div>
 
+    <div v-if="showUpdateButton" class="row items-center q-mb-md" data-tour="changelog-update">
+      <div class="text-kobo-2">{{ $t('updateTrigger.available', { version: update.latestVersion }) }}</div>
+      <q-space />
+      <q-btn unelevated no-caps color="primary" :label="$t('updateTrigger.button')" @click="openUpdateDialog" />
+    </div>
+    <div :class="{ 'q-mb-md': trigger.step !== 'idle' }">
+      <UpdateTriggerProgress :live="!updateDialogOpen" />
+    </div>
+    <UpdateTriggerDialog v-model="updateDialogOpen" />
     <div v-if="loading && versions.length === 0" class="text-kobo-3 text-center q-pa-lg">
       {{ $t('common.loading') }}
     </div>
@@ -53,10 +62,15 @@
 <script setup lang="ts">
 import DrawerToggleButton from 'src/components/DrawerToggleButton.vue'
 import TourReplayButton from 'src/components/TourReplayButton.vue'
+import UpdateTriggerDialog from 'src/components/UpdateTriggerDialog.vue'
+import UpdateTriggerProgress from 'src/components/UpdateTriggerProgress.vue'
 import { useTours } from 'src/composables/use-tours'
+import { useUpdateStore } from 'src/stores/update'
+import { useUpdateTriggerStore } from 'src/stores/update-trigger'
 import { apiFetchResponse, apiResponseError } from 'src/utils/api'
+import { compareVersions } from 'src/utils/compare-versions'
 import { renderChatMarkdown } from 'src/utils/render-chat-markdown'
-import { onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 interface ChangelogEntry {
@@ -66,6 +80,28 @@ interface ChangelogEntry {
 
 const router = useRouter()
 const { scheduleAutoRun } = useTours()
+const update = useUpdateStore()
+const trigger = useUpdateTriggerStore()
+const updateDialogOpen = ref(false)
+// Independent of the banner's dismissed version: the operator may still want to update.
+const showUpdateButton = computed(
+  () =>
+    trigger.state?.available === true &&
+    // `available` stays true for a whole update: the button is offered only when none runs.
+    !trigger.state.inProgress &&
+    trigger.step !== 'other' &&
+    !!update.latestVersion &&
+    !!update.currentVersion &&
+    compareVersions(update.latestVersion, update.currentVersion) > 0,
+)
+function openUpdateDialog(): void {
+  // A leftover result must not cost a second click, but a done without our `complete` report is
+  // provisional: a later report may still replace it, so it stays until closed explicitly.
+  const status = trigger.state?.status
+  const provisional = trigger.step === 'done' && !(status?.id === trigger.requestId && status.phase === 'complete')
+  if (trigger.finished && !provisional) trigger.dismiss()
+  updateDialogOpen.value = true
+}
 const versions = ref<ChangelogEntry[]>([])
 const currentVersion = ref<string>('')
 const loading = ref<boolean>(false)
@@ -93,8 +129,11 @@ async function load(): Promise<void> {
 
 onMounted(() => {
   void load()
+  void update.refreshSnapshot()
+  trigger.startPolling()
   scheduleAutoRun('changelog')
 })
+onBeforeUnmount(() => trigger.stopPolling())
 </script>
 
 <style scoped>

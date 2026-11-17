@@ -78,6 +78,7 @@ describe('tours registry', () => {
       'ws-tab-subagents',
       'pr-actions',
       'home-activity',
+      'changelog-update',
     ]
     const byId = new Map(TOURS.flatMap((t) => t.steps.map((s) => [s.id, s] as const)))
     for (const id of gated) {

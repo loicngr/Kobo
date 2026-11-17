@@ -575,6 +575,13 @@ export async function decideSessionHandoff(
   return map(read(id))
 }
 
+/** A transfer actually running (not one awaiting an operator decision after failure or restart). */
+export function hasActiveSessionHandoff(): boolean {
+  return !!getDb()
+    .prepare("SELECT 1 FROM session_handoffs WHERE state IN ('stopping', 'generating', 'starting') LIMIT 1")
+    .get()
+}
+
 /** A restart never replays a possibly accepted native turn. Keep automation reserved until a decision. */
 export function reconcileSessionHandoffs(): void {
   const rows = getDb()

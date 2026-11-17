@@ -733,6 +733,87 @@ it.each([false, true])('recovers a saved closing report after restart (return=%s
   expect(f.starts[0]!.sendMessage).not.toHaveBeenCalled()
 })
 
+it.each([false, true])(
+  'settles a saved closing report like startup recovery after a forced update stop (return=%s)',
+  async (returnToSession) => {
+    let close!: () => void
+    const f = await fixture(
+      returnToSession,
+      new Promise<void>((resolve) => {
+        close = resolve
+      }),
+    )
+    f.starts[1]!.emit({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
+    expect(f.parallel.getParallelReviewStatus(f.workspace.id)?.phase).toBe('closing')
+    const maintenance = await import('../server/services/update-maintenance-service.js')
+    expect(maintenance.acquireUpdateMaintenance('e'.repeat(32), () => true)).toBe('acquired')
+
+    const stopping = f.orch.stopAgentsForUpdate(1_000)
+    close()
+    expect(await stopping).toEqual({ stopped: 1, unconfirmed: 0 })
+    await new Promise((resolve) => setImmediate(resolve))
+
+    expect(f.parallel.getParallelReview(f.workspace.id)).toMatchObject({
+      phase: returnToSession ? 'ready' : 'completed',
+      returnPrompt: expect.any(String),
+    })
+    expect(f.starts).toHaveLength(2)
+    expect(f.starts[0]!.sendMessage).not.toHaveBeenCalled()
+    expect(f.orch.isIdleForForcedUpdate()).toBe(true)
+    maintenance.releaseUpdateMaintenance('e'.repeat(32))
+  },
+)
+
+it('delivers a forced-stop ready return exactly once after the reservation is released', async () => {
+  let close!: () => void
+  const f = await fixture(
+    true,
+    new Promise<void>((resolve) => {
+      close = resolve
+    }),
+  )
+  f.starts[0]!.emit({ kind: 'session:started', engineSessionId: 'primary-native' })
+  f.starts[1]!.emit({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
+  const maintenance = await import('../server/services/update-maintenance-service.js')
+  expect(maintenance.acquireUpdateMaintenance('e'.repeat(32), () => true)).toBe('acquired')
+  const stopping = f.orch.stopAgentsForUpdate(1_000)
+  close()
+  await stopping
+  f.orch.resumePendingReviewReturns()
+  await new Promise((resolve) => setImmediate(resolve))
+  expect(f.starts).toHaveLength(2)
+  const saved = f.parallel.getParallelReview(f.workspace.id)
+  expect(saved?.phase).toBe('ready')
+
+  maintenance.releaseUpdateMaintenance('e'.repeat(32))
+  f.orch.resumeAfterUpdateMaintenance()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  await new Promise((resolve) => setImmediate(resolve))
+  f.orch.resumePendingReviewReturns()
+  await new Promise((resolve) => setImmediate(resolve))
+
+  expect(f.starts).toHaveLength(3)
+  expect(f.starts[2]!.options.prompt).toContain(saved!.returnPrompt!)
+})
+
+it('leaves a closing report to startup recovery at a normal process shutdown', async () => {
+  let close!: () => void
+  const f = await fixture(
+    true,
+    new Promise<void>((resolve) => {
+      close = resolve
+    }),
+  )
+  f.starts[1]!.emit({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
+  const stopping = f.orch.stopAllAgents(1_000)
+  close()
+  await stopping
+  await new Promise((resolve) => setImmediate(resolve))
+  expect(f.parallel.getParallelReviewStatus(f.workspace.id)?.phase).toBe('closing')
+  f.parallel.reconcileParallelReviews()
+  expect(f.parallel.getParallelReview(f.workspace.id)?.phase).toBe('ready')
+})
+
 it('publishes one coherent live and HTTP compaction snapshot when cancelling return', async () => {
   const f = await fixture(true)
   const websocket = await import('../server/services/websocket-service.js')

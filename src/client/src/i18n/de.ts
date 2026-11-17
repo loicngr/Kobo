@@ -1533,6 +1533,9 @@ export default {
   'tours.changelog.title': 'Was ist neu',
   'tours.changelog.list.title': 'Versionen',
   'tours.changelog.list.description': 'Was sich in jeder Version geändert hat, neueste zuerst.',
+  'tours.changelog.update.title': 'Von hier aktualisieren',
+  'tours.changelog.update.description':
+    'Wenn eine neuere Version existiert und das Update-Programm des Hosts eingerichtet ist, aktualisieren Sie Kōbō mit dieser Schaltfläche.',
   'settings.projectGroup.identity': 'Identität',
   'settings.projectGroup.defaults': 'Standardwerte',
   'settings.projectGroup.prompts': 'Prompts',
@@ -2411,6 +2414,50 @@ export default {
   'changelog.empty': 'Kein Änderungsprotokoll verfügbar.',
   'changelog.current': 'aktuell',
   'changelog.currentVersion': 'Aktuelle Version: v{version}',
+  'updateTrigger.available': 'Version {version} ist verfügbar.',
+  'updateTrigger.button': 'Kōbō aktualisieren',
+  'updateTrigger.dialogTitle': 'Kōbō aktualisieren',
+  'updateTrigger.explain':
+    'Kōbō baut sich auf dem Host neu und startet neu. Laufende Agents werden erst gestoppt, wenn das neue Image gebaut ist. Der Dienst ist kurz nicht erreichbar, und diese Seite verbindet sich von selbst wieder.',
+  'updateTrigger.signInAgain': 'Nach dem Neustart müssen Sie sich möglicherweise erneut anmelden.',
+  'updateTrigger.backup': 'Daten vor der Aktualisierung sichern',
+  'updateTrigger.backupWarning':
+    'Ohne Backup können die Daten nicht wiederhergestellt werden, wenn die Aktualisierung fehlschlägt.',
+  'updateTrigger.agentsRunning': 'Laufende Agents: {count}. Für die Aktualisierung müssen sie gestoppt werden.',
+  'updateTrigger.workspaceMarkedRunning':
+    'Ein Workspace ist noch als laufend markiert, obwohl kein Agent läuft. Für die Aktualisierung müssen Sie den Stopp unten bestätigen.',
+  'updateTrigger.stopAgents': 'Laufende Agents stoppen und aktualisieren',
+  'updateTrigger.stopAgentsWarning':
+    'Aktivieren Sie das Kontrollkästchen, um zu bestätigen, dass die laufenden Agents gestoppt werden dürfen.',
+  'updateTrigger.confirm': 'Jetzt aktualisieren',
+  'updateTrigger.step.waiting':
+    'Warten auf das Update-Programm: Der Server startet die Aktualisierung innerhalb von etwa einer Minute',
+  'updateTrigger.step.building': 'Neue Version wird gebaut',
+  'updateTrigger.step.stoppingAgents': 'Laufende Agents werden gestoppt',
+  'updateTrigger.step.restarting': 'Kōbō wird neu gestartet',
+  'updateTrigger.step.reconnecting': 'Verbindung zu Kōbō wird wiederhergestellt',
+  'updateTrigger.result.complete': 'Kōbō wurde auf Version {version} aktualisiert.',
+  'updateTrigger.result.upToDate': 'Kōbō ist bereits auf dem neuesten Stand.',
+  'updateTrigger.result.aborted': 'Die Aktualisierung wurde abgebrochen. Kōbō läuft weiter mit der vorherigen Version.',
+  'updateTrigger.result.recoveryRequired':
+    'Die Aktualisierung ist fehlgeschlagen und erfordert eine manuelle Wiederherstellung auf dem Host. Siehe die Update-Protokolle.',
+  'updateTrigger.result.notStarted':
+    'Die Aktualisierung wurde nicht gestartet, oder ihr Bericht ging verloren. Prüfen Sie den Host, bevor Sie es erneut versuchen.',
+  'updateTrigger.reason.busy': 'Aktualisierung abgelehnt: Kōbō ist ausgelastet.',
+  'updateTrigger.reason.alreadyRunning': 'Aktualisierung abgelehnt: Es läuft bereits eine andere Aktualisierung.',
+  'updateTrigger.reason.interruptedUpdate':
+    'Aktualisierung abgelehnt: Eine frühere Aktualisierung wurde unterbrochen und erfordert eine manuelle Wiederherstellung.',
+  'updateTrigger.reason.legacyRuntime':
+    'Aktualisierung abgelehnt: Diese Installation kann nicht über die Oberfläche aktualisiert werden.',
+  'updateTrigger.reason.unknown': 'Aktualisierung aus unbekanntem Grund abgelehnt.',
+  'updateTrigger.result.lost':
+    'Die Aktualisierung meldet sich nicht mehr. Prüfen Sie den Server, bevor Sie eine weitere starten.',
+  'updateTrigger.result.completeNoVersion': 'Die Aktualisierung ist abgeschlossen.',
+  'updateTrigger.error.unavailable':
+    'Der Update-Auslöser des Servers antwortet nicht. Möglicherweise ist er nicht installiert.',
+  'updateTrigger.error.network':
+    'Kōbō war nicht erreichbar, und das Ergebnis ist unbekannt. Prüfen Sie diese Seite erneut, bevor Sie es noch einmal versuchen.',
+  'updateTrigger.otherInProgress': 'Eine Aktualisierung läuft.',
   'health.envTitle': 'Umgebung',
   'health.version': 'Version',
   'health.koboHome': 'Kōbō home',

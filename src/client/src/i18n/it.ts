@@ -1521,6 +1521,9 @@ export default {
   'tours.changelog.title': 'Novità',
   'tours.changelog.list.title': 'Versioni',
   'tours.changelog.list.description': 'Cosa è cambiato in ogni versione, la più recente per prima.',
+  'tours.changelog.update.title': 'Aggiorna da qui',
+  'tours.changelog.update.description':
+    "Quando esiste una versione più recente e l'updater dell'host è configurato, aggiorna Kōbō con questo pulsante.",
   'settings.projectGroup.identity': 'Identità',
   'settings.projectGroup.defaults': 'Valori predefiniti',
   'settings.projectGroup.prompts': 'Prompt',
@@ -2390,6 +2393,48 @@ export default {
   'changelog.empty': 'Nessun changelog disponibile.',
   'changelog.current': 'corrente',
   'changelog.currentVersion': 'Versione corrente: v{version}',
+  'updateTrigger.available': 'La versione {version} è disponibile.',
+  'updateTrigger.button': 'Aggiorna Kōbō',
+  'updateTrigger.dialogTitle': 'Aggiorna Kōbō',
+  'updateTrigger.explain':
+    "Kōbō si ricostruirà e si riavvierà sull'host. Gli agenti in esecuzione vengono fermati solo dopo che la nuova immagine è stata compilata. Il servizio sarà non disponibile per un breve momento e questa pagina si riconnetterà da sola.",
+  'updateTrigger.signInAgain': 'Dopo il riavvio potrebbe essere necessario accedere di nuovo.',
+  'updateTrigger.backup': 'Esegui il backup dei dati prima di aggiornare',
+  'updateTrigger.backupWarning': "Senza backup, i dati non potranno essere ripristinati se l'aggiornamento fallisce.",
+  'updateTrigger.agentsRunning': 'Agenti in esecuzione: {count}. Per aggiornare è necessario fermarli.',
+  'updateTrigger.workspaceMarkedRunning':
+    "Un workspace risulta ancora in esecuzione, anche se nessun agente è attivo. Per aggiornare è necessario confermare l'arresto qui sotto.",
+  'updateTrigger.stopAgents': 'Ferma gli agenti in esecuzione e aggiorna',
+  'updateTrigger.stopAgentsWarning':
+    'Seleziona la casella per confermare che gli agenti in esecuzione possono essere fermati.',
+  'updateTrigger.confirm': 'Aggiorna ora',
+  'updateTrigger.step.waiting': "In attesa dell'updater: il server avvia l'aggiornamento entro circa un minuto",
+  'updateTrigger.step.building': 'Compilazione della nuova versione',
+  'updateTrigger.step.stoppingAgents': 'Arresto degli agenti in esecuzione',
+  'updateTrigger.step.restarting': 'Riavvio di Kōbō',
+  'updateTrigger.step.reconnecting': 'Riconnessione a Kōbō',
+  'updateTrigger.result.complete': 'Kōbō è stato aggiornato alla versione {version}.',
+  'updateTrigger.result.upToDate': 'Kōbō è già aggiornato.',
+  'updateTrigger.result.aborted':
+    "L'aggiornamento è stato annullato. Kōbō continua a funzionare con la versione precedente.",
+  'updateTrigger.result.recoveryRequired':
+    "L'aggiornamento è fallito e richiede un ripristino manuale sull'host. Consulta i log di aggiornamento.",
+  'updateTrigger.result.notStarted':
+    "L'aggiornamento non è partito, oppure il suo rapporto è andato perso. Controlla l'host prima di riprovare.",
+  'updateTrigger.reason.busy': 'Aggiornamento rifiutato: Kōbō è occupato.',
+  'updateTrigger.reason.alreadyRunning': 'Aggiornamento rifiutato: un altro aggiornamento è già in corso.',
+  'updateTrigger.reason.interruptedUpdate':
+    'Aggiornamento rifiutato: un aggiornamento precedente è stato interrotto e richiede un ripristino manuale.',
+  'updateTrigger.reason.legacyRuntime':
+    "Aggiornamento rifiutato: questa installazione non può essere aggiornata dall'interfaccia.",
+  'updateTrigger.reason.unknown': 'Aggiornamento rifiutato per un motivo sconosciuto.',
+  'updateTrigger.result.lost': "L'aggiornamento non dà più notizie. Controlla il server prima di avviarne un altro.",
+  'updateTrigger.result.completeNoVersion': "L'aggiornamento è completato.",
+  'updateTrigger.error.unavailable':
+    'Il trigger di aggiornamento del server non risponde. Potrebbe non essere installato.',
+  'updateTrigger.error.network':
+    'Kōbō non è raggiungibile e il risultato è sconosciuto. Controlla di nuovo questa pagina prima di riprovare.',
+  'updateTrigger.otherInProgress': 'È in corso un aggiornamento.',
   'health.envTitle': 'Ambiente',
   'health.version': 'Versione',
   'health.koboHome': 'Kōbō home',

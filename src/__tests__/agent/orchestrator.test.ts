@@ -338,6 +338,382 @@ describe('Orchestrator — stop / interrupt / sendMessage', () => {
   })
 })
 
+describe('Orchestrator - forced stop for an update', () => {
+  let hangingStop = false
+  let stopGate: Promise<void> | undefined
+  let starts = 0
+
+  beforeEach(async () => {
+    hangingStop = false
+    stopGate = undefined
+    starts = 0
+    vi.resetModules()
+    await resetDb()
+    const { _registerEngineForTest } = await import('../../server/services/agent/engines/registry.js')
+    _registerEngineForTest({
+      id: 'claude-code',
+      displayName: 'Claude Code',
+      capabilities: {
+        models: [{ id: 'auto', label: 'Auto' }],
+        permissionModes: ['bypass'],
+        supportsResume: true,
+        supportsMcp: true,
+        supportsLiveSteering: true,
+        supportsReadOnly: true,
+        supportsSkills: true,
+        supportsSubagents: false,
+        supportsQuotaStatus: false,
+      },
+      async start(_opts, onEvent) {
+        const hang = hangingStop
+        starts++
+        return {
+          pid: 3333,
+          engineSessionId: 'session-id',
+          sendMessage() {},
+          interrupt() {},
+          // Like a real engine, a confirmed stop reports the end of its session.
+          stop: () => {
+            if (hang) return new Promise<void>(() => {})
+            const end = () => onEvent({ kind: 'session:ended', reason: 'killed', exitCode: null })
+            if (stopGate) return stopGate.then(end)
+            end()
+            return Promise.resolve()
+          },
+          resolvePendingUserInput: () => false,
+        }
+      },
+    })
+  })
+
+  async function twoWorkspaces() {
+    const { createWorkspace } = await import('../../server/services/workspace-service.js')
+    return [
+      createWorkspace({ name: 'First', projectPath: '/tmp', sourceBranch: 'd', workingBranch: 'first' }),
+      createWorkspace({ name: 'Second', projectPath: '/tmp', sourceBranch: 'd', workingBranch: 'second' }),
+    ]
+  }
+
+  it('stops every live controller with the shutdown cause without shutting Kōbō down', async () => {
+    const [first, second] = await twoWorkspaces()
+    const agents = await import('../../server/services/agent/orchestrator.js')
+    agents.startAgent(first.id, '/tmp', 'hi')
+    agents.startAgent(second.id, '/tmp', 'hi')
+    await flushControllerStart()
+    const stopped = [...agents._getControllers().values()]
+
+    expect(await agents.stopAgentsForUpdate()).toEqual({ stopped: 2, unconfirmed: 0 })
+
+    expect(stopped.map((ctrl) => ctrl.stopCause)).toEqual(['shutdown', 'shutdown'])
+    expect(agents.getRunningCount()).toBe(0)
+    expect(agents.isShuttingDown()).toBe(false)
+    expect(() => agents.startAgent(first.id, '/tmp', 'again')).not.toThrow()
+  })
+
+  it('reports an unconfirmed stop and keeps that controller owned', async () => {
+    const [first] = await twoWorkspaces()
+    const agents = await import('../../server/services/agent/orchestrator.js')
+    hangingStop = true
+    agents.startAgent(first.id, '/tmp', 'hi')
+    await flushControllerStart()
+
+    expect(await agents.stopAgentsForUpdate(20)).toEqual({ stopped: 0, unconfirmed: 1 })
+
+    expect(agents._getControllers().get(first.id)?.status).toBe('stopping')
+    expect(agents.isIdleForForcedUpdate()).toBe(false)
+  })
+
+  it('ignores the workspace status but not a running session row', async () => {
+    const [first] = await twoWorkspaces()
+    const agents = await import('../../server/services/agent/orchestrator.js')
+    const { getDb } = await import('../../server/db/index.js')
+    getDb().prepare("UPDATE workspaces SET status = 'executing' WHERE id = ?").run(first.id)
+    expect(agents.isIdleForUpdate()).toBe(false)
+    expect(agents.isIdleForForcedUpdate()).toBe(true)
+    getDb()
+      .prepare('INSERT INTO agent_sessions (id, workspace_id, status, started_at) VALUES (?, ?, ?, ?)')
+      .run('running', first.id, 'running', new Date().toISOString())
+    expect(agents.isIdleForForcedUpdate()).toBe(false)
+  })
+
+  const owner = 'd'.repeat(32)
+
+  /** A handed-out stopAgents request, as the host updater sees it after its poll. */
+  async function handedOutRequest(): Promise<string> {
+    const trigger = await import('../../server/services/update-trigger-service.js')
+    trigger.resetUpdateTriggerForTests()
+    trigger.pollUpdateTrigger()
+    const { id } = trigger.requestUpdate({ skipBackup: false, stopAgents: true })
+    trigger.pollUpdateTrigger()
+    return id
+  }
+
+  async function maintenanceCall(method: string, path: string, body: unknown) {
+    const { default: app } = await import('../../server/routes/maintenance.js')
+    return app.request(path, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  }
+
+  it('reserves before stopping and keeps the reservation once every stop is confirmed', async () => {
+    const [first, second] = await twoWorkspaces()
+    const agents = await import('../../server/services/agent/orchestrator.js')
+    const maintenance = await import('../../server/services/update-maintenance-service.js')
+    agents.startAgent(first.id, '/tmp', 'hi')
+    agents.startAgent(second.id, '/tmp', 'hi')
+    await flushControllerStart()
+    const stopped = [...agents._getControllers().values()]
+    const id = await handedOutRequest()
+    const { getDb } = await import('../../server/db/index.js')
+    // Statuses an engine may leave behind; the forced path does not wait for reconciliation.
+    getDb().prepare("UPDATE workspaces SET status = 'executing'").run()
+
+    const res = await maintenanceCall('POST', '/update-trigger/stop-agents', { id, owner })
+
+    expect(await res.json()).toEqual({ protocol: 1, stopped: 2, unconfirmed: 0, reserved: true })
+    expect(res.status).toBe(200)
+    expect(stopped.map((ctrl) => ctrl.stopCause)).toEqual(['shutdown', 'shutdown'])
+    expect(maintenance.isUpdateMaintenanceActive()).toBe(true)
+    expect(agents.isShuttingDown()).toBe(true)
+    expect(() => agents.startAgent(first.id, '/tmp', 'again')).toThrow(/maintenance/i)
+  })
+
+  it('defers capacity checks and a pending review return while the reservation is held', async () => {
+    const [first, second] = await twoWorkspaces()
+    const agents = await import('../../server/services/agent/orchestrator.js')
+    const reviews = await import('../../server/services/review-return-service.js')
+    const { agentSessionId: reviewSessionId } = agents.startAgent(first.id, '/tmp', 'review')
+    agents.startAgent(second.id, '/tmp', 'hi')
+    await flushControllerStart()
+    const configuration = {
+      engine: 'claude-code',
+      model: 'auto',
+      reasoningEffort: 'auto',
+      agentPermissionMode: 'bypass' as const,
+    }
+    reviews.registerReviewReturn({
+      workspaceId: first.id,
+      reviewSessionId,
+      originalSessionId: (await import('../../server/services/workspace-service.js')).createIdleSession(first.id).id,
+      original: configuration,
+      review: configuration,
+      reviewPrompt: 'Review the work',
+    })
+    const id = await handedOutRequest()
+    const launchesBefore = starts
+
+    expect((await maintenanceCall('POST', '/update-trigger/stop-agents', { id, owner })).status).toBe(200)
+    agents.notifyCapacityAvailable(first.id)
+    agents.resumePendingReviewReturns()
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+
+    expect(starts).toBe(launchesBefore)
+    expect(agents.getRunningCount()).toBe(0)
+    expect(reviews.getReviewReturn(first.id)?.phase).toBe('reviewing')
+  })
+
+  it('releases the reservation and answers busy when a stop is not confirmed', async () => {
+    const [first] = await twoWorkspaces()
+    const agents = await import('../../server/services/agent/orchestrator.js')
+    const maintenance = await import('../../server/services/update-maintenance-service.js')
+    hangingStop = true
+    agents.startAgent(first.id, '/tmp', 'hi')
+    await flushControllerStart()
+    const id = await handedOutRequest()
+
+    vi.useFakeTimers()
+    try {
+      const pending = maintenanceCall('POST', '/update-trigger/stop-agents', { id, owner })
+      await vi.advanceTimersByTimeAsync(agents.STOP_AGENT_TIMEOUT_MS)
+      const res = await pending
+      expect(res.status).toBe(409)
+      expect(await res.json()).toEqual({ error: 'Kōbō is busy', code: 'busy', stopped: 0, unconfirmed: 1 })
+    } finally {
+      vi.useRealTimers()
+    }
+    expect(maintenance.isUpdateMaintenanceActive()).toBe(false)
+    expect(agents.isShuttingDown()).toBe(false)
+    expect(agents._getControllers().get(first.id)?.status).toBe('stopping')
+  })
+
+  async function insertHandoff(workspaceId: string, state: string): Promise<void> {
+    const { getDb } = await import('../../server/db/index.js')
+    const now = new Date().toISOString()
+    getDb()
+      .prepare(
+        `INSERT INTO session_handoffs (id, workspace_id, request_id, request_fingerprint, source_configuration,
+         target_configuration, generate_summary, state, created_at, updated_at)
+         VALUES (?, ?, 'request', '{}', '{}', '{}', 0, ?, ?, ?)`,
+      )
+      .run(`handoff-${state}`, workspaceId, state, now, now)
+  }
+
+  it.each(['stopping', 'generating', 'starting'])(
+    'refuses while a session handoff is %s, stopping nothing and reserving nothing',
+    async (state) => {
+      const [first] = await twoWorkspaces()
+      const agents = await import('../../server/services/agent/orchestrator.js')
+      const maintenance = await import('../../server/services/update-maintenance-service.js')
+      agents.startAgent(first.id, '/tmp', 'hi')
+      await flushControllerStart()
+      const id = await handedOutRequest()
+      await insertHandoff(first.id, state)
+
+      const res = await maintenanceCall('POST', '/update-trigger/stop-agents', { id, owner })
+
+      expect(res.status).toBe(409)
+      expect(await res.json()).toEqual({ error: 'Kōbō is busy', code: 'busy', stopped: 0, unconfirmed: 0 })
+      expect(maintenance.isUpdateMaintenanceActive()).toBe(false)
+      expect(agents._getControllers().get(first.id)?.status).toBe('running')
+    },
+  )
+
+  it.each(['failed', 'interrupted'])('does not refuse for a %s handoff awaiting a decision', async (state) => {
+    const [first] = await twoWorkspaces()
+    const agents = await import('../../server/services/agent/orchestrator.js')
+    agents.startAgent(first.id, '/tmp', 'hi')
+    await flushControllerStart()
+    const id = await handedOutRequest()
+    await insertHandoff(first.id, state)
+    // fail() and startup reconciliation leave the transfer's stop handler registered until a decision.
+    const { registerHandoffStopHandler } = await import('../../server/services/session-handoff-runtime.js')
+    registerHandoffStopHandler(first.id, { requested() {}, settled() {}, shutdown() {} })
+
+    const res = await maintenanceCall('POST', '/update-trigger/stop-agents', { id, owner })
+
+    expect(await res.json()).toEqual({ protocol: 1, stopped: 1, unconfirmed: 0, reserved: true })
+  })
+
+  it.each([
+    ['the same owner', owner],
+    ['another owner', 'f'.repeat(32)],
+  ])('refuses with conflict when %s already holds a reservation, touching nothing', async (_label, holder) => {
+    const [first] = await twoWorkspaces()
+    const agents = await import('../../server/services/agent/orchestrator.js')
+    const maintenance = await import('../../server/services/update-maintenance-service.js')
+    agents.startAgent(first.id, '/tmp', 'hi')
+    await flushControllerStart()
+    const id = await handedOutRequest()
+    expect(maintenance.acquireUpdateMaintenance(holder, () => true)).toBe('acquired')
+
+    const res = await maintenanceCall('POST', '/update-trigger/stop-agents', { id, owner })
+
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ error: 'Update already reserved', code: 'conflict', stopped: 0, unconfirmed: 0 })
+    expect(agents._getControllers().get(first.id)?.status).toBe('running')
+    expect(maintenance.isUpdateMaintenanceActive()).toBe(true)
+    expect(maintenance.releaseUpdateMaintenance(holder)).toBe(true)
+  })
+
+  it('refuses an overlapping call with the same owner and lets the first outcome stand', async () => {
+    const [first] = await twoWorkspaces()
+    const agents = await import('../../server/services/agent/orchestrator.js')
+    const maintenance = await import('../../server/services/update-maintenance-service.js')
+    let finishStop!: () => void
+    stopGate = new Promise<void>((resolve) => {
+      finishStop = resolve
+    })
+    agents.startAgent(first.id, '/tmp', 'hi')
+    await flushControllerStart()
+    const id = await handedOutRequest()
+
+    const firstCall = maintenanceCall('POST', '/update-trigger/stop-agents', { id, owner })
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+    const second = await maintenanceCall('POST', '/update-trigger/stop-agents', { id, owner })
+    expect(second.status).toBe(409)
+    expect(await second.json()).toMatchObject({ code: 'conflict', stopped: 0, unconfirmed: 0 })
+    expect(maintenance.isUpdateMaintenanceActive()).toBe(true)
+
+    finishStop()
+    const res = await firstCall
+    expect(await res.json()).toEqual({ protocol: 1, stopped: 1, unconfirmed: 0, reserved: true })
+    expect(maintenance.isUpdateMaintenanceActive()).toBe(true)
+  })
+
+  it.each(['stop', 'idle check'])(
+    'releases and resumes exactly once when the %s throws, answering an error',
+    async (failing) => {
+      await twoWorkspaces()
+      const agents = await import('../../server/services/agent/orchestrator.js')
+      const maintenance = await import('../../server/services/update-maintenance-service.js')
+      const id = await handedOutRequest()
+      if (failing === 'stop') vi.spyOn(agents, 'stopAgentsForUpdate').mockRejectedValueOnce(new Error('boom'))
+      else
+        vi.spyOn(agents, 'isIdleForForcedUpdate').mockImplementationOnce(() => {
+          throw new Error('boom')
+        })
+      const release = vi.spyOn(maintenance, 'releaseUpdateMaintenance')
+      const resume = vi.spyOn(agents, 'resumeAfterUpdateMaintenance')
+
+      const res = await maintenanceCall('POST', '/update-trigger/stop-agents', { id, owner })
+
+      expect(res.status).toBe(500)
+      expect(release).toHaveBeenCalledTimes(1)
+      expect(release).toHaveBeenCalledWith(owner)
+      expect(resume).toHaveBeenCalledTimes(1)
+      expect(maintenance.isUpdateMaintenanceActive()).toBe(false)
+    },
+  )
+
+  it('reserves for a forced update when a workspace is still marked executing but no agent runs', async () => {
+    await twoWorkspaces()
+    const { getDb } = await import('../../server/db/index.js')
+    const maintenance = await import('../../server/services/update-maintenance-service.js')
+    const trigger = await import('../../server/services/update-trigger-service.js')
+    getDb().prepare("UPDATE workspaces SET status = 'executing'").run()
+    trigger.resetUpdateTriggerForTests()
+    trigger.pollUpdateTrigger()
+    expect(trigger.getUpdateTriggerState()).toMatchObject({ busy: true, runningAgents: 0 })
+    expect(() => trigger.requestUpdate({ skipBackup: false, stopAgents: false })).toThrow(trigger.UpdateTriggerError)
+    const { id } = trigger.requestUpdate({ skipBackup: false, stopAgents: true })
+    trigger.pollUpdateTrigger()
+
+    const res = await maintenanceCall('POST', '/update-trigger/stop-agents', { id, owner })
+
+    expect(await res.json()).toEqual({ protocol: 1, stopped: 0, unconfirmed: 0, reserved: true })
+    expect(res.status).toBe(200)
+    expect(maintenance.isUpdateMaintenanceActive()).toBe(true)
+  })
+
+  it('releases nothing on success', async () => {
+    await twoWorkspaces()
+    const agents = await import('../../server/services/agent/orchestrator.js')
+    const maintenance = await import('../../server/services/update-maintenance-service.js')
+    const id = await handedOutRequest()
+    const release = vi.spyOn(maintenance, 'releaseUpdateMaintenance')
+    const resume = vi.spyOn(agents, 'resumeAfterUpdateMaintenance')
+
+    expect((await maintenanceCall('POST', '/update-trigger/stop-agents', { id, owner })).status).toBe(200)
+
+    expect(release).not.toHaveBeenCalled()
+    expect(resume).not.toHaveBeenCalled()
+    expect(maintenance.isUpdateMaintenanceActive()).toBe(true)
+  })
+
+  it('leaves a refused update terminal, with no running agent, once the updater releases its reservation', async () => {
+    const [first, second] = await twoWorkspaces()
+    const agents = await import('../../server/services/agent/orchestrator.js')
+    const trigger = await import('../../server/services/update-trigger-service.js')
+    agents.startAgent(first.id, '/tmp', 'hi')
+    agents.startAgent(second.id, '/tmp', 'hi')
+    await flushControllerStart()
+    const id = await handedOutRequest()
+
+    expect((await maintenanceCall('POST', '/update-trigger/stop-agents', { id, owner })).status).toBe(200)
+    expect(trigger.reportUpdateTrigger(id, 'refused', 'busy')).toBe(true)
+    expect((await maintenanceCall('DELETE', '/update', { owner })).status).toBe(200)
+
+    const state = trigger.getUpdateTriggerState()
+    expect(state.status).toMatchObject({ id, phase: 'refused', reason: 'busy' })
+    expect(state.inProgress).toBe(false)
+    expect(state.runningAgents).toBe(0)
+    expect(agents.isShuttingDown()).toBe(false)
+  })
+})
+
 describe('Orchestrator — lifecycle-safe fallback delivery', () => {
   beforeEach(async () => {
     vi.resetModules()

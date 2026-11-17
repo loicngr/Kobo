@@ -2594,8 +2594,28 @@ export async function stopAllAgents(timeoutMs = 3_000): Promise<void> {
   // into a logged, returned `StopAgentOutcome`
   // instead of a thrown error. A wrapping catch here would be unreachable
   // dead code pretending to guard against a failure mode that can't occur.
-  const workspaceIds = new Set([...controllers.keys(), ...pendingStarts.keys(), ...parallelReviewControllers.keys()])
-  await Promise.all([...workspaceIds].map((workspaceId) => stopAgentAndWait(workspaceId, timeoutMs, 'shutdown')))
+  await Promise.all([...agentWorkspaceIds()].map((workspaceId) => stopAgentAndWait(workspaceId, timeoutMs, 'shutdown')))
+}
+
+/** All three maps are keyed by workspace id: a primary and its parallel reviewer count once. */
+function agentWorkspaceIds(): Set<string> {
+  return new Set([...controllers.keys(), ...pendingStarts.keys(), ...parallelReviewControllers.keys()])
+}
+
+/**
+ * Operator-requested stop before a host update. Same `shutdown` cause as
+ * process shutdown (durable intent is kept), but Kōbō itself keeps running:
+ * no `shuttingDown`, no scheduler suspension, so a refused update leaves
+ * the server fully operational.
+ */
+export async function stopAgentsForUpdate(
+  timeoutMs = STOP_AGENT_TIMEOUT_MS,
+): Promise<{ stopped: number; unconfirmed: number }> {
+  const outcomes = await Promise.all(
+    [...agentWorkspaceIds()].map((workspaceId) => stopAgentAndWait(workspaceId, timeoutMs, 'shutdown')),
+  )
+  const unconfirmed = outcomes.filter((outcome) => outcome === 'timeout' || outcome === 'failed').length
+  return { stopped: outcomes.length - unconfirmed, unconfirmed }
 }
 
 /** Automatic continuations must preserve their durable intent during teardown. */
@@ -2603,13 +2623,25 @@ export function isShuttingDown(): boolean {
   return shuttingDown || isUpdateMaintenanceActive()
 }
 
+/** Distinct workspaces with a live, starting or reviewing controller (update trigger check). */
+export function agentCountForUpdate(): number {
+  return agentWorkspaceIds().size
+}
+
+/**
+ * Reservation predicate after a confirmed forced stop: no runtime and no running
+ * session row. Workspace status is not consulted; startup reconciliation settles it.
+ */
+export function isIdleForForcedUpdate(): boolean {
+  if (shuttingDown || agentWorkspaceIds().size) return false
+  return !getDb().prepare("SELECT 1 FROM agent_sessions WHERE status = 'running' LIMIT 1").get()
+}
+
 /** Used synchronously by update reservation; include runtimes still closing and pending replacements. */
 export function isIdleForUpdate(): boolean {
-  if (shuttingDown || controllers.size || pendingStarts.size || parallelReviewControllers.size) return false
-  const db = getDb()
   return (
-    !db.prepare("SELECT 1 FROM agent_sessions WHERE status = 'running' LIMIT 1").get() &&
-    !db
+    isIdleForForcedUpdate() &&
+    !getDb()
       .prepare(
         "SELECT 1 FROM workspaces WHERE status IN ('extracting','brainstorming','executing','compacting') LIMIT 1",
       )
@@ -2828,7 +2860,11 @@ function handleParallelReviewEvent(workspaceId: string, controller: SessionContr
               buildReviewReturnPrompt(workspaceId, sessionId),
             )
             dispatchParallelReviewReturnInBackground(workspaceId)
-          } else setParallelReviewPhase(workspaceId, 'interrupted', 'Review did not complete')
+            // Forced update stop (Kōbō keeps running): settle a saved report as startup recovery would,
+            // so a refused update never leaves it stuck in `closing`. Delivery waits for admission.
+          } else if (controller.stopCause === 'shutdown' && pending.phase === 'closing' && pending.returnPrompt)
+            setParallelReviewPhase(workspaceId, pending.returnToSession ? 'ready' : 'completed')
+          else setParallelReviewPhase(workspaceId, 'interrupted', 'Review did not complete')
         }
         notifyCapacityAvailable()
       })

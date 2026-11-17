@@ -1532,6 +1532,9 @@ export default {
   'tours.changelog.title': 'Nouveautés',
   'tours.changelog.list.title': 'Versions',
   'tours.changelog.list.description': 'Ce qui a changé à chaque version, la plus récente en premier.',
+  'tours.changelog.update.title': "Mettre à jour d'ici",
+  'tours.changelog.update.description':
+    "Lorsqu'une version plus récente existe et que l'outil de mise à jour de l'hôte est en place, mettez Kōbō à jour avec ce bouton.",
   'settings.projectGroup.identity': 'Identité',
   'settings.projectGroup.defaults': 'Valeurs par défaut',
   'settings.projectGroup.prompts': 'Prompts',
@@ -2406,6 +2409,50 @@ export default {
   'changelog.empty': 'Aucun changelog disponible.',
   'changelog.current': 'actuelle',
   'changelog.currentVersion': 'Version actuelle : v{version}',
+  'updateTrigger.available': 'La version {version} est disponible.',
+  'updateTrigger.button': 'Mettre à jour Kōbō',
+  'updateTrigger.dialogTitle': 'Mettre à jour Kōbō',
+  'updateTrigger.explain':
+    "Kōbō va se reconstruire et redémarrer sur l'hôte. Les agents en cours ne sont arrêtés qu'une fois la nouvelle image construite. Le service sera indisponible un court instant et cette page se reconnectera d'elle-même.",
+  'updateTrigger.signInAgain': 'Vous devrez peut-être vous reconnecter après le redémarrage.',
+  'updateTrigger.backup': 'Sauvegarder les données avant la mise à jour',
+  'updateTrigger.backupWarning':
+    'Sans sauvegarde, les données ne pourront pas être restaurées si la mise à jour échoue.',
+  'updateTrigger.agentsRunning': 'Agents en cours : {count}. La mise à jour nécessite de les arrêter.',
+  'updateTrigger.workspaceMarkedRunning':
+    "Un workspace est encore marqué comme en cours, bien qu'aucun agent ne tourne. La mise à jour nécessite de confirmer l'arrêt ci-dessous.",
+  'updateTrigger.stopAgents': 'Arrêter les agents en cours et mettre à jour',
+  'updateTrigger.stopAgentsWarning': 'Cochez la case pour confirmer que les agents en cours peuvent être arrêtés.',
+  'updateTrigger.confirm': 'Mettre à jour maintenant',
+  'updateTrigger.step.waiting':
+    "En attente de l'outil de mise à jour : le serveur lance la mise à jour d'ici environ une minute",
+  'updateTrigger.step.building': 'Construction de la nouvelle version',
+  'updateTrigger.step.stoppingAgents': 'Arrêt des agents en cours',
+  'updateTrigger.step.restarting': 'Redémarrage de Kōbō',
+  'updateTrigger.step.reconnecting': 'Reconnexion à Kōbō',
+  'updateTrigger.result.complete': 'Kōbō a été mis à jour vers la version {version}.',
+  'updateTrigger.result.upToDate': 'Kōbō est déjà à jour.',
+  'updateTrigger.result.aborted':
+    'La mise à jour a été abandonnée. Kōbō continue de fonctionner sur la version précédente.',
+  'updateTrigger.result.recoveryRequired':
+    "La mise à jour a échoué et nécessite une reprise manuelle sur l'hôte. Consultez les journaux de mise à jour.",
+  'updateTrigger.result.notStarted':
+    "La mise à jour n'a pas démarré, ou son rapport a été perdu. Vérifiez l'hôte avant de réessayer.",
+  'updateTrigger.reason.busy': 'Mise à jour refusée : Kōbō est occupé.',
+  'updateTrigger.reason.alreadyRunning': 'Mise à jour refusée : une autre mise à jour est déjà en cours.',
+  'updateTrigger.reason.interruptedUpdate':
+    'Mise à jour refusée : une mise à jour précédente a été interrompue et nécessite une reprise manuelle.',
+  'updateTrigger.reason.legacyRuntime':
+    "Mise à jour refusée : cette installation ne peut pas être mise à jour depuis l'interface.",
+  'updateTrigger.reason.unknown': 'Mise à jour refusée pour une raison inconnue.',
+  'updateTrigger.result.lost':
+    "La mise à jour ne donne plus de nouvelles. Vérifiez le serveur avant d'en lancer une autre.",
+  'updateTrigger.result.completeNoVersion': 'La mise à jour est terminée.',
+  'updateTrigger.error.unavailable':
+    "Le déclencheur de mise à jour du serveur ne répond pas. Il n'est peut-être pas installé.",
+  'updateTrigger.error.network':
+    'Kōbō est injoignable et le résultat est inconnu. Vérifiez à nouveau cette page avant de réessayer.',
+  'updateTrigger.otherInProgress': 'Une mise à jour est en cours.',
   'health.envTitle': 'Environnement',
   'health.version': 'Version',
   'health.koboHome': 'Kōbō home',
