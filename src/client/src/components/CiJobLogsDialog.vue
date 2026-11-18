@@ -14,17 +14,17 @@
           <template #option="{ itemProps, opt }">
             <q-item v-bind="itemProps">
               <q-item-section v-if="opt.icon" avatar><q-icon :name="opt.icon" :color="opt.color" /></q-item-section>
-              <q-item-section><q-item-label>{{ opt.name || opt.label }}<span v-if="opt.state" :class="'text-' + opt.color"> · {{ opt.state }}</span></q-item-label></q-item-section>
+              <q-item-section><q-item-label>{{ opt.name || opt.label }}<span v-if="opt.state" :class="'text-' + opt.color"> · {{ opt.state }}</span><CiDuration :item="opt.item" :live="live" prefix=" · " /></q-item-label></q-item-section>
             </q-item>
           </template>
           <template #selected-item="{ opt }">
             <span class="row items-center no-wrap q-gutter-xs">
               <q-icon v-if="opt.icon" :name="opt.icon" :color="opt.color" />
-              <span>{{ opt.name || opt.label }}<span v-if="opt.state" :class="'text-' + opt.color"> · {{ opt.state }}</span></span>
+              <span>{{ opt.name || opt.label }}<span v-if="opt.state" :class="'text-' + opt.color"> · {{ opt.state }}</span><CiDuration :item="opt.item" :live="live" prefix=" · " /></span>
             </span>
           </template>
         </q-select>
-        <div v-if="data" :class="'text-' + ciStepAppearance(data.status, data.conclusion).color" class="text-caption q-mt-sm">{{ data.status }}<span v-if="data.conclusion"> · {{ data.conclusion }}</span></div>
+        <div v-if="data" :class="'text-' + ciStepAppearance(data.status, data.conclusion).color" class="text-caption q-mt-sm">{{ data.status }}<span v-if="data.conclusion"> · {{ data.conclusion }}</span><CiDuration :item="data" :live="live" total prefix=" · " /></div>
         <div v-if="error" role="alert" class="text-negative q-mt-sm">{{ t('git.ciLogs.error') }}</div>
         <div v-if="retryStopped" role="status" class="text-warning text-caption">{{ t('git.ciLogs.retryStopped') }}</div>
         <div v-if="data?.truncated" class="text-warning text-caption">{{ t('git.ciLogs.truncated') }}</div>
@@ -44,6 +44,7 @@ import { ciLogSpans, ciStepAppearance } from 'src/utils/ci-log-format'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { CiJobLogs } from '../../../shared/ci-job-logs'
+import CiDuration from './CiDuration.vue'
 
 const props = defineProps<{ workspaceId: string; url: string; jobName: string }>()
 const emit = defineEmits<{ close: [] }>()
@@ -57,6 +58,8 @@ let retryCount = 0
 const follow = ref(true)
 const logElement = ref<HTMLElement | null>(null)
 const logSpans = computed(() => ciLogSpans(data.value?.logs ?? ''))
+// Durations (and their clock) live in CiDuration: the options never depend on a tick.
+const live = computed(() => data.value?.status !== 'completed')
 const stepOptions = computed(() => [
   { label: t('git.ciLogs.all'), value: null },
   ...(data.value?.steps ?? []).map((item) => ({
@@ -64,6 +67,7 @@ const stepOptions = computed(() => [
     value: item.number,
     name: `${item.number}. ${item.name}`,
     state: item.conclusion || item.status,
+    item,
     ...ciStepAppearance(item.status, item.conclusion),
   })),
 ])

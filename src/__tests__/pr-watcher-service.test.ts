@@ -8,7 +8,7 @@ vi.mock('../server/services/forge/registry.js', () => ({
 }))
 vi.mock('../server/services/dev-server-service.js', () => ({ stopDevServer: vi.fn() }))
 vi.mock('../server/services/terminal-service.js', () => ({ destroyTerminal: vi.fn() }))
-vi.mock('../server/services/websocket-service.js', () => ({ emitEphemeral: vi.fn() }))
+vi.mock('../server/services/websocket-service.js', () => ({ emitEphemeral: vi.fn(), broadcastAll: vi.fn() }))
 vi.mock('../server/services/workspace-service.js', () => ({
   archiveWorkspace: vi.fn(),
   getWorkspace: vi.fn(),
@@ -39,6 +39,7 @@ vi.mock('../server/utils/git-ops.js', () => ({
   isGitWorktree: vi.fn(() => false),
 }))
 vi.mock('../server/services/worktree-service.js', () => ({ isMatchingWorkspaceWorktree: vi.fn(() => false) }))
+vi.mock('../server/services/kept-ai-service.js', () => ({ putBackKeptAiFor: vi.fn(async () => [] as string[]) }))
 vi.mock('node:fs', async () => {
   const actual = await vi.importActual<typeof import('node:fs')>('node:fs')
   return { ...actual, existsSync: vi.fn(() => true), default: { ...actual, existsSync: vi.fn(() => true) } }
@@ -46,6 +47,7 @@ vi.mock('node:fs', async () => {
 
 import * as orchestrator from '../server/services/agent/orchestrator.js'
 import { computeGitStats } from '../server/services/git-stats-service.js'
+import { putBackKeptAiFor } from '../server/services/kept-ai-service.js'
 import {
   _resetForTest,
   checkPrStatuses,
@@ -1093,6 +1095,87 @@ describe('checkPrStatuses — auto-restore guards against purge leftovers', () =
     await checkPrStatuses()
 
     expect(wsService.restoreWorktreeFromDisk).toHaveBeenCalledWith('ws-purged')
+  })
+
+  it('puts the kept .ai folder back before the metadata is cleared, and logs its warnings without stopping the restore', async () => {
+    const purged = makePurged()
+    vi.mocked(wsService.listArchivedWorkspaces).mockReturnValue([purged as never])
+    vi.mocked(isMatchingWorkspaceWorktree).mockResolvedValue(true)
+    vi.mocked(wsService.restoreWorktreeFromDisk).mockReturnValue(purged as never)
+    const order: string[] = []
+    vi.mocked(putBackKeptAiFor).mockImplementationOnce(async () => {
+      order.push('put-back')
+      return ['one file could not be placed']
+    })
+    vi.mocked(wsService.restoreWorktreeFromDisk).mockImplementationOnce(() => {
+      order.push('restore')
+      return purged as never
+    })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await checkPrStatuses()
+      expect(order).toEqual(['put-back', 'restore'])
+      expect(vi.mocked(putBackKeptAiFor).mock.calls[0]![0]).toMatchObject({ id: 'ws-purged' })
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(String(warn.mock.calls[0]![0])).toContain('[pr-watcher]')
+      expect(warn.mock.calls.flat().join(' ')).toContain('one file could not be placed')
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('broadcasts the put-back warnings globally, only when there are some, never inside the restored event', async () => {
+    const purged = makePurged()
+    vi.mocked(wsService.listArchivedWorkspaces).mockReturnValue([purged as never])
+    vi.mocked(isMatchingWorkspaceWorktree).mockResolvedValue(true)
+    vi.mocked(wsService.restoreWorktreeFromDisk).mockReturnValue(purged as never)
+    vi.mocked(putBackKeptAiFor).mockResolvedValueOnce(['one file could not be placed'])
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await checkPrStatuses()
+      expect(wsSvc.emitEphemeral).toHaveBeenCalledWith('ws-purged', 'workspace:worktree-restored', {
+        workspace: purged,
+      })
+      expect(wsSvc.broadcastAll).toHaveBeenCalledExactlyOnceWith('workspace:restore-warnings', {
+        workspaceId: 'ws-purged',
+        workspaceName: 'purged ws',
+        warnings: ['one file could not be placed'],
+      })
+      vi.mocked(wsSvc.broadcastAll).mockClear()
+      vi.mocked(putBackKeptAiFor).mockResolvedValueOnce([])
+      await checkPrStatuses()
+      expect(wsSvc.broadcastAll).not.toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('does not fail the auto-restore when the warnings broadcast throws', async () => {
+    const purged = makePurged()
+    vi.mocked(wsService.listArchivedWorkspaces).mockReturnValue([purged as never])
+    vi.mocked(isMatchingWorkspaceWorktree).mockResolvedValue(true)
+    vi.mocked(wsService.restoreWorktreeFromDisk).mockReturnValue(purged as never)
+    vi.mocked(putBackKeptAiFor).mockResolvedValueOnce(['w'])
+    vi.mocked(wsSvc.broadcastAll).mockImplementationOnce(() => {
+      throw new Error('socket down')
+    })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      await checkPrStatuses()
+      expect(wsService.restoreWorktreeFromDisk).toHaveBeenCalledWith('ws-purged')
+      expect(err.mock.calls.flat().join(' ')).not.toContain('auto-restore failed')
+    } finally {
+      warn.mockRestore()
+      err.mockRestore()
+    }
+  })
+
+  it('does not put anything back for a checkout that does not match', async () => {
+    vi.mocked(wsService.listArchivedWorkspaces).mockReturnValue([makePurged() as never])
+    vi.mocked(isMatchingWorkspaceWorktree).mockResolvedValue(false)
+    await checkPrStatuses()
+    expect(putBackKeptAiFor).not.toHaveBeenCalled()
   })
 })
 

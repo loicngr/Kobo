@@ -1,7 +1,7 @@
 import { execFile, spawn } from 'node:child_process'
 import { promisify, stripVTControlCharacters } from 'node:util'
 import { Hono } from 'hono'
-import { type CiJobLogs, githubJobTarget } from '../../shared/ci-job-logs.js'
+import { type CiJobLogs, ciDate, githubJobTarget } from '../../shared/ci-job-logs.js'
 import { getAllPrSnapshots, refreshPrSnapshot } from '../services/pr-watcher-service.js'
 import { getWorkspace } from '../services/workspace-service.js'
 
@@ -82,12 +82,28 @@ app.get('/:id/ci-job-logs', async (c) => {
       run_id: number
       status: string
       conclusion: string | null
-      steps?: CiJobLogs['steps']
+      started_at?: unknown
+      completed_at?: unknown
+      steps?: Array<{
+        number: number
+        name: string
+        status: string
+        conclusion: string | null
+        started_at?: unknown
+        completed_at?: unknown
+      }>
     }
     if (String(job.run_id) !== target.runId) return c.json({ error: 'Job run mismatch' }, 404)
     const steps = (job.steps ?? [])
       .slice(0, 200)
-      .map(({ number, name, status, conclusion }) => ({ number, name, status, conclusion }))
+      .map(({ number, name, status, conclusion, started_at, completed_at }) => ({
+        number,
+        name,
+        status,
+        conclusion,
+        startedAt: ciDate(started_at),
+        completedAt: ciDate(completed_at),
+      }))
     if (step && !steps.some((item) => String(item.number) === step)) return c.json({ error: 'Step not found' }, 404)
     const logs = await readLogTail(
       [...args, '--allow-escape-sequences', `${endpoint}${step ? `/steps/${step}` : ''}/logs`],
@@ -97,7 +113,14 @@ app.get('/:id/ci-job-logs', async (c) => {
         timeout: 30_000,
       },
     )
-    return c.json({ status: job.status, conclusion: job.conclusion, steps, ...logs } satisfies CiJobLogs)
+    return c.json({
+      status: job.status,
+      conclusion: job.conclusion,
+      startedAt: ciDate(job.started_at),
+      completedAt: ciDate(job.completed_at),
+      steps,
+      ...logs,
+    } satisfies CiJobLogs)
   } catch {
     // CLI errors may contain credentials or signed log URLs.
     return c.json(

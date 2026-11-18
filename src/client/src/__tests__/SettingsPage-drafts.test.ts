@@ -230,6 +230,34 @@ describe('settings drafts', () => {
     expect(store.global.agentWatchdogEnabled).toBe(false)
   })
 
+  it('loads keepAiFolderOnPurge with a default of true, saves it and restores the persisted draft', async () => {
+    const { wrapper, store, tab, vm } = await setup()
+    await tab('worktrees')
+    const control = () =>
+      wrapper.getComponent<typeof Field>(`input[aria-label="${en['settings.keepAiFolderOnPurge']}"]`)
+    expect(control().props('modelValue')).toBe(true)
+    control().vm.$emit('update:modelValue', false)
+    await flushPromises()
+    expect(hasUnsavedWork()).toBe(true)
+    // The Worktrees tab validates a path input that this suite stubs: save from another tab.
+    await tab('agents')
+    await vm.savebarSave()
+    await flushPromises()
+    expect(api).toHaveBeenCalledWith(
+      '/api/settings/global',
+      expect.objectContaining({ body: expect.objectContaining({ keepAiFolderOnPurge: false }) }),
+    )
+    expect(store.global.keepAiFolderOnPurge).toBe(false)
+    vm.syncGlobalForm()
+    await tab('worktrees')
+    expect(control().props('modelValue')).toBe(false)
+    // An older server omits the setting: the toggle reads as on.
+    store.global = { ...store.global, keepAiFolderOnPurge: undefined as unknown as boolean }
+    vm.syncGlobalForm()
+    await flushPromises()
+    expect(control().props('modelValue')).toBe(true)
+  })
+
   it('saves shutdown options and restores the persisted draft', async () => {
     const { wrapper, store, tab, vm } = await setup()
     await tab('scripts')

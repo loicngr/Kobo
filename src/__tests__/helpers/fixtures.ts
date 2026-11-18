@@ -10,6 +10,7 @@
 import type { EffectiveSettings, GlobalSettings, ProjectSettings } from '../../server/services/settings-service.js'
 import type { Task, Workspace, WorkspaceWithTasks } from '../../server/services/workspace-service.js'
 import { LEGACY_WORKFLOW_POLICY } from '../../shared/workflow-policy.js'
+import { DEFAULT_WORKSPACE_NOTIFICATION_PREFS } from '../../shared/workspace-notifications.js'
 
 export function makeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
   return {
@@ -46,6 +47,7 @@ export function makeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
     sprintId: null,
     slackChannelId: null,
     slackQuestionMirror: 'never',
+    notificationPrefs: { ...DEFAULT_WORKSPACE_NOTIFICATION_PREFS },
     engine: 'claude-code',
     autoLoop: false,
     autoLoopReady: false,
@@ -179,6 +181,7 @@ export function makeGlobalSettings(overrides: Partial<GlobalSettings> = {}): Glo
     slackEnabled: false,
     slackAllowedUserIds: [],
     stopDevServersOnShutdown: true,
+    keepAiFolderOnPurge: true,
     serializeDevServerStarts: true,
     maxRunningDevServers: 0,
     awaitingUserReminderMinutes: 0,

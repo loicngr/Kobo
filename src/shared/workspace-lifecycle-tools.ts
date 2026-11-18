@@ -97,7 +97,7 @@ export const WORKSPACE_LIFECYCLE_TOOLS: Tool[] = [
   {
     name: 'purge_workspace_worktree',
     description:
-      'Free disk space by removing a Kōbō-owned workspace checkout, stopping its processes and archiving it, while preserving conversation history and workspace metadata. Uncommitted files in the checkout can be lost. External attached worktrees are protected. Set confirm_purge=true to explicitly request removal. Inspect the returned outcome and warnings; removal-failed is not success.',
+      'Free disk space by removing a Kōbō-owned workspace checkout, stopping its processes and archiving it, while preserving conversation history and workspace metadata. Uncommitted files in the checkout can be lost. External attached worktrees are protected. Set confirm_purge=true to explicitly request removal. Inspect the returned outcome and warnings; removal-failed and keep-failed are not success. When the "keep the .ai folder" setting is on (default), the checkout\'s .ai folder is moved to a kept folder and comes back at restore; a failure to keep it stops the purge.',
     inputSchema: {
       type: 'object',
       properties: { workspace_id: workspaceId, confirm_purge: { type: 'boolean', const: true } },

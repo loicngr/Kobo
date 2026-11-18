@@ -11,6 +11,11 @@ export default {
   'bulk.branches': 'Enter the branches above, one per line',
   'bulk.changed': 'The workspace or its branches changed. Select it again.',
   'bulk.result': '{done}/{total} actions succeeded',
+  'bulk.muteNotifications': 'Mute notifications',
+  'bulk.restoreNotifications': 'Restore notifications',
+  'bulk.groupMessageScope': 'Selection ({count})',
+  'bulk.groupMessageNone':
+    'No selected workspace can receive a message: archived workspaces and purged worktrees are left out.',
 
   'tools.group.session': 'Session',
   'tools.group.quality': 'Review and quality',
@@ -26,6 +31,10 @@ export default {
   'git.ciLogs.step': 'Step',
   'git.ciLogs.error': 'Unable to load logs. Check the server’s GitHub access and retry.',
   'git.ciLogs.truncated': 'Limited display: some logs are omitted.',
+  'ciDuration.seconds': '{s} s',
+  'ciDuration.minutes': '{m} min {s} s',
+  'ciDuration.hours': '{h} h {m} min',
+  'ciDuration.total': 'Total: {duration}',
   'git.ciLogs.follow': 'Follow new logs',
   'git.ciLogs.all': 'All steps',
   'git.ciLogs.unavailable': 'GitHub has not provided logs for this selection yet.',
@@ -166,6 +175,8 @@ export default {
     'Your original recipients and message are saved. Retry checks or resumes this same request without duplicating accepted deliveries.',
   'groupMessage.retry': 'Check this delivery',
   'groupMessage.newMessage': 'New message',
+  'groupMessage.selectionPending':
+    'An earlier group message is still displayed. Your selection will be used once it is finished or dismissed.',
   'groupMessage.send': 'Send to {count} workspaces',
   'groupMessage.state.pending': 'Pending',
   'groupMessage.state.sending': 'Sending',
@@ -660,6 +671,7 @@ export default {
   'workspaceList.a11y.groupToggle': '{group} group, {count} workspaces',
   'workspaceList.a11y.list': 'Workspaces',
   'workspaceList.a11y.card': '{name}, {status}',
+  'workspaceList.a11y.actions': 'Workspace actions',
   'workspaceList.needsAttention': 'Needs Attention',
   'workspaceList.running': 'Running',
   'workspaceList.idle': 'Idle',
@@ -727,8 +739,11 @@ export default {
   'contextMenu.restoreWorktree': 'Restore worktree',
   'workspacePage.restoringWorktree': 'Restoring…',
   'workspacePage.worktreeRestoreSuccess': 'Worktree restored',
+  'workspacePage.keptAiFolder': '.ai folder kept: {path}',
+  'workspacePage.copyKeptAiPath': 'Copy the path',
+  'workspacePage.worktreeRestoreWarning': 'Worktree restored, with a warning: {message}',
   'workspacePage.worktreeRestoreLimitations':
-    'Recreates committed Git files. Dependencies and previously discarded local files are not restored.',
+    'Recreates committed Git files, and brings back the .ai folder if one was kept. Dependencies and other previously discarded local files are not restored.',
   'workspacePage.restoreError.not-found': 'This workspace no longer exists. Refresh the workspace list.',
   'workspacePage.restoreError.not-purged':
     'This workspace is not marked as purged. Refresh it and check its working directory.',
@@ -749,7 +764,7 @@ export default {
   'workspacePage.archivedBanner': 'Archived workspace — read-only',
   'workspacePage.worktreePurgedBanner': 'Worktree deleted — history kept',
   'workspacePage.worktreePurgedTooltip':
-    'Restore worktree recreates the working directory and unarchives this workspace. Chat history, tasks and sessions are preserved. No agent or dev server is started.',
+    'Restore worktree recreates the working directory and unarchives this workspace. Chat history, tasks and sessions are preserved. The .ai folder is kept if «Keep the .ai folder when purging a worktree» was on at purge time. No agent or dev server is started.',
   'workspacePage.pendingInitialPromptBanner':
     'An initial prompt is pending — the agent never received it (setup script crashed or the workspace was never started). Click Start to send it now.',
   'workspacePage.unarchived': 'Workspace unarchived',
@@ -1481,7 +1496,8 @@ export default {
   'tours.settings.memory.title': 'Memory',
   'tours.settings.memory.description':
     'Choose Manual, Automatic or Hybrid behavior, then browse scopes and inspect or clear their exact memory data. CRUD and clear operations take effect immediately; changing the mode uses the Settings save button.',
-  'tours.settings.worktrees.description': 'Where worktrees live, how long merged ones are kept, and automatic purge.',
+  'tours.settings.worktrees.description':
+    'Where worktrees live, how long merged ones are kept, and automatic purge (the .ai folder can be kept).',
   'tours.settings.projects.title': 'Projects',
   'tours.settings.projects.description': 'Registered projects and their per-project overrides.',
   'tours.settings.misc.title': 'General, voice, notifications, export',
@@ -1595,7 +1611,7 @@ export default {
     'Bitbucket credentials. GitHub and GitLab use your authenticated gh/glab CLI; choose the forge per project.',
   'settings.help.voice': 'Dictation and push-to-talk.',
   'settings.help.notifications': 'Sounds, browser notifications and the unanswered-question reminder.',
-  'settings.help.worktrees': 'Where worktrees are created, retention and automatic purge.',
+  'settings.help.worktrees': 'Where worktrees are created, retention and automatic purge (the .ai folder can be kept).',
   'settings.help.projects': 'Registered projects and their per-project overrides.',
   'settings.help.templates': 'Prompt templates expanded in the chat input.',
   'settings.help.workspaceTemplates': 'Saved presets of the create form.',
@@ -2158,15 +2174,18 @@ export default {
     'Restore the worktree first using Restore worktree, or recreate it manually. Kōbō detects matching worktrees automatically.',
   'contextMenu.purgeWorktree': 'Free disk space (delete worktree)',
   'contextMenu.purgeWorktreeTooltip':
-    'Deletes the worktree from disk to reclaim space — chat / session history is preserved. Auto-archives the workspace.',
+    'Deletes the worktree from disk to reclaim space - chat / session history is preserved, and so is the .ai folder when «Keep the .ai folder when purging a worktree» is on. Auto-archives the workspace.',
   'contextMenu.purgeWorktreeDialogTitle': 'Free disk space?',
   'contextMenu.purgeWorktreeDialogMessage':
-    'The worktree folder for «{name}» will be deleted from disk. Chat and session history are kept. The workspace is auto-archived. This cannot be undone in the current version.',
+    'The worktree folder for «{name}» will be deleted from disk. Chat and session history are kept, and so is the .ai folder (notes, images, attachments) when «Keep the .ai folder when purging a worktree» is on. The workspace is auto-archived. This cannot be undone in the current version.',
   'contextMenu.purgeWorktreeDialogConfirm': 'Delete the worktree',
   'contextMenu.purgeWorktreeSuccess': 'Worktree deleted — disk space reclaimed.',
   'settings.autoPurgeOnPrMerged': 'Auto-purge worktree on PR merged',
   'settings.autoPurgeOnPrMergedHint':
-    'When ON, the worktree is deleted from disk as soon as the PR is merged (in addition to the auto-archive). Chat history is kept.',
+    'When ON, the worktree is deleted from disk as soon as the PR is merged (in addition to the auto-archive). Chat history is kept, and so is the .ai folder when «Keep the .ai folder when purging a worktree» is on.',
+  'settings.keepAiFolderOnPurge': 'Keep the .ai folder when purging a worktree',
+  'settings.keepAiFolderOnPurgeHint':
+    'Notes, handoffs, images and attachments are moved to a .kobo-kept folder next to the worktrees, stay readable here, come back when the worktree is restored and are removed with the workspace. A manual clean-up of that folder (git clean -fdx included) deletes them.',
   'settings.forceImmediateMessages': 'Force immediate message delivery',
   'settings.forceImmediateMessagesHint':
     'Off by default. Send new messages while the agent is working, like Ctrl+Enter, without queueing them. In auto-loop, send now and pause the loop. Already queued messages stay unchanged; compaction and permission blocks still apply.',
@@ -2229,7 +2248,7 @@ export default {
   'settings.purgeDocsRestoreCommands':
     '# GitHub (using gh CLI):\n  gh pr checkout [pr-number] --recurse-submodules\n\n# Or directly via git (works on GitHub even after branch deletion):\n  git fetch origin pull/[pr-number]/head:[branch-name]\n  git worktree add [path] [branch-name]',
   'settings.purgeDocsRestoreFootnote':
-    'GitHub keeps the PR head ref accessible long after the source branch is deleted (months / years). Auto-detection runs in the 30s watcher — no UI action needed once the folder is back.',
+    'GitHub keeps the PR head ref accessible long after the source branch is deleted (months / years). Auto-detection runs in the 30s watcher - no UI action needed once the folder is back. If its .ai folder was kept, it is put back into the recreated worktree first (a file that Git already checked out is left as it is).',
   'settings.purgeDocsPermissionsTitle': 'Avoiding permission errors during purge',
   'settings.purgeDocsPermissionsIntro':
     'Docker often leaves root-owned files in node_modules / vendor inside the worktree. When Kōbō tries to remove them, you hit EACCES / EPERM and the purge fails. Two ways to prevent it:',
@@ -2621,6 +2640,24 @@ export default {
   // Workspace list drawer indicators
   'workspaceList.prOpen': '#{n} — Pull request open',
   'workspaceList.prWatchDisabledIndicator': 'PR checks ignored for this workspace',
+  'workspaceNotifications.indicator.label': 'Notifications muted for this workspace',
+  'workspaceNotifications.indicator.browser': 'Browser notifications',
+  'workspaceNotifications.indicator.sound': 'Sounds',
+  'workspaceNotifications.indicator.toast': 'Toasts',
+  'workspaceNotifications.indicator.drawer': 'Drawer signals',
+  'workspaceNotifications.title': 'Notifications: {name}',
+  'workspaceNotifications.menu': 'Notifications...',
+  'workspaceNotifications.intro': 'Choose which signals this workspace may produce. Changes apply immediately.',
+  'workspaceNotifications.muteHeading': 'Mute for this workspace',
+  'workspaceNotifications.drawerHint':
+    'This workspace will no longer appear under the attention group. The Dashboard still shows its real state.',
+  'workspaceNotifications.keepQuestions': 'Keep questions audible and visible',
+  'workspaceNotifications.keepQuestionsHint':
+    'The exception covers the sound and the on-screen message only, never the browser notification nor the drawer signals.',
+  'workspaceNotifications.keepQuestionsDisabled': 'Available once sounds or toasts are muted.',
+  'workspaceNotifications.muteAll': 'Mute all',
+  'workspaceNotifications.restoreAll': 'Restore all',
+  'workspaceNotifications.error': 'The change could not be saved. Please try again.',
   'workspaceList.prChangesRequested': '#{n} — Changes requested',
   'workspaceList.attentionCiFailed': 'CI failed',
   'workspaceList.attentionChangesRequested': 'Changes requested',

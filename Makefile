@@ -9,7 +9,7 @@
 #   make release     # CI gates + build + version-not-yet-published guard
 #   make test        # backend + client + deployment tooling tests
 #   make lint        # biome lint only
-#   make audit       # npm audit on all three trees
+#   make audit       # npm audit on all three trees (scripts/audit-check.mjs)
 #   make install     # `npm ci` on all three trees (CI-equivalent install)
 #   make build       # production build (client + server)
 #   make clean       # rm dist/
@@ -32,7 +32,7 @@ help:
 	@echo "  make ci         Run the full PR pipeline, step for step (install + audit + lint + type checks + build + tests + package smoke test)"
 	@echo "  make release    Run CI + build + verify version is not already published"
 	@echo "  make install    npm ci on all three trees"
-	@echo "  make audit      npm audit --audit-level=high on all three trees"
+	@echo "  make audit      npm audit (high and critical) on all three trees"
 	@echo "  make lint       biome check"
 	@echo "  make typecheck  tsc --noEmit (backend), tests, vue-tsc (client)"
 	@echo "  make test       backend + client vitest suites + deployment tooling"
@@ -57,19 +57,20 @@ install-client:
 install-pwa:
 	cd $(PWA_DIR) && npm ci
 
-# ── Audit (mirrors CI `--audit-level=high`) ────────────────────────────────────
+# ── Audit (mirrors CI: high and critical, minus scripts/audit-check.mjs's allowlist) ──
 
 .PHONY: audit audit-root audit-client audit-pwa
 audit: audit-root audit-client audit-pwa
 
 audit-root:
-	npm audit --audit-level=high
+	node scripts/audit-check.mjs --self-test
+	node scripts/audit-check.mjs .
 
 audit-client:
-	cd $(CLIENT_DIR) && npm audit --audit-level=high
+	node scripts/audit-check.mjs $(CLIENT_DIR)
 
 audit-pwa:
-	cd $(PWA_DIR) && npm audit --audit-level=high
+	node scripts/audit-check.mjs $(PWA_DIR)
 
 # ── Lint / typecheck ───────────────────────────────────────────────────────────
 

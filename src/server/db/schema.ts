@@ -12,6 +12,7 @@ import { initSearchSchema } from './search-schema.js'
 import { initSessionHandoffSchema } from './session-handoff-schema.js'
 import { initSlackButtonsSchema, initSlackQuestionsSchema, initSlackSchema } from './slack-schema.js'
 import { initWorkspaceMessageBatchSchema } from './workspace-message-batch-schema.js'
+import { initWorkspaceNotificationPrefsSchema } from './workspace-notification-schema.js'
 
 /** Create all tables and indexes for a fresh install. Not used for upgrades -- see migrations.ts. */
 export function initSchema(db: Database.Database): void {
@@ -267,4 +268,5 @@ export function initSchema(db: Database.Database): void {
   initSlackSchema(db)
   initSlackButtonsSchema(db)
   initSlackQuestionsSchema(db)
+  initWorkspaceNotificationPrefsSchema(db)
 }

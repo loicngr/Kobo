@@ -1,5 +1,5 @@
 import type { AgentLiveness, PrSnapshot, Workspace } from '../stores/workspace'
-import { type AttentionKind, getAttentionReasons } from './workspace-attention'
+import { type AttentionKind, getDrawerAttentionReasons } from './workspace-attention'
 import { filterWorkspaces } from './workspace-search'
 
 export type WorkspaceSortField = 'activity' | 'created' | 'name' | 'attention'
@@ -62,7 +62,7 @@ export function sortWorkspaces<T extends Workspace>(
       sort.field === 'attention'
         ? Math.max(
             0,
-            ...getAttentionReasons(ws, context.snapshots?.[ws.id], context.quotaBackoffReasons?.[ws.id]).map(
+            ...getDrawerAttentionReasons(ws, context.snapshots?.[ws.id], context.quotaBackoffReasons?.[ws.id]).map(
               (reason) => ATTENTION_PRIORITY[reason.kind],
             ),
           )

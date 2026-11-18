@@ -1,6 +1,21 @@
 import { describe, expect, it } from 'vitest'
 import type { PrSnapshot, Workspace } from '../stores/workspace'
-import { getAttentionReasons } from '../utils/workspace-attention'
+import { getAttentionReasons, getDrawerAttentionReasons } from '../utils/workspace-attention'
+
+describe('getDrawerAttentionReasons', () => {
+  const muted = { muteBrowser: false, muteSound: false, muteToast: false, muteDrawer: true, keepQuestions: false }
+  it('hides every reason when muteDrawer is set, while getAttentionReasons keeps the true state', () => {
+    const w = { id: 'w1', status: 'error', notificationPrefs: muted } as unknown as Workspace
+    expect(getDrawerAttentionReasons(w, undefined)).toEqual([])
+    expect(getAttentionReasons(w, undefined)).toHaveLength(1)
+  })
+  it('matches getAttentionReasons when not muted or without prefs', () => {
+    const plain = { id: 'w1', status: 'error' } as unknown as Workspace
+    expect(getDrawerAttentionReasons(plain, undefined)).toEqual(getAttentionReasons(plain, undefined))
+    const other = { ...plain, notificationPrefs: { ...muted, muteDrawer: false, muteSound: true } } as Workspace
+    expect(getDrawerAttentionReasons(other, undefined)).toEqual(getAttentionReasons(other, undefined))
+  })
+})
 
 function ws(status: string): Workspace {
   return { id: 'w1', status } as unknown as Workspace

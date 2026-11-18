@@ -8,7 +8,13 @@ import {
   removeAttachments,
   saveAttachments,
 } from '../server/services/attachment-service.js'
+import * as worktreeService from '../server/services/worktree-service.js'
 import { MAX_ATTACHMENT_BYTES, validateAttachments } from '../shared/attachments.js'
+
+vi.mock('../server/services/worktree-service.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../server/services/worktree-service.js')>()
+  return { ...actual, ensureKoboGitExcludes: vi.fn(actual.ensureKoboGitExcludes) }
+})
 
 const roots: string[] = []
 afterEach(() => {
@@ -101,16 +107,36 @@ describe('creation images', () => {
     expect(fs.readdirSync(path.join(dir, '.ai/images')).filter((name) => name.endsWith('.png'))).toEqual([])
   })
 
-  it('excludes uploaded documents from Git in an existing worktree', async () => {
+  it('excludes uploaded documents through the local exclude file without touching .gitignore', async () => {
     const dir = root()
     execFileSync('git', ['init', '-q', dir])
     fs.writeFileSync(path.join(dir, '.gitignore'), 'node_modules/\n')
     const [saved] = await saveAttachments(dir, [new File(['private'], 'spec.pdf', { type: 'application/pdf' })])
+    expect(worktreeService.ensureKoboGitExcludes).toHaveBeenCalledWith(dir)
     expect(execFileSync('git', ['-C', dir, 'check-ignore', saved!.relativePath], { encoding: 'utf8' }).trim()).toBe(
       saved!.relativePath,
     )
     await saveAttachments(dir, [new File(['notes'], 'notes.md')])
-    expect(fs.readFileSync(path.join(dir, '.gitignore'), 'utf8')).toBe('node_modules/\n.ai/attachments/\n')
+    expect(fs.readFileSync(path.join(dir, '.gitignore'), 'utf8')).toBe('node_modules/\n')
+  })
+
+  it('ensures the local excludes once per batch, and not for images only', async () => {
+    const dir = root()
+    const spy = vi.mocked(worktreeService.ensureKoboGitExcludes)
+    spy.mockClear()
+    await saveAttachments(dir, [new File(['a'], 'a.md'), new File(['b'], 'b.md'), new File(['c'], 'c.md')])
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(spy).toHaveBeenCalledWith(dir)
+    spy.mockClear()
+    await saveAttachments(dir, [new File(['png'], 'screen.png', { type: 'image/png' })])
+    expect(spy).not.toHaveBeenCalled()
+  })
+
+  it('does not create a .gitignore, and still saves the file outside a git repository', async () => {
+    const dir = root()
+    const [saved] = await saveAttachments(dir, [new File(['notes'], 'notes.md')])
+    expect(fs.existsSync(path.join(dir, '.gitignore'))).toBe(false)
+    expect(fs.existsSync(path.join(dir, saved!.relativePath))).toBe(true)
   })
 
   it('removes a partially written file when the disk fills up', async () => {

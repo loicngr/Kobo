@@ -1801,3 +1801,69 @@ describe('workspace workflow policy snapshots', () => {
     expect(getWorkspace(workspace.id)?.workflowPolicy).toEqual(updated.workflowPolicy)
   })
 })
+
+describe('workspace notification prefs', () => {
+  async function setup() {
+    const svc = await import('../server/services/workspace-service.js')
+    const { getDb } = await import('../server/db/index.js')
+    const ws = svc.createWorkspace({ name: 'N', projectPath: '/tmp/n', sourceBranch: 'main', workingBranch: 'n' })
+    return { svc, db: getDb(), ws }
+  }
+  const muted = { muteBrowser: true, muteSound: true, muteToast: false, muteDrawer: false, keepQuestions: true }
+
+  it('maps NULL and invalid JSON to the default', async () => {
+    const { svc, db, ws } = await setup()
+    const def = { muteBrowser: false, muteSound: false, muteToast: false, muteDrawer: false, keepQuestions: false }
+    expect(ws.notificationPrefs).toEqual(def)
+    db.prepare("UPDATE workspaces SET notification_prefs = '{bad' WHERE id = ?").run(ws.id)
+    expect(svc.getWorkspace(ws.id)?.notificationPrefs).toEqual(def)
+  })
+
+  it.each(['[]', '"muteSound"', '[{"muteSound":true}]'])('maps a stored %s to the default', async (raw) => {
+    const { svc, db, ws } = await setup()
+    db.prepare('UPDATE workspaces SET notification_prefs = ? WHERE id = ?').run(raw, ws.id)
+    expect(svc.getWorkspace(ws.id)?.notificationPrefs).toEqual({
+      muteBrowser: false,
+      muteSound: false,
+      muteToast: false,
+      muteDrawer: false,
+      keepQuestions: false,
+    })
+  })
+
+  it('round-trips, reports changed, and leaves updated_at alone', async () => {
+    const { svc, ws } = await setup()
+    const first = svc.setWorkspaceNotificationPrefs(ws.id, muted)
+    expect(first.changed).toBe(true)
+    expect(first.workspace.notificationPrefs).toEqual(muted)
+    expect(svc.getWorkspace(ws.id)?.notificationPrefs).toEqual(muted)
+    expect(first.workspace.updatedAt).toBe(ws.updatedAt)
+    expect(svc.setWorkspaceNotificationPrefs(ws.id, muted).changed).toBe(false)
+  })
+
+  it('stores NULL when set back to the default', async () => {
+    const { svc, db, ws } = await setup()
+    svc.setWorkspaceNotificationPrefs(ws.id, muted)
+    const def = { muteBrowser: false, muteSound: false, muteToast: false, muteDrawer: false, keepQuestions: false }
+    const result = svc.setWorkspaceNotificationPrefs(ws.id, def)
+    expect(result.changed).toBe(true)
+    expect(db.prepare('SELECT notification_prefs AS p FROM workspaces WHERE id = ?').get(ws.id)).toEqual({ p: null })
+  })
+
+  it('accepts an archived workspace and throws for an unknown one', async () => {
+    const { svc, ws } = await setup()
+    svc.archiveWorkspace(ws.id)
+    expect(svc.setWorkspaceNotificationPrefs(ws.id, muted).changed).toBe(true)
+    expect(() => svc.setWorkspaceNotificationPrefs('nope', muted)).toThrow("Workspace 'nope' not found")
+  })
+
+  it('is carried by the active and archived list payloads', async () => {
+    const { svc, ws } = await setup()
+    const other = svc.createWorkspace({ name: 'O', projectPath: '/tmp/o', sourceBranch: 'main', workingBranch: 'o' })
+    svc.setWorkspaceNotificationPrefs(ws.id, muted)
+    svc.setWorkspaceNotificationPrefs(other.id, muted)
+    svc.archiveWorkspace(other.id)
+    expect(svc.listWorkspaces().find((w) => w.id === ws.id)?.notificationPrefs).toEqual(muted)
+    expect(svc.listArchivedWorkspaces()[0].notificationPrefs).toEqual(muted)
+  })
+})

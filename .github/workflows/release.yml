@@ -50,11 +50,9 @@ jobs:
         working-directory: src/client
       - run: npm ci
         working-directory: src/client/src-pwa
-      - run: npm audit --audit-level=high
-      - run: npm audit --audit-level=high
-        working-directory: src/client
-      - run: npm audit --audit-level=high
-        working-directory: src/client/src-pwa
+      - run: node scripts/audit-check.mjs --self-test && node scripts/audit-check.mjs .
+      - run: node scripts/audit-check.mjs src/client
+      - run: node scripts/audit-check.mjs src/client/src-pwa
       - run: npm run lint
       - run: npx tsc --noEmit
       - run: npm run typecheck:tests

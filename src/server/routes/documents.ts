@@ -2,6 +2,7 @@ import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from '
 import path from 'node:path'
 import { Hono } from 'hono'
 import { DOCUMENT_DIRS } from '../../shared/document-roots.js'
+import { workspaceFilesRoot } from '../services/kept-ai-service.js'
 import * as workspaceService from '../services/workspace-service.js'
 import { isPathInside, resolveExistingPathInside } from '../utils/safe-path.js'
 
@@ -70,7 +71,8 @@ app.get('/:id/documents', (c) => {
       return c.json({ error: `Workspace '${id}' not found` }, 404)
     }
 
-    const worktreePath = workspace.worktreePath
+    // Kept copy of `.ai` while the workspace is purged, the worktree otherwise.
+    const worktreePath = workspaceFilesRoot(workspace)
     const documents: DocumentFile[] = []
 
     for (const dir of DOCUMENT_DIRS) {
@@ -123,7 +125,8 @@ app.get('/:id/document', (c) => {
       return c.json({ error: 'Only .md files can be read' }, 400)
     }
 
-    const worktreePath = workspace.worktreePath
+    // Kept copy of `.ai` while the workspace is purged, the worktree otherwise.
+    const worktreePath = workspaceFilesRoot(workspace)
     const absPath = path.join(worktreePath, normalized)
 
     if (!existsSync(absPath)) {
@@ -134,7 +137,13 @@ app.get('/:id/document', (c) => {
     if (fileStat.isSymbolicLink()) return c.json({ error: 'Symbolic links are not allowed' }, 400)
     if (!fileStat.isFile()) return c.json({ error: `Document not found: ${normalized}` }, 404)
     const realWorktree = realpathSync(worktreePath)
-    const realFile = resolveExistingPathInside(worktreePath, absPath)
+    let realFile: string
+    try {
+      realFile = resolveExistingPathInside(worktreePath, absPath)
+    } catch {
+      // A parent directory that is a symbolic link out of the root.
+      return c.json({ error: 'Path escapes allowed root' }, 400)
+    }
     const allowed = DOCUMENT_DIRS.some((dir) => {
       const allowedRoot = path.join(worktreePath, dir)
       if (!existsSync(allowedRoot) || lstatSync(allowedRoot).isSymbolicLink()) return false

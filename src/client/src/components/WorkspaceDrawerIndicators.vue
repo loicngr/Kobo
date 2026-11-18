@@ -34,8 +34,27 @@
     name="visibility_off"
     size="14px"
     color="kobo-3"
+    data-testid="pr-watch-disabled-indicator"
+    role="img"
+    aria-hidden="false"
+    :aria-label="t('workspaceList.prWatchDisabledIndicator')"
   >
     <q-tooltip>{{ t('workspaceList.prWatchDisabledIndicator') }}</q-tooltip>
+  </q-icon>
+  <q-icon
+    v-if="mutedChannels.length > 0"
+    name="notifications_off"
+    size="14px"
+    color="kobo-3"
+    data-testid="notification-muted-indicator"
+    role="img"
+    aria-hidden="false"
+    :aria-label="`${t('workspaceNotifications.indicator.label')}: ${mutedChannels.join(', ')}`"
+  >
+    <q-tooltip>
+      <div>{{ t('workspaceNotifications.indicator.label') }}</div>
+      <div v-for="channel in mutedChannels" :key="channel">{{ channel }}</div>
+    </q-tooltip>
   </q-icon>
   <q-icon
     v-if="workspaceStore.autoLoopStates[workspace.id]?.auto_loop"
@@ -57,6 +76,7 @@ import { useWorkspaceStore } from 'src/stores/workspace'
 import { isChangesRequestedBlocking, isCiFailed } from 'src/utils/pr-status'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { hasAnyMute } from '../../../shared/workspace-notifications'
 
 const props = defineProps<{ workspace: Workspace }>()
 
@@ -65,6 +85,20 @@ const workspaceStore = useWorkspaceStore()
 const { t } = useI18n()
 
 const cronCount = computed(() => workspaceStore.autoLoopStates[props.workspace.id]?.crons_count ?? 0)
+
+const MUTE_CHANNELS = [
+  ['muteBrowser', 'browser'],
+  ['muteSound', 'sound'],
+  ['muteToast', 'toast'],
+  ['muteDrawer', 'drawer'],
+] as const
+
+// Empty for undefined prefs and for keepQuestions alone (hasAnyMute ignores it).
+const mutedChannels = computed(() => {
+  const prefs = props.workspace.notificationPrefs
+  if (!prefs || !hasAnyMute(prefs)) return []
+  return MUTE_CHANNELS.filter(([key]) => prefs[key]).map(([, name]) => t(`workspaceNotifications.indicator.${name}`))
+})
 
 const prSnapshot = computed(() => workspaceStore.prSnapshots[props.workspace.id])
 // The PR icon stays green at all times — it only signals "this workspace has

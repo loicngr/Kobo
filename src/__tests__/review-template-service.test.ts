@@ -5,6 +5,7 @@ import {
   renderReviewTemplate,
 } from '../server/services/review-template-service.js'
 import type { Workspace } from '../server/services/workspace-service.js'
+import { DEFAULT_WORKSPACE_NOTIFICATION_PREFS } from '../shared/workspace-notifications.js'
 
 function makeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
   return {
@@ -38,6 +39,7 @@ function makeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
     sprintId: null,
     slackChannelId: null,
     slackQuestionMirror: 'never',
+    notificationPrefs: { ...DEFAULT_WORKSPACE_NOTIFICATION_PREFS },
     tags: [],
     engine: 'claude-code',
     autoLoop: false,

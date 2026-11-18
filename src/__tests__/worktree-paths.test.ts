@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   normalizeWorktreesPath,
   resolveGlobalWorktreesRoot,
+  resolveKeptAiBase,
   resolveSiblingWorkspaceWorktreePath,
   resolveWorkspaceWorktreePath,
   resolveWorktreesRoot,
@@ -180,5 +181,37 @@ describe('resolveSiblingWorkspaceWorktreePath — projectSlug', () => {
       undefined,
     )
     expect(next).toBe('/home/me/kobo/worktrees/feature/new')
+  })
+})
+
+describe('resolveKeptAiBase', () => {
+  it('returns the configured root for a worktree inside it (relative setting)', () => {
+    const root = path.resolve('/repo', '.worktrees')
+    const worktree = resolveWorkspaceWorktreePath('/repo', 'feature/x', '.worktrees', 'slug')
+    expect(resolveKeptAiBase('/repo', worktree, 'feature/x', '.worktrees')).toBe(root)
+  })
+
+  it('returns the configured root for a worktree inside it (absolute setting, no slug)', () => {
+    const worktree = resolveWorkspaceWorktreePath('/repo', 'feature/x', '/data/wt')
+    expect(resolveKeptAiBase('/repo', worktree, 'feature/x', '/data/wt')).toBe('/data/wt')
+  })
+
+  it('strips the branch segments for a worktree outside the configured root', () => {
+    expect(resolveKeptAiBase('/repo', '/old/slug/feature/x', 'feature/x', '/data/wt')).toBe('/old/slug')
+  })
+
+  it('falls back to the parent folder when the path does not end with the branch', () => {
+    expect(resolveKeptAiBase('/repo', '/elsewhere/custom-dir', 'feature/x', '/data/wt')).toBe('/elsewhere')
+  })
+
+  it('never returns an empty or relative base for a path made only of the branch segments', () => {
+    expect(resolveKeptAiBase('/p', '/feature/x', 'feature/x', '.worktrees')).toBe('/feature')
+    expect(resolveKeptAiBase('/p', '/x', 'x', '.worktrees')).toBe('/')
+    expect(resolveKeptAiBase('C:\\p', 'C:\\feature\\x', 'feature/x', 'D:\\wt')).toBe('C:\\feature')
+  })
+
+  it('works with Windows-style paths', () => {
+    expect(resolveKeptAiBase('C:\\repo', 'C:\\wt\\slug\\feature\\x', 'feature/x', 'C:\\wt')).toBe('C:\\wt')
+    expect(resolveKeptAiBase('C:\\repo', 'D:\\old\\feature\\x', 'feature/x', 'C:\\wt')).toBe('D:\\old')
   })
 })

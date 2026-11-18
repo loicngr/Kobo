@@ -338,6 +338,8 @@ export interface GlobalSettings {
   reviewDefaultInstructions?: string
   showProgressBars: boolean
   stopDevServersOnShutdown: boolean
+  /** Keep a purged workspace's untracked `.ai` folder in `.kobo-kept` instead of deleting it. */
+  keepAiFolderOnPurge: boolean
   serializeDevServerStarts: boolean
   /** Running and starting development servers; 0 means unlimited. */
   maxRunningDevServers: number
@@ -1427,6 +1429,13 @@ const settingsMigrations: SettingsMigration[] = [
       global.agentWorkspaceLifecycleEnabled = false
     },
   },
+  {
+    version: 75,
+    name: 'keep-ai-folder-on-purge',
+    migrate: ({ global }) => {
+      if (typeof global.keepAiFolderOnPurge !== 'boolean') global.keepAiFolderOnPurge = true
+    },
+  },
 ]
 
 const SLACK_MEMBER_ID = /^[UW][A-Z0-9]{2,}$/
@@ -1557,6 +1566,7 @@ function defaultSettings(): Settings {
       reviewDefaultInstructions: '',
       showProgressBars: true,
       stopDevServersOnShutdown: true,
+      keepAiFolderOnPurge: true,
       serializeDevServerStarts: true,
       maxRunningDevServers: 0,
       awaitingUserReminderMinutes: 0,
@@ -1724,6 +1734,7 @@ export function runSettingsMigrations(raw: Record<string, unknown>): Settings {
   if (typeof current.global.forceImmediateMessages !== 'boolean') current.global.forceImmediateMessages = false
   if (typeof current.global.showProgressBars !== 'boolean') current.global.showProgressBars = true
   if (typeof current.global.stopDevServersOnShutdown !== 'boolean') current.global.stopDevServersOnShutdown = true
+  if (typeof current.global.keepAiFolderOnPurge !== 'boolean') current.global.keepAiFolderOnPurge = true
   if (typeof current.global.serializeDevServerStarts !== 'boolean') current.global.serializeDevServerStarts = true
   if (!Number.isSafeInteger(current.global.maxRunningDevServers) || (current.global.maxRunningDevServers as number) < 0)
     current.global.maxRunningDevServers = 0
@@ -2145,6 +2156,9 @@ export function updateGlobalSettings(input: Partial<GlobalSettings>): GlobalSett
   if ('stopDevServersOnShutdown' in data && typeof data.stopDevServersOnShutdown !== 'boolean') {
     delete (data as Record<string, unknown>).stopDevServersOnShutdown
   }
+  if ('keepAiFolderOnPurge' in data && typeof data.keepAiFolderOnPurge !== 'boolean') {
+    delete (data as Record<string, unknown>).keepAiFolderOnPurge
+  }
   if ('serializeDevServerStarts' in data && typeof data.serializeDevServerStarts !== 'boolean') {
     delete (data as Record<string, unknown>).serializeDevServerStarts
   }
@@ -2249,6 +2263,7 @@ export function updateGlobalSettings(input: Partial<GlobalSettings>): GlobalSett
     'reviewDefaultInstructions',
     'showProgressBars',
     'stopDevServersOnShutdown',
+    'keepAiFolderOnPurge',
     'serializeDevServerStarts',
     'maxRunningDevServers',
     'awaitingUserReminderMinutes',

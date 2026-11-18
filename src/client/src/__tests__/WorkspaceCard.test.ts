@@ -5,15 +5,20 @@ import { createI18n } from 'vue-i18n'
 import WorkspaceCard from '../components/WorkspaceCard.vue'
 import en from '../i18n/en'
 import type { Workspace } from '../stores/workspace'
+import { useWorkspaceStore } from '../stores/workspace'
 
 afterEach(() => vi.useRealTimers())
 
 const i18n = createI18n({ legacy: false, locale: 'en', messages: { en } })
+const menuShow = vi.fn()
 const stubs = {
+  'q-btn': { template: '<button><slot /></button>' },
   WorkspaceContextMenu: {
     props: ['workspace'],
-    emits: ['copy-id'],
-    template: '<button class="copy-id-stub" @click="$emit(\'copy-id\', workspace)" />',
+    emits: ['copy-id', 'notifications'],
+    methods: { show: (evt: unknown) => menuShow(evt) },
+    template:
+      '<div><button class="copy-id-stub" @click="$emit(\'copy-id\', workspace)" /><button class="notifications-stub" @click="$emit(\'notifications\', workspace)" /></div>',
   },
   WorkspaceDrawerIndicators: { template: '<div class="indicators-stub" />' },
   WorkspaceAttentionLabels: {
@@ -67,7 +72,7 @@ const makeWorkspace = (over: Partial<Workspace> = {}): Workspace => ({
   ...over,
 })
 
-function mountCard(props: Record<string, unknown> = {}) {
+function mountCard(props: Record<string, unknown> = {}, touch = false) {
   const workspace =
     (props.workspace as Workspace | undefined) ??
     makeWorkspace(props.variant === 'archived' ? { archivedAt: '2026-01-02T00:00:00Z' } : {})
@@ -80,12 +85,63 @@ function mountCard(props: Record<string, unknown> = {}) {
       ...props,
       workspace,
     },
-    global: { plugins: [i18n], stubs },
+    global: { plugins: [i18n], stubs, provide: { _q_: { platform: { has: { touch } } } } },
   })
 }
 
 describe('WorkspaceCard.vue', () => {
-  beforeEach(() => setActivePinia(createPinia()))
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    menuShow.mockClear()
+  })
+
+  describe('touch "more" button', () => {
+    const btn = '[data-testid="workspace-card-menu-button"]'
+
+    it('is rendered only when the platform has a touch screen', () => {
+      expect(mountCard({}, true).find(btn).exists()).toBe(true)
+      expect(mountCard({}, false).find(btn).exists()).toBe(false)
+    })
+
+    it('is hidden in bulk selection mode and present on archived cards', () => {
+      expect(mountCard({ selectionMode: true }, true).find(btn).exists()).toBe(false)
+      expect(mountCard({ variant: 'archived' }, true).find(btn).exists()).toBe(true)
+    })
+
+    it('has an accessible name', () => {
+      expect(mountCard({}, true).get(btn).attributes('aria-label')).toBe('Workspace actions')
+    })
+
+    it('opens the context menu on tap without selecting nor toggling', async () => {
+      const card = mountCard({}, true)
+      await card.get(btn).trigger('click')
+      expect(menuShow).toHaveBeenCalledTimes(1)
+      expect(card.emitted('select')).toBeUndefined()
+      expect(card.emitted('toggleSelection')).toBeUndefined()
+    })
+
+    it('does not start the hold-to-select timer', async () => {
+      vi.useFakeTimers()
+      const card = mountCard({}, true)
+      await card.get(btn).trigger('pointerdown', { pointerType: 'touch', button: 0, isPrimary: true })
+      vi.advanceTimersByTime(1500)
+      expect(card.emitted('toggleSelection')).toBeUndefined()
+    })
+
+    it('opens on Enter and Space without triggering the card selection', async () => {
+      const card = mountCard({}, true)
+      await card.get(btn).trigger('keydown', { key: 'Enter' })
+      await card.get(btn).trigger('keydown', { key: ' ' })
+      expect(menuShow).toHaveBeenCalled()
+      expect(card.emitted('select')).toBeUndefined()
+    })
+  })
+
+  it.each(['idle', 'archived'])('re-emits the context-menu notifications event (%s)', async (variant) => {
+    const card = mountCard({ variant })
+    await card.get('.notifications-stub').trigger('click')
+    expect(card.emitted('notifications')?.[0]).toEqual([card.props('workspace')])
+  })
 
   it('exposes the card as a keyboard-reachable listbox option', () => {
     const card = mountCard({ selected: true })
@@ -233,6 +289,114 @@ describe('WorkspaceCard.vue', () => {
     const archived = mountCard({ variant: 'archived' })
     expect(archived.find('.indicators-stub').exists()).toBe(true)
     expect(archived.find('.labels-stub').exists()).toBe(true)
+  })
+
+  describe('status line of the idle variant', () => {
+    const meta = (status: Workspace['status'], variant: 'idle' | 'running' = 'idle') =>
+      mountCard({ variant, workspace: makeWorkspace({ status }) })
+        .get('.wl-item-meta')
+        .text()
+
+    it.each([
+      ['error', 'error'],
+      ['quota', 'quota reached'],
+      ['awaiting-user', 'awaiting your answer'],
+    ] as const)('shows the %s status in plain muted text', (status, label) => {
+      const card = mountCard({ variant: 'idle', workspace: makeWorkspace({ status }) })
+      const line = card.get('.wl-item-meta')
+      expect(line.text()).toMatch(new RegExp(`^${label} · `))
+      expect(line.classes()).toContain('text-kobo-3')
+      expect(line.find('q-icon-stub, .q-icon').exists()).toBe(false)
+      expect(line.html()).not.toMatch(/text-(red|amber|negative|warning)/)
+    })
+
+    it.each(['idle', 'completed', 'created'] as const)('adds nothing for %s', (status) => {
+      expect(meta(status)).not.toContain('·')
+    })
+  })
+
+  describe('muteDrawer', () => {
+    const muted = { muteBrowser: false, muteSound: false, muteToast: false, muteDrawer: true, keepQuestions: false }
+    const nameStyle = (card: ReturnType<typeof mountCard>) => card.get('.wl-item-name').attributes('style') ?? ''
+
+    it('shows the unread emphasis for an unmuted workspace', () => {
+      expect(nameStyle(mountCard({ workspace: makeWorkspace({ hasUnread: true }) }))).toContain('font-weight: 700')
+    })
+
+    it('drops the unread bold and opacity but keeps the stored flag', () => {
+      const workspace = makeWorkspace({ hasUnread: true, notificationPrefs: muted })
+      const style = nameStyle(mountCard({ workspace }))
+      expect(style).toContain('font-weight: 400')
+      expect(style).toContain('opacity: 0.75')
+      expect(workspace.hasUnread).toBe(true)
+    })
+
+    it.each(['attention', 'running', 'idle'] as const)(
+      'renders no labels block at all in the %s variant',
+      (variant) => {
+        const workspace = makeWorkspace({ status: 'error', notificationPrefs: muted })
+        const card = mountCard({ workspace, variant })
+        expect(card.findComponent({ name: 'WorkspaceAttentionLabels' }).exists()).toBe(false)
+      },
+    )
+
+    describe('with a running CI and a failed check (real labels component)', () => {
+      const snapshot = {
+        number: 1,
+        title: 't',
+        url: 'u',
+        state: 'OPEN',
+        base: 'main',
+        reviewDecision: null,
+        author: { login: 'a' },
+        assignees: [],
+        reviewers: [],
+        labels: [],
+        ci: {
+          rollup: 'FAILURE',
+          checks: [
+            { name: 'build', status: 'IN_PROGRESS', conclusion: null },
+            { name: 'lint', status: 'COMPLETED', conclusion: 'FAILURE' },
+          ],
+        },
+        updatedAt: '',
+        unresolvedReviewThreadsCount: 0,
+        readyToMerge: false,
+      }
+      const realStubs = { ...stubs, WorkspaceAttentionLabels: false, 'q-spinner': true, 'q-btn': true }
+      const mountWith = (prefs?: typeof muted) => {
+        const store = useWorkspaceStore()
+        store.prSnapshots = { 'ws-1': snapshot as never }
+        return mount(WorkspaceCard, {
+          props: {
+            variant: 'attention',
+            selected: false,
+            showProjectChip: false,
+            borderColor: 'var(--kobo-border-strong)',
+            workspace: makeWorkspace({ status: 'idle', ...(prefs ? { notificationPrefs: prefs } : {}) }),
+          },
+          global: { plugins: [i18n], stubs: realStubs, provide: { _q_: { platform: { has: { touch: false } } } } },
+        })
+      }
+
+      it('is unchanged when unmuted: label and recap are rendered', () => {
+        const text = mountWith().text()
+        expect(text).toContain('CI failed')
+        expect(text).toContain('1')
+        expect(mountWith().find('.ci-recap').exists()).toBe(true)
+      })
+
+      it('renders neither recap nor label when muted', () => {
+        const card = mountWith(muted)
+        expect(card.find('.ci-recap').exists()).toBe(false)
+        expect(card.text()).not.toContain('CI failed')
+      })
+    })
+
+    it('keeps the attention labels for an unmuted attention card', () => {
+      const labels = mountCard({ variant: 'attention' }).findComponent({ name: 'WorkspaceAttentionLabels' })
+      expect(labels.props('ciRecapOnly')).toBe(false)
+    })
   })
 
   it('renders the project chip only when asked to', () => {

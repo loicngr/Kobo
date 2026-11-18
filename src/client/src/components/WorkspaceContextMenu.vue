@@ -1,5 +1,5 @@
 <template>
-  <q-menu dark context-menu self="center middle" max-height="calc(100dvh - 16px)" max-width="calc(100vw - 16px)">
+  <q-menu ref="menu" dark context-menu self="center middle" max-height="calc(100dvh - 16px)" max-width="calc(100vw - 16px)">
     <q-list dense style="min-width: 180px;">
       <q-item v-if="!isWorkspacePane" clickable v-close-popup
         @click="router.push({ name: 'split', query: splitWorkspaceQuery(workspaceStore.selectedWorkspaceId, workspace.id) })">
@@ -61,6 +61,10 @@
       <q-item clickable v-close-popup @click="emit('manageTags', workspace)">
         <q-item-section side><q-icon name="label" size="xs" /></q-item-section>
         <q-item-section>{{ $t('tags.manage') }}</q-item-section>
+      </q-item>
+      <q-item clickable v-close-popup @click="emit('notifications', workspace)">
+        <q-item-section side><q-icon name="notifications_off" size="xs" /></q-item-section>
+        <q-item-section>{{ $t('workspaceNotifications.menu') }}</q-item-section>
       </q-item>
       <q-item v-if="workspace.notionUrl" clickable v-close-popup @click="openExternal(workspace.notionUrl)">
         <q-item-section side><q-icon name="open_in_new" size="xs" /></q-item-section>
@@ -182,11 +186,15 @@ import { exportWorkspaceEvents } from 'src/utils/export-workspace-events'
 import { DEFAULT_TOAST_TIMEOUT_MS } from 'src/utils/notification-timeout'
 import { isChangesRequestedBlocking, isCiFailed } from 'src/utils/pr-status'
 import { isWorkspacePane, splitWorkspaceQuery } from 'src/utils/split-workspace'
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 
 const router = useRouter()
+
+// Lets the card's touch "more" button open this same menu (QMenu positions itself from the event's clientX/clientY).
+const menu = ref<{ show: (evt: { clientX: number; clientY: number }) => void } | null>(null)
+defineExpose({ show: (evt: { clientX: number; clientY: number }) => menu.value?.show(evt) })
 
 const props = withDefaults(
   defineProps<{
@@ -206,6 +214,7 @@ const emit = defineEmits<{
   runSetup: [ws: Workspace]
   toggleFavorite: [ws: Workspace]
   manageTags: [ws: Workspace]
+  notifications: [ws: Workspace]
   duplicate: [ws: Workspace]
   archive: [ws: Workspace, event: Event]
   unarchive: [ws: Workspace, event: Event]

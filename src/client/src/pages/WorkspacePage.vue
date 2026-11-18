@@ -143,28 +143,31 @@
 
     <div
       v-if="selectedWs?.worktreePurgedAt"
-      class="wp-purged-banner row items-center q-px-md q-py-sm"
+      class="wp-purged-banner q-px-md q-py-sm"
     >
-      <q-icon name="cleaning_services" size="16px" color="orange-5" class="q-mr-sm" />
-      <span class="text-caption text-kobo-1">
-        {{ $t('workspacePage.worktreePurgedBanner') }}
-      </span>
-      <q-space />
-      <q-btn
-        v-if="selectedWs.worktreeOwned"
-        flat dense size="sm" no-caps color="kobo-2"
-        :loading="store.restoringWorktreeIds.includes(selectedWs.id)"
-        :label="$t('contextMenu.restoreWorktree')"
-        @click="restoreWorktree(selectedWs.id)"
-      >
-        <template #loading>{{ $t('workspacePage.restoringWorktree') }} <q-spinner class="q-ml-xs" size="14px" /></template>
-      </q-btn>
-      <q-btn flat dense size="sm" no-caps color="kobo-2" icon="info_outline" :label="$t('common.details')">
-        <q-tooltip max-width="320px" anchor="bottom right" self="top right">
-          {{ $t('workspacePage.worktreePurgedTooltip') }}
-          {{ $t('workspacePage.worktreeRestoreLimitations') }}
-        </q-tooltip>
-      </q-btn>
+      <div class="row items-center">
+        <q-icon name="cleaning_services" size="16px" color="orange-5" class="q-mr-sm" />
+        <span class="text-caption text-kobo-1">
+          {{ $t('workspacePage.worktreePurgedBanner') }}
+        </span>
+        <q-space />
+        <q-btn
+          v-if="selectedWs.worktreeOwned"
+          flat dense size="sm" no-caps color="kobo-2"
+          :loading="store.restoringWorktreeIds.includes(selectedWs.id)"
+          :label="$t('contextMenu.restoreWorktree')"
+          @click="restoreWorktree(selectedWs.id)"
+        >
+          <template #loading>{{ $t('workspacePage.restoringWorktree') }} <q-spinner class="q-ml-xs" size="14px" /></template>
+        </q-btn>
+        <q-btn flat dense size="sm" no-caps color="kobo-2" icon="info_outline" :label="$t('common.details')">
+          <q-tooltip max-width="320px" anchor="bottom right" self="top right">
+            {{ $t('workspacePage.worktreePurgedTooltip') }}
+            {{ $t('workspacePage.worktreeRestoreLimitations') }}
+          </q-tooltip>
+        </q-btn>
+      </div>
+      <WorktreeKeptAiNotice :workspace-id="selectedWs.id" :restore-data="selectedWs.worktreePurgeRestoreData" />
     </div>
 
     <div
@@ -387,6 +390,7 @@ import WorkspacePreview from 'src/components/WorkspacePreview.vue'
 import WorkspaceSlackChannel from 'src/components/WorkspaceSlackChannel.vue'
 import WorkspaceToolbarSelectors from 'src/components/WorkspaceToolbarSelectors.vue'
 import WorkspaceWhipControl from 'src/components/WorkspaceWhipControl.vue'
+import WorktreeKeptAiNotice from 'src/components/WorktreeKeptAiNotice.vue'
 
 const $q = useQuasar()
 const { isMobile } = useIsMobile()

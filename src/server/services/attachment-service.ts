@@ -2,8 +2,9 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { nanoid } from 'nanoid'
 import { attachmentFormat, validateAttachments } from '../../shared/attachments.js'
-import { ensureDirectoryInside, resolvePathInside } from '../utils/safe-path.js'
+import { ensureDirectoryInside } from '../utils/safe-path.js'
 import { deleteImage, saveImage } from './image-service.js'
+import { ensureKoboGitExcludes } from './worktree-service.js'
 
 export interface SavedAttachment {
   uid: string
@@ -84,6 +85,8 @@ export async function removeAttachments(
 export async function saveAttachments(worktreePath: string, files: readonly File[]): Promise<SavedAttachment[]> {
   const saved: SavedAttachment[] = []
   try {
+    // Once per batch and before any containment check: no await may separate that check from the exclusive open.
+    if (files.some((file) => attachmentFormat(file)?.kind === 'file')) await ensureKoboGitExcludes(worktreePath)
     for (const file of files) {
       const format = attachmentFormat(file)
       if (!format) throw new AttachmentRequestError('Unsupported attachment type')
@@ -96,11 +99,6 @@ export async function saveAttachments(worktreePath: string, files: readonly File
         saved.push({ ...(await saveImage(worktreePath, buffer, name)), kind: 'image', originalName: file.name })
       } else {
         const directory = ensureDirectoryInside(worktreePath, '.ai/attachments')
-        const ignorePath = resolvePathInside(worktreePath, '.gitignore')
-        const ignore = fs.existsSync(ignorePath) ? fs.readFileSync(ignorePath, 'utf8') : ''
-        if (!ignore.split('\n').some((line) => line.trim() === '.ai/attachments/')) {
-          fs.appendFileSync(ignorePath, `${ignore && !ignore.endsWith('\n') ? '\n' : ''}.ai/attachments/\n`)
-        }
         const uid = nanoid(10)
         const filename = `${uid}${format.extension}`
         const descriptor = fs.openSync(path.join(directory, filename), 'wx', 0o600)

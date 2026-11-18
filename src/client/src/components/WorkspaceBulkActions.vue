@@ -7,10 +7,13 @@
     <q-btn outline dense no-caps color="kobo-2" :label="t('bulk.actions')" :loading="busy" :disable="busy || !workspaces.length">
       <q-menu>
         <q-list dense>
-          <q-item v-for="action in actions" :key="action.id" clickable v-close-popup @click="choose(action.id)">
-            <q-item-section avatar><q-icon :name="action.icon" :color="action.id === 'delete' ? 'negative' : undefined" /></q-item-section>
-            <q-item-section>{{ t(action.label) }}</q-item-section>
-          </q-item>
+          <ActionAvailability v-for="action in actions" :key="action.id" :reason="action.id === 'message' && !messageTargets.length ? t('bulk.groupMessageNone') : null">
+            <!-- dense here: `q-list dense` only reaches direct children, and each item is wrapped. -->
+            <q-item dense clickable v-close-popup :data-test="`bulk-${action.id}`" :disable="action.id === 'message' && !messageTargets.length" @click="choose(action.id)">
+              <q-item-section avatar><q-icon :name="action.icon" :color="action.id === 'delete' ? 'negative' : undefined" /></q-item-section>
+              <q-item-section>{{ t(action.label) }}</q-item-section>
+            </q-item>
+          </ActionAvailability>
         </q-list>
       </q-menu>
     </q-btn>
@@ -34,20 +37,23 @@
 
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
+import ActionAvailability from 'src/components/ActionAvailability.vue'
 import StartReviewDialog from 'src/components/StartReviewDialog.vue'
 import { useParallelReviewStore } from 'src/stores/parallel-review'
 import { useWebSocketStore } from 'src/stores/websocket'
 import { useWorkspaceStore, type Workspace } from 'src/stores/workspace'
 import { apiFetchOk } from 'src/utils/api'
 import { exportWorkspaceEvents } from 'src/utils/export-workspace-events'
+import { canReceiveGroupMessage } from 'src/utils/group-message-recipients'
 import { isBusyStatus } from 'src/utils/workspace-status'
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import type { StartReviewRequest } from '../../../shared/review'
+import { DEFAULT_WORKSPACE_NOTIFICATION_PREFS, MUTE_KEYS, withAllMuted } from '../../../shared/workspace-notifications'
 
 const props = defineProps<{ workspaces: Workspace[] }>()
-const emit = defineEmits<{ clear: []; completed: [ids: string[]] }>()
+const emit = defineEmits<{ clear: []; completed: [ids: string[]]; message: [ids: string[]] }>()
 const { t } = useI18n()
 const $q = useQuasar()
 const store = useWorkspaceStore()
@@ -74,6 +80,7 @@ async function startReviews(payload: StartReviewRequest) {
     reviewOpen.value = false
   }
 }
+const messageTargets = computed(() => props.workspaces.filter(canReceiveGroupMessage))
 const actions = [
   { id: 'archive', label: 'common.archive', icon: 'archive' },
   { id: 'purge', label: 'contextMenu.purgeWorktree', icon: 'cleaning_services' },
@@ -85,6 +92,9 @@ const actions = [
   { id: 'merge', label: 'bulk.merge', icon: 'merge' },
   { id: 'rebase', label: 'bulk.rebase', icon: 'rebase_edit' },
   { id: 'review', label: 'review.title', icon: 'rate_review' },
+  { id: 'mute', label: 'bulk.muteNotifications', icon: 'notifications_off' },
+  { id: 'restore', label: 'bulk.restoreNotifications', icon: 'notifications_active' },
+  { id: 'message', label: 'groupMessage.title', icon: 'campaign' },
 ] as const
 type Action = (typeof actions)[number]['id']
 
@@ -92,6 +102,14 @@ function choose(action: Action) {
   if (busy.value) return
   const targets = props.workspaces.map((ws) => ({ ...ws }))
   if (!targets.length) return
+  if (action === 'message') {
+    if (messageTargets.value.length)
+      emit(
+        'message',
+        targets.map((ws) => ws.id),
+      )
+    return
+  }
   if (action === 'review') {
     reviewTargets.value = targets
     reviewOpen.value = true
@@ -157,7 +175,13 @@ async function run(action: Action, targets: Workspace[], review?: StartReviewReq
           if (!result.ok) throw new Error(result.error)
           warnings.push(...result.warnings.map((message) => `${ws.name}: ${message}`))
         } else if (action === 'export') await exportWorkspaceEvents(ws)
-        else if (action === 'review') {
+        else if (action === 'mute' || action === 'restore') {
+          const muted = action === 'mute'
+          const prefs = store.notificationPrefsOf(ws.id) ?? DEFAULT_WORKSPACE_NOTIFICATION_PREFS
+          // Nothing to change: no request, counted as done.
+          if (!MUTE_KEYS.every((key) => prefs[key] === muted))
+            await store.setNotificationPrefs(ws.id, withAllMuted(prefs, muted))
+        } else if (action === 'review') {
           await apiFetchOk(`/api/workspaces/${ws.id}/start-review`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },

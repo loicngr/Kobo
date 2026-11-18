@@ -2,10 +2,16 @@
 // covers worktree purge: an operation that deletes a directory from disk and
 // flips a flag driving the "restore" UX and the PR watcher's auto-restore probe.
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { lstatSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+const logWarnMock = vi.hoisted(() => vi.fn())
+vi.mock('../server/utils/logger.js', async () => ({
+  ...(await vi.importActual<typeof import('../server/utils/logger.js')>('../server/utils/logger.js')),
+  logWarn: logWarnMock,
+}))
 
 const existsSyncMock = vi.fn((_path: string) => true)
 vi.mock('node:fs', async () => {
@@ -50,9 +56,34 @@ vi.mock('../server/services/workspace-service.js', () => ({
 }))
 
 const removeWorktreeMock = vi.fn()
+const isMatchingWorkspaceWorktreeMock = vi.fn(async (_input: unknown): Promise<boolean> => true)
 vi.mock('../server/services/worktree-service.js', () => ({
+  isMatchingWorkspaceWorktree: (input: unknown) => isMatchingWorkspaceWorktreeMock(input),
   removeWorktree: (projectPath: string, worktreePath: string) => removeWorktreeMock(projectPath, worktreePath),
   isPermissionError: (message: string) => /EACCES|EPERM|permission denied/i.test(message),
+}))
+
+const keepAiFolderMock = vi.fn(async (_workspace: unknown): Promise<string | null> => null)
+const putBackKeptRootMock = vi.fn(async (_keptRoot: string, _worktreePath: string): Promise<string | null> => null)
+const computeKeptRootMock = vi.fn((_workspace: unknown) => '/kept/ws-1')
+// Stand-in for the real helper (tested in kept-ai-service.test.ts): the computed root when it is a real directory.
+const computedKeptRootIfExistsMock = vi.fn((w: unknown): string | null => {
+  try {
+    const target = computeKeptRootMock(w)
+    const stat = lstatSync(target)
+    return stat.isDirectory() && !stat.isSymbolicLink() ? target : null
+  } catch {
+    return null
+  }
+})
+vi.mock('../server/services/kept-ai-service.js', () => ({
+  keepAiFolder: (w: unknown) => keepAiFolderMock(w),
+  putBackKeptRoot: (k: string, w: string) => putBackKeptRootMock(k, w),
+  computedKeptRootIfExists: (w: unknown) => computedKeptRootIfExistsMock(w),
+}))
+let keepAiFolderOnPurge = true
+vi.mock('../server/services/settings-service.js', () => ({
+  getGlobalSettings: () => ({ keepAiFolderOnPurge }),
 }))
 
 import { purgeWorktree } from '../server/services/worktree-purge-service.js'
@@ -76,6 +107,11 @@ function makeWorkspace(overrides: Record<string, unknown> = {}) {
 beforeEach(() => {
   vi.clearAllMocks()
   existsSyncMock.mockReturnValue(true)
+  keepAiFolderOnPurge = true
+  computeKeptRootMock.mockReturnValue('/kept/ws-1')
+  keepAiFolderMock.mockResolvedValue(null)
+  putBackKeptRootMock.mockResolvedValue(null)
+  isMatchingWorkspaceWorktreeMock.mockResolvedValue(true)
   getPrStatusMock.mockResolvedValue({ number: 42, url: 'https://example.test/pr/42' })
 })
 
@@ -273,5 +309,336 @@ describe('purge lifecycle exclusion', () => {
     release()
     await pending
     await expect(withWorkspaceLifecycleGuard('ws-1', async () => 'free')).resolves.toBe('free')
+  })
+})
+
+describe('keeping the .ai folder', () => {
+  const worktree = '/tmp/project/.worktrees/ws-1'
+
+  it('keeps .ai after the archive and before the removal, and records the kept root', async () => {
+    getWorkspaceMock.mockReturnValue(makeWorkspace())
+    const order: string[] = []
+    destroyTerminalMock.mockImplementationOnce(() => order.push('stops'))
+    getPrStatusMock.mockImplementationOnce(async () => {
+      order.push('capture')
+      return { number: 42, url: 'https://example.test/pr/42' }
+    })
+    archiveWorkspaceMock.mockImplementationOnce((id: string) => {
+      order.push('archive')
+      return { id, archivedAt: 'x' }
+    })
+    keepAiFolderMock.mockImplementationOnce(async () => {
+      order.push('keep')
+      return '/kept/ws-1'
+    })
+    removeWorktreeMock.mockImplementationOnce(() => order.push('remove'))
+    existsSyncMock.mockImplementation(() => removeWorktreeMock.mock.calls.length === 0)
+
+    const result = await purgeWorktree('ws-1')
+
+    expect(order).toEqual(['stops', 'capture', 'archive', 'keep', 'remove'])
+    expect(result.outcome).toBe('purged')
+    expect(markWorktreePurgedMock).toHaveBeenCalledWith('ws-1', expect.objectContaining({ keptAiPath: '/kept/ws-1' }))
+  })
+
+  it('does not keep anything when the setting is off, and records no kept root', async () => {
+    keepAiFolderOnPurge = false
+    getWorkspaceMock.mockReturnValue(makeWorkspace())
+    existsSyncMock.mockImplementation((p) => (p === worktree ? removeWorktreeMock.mock.calls.length === 0 : false))
+
+    const result = await purgeWorktree('ws-1')
+
+    expect(result.outcome).toBe('purged')
+    expect(keepAiFolderMock).not.toHaveBeenCalled()
+    expect(markWorktreePurgedMock.mock.calls[0][1]).not.toHaveProperty('keptAiPath')
+  })
+
+  it('records a leftover kept root when the setting is off', async () => {
+    const leftover = mkdtempSync(path.join(tmpdir(), 'kobo-purge-leftover-'))
+    try {
+      keepAiFolderOnPurge = false
+      computeKeptRootMock.mockReturnValue(leftover)
+      getWorkspaceMock.mockReturnValue(makeWorkspace())
+      existsSyncMock.mockImplementation((p) => (p === worktree ? removeWorktreeMock.mock.calls.length === 0 : true))
+
+      await purgeWorktree('ws-1')
+
+      expect(keepAiFolderMock).not.toHaveBeenCalled()
+      expect(markWorktreePurgedMock).toHaveBeenCalledWith('ws-1', expect.objectContaining({ keptAiPath: leftover }))
+    } finally {
+      rmSync(leftover, { recursive: true, force: true })
+    }
+  })
+
+  it('leaves the worktree in place and reports keep-failed when keeping fails', async () => {
+    getWorkspaceMock.mockReturnValue(makeWorkspace())
+    keepAiFolderMock.mockRejectedValueOnce(new Error('EACCES: permission denied'))
+
+    const result = await purgeWorktree('ws-1')
+
+    expect(result.outcome).toBe('keep-failed')
+    expect(result.warnings).toHaveLength(1)
+    expect(result.warnings[0]).toContain(worktree)
+    expect(result.warnings[0]).toContain('EACCES: permission denied')
+    expect(removeWorktreeMock).not.toHaveBeenCalled()
+    expect(markWorktreePurgedMock).not.toHaveBeenCalled()
+    expect(emitEphemeralMock).toHaveBeenCalledWith('ws-1', 'workspace:worktree-purge-failed', {
+      workspaceId: 'ws-1',
+      warnings: result.warnings,
+    })
+  })
+
+  it('puts .ai back when the removal leaves the folder behind', async () => {
+    getWorkspaceMock.mockReturnValue(makeWorkspace())
+    keepAiFolderMock.mockResolvedValueOnce('/kept/ws-1')
+    removeWorktreeMock.mockImplementation(() => {
+      throw new Error('EACCES: permission denied')
+    })
+
+    const result = await purgeWorktree('ws-1')
+
+    expect(result.outcome).toBe('removal-failed')
+    expect(putBackKeptRootMock).toHaveBeenCalledWith('/kept/ws-1', worktree)
+    expect(result.warnings.join('\n')).not.toContain('still in')
+  })
+
+  it('after a successful put-back into an intact checkout, tells the operator not to delete the folder', async () => {
+    getWorkspaceMock.mockReturnValue(makeWorkspace())
+    keepAiFolderMock.mockResolvedValueOnce('/kept/ws-1')
+    removeWorktreeMock.mockImplementation(() => {
+      throw new Error('EACCES: permission denied')
+    })
+
+    const result = await purgeWorktree('ws-1')
+
+    const note = `The .ai folder was put back into '${worktree}'. Do not delete that folder by hand: purge again instead, so the notes are kept.`
+    expect(result.outcome).toBe('removal-failed')
+    expect(result.warnings).toContain(note)
+    const removalIndex = result.warnings.findIndex((w) => w.startsWith('Failed to remove worktree'))
+    expect(removalIndex).toBeGreaterThanOrEqual(0)
+    expect(result.warnings.indexOf(note)).toBeGreaterThan(removalIndex)
+    expect(result.warnings.join('\n')).not.toContain('was kept in')
+  })
+
+  it('adds only the put-back warning when the put-back into an intact checkout fails or is partial', async () => {
+    getWorkspaceMock.mockReturnValue(makeWorkspace())
+    keepAiFolderMock.mockResolvedValue('/kept/ws-1')
+    removeWorktreeMock.mockImplementation(() => {
+      throw new Error('boom')
+    })
+    putBackKeptRootMock.mockResolvedValueOnce('PUT-BACK WARNING')
+
+    const result = await purgeWorktree('ws-1')
+
+    expect(result.warnings).toContain('PUT-BACK WARNING')
+    expect(result.warnings.join('\n')).not.toContain('Do not delete that folder by hand')
+  })
+
+  it('reports the warning of a failed or partial put-back', async () => {
+    getWorkspaceMock.mockReturnValue(makeWorkspace())
+    keepAiFolderMock.mockResolvedValue('/kept/ws-1')
+    removeWorktreeMock.mockImplementation(() => {
+      throw new Error('boom')
+    })
+    putBackKeptRootMock.mockResolvedValueOnce('PUT-BACK WARNING')
+    const result = await purgeWorktree('ws-1')
+    expect(result.outcome).toBe('removal-failed')
+    expect(result.warnings).toContain('PUT-BACK WARNING')
+  })
+
+  it('leaves .ai in the kept root when the removal failed and the checkout is no longer a registered worktree', async () => {
+    getWorkspaceMock.mockReturnValue(makeWorkspace())
+    keepAiFolderMock.mockResolvedValueOnce('/kept/ws-1')
+    isMatchingWorkspaceWorktreeMock.mockResolvedValue(false)
+    removeWorktreeMock.mockImplementation(() => {
+      throw new Error('EACCES: permission denied')
+    })
+
+    const result = await purgeWorktree('ws-1')
+
+    expect(result.outcome).toBe('removal-failed')
+    expect(putBackKeptRootMock).not.toHaveBeenCalled()
+    expect(isMatchingWorkspaceWorktreeMock).toHaveBeenCalledWith(
+      expect.objectContaining({ projectPath: '/tmp/project', worktreePath: worktree, workingBranch: 'feature/x' }),
+    )
+    expect(result.warnings).toContain(
+      "The .ai folder was kept in '/kept/ws-1'. It will be recorded when you purge again after cleaning the folder up.",
+    )
+    expect(markWorktreePurgedMock).not.toHaveBeenCalled()
+    expect(result.warnings.join('\n')).not.toContain('Do not delete that folder by hand')
+  })
+
+  it('treats a throwing checkout check as not a valid checkout', async () => {
+    getWorkspaceMock.mockReturnValue(makeWorkspace())
+    keepAiFolderMock.mockResolvedValueOnce('/kept/ws-1')
+    isMatchingWorkspaceWorktreeMock.mockRejectedValue(new Error('git exploded'))
+    removeWorktreeMock.mockImplementation(() => {
+      throw new Error('boom')
+    })
+
+    const result = await purgeWorktree('ws-1')
+
+    expect(result.outcome).toBe('removal-failed')
+    expect(putBackKeptRootMock).not.toHaveBeenCalled()
+    expect(result.warnings.join('\n')).toContain("The .ai folder was kept in '/kept/ws-1'")
+  })
+
+  it('records the kept root when the second purge finds the cleaned-up folder gone', async () => {
+    const kept = mkdtempSync(path.join(tmpdir(), 'kobo-purge-seq-'))
+    try {
+      mkdirSync(path.join(kept, '.ai'))
+      computeKeptRootMock.mockReturnValue(kept)
+      getWorkspaceMock.mockReturnValue(makeWorkspace())
+      keepAiFolderMock.mockResolvedValueOnce(kept)
+      isMatchingWorkspaceWorktreeMock.mockResolvedValue(false)
+      removeWorktreeMock.mockImplementationOnce(() => {
+        throw new Error('EACCES: permission denied')
+      })
+
+      const first = await purgeWorktree('ws-1')
+      expect(first.outcome).toBe('removal-failed')
+      expect(markWorktreePurgedMock).not.toHaveBeenCalled()
+
+      existsSyncMock.mockImplementation((p) => p !== worktree) // the operator deleted the folder
+      const second = await purgeWorktree('ws-1')
+      expect(second.outcome).toBe('purged')
+      expect(markWorktreePurgedMock).toHaveBeenCalledWith('ws-1', expect.objectContaining({ keptAiPath: kept }))
+      expect(lstatSync(path.join(kept, '.ai')).isDirectory()).toBe(true)
+    } finally {
+      rmSync(kept, { recursive: true, force: true })
+    }
+  })
+
+  it('records the kept root on a retry when the worktree is already gone', async () => {
+    const kept = mkdtempSync(path.join(tmpdir(), 'kobo-purge-retry-'))
+    try {
+      mkdirSync(path.join(kept, '.ai'))
+      computeKeptRootMock.mockReturnValue(kept)
+      getWorkspaceMock.mockReturnValue(makeWorkspace())
+      existsSyncMock.mockImplementation((p) => p !== worktree)
+
+      const result = await purgeWorktree('ws-1')
+
+      expect(result.outcome).toBe('purged')
+      expect(removeWorktreeMock).not.toHaveBeenCalled()
+      expect(keepAiFolderMock).not.toHaveBeenCalled()
+      expect(markWorktreePurgedMock).toHaveBeenCalledWith('ws-1', expect.objectContaining({ keptAiPath: kept }))
+    } finally {
+      rmSync(kept, { recursive: true, force: true })
+    }
+  })
+
+  it('records nothing when there was no .ai folder to keep', async () => {
+    getWorkspaceMock.mockReturnValue(makeWorkspace())
+    keepAiFolderMock.mockResolvedValueOnce(null)
+    existsSyncMock.mockImplementation(() => removeWorktreeMock.mock.calls.length === 0)
+
+    const result = await purgeWorktree('ws-1')
+
+    expect(result.outcome).toBe('purged')
+    expect(markWorktreePurgedMock.mock.calls[0][1]).not.toHaveProperty('keptAiPath')
+  })
+  it('puts a leftover kept root back when the setting is off and the removal fails', async () => {
+    const leftover = mkdtempSync(path.join(tmpdir(), 'kobo-purge-leftover-'))
+    try {
+      keepAiFolderOnPurge = false
+      computeKeptRootMock.mockReturnValue(leftover)
+      getWorkspaceMock.mockReturnValue(makeWorkspace())
+      removeWorktreeMock.mockImplementation(() => {
+        throw new Error('boom')
+      })
+
+      const result = await purgeWorktree('ws-1')
+
+      expect(result.outcome).toBe('removal-failed')
+      expect(keepAiFolderMock).not.toHaveBeenCalled()
+      expect(putBackKeptRootMock).toHaveBeenCalledWith(leftover, worktree)
+    } finally {
+      rmSync(leftover, { recursive: true, force: true })
+    }
+  })
+
+  it('puts back a root left by an earlier attempt when the setting is on and the removal fails', async () => {
+    getWorkspaceMock.mockReturnValue(makeWorkspace())
+    keepAiFolderMock.mockResolvedValueOnce('/kept/ws-1')
+    removeWorktreeMock.mockImplementation(() => {
+      throw new Error('boom')
+    })
+
+    await purgeWorktree('ws-1')
+
+    expect(putBackKeptRootMock).toHaveBeenCalledWith('/kept/ws-1', worktree)
+  })
+
+  it('rethrows when the purge cannot be recorded after a keep, and the retry records the kept root', async () => {
+    const kept = mkdtempSync(path.join(tmpdir(), 'kobo-purge-retry-'))
+    try {
+      computeKeptRootMock.mockReturnValue(kept)
+      getWorkspaceMock.mockReturnValue(makeWorkspace())
+      keepAiFolderMock.mockResolvedValueOnce(kept)
+      existsSyncMock.mockImplementation((p) => (p === worktree ? removeWorktreeMock.mock.calls.length === 0 : true))
+      markWorktreePurgedMock.mockImplementationOnce(() => {
+        throw new Error('database is locked')
+      })
+
+      await expect(purgeWorktree('ws-1')).rejects.toThrow(/removed from disk.*database is locked/s)
+
+      existsSyncMock.mockImplementation((p) => p !== worktree)
+      const retry = await purgeWorktree('ws-1')
+      expect(retry.outcome).toBe('purged')
+      expect(markWorktreePurgedMock).toHaveBeenLastCalledWith('ws-1', expect.objectContaining({ keptAiPath: kept }))
+    } finally {
+      rmSync(kept, { recursive: true, force: true })
+    }
+  })
+
+  it('tries to put a partly moved .ai back when keeping fails, and stays keep-failed', async () => {
+    const partial = mkdtempSync(path.join(tmpdir(), 'kobo-purge-partial-'))
+    try {
+      computeKeptRootMock.mockReturnValue(partial)
+      getWorkspaceMock.mockReturnValue(makeWorkspace())
+      keepAiFolderMock.mockRejectedValueOnce(new Error('EXDEV'))
+
+      const ok = await purgeWorktree('ws-1')
+      expect(ok.outcome).toBe('keep-failed')
+      expect(putBackKeptRootMock).toHaveBeenCalledWith(partial, worktree)
+      expect(ok.warnings).toHaveLength(1)
+
+      keepAiFolderMock.mockRejectedValueOnce(new Error('EXDEV'))
+      putBackKeptRootMock.mockResolvedValueOnce('PUT-BACK WARNING')
+      const bad = await purgeWorktree('ws-1')
+      expect(bad.outcome).toBe('keep-failed')
+      expect(bad.warnings).toContain('PUT-BACK WARNING')
+    } finally {
+      rmSync(partial, { recursive: true, force: true })
+    }
+  })
+
+  it('does not mask the keep failure when computeKeptRoot throws', async () => {
+    getWorkspaceMock.mockReturnValue(makeWorkspace())
+    keepAiFolderMock.mockRejectedValueOnce(new Error('EXDEV'))
+    computeKeptRootMock.mockImplementation(() => {
+      throw new Error('Cannot resolve a kept folder')
+    })
+
+    const result = await purgeWorktree('ws-1')
+
+    expect(result.outcome).toBe('keep-failed')
+    expect(result.warnings[0]).toContain('EXDEV')
+    expect(putBackKeptRootMock).not.toHaveBeenCalled()
+  })
+
+  it('still purges, without a kept root, when computeKeptRoot throws and the setting is off', async () => {
+    keepAiFolderOnPurge = false
+    computeKeptRootMock.mockImplementation(() => {
+      throw new Error('Cannot resolve a kept folder')
+    })
+    getWorkspaceMock.mockReturnValue(makeWorkspace())
+    existsSyncMock.mockImplementation(() => removeWorktreeMock.mock.calls.length === 0)
+
+    const result = await purgeWorktree('ws-1')
+
+    expect(result.outcome).toBe('purged')
+    expect(markWorktreePurgedMock.mock.calls[0][1]).not.toHaveProperty('keptAiPath')
   })
 })

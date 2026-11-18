@@ -1876,6 +1876,15 @@ where ffmpeg</pre>
                   class="text-kobo-2 text-caption"
                 />
                 <div class="text-caption text-kobo-3 q-mt-xs">{{ $t('settings.autoPurgeOnPrMergedHint') }}</div>
+                <q-toggle
+                  v-model="globalKeepAiFolderOnPurge"
+                  :label="$t('settings.keepAiFolderOnPurge')"
+                  dark
+                  dense
+                  color="primary"
+                  class="text-kobo-2 text-caption q-mt-md"
+                />
+                <div class="text-caption text-kobo-3 q-mt-xs">{{ $t('settings.keepAiFolderOnPurgeHint') }}</div>
               </div>
 
 
@@ -3085,6 +3094,7 @@ const maxRunningDevServersValid = computed(
     globalMaxRunningDevServers.value >= 0,
 )
 const globalStopDevServersOnShutdown = ref(true)
+const globalKeepAiFolderOnPurge = ref(true)
 const globalAwaitingUserReminderMinutes = ref(0)
 const globalActivityDigestEnabled = ref(true)
 const globalWsEventsRetentionDays = ref(0)
@@ -4188,6 +4198,7 @@ function readGlobalForm(): Record<string, unknown> {
     serializeDevServerStarts: globalSerializeDevServerStarts.value,
     maxRunningDevServers: globalMaxRunningDevServers.value,
     stopDevServersOnShutdown: globalStopDevServersOnShutdown.value,
+    keepAiFolderOnPurge: globalKeepAiFolderOnPurge.value,
     awaitingUserReminderMinutes: globalAwaitingUserReminderMinutes.value,
     activityDigestEnabled: globalActivityDigestEnabled.value,
     wsEventsRetentionDays: globalWsEventsRetentionDays.value,
@@ -4336,6 +4347,7 @@ function syncGlobalForm() {
   globalSerializeDevServerStarts.value = store.global.serializeDevServerStarts !== false
   globalMaxRunningDevServers.value = store.global.maxRunningDevServers ?? 0
   globalStopDevServersOnShutdown.value = store.global.stopDevServersOnShutdown !== false
+  globalKeepAiFolderOnPurge.value = store.global.keepAiFolderOnPurge !== false
   globalAwaitingUserReminderMinutes.value = store.global.awaitingUserReminderMinutes ?? 0
   globalActivityDigestEnabled.value = store.global.activityDigestEnabled ?? true
   globalWsEventsRetentionDays.value = store.global.wsEventsRetentionDays ?? 0
@@ -4741,6 +4753,7 @@ async function saveGlobal() {
       serializeDevServerStarts: globalSerializeDevServerStarts.value,
       maxRunningDevServers: globalMaxRunningDevServers.value as number,
       stopDevServersOnShutdown: globalStopDevServersOnShutdown.value,
+      keepAiFolderOnPurge: globalKeepAiFolderOnPurge.value,
       awaitingUserReminderMinutes: globalAwaitingUserReminderMinutes.value,
       activityDigestEnabled: globalActivityDigestEnabled.value,
       wsEventsRetentionDays: globalWsEventsRetentionDays.value,

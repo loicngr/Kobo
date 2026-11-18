@@ -55,15 +55,13 @@ jobs:
         run: npm ci
 
       - name: Audit root dependencies
-        run: npm audit --audit-level=high
+        run: node scripts/audit-check.mjs --self-test && node scripts/audit-check.mjs .
 
       - name: Audit client dependencies
-        working-directory: src/client
-        run: npm audit --audit-level=high
+        run: node scripts/audit-check.mjs src/client
 
       - name: Audit PWA dependencies
-        working-directory: src/client/src-pwa
-        run: npm audit --audit-level=high
+        run: node scripts/audit-check.mjs src/client/src-pwa
 
       - name: Lint (biome)
         run: npm run lint

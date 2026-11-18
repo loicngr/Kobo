@@ -1,6 +1,7 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { computed, nextTick, ref, watch } from 'vue'
+import type { WorkspaceNotificationPrefs } from '../../../shared/workspace-notifications'
 import { useAgentStreamStore } from '../stores/agent-stream'
 import { useWebSocketStore } from '../stores/websocket'
 import {
@@ -229,7 +230,7 @@ describe('workspace store', () => {
         }),
       )
 
-      expect(await store.restoreWorktree('w1')).toEqual(restored)
+      expect(await store.restoreWorktree('w1')).toEqual({ warnings: [] })
       expect(store.workspaces).toEqual([restored])
       expect(store.archivedWorkspaces).toEqual([])
       expect(store.selectedWorkspaceId).toBe('w1')
@@ -387,7 +388,33 @@ describe('workspace store', () => {
       expect(store.archivedWorkspaces).toEqual([archived])
       expect(store.workspaces).toEqual([])
       fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ workspace: makeWorkspace() }) })
-      await expect(store.restoreWorktree('w1')).resolves.toEqual(makeWorkspace())
+      await expect(store.restoreWorktree('w1')).resolves.toEqual({ warnings: [] })
+    })
+
+    it('resolves with the warnings written by the server', async () => {
+      const store = useWorkspaceStore()
+      const warnings = ['The kept .ai folder could not be moved back.']
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: true,
+          json: async () => ({ workspace: makeWorkspace(), outcome: 'restored', source: 'local-branch', warnings }),
+        }),
+      )
+      await expect(store.restoreWorktree('w1')).resolves.toEqual({ warnings })
+    })
+
+    it.each([
+      ['a string', 'Not an array', []],
+      ['an object', { 0: 'x' }, []],
+      ['an array with non-strings', ['kept', 3, null, { a: 1 }, 'second'], ['kept', 'second']],
+    ])('only trusts string warnings from an array: %s', async (_label, value, expected) => {
+      const store = useWorkspaceStore()
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({ ok: true, json: async () => ({ workspace: makeWorkspace(), warnings: value }) }),
+      )
+      await expect(store.restoreWorktree('w1')).resolves.toEqual({ warnings: expected })
     })
   })
 
@@ -2555,6 +2582,74 @@ describe('workspace store', () => {
       expect(store.needsAttention.map((w) => w.id)).toEqual(['w1'])
       expect(store.idle.map((w) => w.id)).toEqual([])
     })
+
+    describe('muteDrawer grouping matrix', () => {
+      const STATUSES = [
+        'created',
+        'extracting',
+        'brainstorming',
+        'executing',
+        'compacting',
+        'awaiting-user',
+        'completed',
+        'idle',
+        'error',
+        'quota',
+      ] as const
+      const BUSY = ['extracting', 'brainstorming', 'executing', 'compacting']
+      const base = failingCiSnapshot()
+      const PR_STATES: Record<string, PrSnapshot | undefined> = {
+        none: undefined,
+        'ci-failed': base,
+        'changes-requested': {
+          ...base,
+          ci: { rollup: 'SUCCESS', checks: [] },
+          reviewDecision: 'CHANGES_REQUESTED',
+          reviewers: [{ login: 'r', state: 'CHANGES_REQUESTED' }],
+        },
+        'ready-to-merge': { ...base, ci: { rollup: 'SUCCESS', checks: [] }, readyToMerge: true },
+        'mergeability-pending': { ...base, ci: { rollup: 'SUCCESS', checks: [] }, mergeable: 'UNKNOWN' },
+      }
+      const groupsOf = (store: ReturnType<typeof useWorkspaceStore>) =>
+        (['needsAttention', 'running', 'idle'] as const).filter((g) => store[g].some((w) => w.id === 'w1'))
+      const prefs = (muteDrawer: boolean) => ({
+        muteBrowser: false,
+        muteSound: false,
+        muteToast: false,
+        muteDrawer,
+        keepQuestions: false,
+      })
+
+      for (const status of STATUSES) {
+        for (const [prName, snapshot] of Object.entries(PR_STATES)) {
+          it(`groups muted ${status} / ${prName} by activity alone`, () => {
+            const store = useWorkspaceStore()
+            store.workspaces = [makeWorkspace({ id: 'w1', status, notificationPrefs: prefs(true) })]
+            store.prSnapshots = snapshot ? { w1: snapshot } : {}
+            expect(groupsOf(store)).toEqual([BUSY.includes(status) ? 'running' : 'idle'])
+          })
+
+          it(`keeps unmuted ${status} / ${prName} in at most one group, as before`, () => {
+            const store = useWorkspaceStore()
+            store.workspaces = [makeWorkspace({ id: 'w1', status, notificationPrefs: prefs(false) })]
+            store.prSnapshots = snapshot ? { w1: snapshot } : {}
+            const attention =
+              ['error', 'quota', 'awaiting-user'].includes(status) ||
+              prName === 'ci-failed' ||
+              prName === 'changes-requested' ||
+              (!BUSY.includes(status) && (prName === 'ready-to-merge' || prName === 'mergeability-pending'))
+            const expected = attention ? 'needsAttention' : BUSY.includes(status) ? 'running' : 'idle'
+            expect(groupsOf(store)).toEqual([expected])
+          })
+        }
+      }
+
+      it('treats a workspace without notificationPrefs as unmuted', () => {
+        const store = useWorkspaceStore()
+        store.workspaces = [makeWorkspace({ id: 'w1', status: 'error' })]
+        expect(groupsOf(store)).toEqual(['needsAttention'])
+      })
+    })
   })
 
   describe('createCron / scheduleManualWakeup', () => {
@@ -3523,5 +3618,653 @@ describe('read acknowledgement races', () => {
     reply(Response.json({ success: true }))
     await read
     expect(store.workspaces[0]?.hasUnread).toBe(true)
+  })
+})
+
+describe('workspace notification prefs', () => {
+  const MUTED = { muteBrowser: true, muteSound: true, muteToast: true, muteDrawer: true, keepQuestions: false }
+  const OFF = { muteBrowser: false, muteSound: false, muteToast: false, muteDrawer: false, keepQuestions: false }
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+  })
+
+  it('notificationPrefsOf looks in the active then the archived list', () => {
+    const store = useWorkspaceStore()
+    store.workspaces = [makeWorkspace({ id: 'a', notificationPrefs: MUTED })]
+    store.archivedWorkspaces = [makeWorkspace({ id: 'b', notificationPrefs: OFF })]
+    expect(store.notificationPrefsOf('a')).toEqual(MUTED)
+    expect(store.notificationPrefsOf('b')).toEqual(OFF)
+    expect(store.notificationPrefsOf('missing')).toBeUndefined()
+  })
+
+  it('keeps the optimistic value when a /info response resolves afterwards', async () => {
+    const store = useWorkspaceStore()
+    const old = makeWorkspace({ id: 'w1', notificationPrefs: OFF })
+    store.workspaces = [old]
+    let finishInfo!: (response: Response) => void
+    let finishPut!: (response: Response) => void
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string, init?: RequestInit) => {
+        if (url === '/api/workspaces/info')
+          return new Promise<Response>((resolve) => {
+            finishInfo = resolve
+          })
+        if (url === '/api/workspaces/w1/notification-prefs' && init?.method === 'PUT')
+          return new Promise<Response>((resolve) => {
+            finishPut = resolve
+          })
+        return Promise.resolve(Response.json([]))
+      }),
+    )
+    const refresh = store.fetchWorkspacesInfo()
+    const save = store.setNotificationPrefs('w1', MUTED)
+    expect(store.workspaces[0]?.notificationPrefs).toEqual(MUTED)
+    finishInfo(Response.json({ workspaces: [old], prSnapshots: {}, gitStats: {} }))
+    await refresh
+    expect(store.workspaces[0]?.notificationPrefs).toEqual(MUTED)
+    finishPut(Response.json({ notificationPrefs: MUTED }))
+    await save
+    expect(store.workspaces[0]?.notificationPrefs).toEqual(MUTED)
+  })
+
+  it('also updates an archived workspace', async () => {
+    const store = useWorkspaceStore()
+    store.archivedWorkspaces = [makeWorkspace({ id: 'w1', notificationPrefs: OFF })]
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ notificationPrefs: MUTED })))
+    await store.setNotificationPrefs('w1', MUTED)
+    expect(store.archivedWorkspaces[0]?.notificationPrefs).toEqual(MUTED)
+  })
+
+  it('rolls back and rethrows when the request fails', async () => {
+    const store = useWorkspaceStore()
+    store.workspaces = [makeWorkspace({ id: 'w1', notificationPrefs: OFF })]
+    store.archivedWorkspaces = [makeWorkspace({ id: 'w2', notificationPrefs: OFF })]
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ error: 'boom' }, { status: 500 })))
+    await expect(store.setNotificationPrefs('w1', MUTED)).rejects.toBeTruthy()
+    await expect(store.setNotificationPrefs('w2', MUTED)).rejects.toBeTruthy()
+    expect(store.workspaces[0]?.notificationPrefs).toEqual(OFF)
+    expect(store.archivedWorkspaces[0]?.notificationPrefs).toEqual(OFF)
+  })
+
+  it('workspace:notification-prefs updates active and archived lists without an envelope id', () => {
+    const store = useWorkspaceStore()
+    store.workspaces = [makeWorkspace({ id: 'a', notificationPrefs: OFF })]
+    store.archivedWorkspaces = [makeWorkspace({ id: 'b', notificationPrefs: OFF })]
+    const ws = useWebSocketStore()
+    ws._routeMessage({ type: 'workspace:notification-prefs', payload: { workspaceId: 'a', prefs: MUTED } })
+    ws._routeMessage({ type: 'workspace:notification-prefs', payload: { workspaceId: 'b', prefs: MUTED } })
+    expect(store.workspaces[0]?.notificationPrefs).toEqual(MUTED)
+    expect(store.archivedWorkspaces[0]?.notificationPrefs).toEqual(MUTED)
+  })
+
+  describe('serialised saves', () => {
+    const P0 = OFF
+    const A = { ...OFF, muteSound: true }
+    const B = { ...OFF, muteSound: true, muteToast: true }
+    const C = MUTED
+
+    type Held = { body: WorkspaceNotificationPrefs; resolve: (r: Response) => void }
+    let puts: Held[] = []
+    let infoRows: () => Workspace[] = () => []
+    function stubPuts() {
+      puts = []
+      infoRows = () => []
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((url: string, init?: RequestInit) => {
+          if (init?.method === 'PUT')
+            return new Promise<Response>((resolve) =>
+              puts.push({ body: JSON.parse(String(init.body)) as WorkspaceNotificationPrefs, resolve }),
+            )
+          if (url === '/api/workspaces/info')
+            return Promise.resolve(Response.json({ workspaces: infoRows(), prSnapshots: {}, gitStats: {} }))
+          return Promise.resolve(Response.json([]))
+        }),
+      )
+    }
+    const ok = (v: unknown) => Response.json({ notificationPrefs: v })
+    const fail = () => Response.json({ error: 'boom' }, { status: 500 })
+    const tick = () => new Promise((r) => setTimeout(r, 0))
+    const display = (store: ReturnType<typeof useWorkspaceStore>, id = 'w1') => store.notificationPrefsOf(id)
+
+    beforeEach(() => stubPuts())
+
+    it('1: two calls while A is held send one request at a time, then B', async () => {
+      const store = useWorkspaceStore()
+      store.workspaces = [makeWorkspace({ id: 'w1', notificationPrefs: P0 })]
+      const a = store.setNotificationPrefs('w1', A)
+      const b = store.setNotificationPrefs('w1', B)
+      await vi.waitFor(() => expect(puts).toHaveLength(1))
+      await tick()
+      expect(puts).toHaveLength(1)
+      expect(display(store)).toEqual(B)
+      puts[0]?.resolve(ok(A))
+      await vi.waitFor(() => expect(puts).toHaveLength(2))
+      expect(puts[1]?.body).toEqual(B)
+      puts[1]?.resolve(ok(B))
+      await Promise.all([a, b])
+      expect(puts).toHaveLength(2)
+      expect(display(store)).toEqual(B)
+    })
+
+    it('2: three quick calls coalesce to A then C', async () => {
+      const store = useWorkspaceStore()
+      store.workspaces = [makeWorkspace({ id: 'w1', notificationPrefs: P0 })]
+      const calls = [A, B, C].map((v) => store.setNotificationPrefs('w1', v))
+      await vi.waitFor(() => expect(puts).toHaveLength(1))
+      puts[0]?.resolve(ok(A))
+      await vi.waitFor(() => expect(puts).toHaveLength(2))
+      expect(puts[1]?.body).toEqual(C)
+      puts[1]?.resolve(ok(C))
+      await Promise.all(calls)
+      expect(puts).toHaveLength(2)
+      expect(display(store)).toEqual(C)
+    })
+
+    it('3: A fails while B is wanted: B is still sent and every caller resolves', async () => {
+      const store = useWorkspaceStore()
+      store.workspaces = [makeWorkspace({ id: 'w1', notificationPrefs: P0 })]
+      const a = store.setNotificationPrefs('w1', A)
+      const b = store.setNotificationPrefs('w1', B)
+      await vi.waitFor(() => expect(puts).toHaveLength(1))
+      puts[0]?.resolve(fail())
+      await vi.waitFor(() => expect(puts).toHaveLength(2))
+      expect(puts[1]?.body).toEqual(B)
+      puts[1]?.resolve(ok(B))
+      await expect(Promise.all([a, b])).resolves.toBeDefined()
+      expect(display(store)).toEqual(B)
+    })
+
+    it('4: A succeeds then the final B fails: rolls back to A and every caller rejects', async () => {
+      const store = useWorkspaceStore()
+      store.workspaces = [makeWorkspace({ id: 'w1', notificationPrefs: P0 })]
+      const a = store.setNotificationPrefs('w1', A)
+      const b = store.setNotificationPrefs('w1', B)
+      await vi.waitFor(() => expect(puts).toHaveLength(1))
+      puts[0]?.resolve(ok(A))
+      await vi.waitFor(() => expect(puts).toHaveLength(2))
+      puts[1]?.resolve(fail())
+      const results = await Promise.allSettled([a, b])
+      expect(results.map((r) => r.status)).toEqual(['rejected', 'rejected'])
+      expect(display(store)).toEqual(A)
+    })
+
+    it('5: a single failing call rolls back to the original and rejects', async () => {
+      const store = useWorkspaceStore()
+      store.workspaces = [makeWorkspace({ id: 'w1', notificationPrefs: P0 })]
+      const a = store.setNotificationPrefs('w1', A)
+      await vi.waitFor(() => expect(puts).toHaveLength(1))
+      expect(display(store)).toEqual(A)
+      puts[0]?.resolve(fail())
+      await expect(a).rejects.toBeTruthy()
+      expect(display(store)).toEqual(P0)
+    })
+
+    it('6: an event from another tab during a pending save becomes the rollback value', async () => {
+      const store = useWorkspaceStore()
+      store.workspaces = [makeWorkspace({ id: 'w1', notificationPrefs: P0 })]
+      const a = store.setNotificationPrefs('w1', A)
+      await vi.waitFor(() => expect(puts).toHaveLength(1))
+      useWebSocketStore()._routeMessage({
+        type: 'workspace:notification-prefs',
+        payload: { workspaceId: 'w1', prefs: C },
+      })
+      expect(display(store)).toEqual(A)
+      puts[0]?.resolve(fail())
+      await expect(a).rejects.toBeTruthy()
+      expect(display(store)).toEqual(C)
+    })
+
+    it('7: a refetch at every point of test 1 never moves the display off the wanted value', async () => {
+      const store = useWorkspaceStore()
+      store.workspaces = [makeWorkspace({ id: 'w1', notificationPrefs: P0 })]
+      infoRows = () => [makeWorkspace({ id: 'w1', notificationPrefs: P0 })]
+      const a = store.setNotificationPrefs('w1', A)
+      await vi.waitFor(() => expect(puts).toHaveLength(1))
+      await store.fetchWorkspacesInfo()
+      expect(display(store)).toEqual(A)
+      const b = store.setNotificationPrefs('w1', B)
+      await store.fetchWorkspacesInfo()
+      expect(display(store)).toEqual(B)
+      puts[0]?.resolve(ok(A))
+      await vi.waitFor(() => expect(puts).toHaveLength(2))
+      await store.fetchWorkspacesInfo()
+      expect(display(store)).toEqual(B)
+      puts[1]?.resolve(ok(B))
+      await Promise.all([a, b])
+      infoRows = () => [makeWorkspace({ id: 'w1', notificationPrefs: B })]
+      await store.fetchWorkspacesInfo()
+      expect(display(store)).toEqual(B)
+    })
+
+    it('8: the record is gone after a run, also after a failure', async () => {
+      const store = useWorkspaceStore()
+      store.workspaces = [makeWorkspace({ id: 'w1', notificationPrefs: P0 })]
+      const a = store.setNotificationPrefs('w1', A)
+      await vi.waitFor(() => expect(puts).toHaveLength(1))
+      puts[0]?.resolve(fail())
+      await expect(a).rejects.toBeTruthy()
+      store.workspaces = [makeWorkspace({ id: 'w1', notificationPrefs: C })]
+      const c = store.setNotificationPrefs('w1', B)
+      await vi.waitFor(() => expect(puts).toHaveLength(2))
+      expect(puts[1]?.body).toEqual(B)
+      puts[1]?.resolve(fail())
+      await expect(c).rejects.toBeTruthy()
+      expect(display(store)).toEqual(C)
+      infoRows = () => [makeWorkspace({ id: 'w1', notificationPrefs: P0 })]
+      await store.fetchWorkspacesInfo()
+      expect(display(store)).toEqual(P0)
+    })
+
+    it('9: an archived workspace follows the same rules (tests 1 and 4)', async () => {
+      const store = useWorkspaceStore()
+      store.archivedWorkspaces = [makeWorkspace({ id: 'w1', notificationPrefs: P0 })]
+      const a = store.setNotificationPrefs('w1', A)
+      const b = store.setNotificationPrefs('w1', B)
+      await vi.waitFor(() => expect(puts).toHaveLength(1))
+      await tick()
+      expect(puts).toHaveLength(1)
+      puts[0]?.resolve(ok(A))
+      await vi.waitFor(() => expect(puts).toHaveLength(2))
+      puts[1]?.resolve(fail())
+      const results = await Promise.allSettled([a, b])
+      expect(results.map((r) => r.status)).toEqual(['rejected', 'rejected'])
+      expect(store.archivedWorkspaces[0]?.notificationPrefs).toEqual(A)
+    })
+
+    it('R3-1: mutating the object after the call changes neither what is sent nor what is displayed', async () => {
+      const store = useWorkspaceStore()
+      store.workspaces = [makeWorkspace({ id: 'w1', notificationPrefs: P0 })]
+      const mine = { ...A }
+      const save = store.setNotificationPrefs('w1', mine)
+      mine.muteBrowser = true
+      await vi.waitFor(() => expect(puts).toHaveLength(1))
+      expect(puts[0]?.body).toEqual(A)
+      expect(display(store)).toEqual(A)
+      puts[0]?.resolve(ok(A))
+      await save
+      expect(puts).toHaveLength(1)
+      expect(display(store)).toEqual(A)
+    })
+
+    it('R3-2a: a row that appears during the run and shows the refused value goes back to the defaults', async () => {
+      const store = useWorkspaceStore()
+      const save = store.setNotificationPrefs('w1', A)
+      await vi.waitFor(() => expect(puts).toHaveLength(1))
+      store.workspaces = [makeWorkspace({ id: 'w1', notificationPrefs: A })]
+      puts[0]?.resolve(fail())
+      await expect(save).rejects.toBeTruthy()
+      expect(display(store)).toEqual(OFF)
+    })
+
+    it('R3-2b: a value that reached the row through a fetch during the save is the one shown after it fails', async () => {
+      const store = useWorkspaceStore()
+      const save = store.setNotificationPrefs('w1', A)
+      await vi.waitFor(() => expect(puts).toHaveLength(1))
+      store.workspaces = [makeWorkspace({ id: 'w1', notificationPrefs: C })]
+      expect(display(store)).toEqual(A)
+      puts[0]?.resolve(fail())
+      await expect(save).rejects.toBeTruthy()
+      expect(display(store)).toEqual(C)
+    })
+
+    it('R3-2c: an incoming row does not replace a confirmed value that is already known', async () => {
+      const store = useWorkspaceStore()
+      store.workspaces = [makeWorkspace({ id: 'w1', notificationPrefs: P0 })]
+      const save = store.setNotificationPrefs('w1', A)
+      await vi.waitFor(() => expect(puts).toHaveLength(1))
+      store.workspaces = [makeWorkspace({ id: 'w1', notificationPrefs: C })]
+      expect(display(store)).toEqual(A)
+      puts[0]?.resolve(fail())
+      await expect(save).rejects.toBeTruthy()
+      expect(display(store)).toEqual(P0)
+    })
+
+    it('R3-3: a worktree-restored row replacing the active row keeps the pending value', async () => {
+      const store = useWorkspaceStore()
+      store.workspaces = [makeWorkspace({ id: 'w1', notificationPrefs: P0 })]
+      const save = store.setNotificationPrefs('w1', A)
+      await vi.waitFor(() => expect(puts).toHaveLength(1))
+      store.applyRestoredWorkspace(makeWorkspace({ id: 'w1', notificationPrefs: P0 }))
+      expect(display(store)).toEqual(A)
+      puts[0]?.resolve(ok(A))
+      await save
+    })
+
+    it('R3-4a: a call made from inside the catch of a previous call starts a fresh run', async () => {
+      const store = useWorkspaceStore()
+      store.workspaces = [makeWorkspace({ id: 'w1', notificationPrefs: P0 })]
+      const chained = store.setNotificationPrefs('w1', A).catch(() => store.setNotificationPrefs('w1', B))
+      await vi.waitFor(() => expect(puts).toHaveLength(1))
+      puts[0]?.resolve(fail())
+      await vi.waitFor(() => expect(puts).toHaveLength(2))
+      expect(puts[1]?.body).toEqual(B)
+      puts[1]?.resolve(ok(B))
+      await chained
+      expect(display(store)).toEqual(B)
+    })
+
+    it('R3-4b: two workspaces save independently', async () => {
+      const store = useWorkspaceStore()
+      store.workspaces = [
+        makeWorkspace({ id: 'w1', notificationPrefs: P0 }),
+        makeWorkspace({ id: 'w2', notificationPrefs: P0 }),
+      ]
+      const one = store.setNotificationPrefs('w1', A)
+      const two = store.setNotificationPrefs('w2', B)
+      await vi.waitFor(() => expect(puts).toHaveLength(2))
+      puts[0]?.resolve(fail())
+      await expect(one).rejects.toBeTruthy()
+      expect(display(store, 'w1')).toEqual(P0)
+      expect(display(store, 'w2')).toEqual(B)
+      puts[1]?.resolve(ok(B))
+      await two
+      expect(display(store, 'w2')).toEqual(B)
+    })
+
+    it('R3-4c: a timeout rolls back and frees the record', async () => {
+      const store = useWorkspaceStore()
+      store.workspaces = [makeWorkspace({ id: 'w1', notificationPrefs: P0 })]
+      const timeout = Object.assign(new Error('timeout'), { name: 'TimeoutError' })
+      vi.mocked(fetch).mockImplementationOnce((() => Promise.reject(timeout)) as typeof fetch)
+      await expect(store.setNotificationPrefs('w1', A)).rejects.toBeTruthy()
+      expect(display(store)).toEqual(P0)
+      const later = store.setNotificationPrefs('w1', B)
+      await vi.waitFor(() => expect(puts).toHaveLength(1))
+      expect(puts[0]?.body).toEqual(B)
+      puts[0]?.resolve(ok(B))
+      await later
+    })
+
+    it('R3-4d: an event during the run, then a failing second value, rolls back to the first confirmed value', async () => {
+      const store = useWorkspaceStore()
+      store.workspaces = [makeWorkspace({ id: 'w1', notificationPrefs: P0 })]
+      const a = store.setNotificationPrefs('w1', A)
+      const b = store.setNotificationPrefs('w1', B)
+      await vi.waitFor(() => expect(puts).toHaveLength(1))
+      useWebSocketStore()._routeMessage({
+        type: 'workspace:notification-prefs',
+        payload: { workspaceId: 'w1', prefs: C },
+      })
+      puts[0]?.resolve(ok(A))
+      await vi.waitFor(() => expect(puts).toHaveLength(2))
+      puts[1]?.resolve(fail())
+      await Promise.allSettled([a, b])
+      expect(display(store)).toEqual(A)
+    })
+
+    it('M1: a /info started after the write cannot revert the pending value', async () => {
+      const store = useWorkspaceStore()
+      store.workspaces = [makeWorkspace({ id: 'w1', notificationPrefs: P0 })]
+      infoRows = () => [makeWorkspace({ id: 'w1', notificationPrefs: P0 })]
+      const save = store.setNotificationPrefs('w1', A)
+      await vi.waitFor(() => expect(puts).toHaveLength(1))
+      await store.fetchWorkspacesInfo()
+      expect(store.workspaces[0]?.notificationPrefs).toEqual(A)
+      puts[0]?.resolve(ok(A))
+      await save
+      await store.fetchWorkspacesInfo()
+      expect(store.workspaces[0]?.notificationPrefs).toEqual(P0)
+    })
+
+    it('M2: a 2xx without a usable body keeps the value that was sent', async () => {
+      const store = useWorkspaceStore()
+      store.workspaces = [makeWorkspace({ id: 'w1', notificationPrefs: P0 })]
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(Response.json({})))
+      await store.setNotificationPrefs('w1', A)
+      expect(store.workspaces[0]?.notificationPrefs).toEqual(A)
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(new Response('not json', { status: 200 })))
+      await store.setNotificationPrefs('w1', B)
+      expect(store.workspaces[0]?.notificationPrefs).toEqual(B)
+    })
+
+    it('M2: a partial reply is normalised', async () => {
+      const store = useWorkspaceStore()
+      store.workspaces = [makeWorkspace({ id: 'w1', notificationPrefs: P0 })]
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(ok({ muteToast: true })))
+      await store.setNotificationPrefs('w1', A)
+      expect(store.workspaces[0]?.notificationPrefs).toEqual({ ...OFF, muteToast: true })
+    })
+
+    it('M3: malformed events are ignored without throwing', () => {
+      const store = useWorkspaceStore()
+      store.workspaces = [makeWorkspace({ id: 'w1', notificationPrefs: MUTED })]
+      const ws = useWebSocketStore()
+      for (const payload of [
+        { workspaceId: 'w1' },
+        { workspaceId: 'w1', prefs: 'x' },
+        { workspaceId: 'w1', prefs: null },
+        { workspaceId: 'w1', prefs: [] },
+        { workspaceId: '', prefs: OFF },
+        { prefs: OFF },
+      ])
+        expect(() => ws._routeMessage({ type: 'workspace:notification-prefs', payload })).not.toThrow()
+      expect(store.workspaces[0]?.notificationPrefs).toEqual(MUTED)
+    })
+
+    it('M3: the echo of an older save does not overwrite a newer pending value', async () => {
+      const store = useWorkspaceStore()
+      store.workspaces = [makeWorkspace({ id: 'w1', notificationPrefs: P0 })]
+      const a = store.setNotificationPrefs('w1', A)
+      const b = store.setNotificationPrefs('w1', B)
+      await vi.waitFor(() => expect(puts).toHaveLength(1))
+      useWebSocketStore()._routeMessage({
+        type: 'workspace:notification-prefs',
+        payload: { workspaceId: 'w1', prefs: A },
+      })
+      expect(store.workspaces[0]?.notificationPrefs).toEqual(B)
+      puts[0]?.resolve(ok(A))
+      await vi.waitFor(() => expect(puts).toHaveLength(2))
+      puts[1]?.resolve(ok(B))
+      await Promise.all([a, b])
+      expect(store.workspaces[0]?.notificationPrefs).toEqual(B)
+    })
+
+    it('M4: an older /info response cannot overwrite a value set by the event', async () => {
+      const store = useWorkspaceStore()
+      const old = makeWorkspace({ id: 'w1', notificationPrefs: P0 })
+      store.workspaces = [old]
+      let finish!: (r: Response) => void
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((url: string) =>
+          url === '/api/workspaces/info'
+            ? new Promise<Response>((resolve) => {
+                finish = resolve
+              })
+            : Promise.resolve(Response.json([])),
+        ),
+      )
+      const refresh = store.fetchWorkspacesInfo()
+      useWebSocketStore()._routeMessage({
+        type: 'workspace:notification-prefs',
+        payload: { workspaceId: 'w1', prefs: MUTED },
+      })
+      finish(Response.json({ workspaces: [old], prSnapshots: {}, gitStats: {} }))
+      await refresh
+      expect(store.workspaces[0]?.notificationPrefs).toEqual(MUTED)
+    })
+
+    it('M4: a workspace in neither list still sends the request and does not throw', async () => {
+      const store = useWorkspaceStore()
+      const fetchMock = vi.fn().mockResolvedValue(ok(A))
+      vi.stubGlobal('fetch', fetchMock)
+      await expect(store.setNotificationPrefs('ghost', A)).resolves.toBeUndefined()
+      expect(fetchMock).toHaveBeenCalledOnce()
+    })
+
+    describe('overlay on every row write while a save is pending', () => {
+      type Store = ReturnType<typeof useWorkspaceStore>
+      type ListName = 'workspaces' | 'archivedWorkspaces'
+      const stale = (id = 'w1') => makeWorkspace({ id, notificationPrefs: P0, name: 'from server' })
+      const mutations: Record<string, (store: Store, list: ListName, row: Workspace) => void> = {
+        'direct assignment': (store, list, row) => {
+          store[list] = [row]
+        },
+        'index assignment': (store, list, row) => {
+          store[list][0] = row
+        },
+        push: (store, list, row) => {
+          store[list] = []
+          store[list].push(row)
+        },
+        splice: (store, list, row) => {
+          store[list].splice(0, 1, row)
+        },
+        '$patch object': (store, list, row) => {
+          store.$patch({ [list]: [row] })
+        },
+        '$patch function': (store, list, row) => {
+          store.$patch((state) => {
+            state[list] = [row]
+          })
+        },
+      }
+      for (const list of ['workspaces', 'archivedWorkspaces'] as const) {
+        for (const [name, mutate] of Object.entries(mutations)) {
+          it(`${list}: ${name} keeps the wanted value`, async () => {
+            const store = useWorkspaceStore()
+            store[list] = [makeWorkspace({ id: 'w1', notificationPrefs: P0 })]
+            const save = store.setNotificationPrefs('w1', A)
+            expect(display(store)).toEqual(A)
+            mutate(store, list, stale())
+            expect(store[list][0]?.name).toBe('from server')
+            expect(store[list][0]?.notificationPrefs).toEqual(A)
+            await vi.waitFor(() => expect(puts).toHaveLength(1))
+            puts[0].resolve(ok(A))
+            await save
+            expect(store[list][0]?.notificationPrefs).toEqual(A)
+          })
+        }
+      }
+
+      it('does not run for a mutation of an unrelated part of the state', async () => {
+        const store = useWorkspaceStore()
+        let reads = 0
+        const decoy = makeWorkspace({ id: 'w2', notificationPrefs: P0 })
+        Object.defineProperty(decoy, 'id', {
+          configurable: true,
+          enumerable: true,
+          get: () => {
+            reads++
+            return 'w2'
+          },
+        })
+        store.workspaces = [makeWorkspace({ id: 'w1', notificationPrefs: P0 }), decoy]
+        const save = store.setNotificationPrefs('w1', A)
+        await vi.waitFor(() => expect(puts).toHaveLength(1))
+        const before = reads
+        store.workspaces[0] = stale()
+        expect(reads).toBeGreaterThan(before)
+        const quiet = reads
+        store.listLoadError = 'unrelated'
+        store.prSnapshots.w1 = { number: 1 } as never
+        store.pendingQueue.w1 = []
+        expect(reads).toBe(quiet)
+        puts[0].resolve(ok(A))
+        await save
+      })
+
+      it('reacts to an in-place assignment of row.notificationPrefs', async () => {
+        const store = useWorkspaceStore()
+        store.workspaces = [makeWorkspace({ id: 'w1', notificationPrefs: P0 })]
+        const save = store.setNotificationPrefs('w1', A)
+        await vi.waitFor(() => expect(puts).toHaveLength(1))
+        store.workspaces[0].notificationPrefs = C
+        expect(display(store)).toEqual(A)
+        puts[0].resolve(ok(A))
+        await save
+      })
+
+      it('does nothing when no save is pending (no subscription)', () => {
+        const store = useWorkspaceStore()
+        store.workspaces = [stale()]
+        store.workspaces = [makeWorkspace({ id: 'w1', notificationPrefs: C })]
+        expect(display(store)).toEqual(C)
+        store.workspaces[0] = makeWorkspace({ id: 'w1', notificationPrefs: B })
+        expect(display(store)).toEqual(B)
+      })
+
+      for (const outcome of ['success', 'failure'] as const) {
+        it(`is removed once the last save settles (${outcome})`, async () => {
+          const store = useWorkspaceStore()
+          store.workspaces = [makeWorkspace({ id: 'w1', notificationPrefs: P0 })]
+          const save = store.setNotificationPrefs('w1', A)
+          await vi.waitFor(() => expect(puts).toHaveLength(1))
+          puts[0].resolve(outcome === 'success' ? ok(A) : fail())
+          if (outcome === 'failure') await expect(save).rejects.toBeTruthy()
+          else await save
+          store.workspaces = [makeWorkspace({ id: 'w1', notificationPrefs: C })]
+          expect(display(store)).toEqual(C)
+          store.workspaces[0] = makeWorkspace({ id: 'w1', notificationPrefs: B })
+          expect(display(store)).toEqual(B)
+        })
+      }
+
+      it('protects two pending workspaces and keeps the other when one settles', async () => {
+        const store = useWorkspaceStore()
+        store.workspaces = [
+          makeWorkspace({ id: 'w1', notificationPrefs: P0 }),
+          makeWorkspace({ id: 'w2', notificationPrefs: P0 }),
+        ]
+        const s1 = store.setNotificationPrefs('w1', A)
+        const s2 = store.setNotificationPrefs('w2', B)
+        await vi.waitFor(() => expect(puts).toHaveLength(2))
+        store.workspaces = [stale('w1'), stale('w2')]
+        expect(display(store, 'w1')).toEqual(A)
+        expect(display(store, 'w2')).toEqual(B)
+        puts[0].resolve(ok(A))
+        await s1
+        store.workspaces = [stale('w1'), stale('w2')]
+        expect(display(store, 'w1')).toEqual(P0)
+        expect(display(store, 'w2')).toEqual(B)
+        puts[1].resolve(ok(B))
+        await s2
+        expect(display(store, 'w2')).toEqual(B)
+      })
+
+      it('a rollback after a failed final save is not overwritten by the stale wanted value', async () => {
+        const store = useWorkspaceStore()
+        store.workspaces = [makeWorkspace({ id: 'w1', notificationPrefs: P0 })]
+        const save = store.setNotificationPrefs('w1', A)
+        const failed = expect(save).rejects.toBeTruthy()
+        await vi.waitFor(() => expect(puts).toHaveLength(1))
+        puts[0].resolve(fail())
+        await failed
+        expect(display(store)).toEqual(P0)
+        await tick()
+        expect(display(store)).toEqual(P0)
+      })
+
+      it('rolls back to the last confirmed value when the coalesced save fails', async () => {
+        const store = useWorkspaceStore()
+        store.workspaces = [makeWorkspace({ id: 'w1', notificationPrefs: P0 })]
+        const a = store.setNotificationPrefs('w1', A)
+        const b = store.setNotificationPrefs('w1', B)
+        const failed = expect(b).rejects.toBeTruthy()
+        await vi.waitFor(() => expect(puts).toHaveLength(1))
+        puts[0].resolve(ok(A))
+        await vi.waitFor(() => expect(puts).toHaveLength(2))
+        puts[1].resolve(fail())
+        await failed
+        await expect(a).rejects.toBeTruthy()
+        expect(display(store)).toEqual(A)
+      })
+
+      it('an event from another tab during a save only updates the confirmed value', async () => {
+        const store = useWorkspaceStore()
+        store.workspaces = [makeWorkspace({ id: 'w1', notificationPrefs: P0 })]
+        const save = store.setNotificationPrefs('w1', A)
+        const failed = expect(save).rejects.toBeTruthy()
+        await vi.waitFor(() => expect(puts).toHaveLength(1))
+        store.applyNotificationPrefsEvent('w1', C)
+        expect(display(store)).toEqual(A)
+        puts[0].resolve(fail())
+        await failed
+        expect(display(store)).toEqual(C)
+      })
+    })
   })
 })

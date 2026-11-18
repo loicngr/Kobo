@@ -130,6 +130,8 @@ interface GlobalSettings {
   serializeDevServerStarts: boolean
   maxRunningDevServers: number
   stopDevServersOnShutdown: boolean
+  /** Keep the worktree's `.ai` folder (moved next to the worktrees) when purging. An older server omits it: treat as true. */
+  keepAiFolderOnPurge: boolean
   /** Minutes before Kōbō reminds you about an unanswered question. 0 = off. */
   awaitingUserReminderMinutes: number
   /** Show the absence digest and record significant activity. Default true. */
@@ -290,6 +292,7 @@ export const useSettingsStore = defineStore('settings', {
       serializeDevServerStarts: true,
       maxRunningDevServers: 0,
       stopDevServersOnShutdown: true,
+      keepAiFolderOnPurge: true,
       awaitingUserReminderMinutes: 0,
       activityDigestEnabled: true,
       wsEventsRetentionDays: 0,

@@ -10,6 +10,7 @@ import {
 } from '../../shared/attachments.js'
 import { attachmentReference, saveAttachments } from '../services/attachment-service.js'
 import * as imageService from '../services/image-service.js'
+import { workspaceFilesRoot } from '../services/kept-ai-service.js'
 import * as workspaceService from '../services/workspace-service.js'
 import { ensureDirectoryInside, isPathInside } from '../utils/safe-path.js'
 import { WorkspaceLifecycleBusyError, withWorkspaceLifecycleGuard } from '../utils/workspace-lifecycle-guard.js'
@@ -90,13 +91,16 @@ app.delete('/:id/attachments/:filename', async (c) => {
 })
 
 // POST /:id/images — upload an image
+// Like `/attachments`: the body is received and validated first, the lifecycle guard
+// is held only for the filesystem work (a slow upload must not block the workspace).
 app.post('/:id/images', bodyLimit({ maxSize: MAX_ATTACHMENT_REQUEST_BYTES }), async (c) => {
   try {
     const { id } = c.req.param()
-    const workspace = workspaceService.getWorkspace(id)
-    if (!workspace) {
+    const known = workspaceService.getWorkspace(id)
+    if (!known) {
       return c.json({ error: `Workspace '${id}' not found` }, 404)
     }
+    if (known.worktreePurgedAt) return c.json({ error: 'Restore the worktree before uploading files' }, 409)
 
     const body = await c.req.parseBody()
     const file = body.image
@@ -118,13 +122,17 @@ app.post('/:id/images', bodyLimit({ maxSize: MAX_ATTACHMENT_REQUEST_BYTES }), as
       return c.json({ error: `File too large (${(buffer.length / 1024 / 1024).toFixed(1)} MB). Max: 50 MB` }, 400)
     }
 
-    const worktreePath = workspace.worktreePath
-    const result = await imageService.saveImage(worktreePath, buffer, file.name)
-
-    return c.json({ uid: result.uid, path: result.relativePath }, 201)
+    return await withWorkspaceLifecycleGuard(id, async () => {
+      // Re-read: the workspace may have been purged or deleted while the body was uploading.
+      const workspace = workspaceService.getWorkspace(id)
+      if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+      if (workspace.worktreePurgedAt) return c.json({ error: 'Restore the worktree before uploading files' }, 409)
+      const result = await imageService.saveImage(workspace.worktreePath, buffer, file.name)
+      return c.json({ uid: result.uid, path: result.relativePath }, 201)
+    })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, err instanceof WorkspaceLifecycleBusyError ? 409 : 500)
   }
 })
 
@@ -154,7 +162,8 @@ app.get('/:id/images/file', async (c) => {
       return c.json({ error: 'Invalid or disallowed image path' }, 400)
     }
 
-    const worktreePath = workspace.worktreePath
+    // Kept copy of `.ai` while the workspace is purged, the worktree otherwise.
+    const worktreePath = workspaceFilesRoot(workspace)
     const imagesRoot = path.resolve(worktreePath, '.ai/images')
     const fullPath = path.resolve(worktreePath, requested)
     // Containment check: fullPath must be a descendant of imagesRoot. `+ path.sep`
@@ -198,17 +207,21 @@ app.get('/:id/images/file', async (c) => {
 app.delete('/:id/images/:uid', async (c) => {
   try {
     const { id, uid } = c.req.param()
-    const workspace = workspaceService.getWorkspace(id)
-    if (!workspace) {
-      return c.json({ error: `Workspace '${id}' not found` }, 404)
-    }
+    return await withWorkspaceLifecycleGuard(id, async () => {
+      const workspace = workspaceService.getWorkspace(id)
+      if (!workspace) {
+        return c.json({ error: `Workspace '${id}' not found` }, 404)
+      }
+      if (workspace.worktreePurgedAt) return c.json({ error: 'Worktree is purged' }, 409)
 
-    const worktreePath = workspace.worktreePath
-    await imageService.deleteImage(worktreePath, uid)
+      const worktreePath = workspace.worktreePath
+      await imageService.deleteImage(worktreePath, uid)
 
-    return c.body(null, 204)
+      return c.body(null, 204)
+    })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
+    if (err instanceof WorkspaceLifecycleBusyError) return c.json({ error: message }, 409)
     if (message.includes('not found')) {
       return c.json({ error: message }, 404)
     }

@@ -1,6 +1,8 @@
 import { Notify } from 'quasar'
 import { useSettingsStore } from 'src/stores/settings'
+import { useWorkspaceStore } from 'src/stores/workspace'
 import { DEFAULT_NOTIFICATION_SOUND, resolveSoundId, soundUrl } from 'src/utils/notification-sounds'
+import { allowsBrowser, allowsSound } from '../../../shared/workspace-notifications'
 import { openNotificationTarget, workspaceTargetUrl } from './notification-navigation'
 import { isWorkspacePane } from './split-workspace'
 import type { WorkspaceTarget } from './sprint-navigation'
@@ -143,13 +145,17 @@ export function notify(
   volumeOverride?: number,
   audioEnabled?: boolean,
   target?: WorkspaceTarget,
+  options?: { question?: boolean },
 ): void {
   if (isWorkspacePane) return
   const settings = useSettingsStore()
+  // Workspace mutes apply after the global checks below; unknown workspace = not muted.
+  const prefs = workspaceId ? useWorkspaceStore().notificationPrefsOf(workspaceId) : undefined
 
   // Browser notification only when the tab is not focused
   if (
     !document.hasFocus() &&
+    allowsBrowser(prefs) &&
     settings.global.browserNotifications &&
     'Notification' in window &&
     Notification.permission === 'granted'
@@ -160,7 +166,11 @@ export function notify(
 
   // Sound plays regardless of focus. `undefined` or an empty override inherits
   // the general sound, while `null` explicitly keeps the notification silent.
-  if ((audioEnabled ?? settings.global.audioNotifications) && soundOverride !== null) {
+  if (
+    (audioEnabled ?? settings.global.audioNotifications) &&
+    soundOverride !== null &&
+    allowsSound(prefs, options?.question ?? false)
+  ) {
     const sound =
       soundOverride && soundOverride.length > 0
         ? soundOverride

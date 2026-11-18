@@ -8,6 +8,8 @@ import * as agentManager from './agent/orchestrator.js'
 import * as devServerService from './dev-server-service.js'
 import { getForgeProvider } from './forge/registry.js'
 import { resolveForge } from './forge/resolve.js'
+import { computedKeptRootIfExists, keepAiFolder, putBackKeptRoot } from './kept-ai-service.js'
+import { getGlobalSettings } from './settings-service.js'
 import { destroyTerminal } from './terminal-service.js'
 import { emitEphemeral } from './websocket-service.js'
 import {
@@ -16,7 +18,7 @@ import {
   markWorktreePurged,
   type WorktreePurgeRestoreData,
 } from './workspace-service.js'
-import { isPermissionError, removeWorktree } from './worktree-service.js'
+import { isMatchingWorkspaceWorktree, isPermissionError, removeWorktree } from './worktree-service.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -27,6 +29,7 @@ export type PurgeOutcome =
   | 'worktree-not-owned'
   | 'not-found'
   | 'removal-failed'
+  | 'keep-failed'
 
 export interface PurgeResult {
   outcome: PurgeOutcome
@@ -74,7 +77,30 @@ async function purgeWorktreeGuarded(workspaceId: string, expectedArchivedAt?: st
     }
   }
 
-  if (fs.existsSync(workspace.worktreePath)) {
+  // Keep `.ai` out of the removal: a failure here leaves the worktree untouched.
+  const worktreeExists = fs.existsSync(workspace.worktreePath)
+  let keptRoot: string | null = null
+  if (worktreeExists && getGlobalSettings().keepAiFolderOnPurge) {
+    try {
+      keptRoot = await keepAiFolder(workspace)
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err)
+      // A merge that failed midway may have left part of `.ai` in the kept root.
+      const partial = computedKeptRootIfExists(workspace)
+      const leftWarning = partial ? await putBackKeptRoot(partial, workspace.worktreePath) : null
+      warnings.push(
+        `Could not keep the .ai folder of '${workspace.worktreePath}': ${reason}. The worktree was left in place. Fix the folder's permissions, or turn off "Keep the .ai folder when purging a worktree" in Settings, then purge again.`,
+      )
+      if (leftWarning) warnings.push(leftWarning)
+      emitEphemeral(workspaceId, 'workspace:worktree-purge-failed', { workspaceId, warnings })
+      return { outcome: 'keep-failed', warnings }
+    }
+  } else {
+    // Setting off, or a retry after the worktree is gone: still record a kept root an earlier attempt left.
+    keptRoot = computedKeptRootIfExists(workspace)
+  }
+
+  if (worktreeExists) {
     try {
       await removeWorktree(workspace.projectPath, workspace.worktreePath)
     } catch (err) {
@@ -88,11 +114,38 @@ async function purgeWorktreeGuarded(workspaceId: string, expectedArchivedAt?: st
   // Setting it on a directory that never left puts both in contradiction with
   // the disk — and told the user the space was reclaimed when it wasn't.
   if (fs.existsSync(workspace.worktreePath)) {
+    if (keptRoot) {
+      // Put `.ai` back only while the checkout is still a registered worktree of this workspace (the removal did not
+      // really start). Otherwise the folder is a half-deleted leftover the operator is told to delete: keep the notes aside.
+      let intact = false
+      try {
+        intact = await isMatchingWorkspaceWorktree({
+          projectPath: workspace.projectPath,
+          worktreePath: workspace.worktreePath,
+          workingBranch: workspace.workingBranch,
+        })
+      } catch {
+        intact = false
+      }
+      if (intact) {
+        const warning = await putBackKeptRoot(keptRoot, workspace.worktreePath)
+        // The removal message above tells the operator to delete the folder by hand: say what that would cost.
+        warnings.push(
+          warning ??
+            `The .ai folder was put back into '${workspace.worktreePath}'. Do not delete that folder by hand: purge again instead, so the notes are kept.`,
+        )
+      } else {
+        warnings.push(
+          `The .ai folder was kept in '${keptRoot}'. It will be recorded when you purge again after cleaning the folder up.`,
+        )
+      }
+    }
     emitEphemeral(workspaceId, 'workspace:worktree-purge-failed', { workspaceId, warnings })
     return { outcome: 'removal-failed', warnings }
   }
 
   try {
+    if (keptRoot) restoreData.keptAiPath = keptRoot
     markWorktreePurged(workspaceId, restoreData)
   } catch (err) {
     // The folder is gone but nothing records it: announcing "purged" would lie

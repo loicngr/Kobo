@@ -12,6 +12,7 @@ import type { Turn } from '../services/conversation-turns'
 import { openSubagentActivityKey } from '../services/subagent-activity-navigation'
 import { useDocumentsStore } from '../stores/documents'
 import { usePinnedMessagesStore } from '../stores/pinned-messages'
+import { useSprintStore } from '../stores/sprints'
 import { useWorkspaceStore, type Workspace } from '../stores/workspace'
 
 vi.mock('quasar', async (original) => ({ ...(await original<typeof import('quasar')>()), Notify: { create: vi.fn() } }))
@@ -166,6 +167,7 @@ describe('pinned message list', () => {
     },
   )
   it('navigates global pins, including archived workspaces, using the original session and event', async () => {
+    useSprintStore().setActive('sprint-a')
     vi.stubGlobal(
       'fetch',
       vi
@@ -182,7 +184,8 @@ describe('pinned message list', () => {
       name: 'workspace',
       state: { koboSprintContext: true },
       params: { id: 'w1' },
-      query: { session: 's1', eventId: 'e1', sprint: 'sprint' },
+      // The workspace is in 'sprint' but the operator stays on the tab they were on.
+      query: { session: 's1', eventId: 'e1', sprint: 'sprint-a' },
     })
     expect(wrapper.find('script').exists()).toBe(false)
     wrapper.unmount()

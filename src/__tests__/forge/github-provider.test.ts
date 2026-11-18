@@ -286,4 +286,39 @@ describe('github getPrStatus failure reporting', () => {
       warn.mockRestore()
     }
   })
+
+  it('maps startedAt / completedAt of each check, a zero date becoming null', async () => {
+    const rawPr = {
+      number: 12,
+      title: 'Timed PR',
+      url: 'https://github.com/o/r/pull/12',
+      state: 'OPEN',
+      statusCheckRollup: [
+        {
+          name: 'a',
+          conclusion: 'SUCCESS',
+          status: 'COMPLETED',
+          detailsUrl: null,
+          startedAt: '2026-11-18T10:00:00Z',
+          completedAt: '2026-11-18T10:03:05Z',
+        },
+        {
+          name: 'b',
+          conclusion: '',
+          status: 'QUEUED',
+          detailsUrl: null,
+          startedAt: '0001-01-01T00:00:00Z',
+          completedAt: '0001-01-01T00:00:00Z',
+        },
+        { name: 'c', conclusion: null, status: 'IN_PROGRESS', detailsUrl: null },
+      ],
+    }
+    execFileMock.mockResolvedValueOnce(JSON.stringify(rawPr))
+    const snap = await githubProvider.getPrStatus('/repo', 'feat/x')
+    expect(snap?.ci.checks.map(({ startedAt, completedAt }) => ({ startedAt, completedAt }))).toEqual([
+      { startedAt: '2026-11-18T10:00:00Z', completedAt: '2026-11-18T10:03:05Z' },
+      { startedAt: null, completedAt: null },
+      { startedAt: null, completedAt: null },
+    ])
+  })
 })

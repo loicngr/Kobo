@@ -4,7 +4,7 @@
       <q-card-section>
         <div class="text-h6">{{ $t('groupMessage.title') }}</div>
         <div class="text-caption text-kobo-3 q-mt-xs">{{ $t('groupMessage.description') }}</div>
-        <div v-if="scope" class="text-caption text-kobo-3">{{ $t('sprints.scope', { name: scope }) }}</div>
+        <div v-if="scope && !request" class="text-caption text-kobo-3">{{ $t('sprints.scope', { name: scope }) }}</div>
       </q-card-section>
       <q-separator dark />
       <q-card-section v-if="!request">
@@ -38,6 +38,7 @@
         <p v-if="selectedIds.length > 200" class="text-negative">{{ $t('groupMessage.limit') }}</p>
       </q-card-section>
       <q-card-section v-else aria-live="polite">
+        <div v-if="pendingAtOpen" class="text-caption text-kobo-3 q-mb-sm" data-test="selection-pending">{{ $t('groupMessage.selectionPending') }}</div>
         <div class="text-weight-medium">{{ $t(batch?.complete ? 'groupMessage.finished' : 'groupMessage.inProgress') }}</div>
         <p class="text-caption text-kobo-3">{{ $t('groupMessage.serverContinues') }}</p>
         <div v-for="recipient in batch?.recipients ?? []" :key="recipient.workspaceId" class="group-message-result" :data-result="recipient.workspaceId">
@@ -73,6 +74,7 @@ import { matchesGroupMessageFilters } from '../../../shared/workspace-group-mess
 import { useGroupMessages } from '../composables/use-group-messages'
 import { useDevServerStore } from '../stores/dev-server'
 import { useSettingsStore } from '../stores/settings'
+import { canReceiveGroupMessage } from '../utils/group-message-recipients'
 import { WORKSPACE_STATUSES, workspaceStatusKey } from '../utils/workspace-status'
 import { collectTags } from '../utils/workspace-tag-filter'
 
@@ -86,7 +88,13 @@ interface RecipientWorkspace {
   archivedAt: string | null
   worktreePurgedAt: string | null
 }
-const props = defineProps<{ modelValue: boolean; workspaces: RecipientWorkspace[]; scope?: string }>()
+const props = defineProps<{
+  modelValue: boolean
+  workspaces: RecipientWorkspace[]
+  scope?: string
+  resetKey?: number
+  fromSelection?: boolean
+}>()
 const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>()
 const { t } = useI18n()
 const settingsStore = useSettingsStore()
@@ -112,7 +120,7 @@ watch(content, (value) => {
     /* Preserve draft in memory. */
   }
 })
-const live = computed(() => props.workspaces.filter((w) => !w.archivedAt && !w.worktreePurgedAt))
+const live = computed(() => props.workspaces.filter(canReceiveGroupMessage))
 const availableTags = computed(() => collectTags(live.value, settingsStore.global.tags).map((item) => item.tag))
 const matches = computed(() =>
   live.value.filter((w) =>
@@ -139,10 +147,31 @@ function resultClass(state: string) {
       : 'text-kobo-3'
 }
 function newMessage() {
+  pendingAtOpen.value = false
   reset()
   content.value = ''
   excluded.value = []
 }
+// The caption concerns only a request already displayed when a selection opened the dialog.
+// `request` is restored synchronously by the composable, so it is known at every evaluation.
+const pendingAtOpen = ref(false)
+watch(
+  [() => props.modelValue, () => props.resetKey, () => props.fromSelection],
+  ([open]) => {
+    if (open) pendingAtOpen.value = !!props.fromSelection && !!request.value
+  },
+  { immediate: true },
+)
+// A fresh opening from another source (the drawer selection) starts from all recipients ticked.
+watch(
+  () => props.resetKey,
+  () => {
+    excluded.value = []
+    tags.value = []
+    statuses.value = []
+    devServerRunning.value = false
+  },
+)
 watch(
   () => props.modelValue,
   (open) => {

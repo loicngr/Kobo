@@ -20,12 +20,15 @@ import { openNotificationTarget } from 'src/utils/notification-navigation'
 import { resolveNotificationSoundOverride } from 'src/utils/notification-sounds'
 import { DEFAULT_TOAST_TIMEOUT_MS } from 'src/utils/notification-timeout'
 import { notify } from 'src/utils/notifications'
+import { showRestoreWarnings } from 'src/utils/restore-warnings'
+import { isWorkspacePane } from 'src/utils/split-workspace'
 import type { AutoLoopFinalReviewStatus } from '../../../shared/auto-loop-review'
 import type { ProgressBar } from '../../../shared/progress-bars'
 import type { ParallelReviewStatus } from '../../../shared/review'
 import type { ReviewReturnStatus } from '../../../shared/review-return'
 import type { SessionHandoff } from '../../../shared/session-handoff'
 import { isSlackQuestionMirror } from '../../../shared/slack-question-mirror'
+import { allowsToast, normalizeWorkspaceNotificationPrefs } from '../../../shared/workspace-notifications'
 import { parseMessageSource } from '../utils/message-source'
 import type { DevServerStatus } from './dev-server'
 import { useDevServerStore } from './dev-server'
@@ -92,6 +95,11 @@ const PR_AUDIO_SETTINGS_BY_EVENT = {
     volumeKey: 'audioPrMergedVolume',
   },
 } as const satisfies Record<PrNotificationEvent, PrAudioSettingKeys>
+
+/** Whether a toast for this workspace may be shown under its notification prefs. */
+export function toastAllowed(workspaceId: string, question = false): boolean {
+  return allowsToast(useWorkspaceStore().notificationPrefsOf(workspaceId), question)
+}
 
 function notifyPr(message: string, workspaceId: string, event: PrNotificationEvent): void {
   const settings = useSettingsStore().global
@@ -345,10 +353,19 @@ export function dispatchAgentEvent(
       const settings = useSettingsStore().global
       const soundOverride = event.requestKind === 'question' ? settings.audioQuestionSound : undefined
       const volumeOverride = event.requestKind === 'question' ? settings.audioQuestionVolume : undefined
-      notify(title, undefined, workspaceId, soundOverride, volumeOverride, settings.audioQuestionNotifications, {
+      notify(
+        title,
+        undefined,
         workspaceId,
-        ...(sessionId ? { sessionId } : {}),
-      })
+        soundOverride,
+        volumeOverride,
+        settings.audioQuestionNotifications,
+        {
+          workspaceId,
+          ...(sessionId ? { sessionId } : {}),
+        },
+        { question: true },
+      )
     }
     return
   }
@@ -1535,11 +1552,13 @@ export const useWebSocketStore = defineStore('websocket', {
             settings.audioQuestionSound,
             settings.audioQuestionVolume,
             settings.audioQuestionNotifications,
+            undefined,
+            { question: true },
           )
           // `notify` only posts a browser notification when the tab is NOT
           // focused. The user looking at another workspace in this very tab
           // is the case the reminder exists for, so tell them in-app too.
-          if (document.hasFocus()) {
+          if (document.hasFocus() && toastAllowed(p.workspaceId, true)) {
             const targetId = p.workspaceId
             Notify.create({
               type: 'info',
@@ -1580,6 +1599,22 @@ export const useWebSocketStore = defineStore('websocket', {
             workspaceStore.archivedWorkspaces = workspaceStore.archivedWorkspaces.map((workspace) =>
               workspace.id === wid ? { ...workspace, tags } : workspace,
             )
+          }
+          break
+        }
+
+        case 'workspace:notification-prefs': {
+          // Global broadcast: no envelope workspaceId, the id travels in the payload.
+          const targetId = payload.workspaceId
+          const rawPrefs = payload.prefs
+          if (
+            typeof targetId === 'string' &&
+            targetId !== '' &&
+            typeof rawPrefs === 'object' &&
+            rawPrefs !== null &&
+            !Array.isArray(rawPrefs)
+          ) {
+            workspaceStore.applyNotificationPrefsEvent(targetId, normalizeWorkspaceNotificationPrefs(rawPrefs))
           }
           break
         }
@@ -1716,6 +1751,20 @@ export const useWebSocketStore = defineStore('websocket', {
           break
         }
 
+        case 'workspace:restore-warnings': {
+          // Global event (no workspace envelope): the put-back of a kept .ai folder failed in whole
+          // or in part. Not gated by the per-workspace mute (they say where the notes are, like
+          // chat:rejected); embedded panes stay silent, the host shows them.
+          if (isWorkspacePane) break
+          const p = (payload ?? {}) as { workspaceId?: unknown; workspaceName?: unknown; warnings?: unknown }
+          if (typeof p.workspaceId !== 'string' || !p.workspaceId) break
+          showRestoreWarnings({ notify: (o) => Notify.create(o) }, t, p.warnings, {
+            workspaceId: p.workspaceId,
+            workspaceName: typeof p.workspaceName === 'string' ? p.workspaceName : undefined,
+          })
+          break
+        }
+
         case 'workspace:deleted': {
           if (wid && !this._replaying) void usePinnedMessagesStore().refresh(wid)
           if (wid) useAutoLoopReviewStore().forget(wid)
@@ -1744,13 +1793,14 @@ export const useWebSocketStore = defineStore('websocket', {
           workspaceStore.updateWorkspaceFromEvent(wid, { sourceBranch: newBase })
           // Includes a shortcut to open the PR on GitHub and expires after the
           // shared notification timeout.
-          Notify.create({
-            type: 'info',
-            position: 'top',
-            timeout: DEFAULT_TOAST_TIMEOUT_MS,
-            message: t('pr.baseChanged', { oldBase, newBase }),
-            actions: prToastActions(wid, p.prUrl),
-          })
+          if (toastAllowed(wid))
+            Notify.create({
+              type: 'info',
+              position: 'top',
+              timeout: DEFAULT_TOAST_TIMEOUT_MS,
+              message: t('pr.baseChanged', { oldBase, newBase }),
+              actions: prToastActions(wid, p.prUrl),
+            })
           // Also fire a system-level notification so the user sees the change
           // when Kobo isn't the focused tab — consistent with other workspace
           // events (agent ready, quota, etc.) that route through `notify()`.
@@ -1782,13 +1832,14 @@ export const useWebSocketStore = defineStore('websocket', {
           const current = presentation[eventType]
           const message = t(current.key, { n: prNumber })
 
-          Notify.create({
-            type: current.type,
-            position: 'top',
-            timeout: current.timeout,
-            message,
-            actions: prToastActions(wid, p.prUrl),
-          })
+          if (toastAllowed(wid))
+            Notify.create({
+              type: current.type,
+              position: 'top',
+              timeout: current.timeout,
+              message,
+              actions: prToastActions(wid, p.prUrl),
+            })
           notifyPr(message, wid, eventType)
           if (eventType !== 'pr:merged') {
             void workspaceStore.refreshPrSnapshot(wid)
@@ -1801,13 +1852,14 @@ export const useWebSocketStore = defineStore('websocket', {
           const p = payload as { prNumber?: number; prUrl?: string }
           const prNumber = p.prNumber ?? 0
           const message = t('toast.prChangesRequested', { n: prNumber })
-          Notify.create({
-            type: 'warning',
-            position: 'top',
-            timeout: DEFAULT_TOAST_TIMEOUT_MS,
-            message,
-            actions: prToastActions(wid, p.prUrl),
-          })
+          if (toastAllowed(wid))
+            Notify.create({
+              type: 'warning',
+              position: 'top',
+              timeout: DEFAULT_TOAST_TIMEOUT_MS,
+              message,
+              actions: prToastActions(wid, p.prUrl),
+            })
           notifyPr(message, wid, 'pr:changes-requested')
           // Refresh the local snapshot so the icon flips immediately without
           // waiting for the next watcher tick to re-pull from /pr-states.
@@ -1820,13 +1872,14 @@ export const useWebSocketStore = defineStore('websocket', {
           const p = payload as { prNumber?: number; prUrl?: string }
           const prNumber = p.prNumber ?? 0
           const message = t('toast.prApproved', { n: prNumber })
-          Notify.create({
-            type: 'positive',
-            position: 'top',
-            timeout: 5000,
-            message,
-            actions: prToastActions(wid, p.prUrl),
-          })
+          if (toastAllowed(wid))
+            Notify.create({
+              type: 'positive',
+              position: 'top',
+              timeout: 5000,
+              message,
+              actions: prToastActions(wid, p.prUrl),
+            })
           notifyPr(message, wid, 'pr:approved')
           void workspaceStore.refreshPrSnapshot(wid)
           break
@@ -1837,13 +1890,14 @@ export const useWebSocketStore = defineStore('websocket', {
           const p = payload as { prNumber?: number; prUrl?: string }
           const prNumber = p.prNumber ?? 0
           const message = t('toast.prReadyToMerge', { n: prNumber })
-          Notify.create({
-            type: 'positive',
-            position: 'top',
-            timeout: 5000,
-            message,
-            actions: prToastActions(wid, p.prUrl),
-          })
+          if (toastAllowed(wid))
+            Notify.create({
+              type: 'positive',
+              position: 'top',
+              timeout: 5000,
+              message,
+              actions: prToastActions(wid, p.prUrl),
+            })
           notifyPr(message, wid, 'pr:ready-to-merge')
           void workspaceStore.refreshPrSnapshot(wid)
           break
@@ -1954,16 +2008,17 @@ export const useWebSocketStore = defineStore('websocket', {
           if (!wid) break
           const p = payload as { running?: number; limit?: number }
           const wsName = workspaceStore.workspaces.find((w) => w.id === wid)?.name ?? ''
-          Notify.create({
-            type: 'info',
-            position: 'top',
-            timeout: 6000,
-            message: t('notification.autoLoopWaitingForSlot', {
-              name: wsName,
-              running: p.running ?? 0,
-              limit: p.limit ?? 0,
-            }),
-          })
+          if (toastAllowed(wid))
+            Notify.create({
+              type: 'info',
+              position: 'top',
+              timeout: 6000,
+              message: t('notification.autoLoopWaitingForSlot', {
+                name: wsName,
+                running: p.running ?? 0,
+                limit: p.limit ?? 0,
+              }),
+            })
           break
         }
         case 'autoloop:disabled': {
@@ -1983,7 +2038,17 @@ export const useWebSocketStore = defineStore('websocket', {
                     : reason === 'awaiting-clarification'
                       ? 'notification.autoLoopAwaitingClarification'
                       : null // 'manual'/'user-action' → user disabled it themselves, don't notify
-            if (titleKey) notify(t(titleKey, { name: wsName }), undefined, wid)
+            if (titleKey)
+              notify(
+                t(titleKey, { name: wsName }),
+                undefined,
+                wid,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                reason === 'awaiting-clarification' ? { question: true } : undefined,
+              )
           }
           break
         }

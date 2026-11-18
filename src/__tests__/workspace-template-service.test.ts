@@ -333,4 +333,11 @@ describe('presetFromWorkspace', () => {
 
     expect(preset).not.toHaveProperty('agentPermissionMode')
   })
+
+  it('does not carry notificationPrefs', async () => {
+    const id = await createFixtureWorkspace()
+    const { getDb } = await import('../server/db/index.js')
+    getDb().prepare(`UPDATE workspaces SET notification_prefs = '{"muteSound":true}' WHERE id = ?`).run(id)
+    expect(presetFromWorkspace(id)).not.toHaveProperty('notificationPrefs')
+  })
 })

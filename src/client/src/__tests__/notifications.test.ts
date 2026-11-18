@@ -165,4 +165,87 @@ describe('playNotificationSound() volume application', () => {
 
     expect(instances).toHaveLength(0)
   })
+
+  describe('per-workspace notification prefs', () => {
+    const OFF = {
+      muteBrowser: false,
+      muteSound: false,
+      muteToast: false,
+      muteDrawer: false,
+      keepQuestions: false,
+    }
+    const browserSpy = vi.fn()
+
+    async function setup(prefs?: Partial<typeof OFF>, soundGlobal = true) {
+      setActivePinia(createPinia())
+      const { useSettingsStore } = await import('../stores/settings')
+      const { useWorkspaceStore } = await import('../stores/workspace')
+      const settings = useSettingsStore()
+      settings.global.audioNotifications = soundGlobal
+      settings.global.browserNotifications = true
+      if (prefs) {
+        useWorkspaceStore().workspaces = [
+          { id: 'w1', notificationPrefs: { ...OFF, ...prefs } } as unknown as import('../stores/workspace').Workspace,
+        ]
+      }
+      return (await import('../utils/notifications')).notify
+    }
+
+    beforeEach(() => {
+      browserSpy.mockClear()
+      vi.stubGlobal(
+        'Notification',
+        Object.assign(
+          class {
+            constructor(title: string) {
+              browserSpy(title)
+            }
+          },
+          { permission: 'granted' },
+        ),
+      )
+      vi.spyOn(document, 'hasFocus').mockReturnValue(false)
+    })
+
+    it('does not mute anything when the workspace is unknown', async () => {
+      const notify = await setup()
+      notify('Done', undefined, 'w1', 'ready.wav', 1, true)
+      expect(instances).toHaveLength(1)
+      expect(browserSpy).toHaveBeenCalledOnce()
+    })
+
+    it('muteBrowser silences only the browser notification', async () => {
+      const notify = await setup({ muteBrowser: true })
+      notify('Done', undefined, 'w1', 'ready.wav', 1, true)
+      expect(browserSpy).not.toHaveBeenCalled()
+      expect(instances).toHaveLength(1)
+    })
+
+    it('muteSound silences only the sound', async () => {
+      const notify = await setup({ muteSound: true })
+      notify('Done', undefined, 'w1', 'ready.wav', 1, true)
+      expect(instances).toHaveLength(0)
+      expect(browserSpy).toHaveBeenCalledOnce()
+    })
+
+    it('keepQuestions restores the sound for a question but not for a plain event', async () => {
+      const notify = await setup({ muteSound: true, keepQuestions: true })
+      notify('Done', undefined, 'w1', 'ready.wav', 1, true)
+      expect(instances).toHaveLength(0)
+      notify('Question', undefined, 'w1', 'ready.wav', 1, true, undefined, { question: true })
+      expect(instances).toHaveLength(1)
+    })
+
+    it('keepQuestions never restores the browser notification', async () => {
+      const notify = await setup({ muteBrowser: true, keepQuestions: true })
+      notify('Question', undefined, 'w1', 'ready.wav', 1, true, undefined, { question: true })
+      expect(browserSpy).not.toHaveBeenCalled()
+    })
+
+    it('a globally disabled sound stays silent even for a kept question', async () => {
+      const notify = await setup({ muteSound: true, keepQuestions: true }, false)
+      notify('Question', undefined, 'w1', undefined, undefined, undefined, undefined, { question: true })
+      expect(instances).toHaveLength(0)
+    })
+  })
 })

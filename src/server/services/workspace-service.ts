@@ -7,6 +7,11 @@ import {
   resolveWorkflowPolicy,
   type WorkflowPolicy,
 } from '../../shared/workflow-policy.js'
+import {
+  isDefaultWorkspaceNotificationPrefs,
+  normalizeWorkspaceNotificationPrefs,
+  type WorkspaceNotificationPrefs,
+} from '../../shared/workspace-notifications.js'
 import { MAX_TAG_LENGTH, MAX_WORKSPACE_TAGS, validateWorkspaceTagList } from '../../shared/workspace-tags.js'
 import { getDb } from '../db/index.js'
 import { isValidBranchName } from '../utils/git-ops.js'
@@ -109,6 +114,7 @@ export interface Workspace {
   sprintId: string | null
   slackChannelId: string | null
   slackQuestionMirror: SlackQuestionMirror
+  notificationPrefs: WorkspaceNotificationPrefs
   engine: string
   autoLoop: boolean
   autoLoopReady: boolean
@@ -236,6 +242,7 @@ interface WorkspaceRow {
   sprint_id: string | null
   slack_channel_id: string | null
   slack_question_mirror?: string | null
+  notification_prefs?: string | null
   created_at: string
   updated_at: string
 }
@@ -268,6 +275,14 @@ function coerceAgentPermissionMode(raw: string | null): AgentPermissionMode {
     return raw
   }
   return 'bypass'
+}
+
+function parseNotificationPrefs(raw: string | null | undefined): WorkspaceNotificationPrefs {
+  try {
+    return normalizeWorkspaceNotificationPrefs(raw ? JSON.parse(raw) : null)
+  } catch {
+    return normalizeWorkspaceNotificationPrefs(null)
+  }
 }
 
 function mapWorkspace(row: WorkspaceRow): Workspace {
@@ -311,6 +326,7 @@ function mapWorkspace(row: WorkspaceRow): Workspace {
     sprintId: row.sprint_id ?? null,
     slackChannelId: row.slack_channel_id ?? null,
     slackQuestionMirror: isSlackQuestionMirror(row.slack_question_mirror) ? row.slack_question_mirror : 'never',
+    notificationPrefs: parseNotificationPrefs(row.notification_prefs),
     engine: row.engine ?? 'claude-code',
     autoLoop: row.auto_loop === 1,
     autoLoopReady: row.auto_loop_ready === 1,
@@ -834,6 +850,8 @@ export interface WorktreePurgeRestoreData {
   originalWorktreePath: string
   originalSourceBranch: string
   originalWorkingBranch: string
+  /** Absolute path of the kept `<base>/.kobo-kept/<workspace id>` folder holding the worktree's `.ai`, when one was kept. */
+  keptAiPath?: string | null
 }
 
 export function markWorktreePurged(id: string, restoreData: WorktreePurgeRestoreData): void {
@@ -1046,6 +1064,24 @@ export function setFavorite(id: string): Workspace {
     throw new Error(`Workspace '${id}' not found`)
   }
   return getWorkspace(id) as Workspace
+}
+
+/**
+ * Store the workspace's notification muting (NULL when equal to the default). Deliberately leaves
+ * `updated_at` alone so the drawer order does not move; works on archived workspaces too.
+ */
+export function setWorkspaceNotificationPrefs(
+  id: string,
+  prefs: WorkspaceNotificationPrefs,
+): { workspace: Workspace; changed: boolean } {
+  const before = getWorkspace(id)
+  if (!before) throw new Error(`Workspace '${id}' not found`)
+  const next = normalizeWorkspaceNotificationPrefs(prefs)
+  const stored = isDefaultWorkspaceNotificationPrefs(next) ? null : JSON.stringify(next)
+  getDb().prepare('UPDATE workspaces SET notification_prefs = ? WHERE id = ?').run(stored, id)
+  const workspace = getWorkspace(id) as Workspace
+  const changed = JSON.stringify(workspace.notificationPrefs) !== JSON.stringify(before.notificationPrefs)
+  return { workspace, changed }
 }
 
 /** Flip the `auto_loop_ready` flag for a workspace. Used by the grooming MCP tool + the "Force ready" override. */

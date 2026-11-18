@@ -1,7 +1,8 @@
 import { withGitRepoLock } from '../utils/git-repo-lock.js'
 import { withWorkspaceLifecycleGuard } from '../utils/workspace-lifecycle-guard.js'
+import { putBackKeptAiFor } from './kept-ai-service.js'
 import { invalidateWorkspacePrCaches } from './pr-watcher-service.js'
-import { emitEphemeral } from './websocket-service.js'
+import { broadcastAll, emitEphemeral } from './websocket-service.js'
 import { getWorkspace, restoreWorktreeFromDisk, type Workspace } from './workspace-service.js'
 import {
   isMatchingWorkspaceWorktree,
@@ -33,6 +34,8 @@ export interface RestoreWorktreeResult {
   workspace: Workspace
   outcome: 'restored' | 'already-restored'
   source: RestoreCheckoutSource
+  /** Non-fatal problems, e.g. kept files that could not be put back. Empty when none. */
+  warnings: string[]
 }
 
 function savedHead(json: string | null): string | null {
@@ -71,19 +74,33 @@ export async function restorePurgedWorktree(id: string): Promise<RestoreWorktree
               'Workspace is not marked as purged and its checkout is missing or different.',
             )
           }
-          return { workspace, outcome: 'already-restored', source: 'existing-worktree' }
+          return { workspace, outcome: 'already-restored', source: 'existing-worktree', warnings: [] }
         }
 
         const checkout = await restoreWorktreeCheckoutUnlocked(input)
         if (!(await isMatchingWorkspaceWorktree(input))) {
           throw new WorktreeRestoreError('path-conflict', 'The recreated checkout does not match this workspace.')
         }
+        // Before the metadata is cleared: the purge data tells where `.ai` was kept. Idempotent, so a retry is safe.
+        const warnings = await putBackKeptAiFor(workspace)
         // Preserve a valid checkout on DB failure. A retry or manual detection can
         // safely complete the metadata update without deleting any Git history.
         const restored = restoreWorktreeFromDisk(id)
         invalidateWorkspacePrCaches(id)
         emitEphemeral(id, 'workspace:worktree-restored', { workspace: restored })
-        return { workspace: restored, outcome: 'restored', source: checkout.source }
+        if (warnings.length > 0) {
+          // Global: a purged workspace is archived, so a tab is usually not subscribed to it.
+          try {
+            broadcastAll('workspace:restore-warnings', {
+              workspaceId: id,
+              workspaceName: restored.name,
+              warnings,
+            })
+          } catch (err) {
+            console.error(`[worktree-restore] restore-warnings broadcast failed for '${id}':`, err)
+          }
+        }
+        return { workspace: restored, outcome: 'restored', source: checkout.source, warnings }
       })
     })
   } catch (err) {

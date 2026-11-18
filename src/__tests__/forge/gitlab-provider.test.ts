@@ -114,12 +114,54 @@ describe('gitlab forge provider — CI jobs', () => {
     )
     const snap = await gitlabProvider.getPrStatus('/repo', 'feat/x')
     expect(snap?.ci.checks).toEqual([
-      { name: 'test', conclusion: 'FAILURE', status: 'COMPLETED', detailsUrl: 'https://gl/jobs/1' },
-      { name: 'build', conclusion: 'SUCCESS', status: 'COMPLETED', detailsUrl: 'https://gl/jobs/2' },
-      { name: 'lint', conclusion: 'CANCELLED', status: 'COMPLETED', detailsUrl: 'https://gl/jobs/3' },
-      { name: 'deploy', conclusion: 'NEUTRAL', status: 'COMPLETED', detailsUrl: 'https://gl/jobs/4' },
-      { name: 'cache', conclusion: 'SKIPPED', status: 'COMPLETED', detailsUrl: 'https://gl/jobs/5' },
-      { name: 'e2e', conclusion: null, status: 'IN_PROGRESS', detailsUrl: 'https://gl/jobs/6' },
+      {
+        name: 'test',
+        conclusion: 'FAILURE',
+        status: 'COMPLETED',
+        detailsUrl: 'https://gl/jobs/1',
+        startedAt: null,
+        completedAt: null,
+      },
+      {
+        name: 'build',
+        conclusion: 'SUCCESS',
+        status: 'COMPLETED',
+        detailsUrl: 'https://gl/jobs/2',
+        startedAt: null,
+        completedAt: null,
+      },
+      {
+        name: 'lint',
+        conclusion: 'CANCELLED',
+        status: 'COMPLETED',
+        detailsUrl: 'https://gl/jobs/3',
+        startedAt: null,
+        completedAt: null,
+      },
+      {
+        name: 'deploy',
+        conclusion: 'NEUTRAL',
+        status: 'COMPLETED',
+        detailsUrl: 'https://gl/jobs/4',
+        startedAt: null,
+        completedAt: null,
+      },
+      {
+        name: 'cache',
+        conclusion: 'SKIPPED',
+        status: 'COMPLETED',
+        detailsUrl: 'https://gl/jobs/5',
+        startedAt: null,
+        completedAt: null,
+      },
+      {
+        name: 'e2e',
+        conclusion: null,
+        status: 'IN_PROGRESS',
+        detailsUrl: 'https://gl/jobs/6',
+        startedAt: null,
+        completedAt: null,
+      },
     ])
   })
 
@@ -134,7 +176,9 @@ describe('gitlab forge provider — CI jobs', () => {
     execFileMock.mockResolvedValueOnce(MR_JSON)
     execFileMock.mockResolvedValueOnce(JSON.stringify({ id: 7, status: 'success', jobs: [{ status: 'success' }] }))
     const snap = await gitlabProvider.getPrStatus('/repo', 'feat/x')
-    expect(snap?.ci.checks).toEqual([{ name: '', conclusion: 'SUCCESS', status: 'COMPLETED', detailsUrl: null }])
+    expect(snap?.ci.checks).toEqual([
+      { name: '', conclusion: 'SUCCESS', status: 'COMPLETED', detailsUrl: null, startedAt: null, completedAt: null },
+    ])
   })
 })
 
@@ -203,5 +247,29 @@ describe('gitlab forge provider — readyToMerge', () => {
       .mockResolvedValueOnce('')
     const snap = await gitlabProvider.getPrStatus('/repo', 'feat/x')
     expect(snap?.readyToMerge).toBe(true)
+  })
+
+  it('maps started_at / finished_at of each job when present', async () => {
+    execFileMock.mockResolvedValueOnce(MR_JSON)
+    execFileMock.mockResolvedValueOnce(
+      JSON.stringify({
+        status: 'success',
+        jobs: [
+          {
+            name: 'build',
+            status: 'success',
+            web_url: 'https://gl/jobs/2',
+            started_at: '2026-11-18T10:00:00Z',
+            finished_at: '2026-11-18T10:01:00Z',
+          },
+          { name: 'e2e', status: 'running', web_url: 'https://gl/jobs/6', started_at: 'garbage', finished_at: null },
+        ],
+      }),
+    )
+    const snap = await gitlabProvider.getPrStatus('/repo', 'feat/x')
+    expect(snap?.ci.checks.map(({ startedAt, completedAt }) => ({ startedAt, completedAt }))).toEqual([
+      { startedAt: '2026-11-18T10:00:00Z', completedAt: '2026-11-18T10:01:00Z' },
+      { startedAt: null, completedAt: null },
+    ])
   })
 })

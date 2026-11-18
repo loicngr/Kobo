@@ -283,6 +283,45 @@ describe('shutdown dev server setting', () => {
   })
 })
 
+describe('keep .ai folder on purge setting', () => {
+  it('defaults new installations to keeping the folder', () => {
+    expect(getGlobalSettings().keepAiFolderOnPurge).toBe(true)
+  })
+
+  it('migrates a v74 file without the key to true and keeps other settings', () => {
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({ schemaVersion: 74, global: { gitConventions: 'Keep this preference' }, projects: [] }),
+    )
+    expect(getSettings().global.keepAiFolderOnPurge).toBe(true)
+    expect(getSettings().global.gitConventions).toBe('Keep this preference')
+    expect(JSON.parse(fs.readFileSync(settingsPath, 'utf8')).schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
+  })
+
+  it('keeps an explicit false through the migration and a reload', () => {
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({ schemaVersion: 74, global: { keepAiFolderOnPurge: false }, projects: [] }),
+    )
+    expect(getGlobalSettings().keepAiFolderOnPurge).toBe(false)
+    _setSettingsPath(settingsPath)
+    expect(getGlobalSettings().keepAiFolderOnPurge).toBe(false)
+    expect(
+      runSettingsMigrations({ schemaVersion: 74, global: { keepAiFolderOnPurge: 'x' }, projects: [] }).global
+        .keepAiFolderOnPurge,
+    ).toBe(true)
+  })
+
+  it('drops non-boolean patch values and exports the key', () => {
+    updateGlobalSettings({ keepAiFolderOnPurge: false })
+    for (const value of ['true', 1, null]) {
+      updateGlobalSettings({ keepAiFolderOnPurge: value } as unknown as Partial<GlobalSettings>)
+      expect(getGlobalSettings().keepAiFolderOnPurge).toBe(false)
+    }
+    expect(exportConfigBundle([]).settings.global.keepAiFolderOnPurge).toBe(false)
+  })
+})
+
 describe('getSettings()', () => {
   it('preserves an explicitly saved Auto model instead of replacing it with the fresh-install default', () => {
     getSettings()
@@ -3374,7 +3413,7 @@ it('stores default review instructions as a string and migrates older settings t
 it('migrates v72 settings to v73 with Slack defaults', () => {
   const migrated = runSettingsMigrations({ schemaVersion: 72, global: { editorCommand: 'keep' }, projects: [] })
   expect(migrated.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
-  expect(SETTINGS_SCHEMA_VERSION).toBe(74)
+  expect(SETTINGS_SCHEMA_VERSION).toBe(75)
   expect(migrated.global.slackEnabled).toBe(false)
   expect(migrated.global.slackAllowedUserIds).toEqual([])
   expect(migrated.global.editorCommand).toBe('keep')

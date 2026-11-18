@@ -136,6 +136,13 @@ describe('settings store', () => {
     expect(useSettingsStore().global.memoryMode).toBe('hybrid')
   })
 
+  it('keeps the .ai folder on purge by default, and keeps a loaded false', () => {
+    const store = useSettingsStore()
+    expect(store.global.keepAiFolderOnPurge).toBe(true)
+    store.global = { ...store.global, keepAiFolderOnPurge: false }
+    expect(store.global.keepAiFolderOnPurge).toBe(false)
+  })
+
   it('defaults the whip feature to disabled', () => {
     const store = useSettingsStore()
     expect(store.global.whipEnabled).toBe(false)

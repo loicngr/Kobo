@@ -28,6 +28,12 @@ describe('summarizeCiChecks', () => {
     expect(pending.map((c) => c.name)).toEqual(['alpha', 'zeta'])
   })
 
+  it('does not throw on checks without a name (GitHub commit statuses)', () => {
+    const nameless = { status: undefined, conclusion: null, detailsUrl: null } as unknown as CiCheck
+    const { pending } = summarizeCiChecks([nameless, check('build', 'IN_PROGRESS', null), nameless])
+    expect(pending).toHaveLength(3)
+  })
+
   it('returns empty groups for no checks', () => {
     expect(summarizeCiChecks([])).toEqual({ failed: [], pending: [], passed: [], skipped: [] })
   })

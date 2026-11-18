@@ -1,6 +1,6 @@
 import { flushPromises, shallowMount, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createI18n } from 'vue-i18n'
 import WorkspaceList from '../components/WorkspaceList.vue'
 import en from '../i18n/en'
@@ -10,7 +10,7 @@ import { useWorkspaceStore, type Workspace } from '../stores/workspace'
 
 vi.mock('quasar', async (importOriginal) => ({
   ...(await importOriginal<typeof import('quasar')>()),
-  useQuasar: () => ({ screen: { lt: { sm: false, md: false } }, notify: vi.fn() }),
+  useQuasar: () => ({ screen: { lt: { sm: false, md: false } }, platform: { has: { touch: false } }, notify: vi.fn() }),
 }))
 const { push, replace, currentRoute } = vi.hoisted(() => ({
   push: vi.fn(),
@@ -89,7 +89,11 @@ afterEach(() => {
 })
 
 function mountList() {
-  return shallowMount(WorkspaceList, {
+  return shallowMount(WorkspaceList, mountOptions())
+}
+
+function mountOptions() {
+  return {
     global: {
       plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })],
       renderStubDefaultSlot: true,
@@ -109,7 +113,7 @@ function mountList() {
         'q-tooltip': { name: 'QTooltip', template: '<div><slot /></div>' },
       },
     },
-  })
+  }
 }
 
 it.each(['enter', 'click'])(
@@ -284,6 +288,68 @@ it('filters the drawer by sprint without changing the global workspace list', as
   expect(store.workspaces.map((workspace) => workspace.id)).toEqual(['one', 'two'])
 })
 
+describe('drawer-muted workspaces', () => {
+  const muted = { muteBrowser: false, muteSound: false, muteToast: false, muteDrawer: true, keepQuestions: false }
+  const labels = () => wrapper!.findAllComponents({ name: 'QTab' }).map((tab) => tab.attributes('label'))
+
+  it('is not counted in the sprint tab attention counts', async () => {
+    const store = useWorkspaceStore()
+    store.workspaces = [
+      makeWorkspace({ id: 'loud', status: 'error' }),
+      makeWorkspace({ id: 'quiet', status: 'error', notificationPrefs: muted }),
+    ]
+    wrapper = mountList()
+    await flushPromises()
+    expect(labels()[0]).toMatch(/\(1\)$/)
+  })
+
+  describe('border colour passed to the card', () => {
+    const ciFailed = {
+      number: 1,
+      title: 't',
+      url: 'u',
+      state: 'OPEN',
+      base: 'main',
+      reviewDecision: null,
+      author: { login: 'a' },
+      assignees: [],
+      reviewers: [],
+      labels: [],
+      ci: { rollup: 'FAILURE', checks: [] },
+      updatedAt: '',
+      unresolvedReviewThreadsCount: 0,
+      readyToMerge: false,
+    }
+    const borderOf = async (prefs?: typeof muted) => {
+      const store = useWorkspaceStore()
+      store.workspaces = [makeWorkspace({ id: 'w', status: 'idle', ...(prefs ? { notificationPrefs: prefs } : {}) })]
+      store.prSnapshots = { w: ciFailed as never }
+      wrapper = mountList()
+      await flushPromises()
+      const card = wrapper.findComponent({ name: 'WorkspaceCard' })
+      return [card.props('variant'), card.props('borderColor')]
+    }
+
+    it('keeps the attention border when unmuted', async () => {
+      expect(await borderOf()).toEqual(['attention', 'var(--kobo-danger)'])
+    })
+
+    it('uses the ordinary border of its group when muted', async () => {
+      expect(await borderOf(muted)).toEqual(['idle', 'var(--kobo-border-strong)'])
+    })
+  })
+
+  it('is grouped by activity, never in the attention variant', async () => {
+    const store = useWorkspaceStore()
+    store.workspaces = [makeWorkspace({ id: 'quiet', status: 'error', notificationPrefs: muted })]
+    wrapper = mountList()
+    await flushPromises()
+    const cards = wrapper.findAllComponents({ name: 'WorkspaceCard' })
+    expect(cards.map((card) => [card.props('workspace').id, card.props('variant')])).toEqual([['quiet', 'idle']])
+    expect(labels()[0]).not.toMatch(/\(\d+\)$/)
+  })
+})
+
 it('changes the sprint only after the router accepts returning home', async () => {
   const sprints = useSprintStore()
   wrapper = mountList()
@@ -334,7 +400,7 @@ it('keeps the deleted sprint selected when the dirty guard rejects the fallback'
   expect(sprints.active).toBe('s1')
 })
 
-it('reconciles membership on first hydration of the targeted workspace', async () => {
+it('keeps the tab on first hydration of an open workspace that is not in it', async () => {
   const store = useWorkspaceStore()
   const sprints = useSprintStore()
   sprints.active = 's1'
@@ -344,7 +410,95 @@ it('reconciles membership on first hydration of the targeted workspace', async (
   await flushPromises()
   store.workspaces = [makeWorkspace({ id: 'one', sprintId: 's2' })]
   await flushPromises()
-  expect(replace).toHaveBeenCalledWith(expect.objectContaining({ query: { sprint: 's2' } }))
+  expect(replace).not.toHaveBeenCalled()
+  expect(sprints.active).toBe('s1')
+})
+
+it('does not rewrite the route when the selection moves to a workspace of another sprint', async () => {
+  const store = useWorkspaceStore()
+  const sprints = useSprintStore()
+  store.workspaces = [makeWorkspace({ id: 'one', sprintId: 's1' }), makeWorkspace({ id: 'two', sprintId: 's2' })]
+  store.selectedWorkspaceId = 'one'
+  sprints.active = 's1'
+  currentRoute.value = { name: 'workspace', params: { id: 'one' }, query: { sprint: 's1' } }
+  wrapper = mountList()
+  await flushPromises()
+  currentRoute.value = { name: 'workspace', params: { id: 'two' }, query: { sprint: 's1' } }
+  store.selectedWorkspaceId = 'two'
+  await flushPromises()
+  expect(replace).not.toHaveBeenCalled()
+  expect(sprints.active).toBe('s1')
+  expect(currentRoute.value.query.sprint).toBe('s1')
+})
+
+it('does nothing when an open workspace that was not in the active tab is reassigned', async () => {
+  const store = useWorkspaceStore()
+  const sprints = useSprintStore()
+  store.workspaces = [makeWorkspace({ id: 'one', sprintId: 's2' })]
+  store.selectedWorkspaceId = 'one'
+  sprints.active = 's1'
+  currentRoute.value = { name: 'workspace', params: { id: 'one' }, query: { sprint: 's1' } }
+  wrapper = mountList()
+  await flushPromises()
+  store.workspaces[0]!.sprintId = 's3'
+  await flushPromises()
+  expect(replace).not.toHaveBeenCalled()
+  expect(sprints.active).toBe('s1')
+})
+
+it('does nothing on the All tab when the open workspace is reassigned', async () => {
+  const store = useWorkspaceStore()
+  const sprints = useSprintStore()
+  store.workspaces = [makeWorkspace({ id: 'one', sprintId: 's1' })]
+  store.selectedWorkspaceId = 'one'
+  sprints.active = ALL_SPRINTS
+  currentRoute.value = { name: 'workspace', params: { id: 'one' }, query: { sprint: ALL_SPRINTS } }
+  wrapper = mountList()
+  await flushPromises()
+  store.workspaces[0]!.sprintId = 's2'
+  await flushPromises()
+  expect(replace).not.toHaveBeenCalled()
+})
+
+it('follows a reassignment from the active tab to the no-sprint tab', async () => {
+  const store = useWorkspaceStore()
+  const sprints = useSprintStore()
+  store.workspaces = [makeWorkspace({ id: 'one', sprintId: 's1' })]
+  store.selectedWorkspaceId = 'one'
+  sprints.active = 's1'
+  currentRoute.value = { name: 'workspace', params: { id: 'one' }, query: { sprint: 's1' } }
+  wrapper = mountList()
+  await flushPromises()
+  store.workspaces[0]!.sprintId = null
+  await flushPromises()
+  expect(replace).toHaveBeenCalledWith(expect.objectContaining({ query: { sprint: '__none__' } }))
+})
+
+it('moves focus from the first card when the open workspace is not in the list', async () => {
+  const store = useWorkspaceStore()
+  const sprints = useSprintStore()
+  store.workspaces = [makeWorkspace({ id: 'a', sprintId: 's1' }), makeWorkspace({ id: 'open', sprintId: 's2' })]
+  store.selectedWorkspaceId = 'open'
+  sprints.active = 's1'
+  currentRoute.value = { name: 'workspace', params: { id: 'open' }, query: { sprint: 's1' } }
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  wrapper = shallowMount(WorkspaceList, { ...mountOptions(), attachTo: host })
+  await flushPromises()
+  const list = wrapper.element.querySelector('[role="listbox"]') as HTMLElement
+  const cards = ['a', 'b'].map((id) => {
+    const card = document.createElement('div')
+    card.setAttribute('data-testid', 'workspace-card')
+    card.tabIndex = 0
+    card.id = `card-${id}`
+    list.appendChild(card)
+    return card
+  })
+  expect(() => list.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))).not.toThrow()
+  expect(document.activeElement).toBe(cards[0])
+  list.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+  expect(document.activeElement).toBe(cards[1])
+  host.remove()
 })
 
 it('confirms a missing sprint with a fresh catalogue before falling back', async () => {
@@ -452,4 +606,89 @@ it('clears bulk selection when the search filter changes', async () => {
   wrapper.findComponent({ name: 'QInput' }).vm.$emit('update:modelValue', 'Test')
   await wrapper.vm.$nextTick()
   expect(wrapper.findComponent({ name: 'WorkspaceBulkActions' }).props('workspaces')).toEqual([])
+})
+
+it('opens the notifications dialog for the workspace of the context-menu event', async () => {
+  const store = useWorkspaceStore()
+  const workspace = makeWorkspace({ id: 'w-notif' })
+  store.workspaces = [workspace]
+  wrapper = mountList()
+  await flushPromises()
+  wrapper.findComponent({ name: 'WorkspaceCard' }).vm.$emit('notifications', workspace)
+  await wrapper.vm.$nextTick()
+  const dialog = wrapper.findComponent({ name: 'WorkspaceNotificationsDialog' })
+  expect(dialog.props()).toMatchObject({ modelValue: true, workspaceId: 'w-notif' })
+})
+
+describe('group message from the multi-selection', () => {
+  async function selectBoth() {
+    const store = useWorkspaceStore()
+    store.workspaces = [
+      makeWorkspace({ id: 'ws-1', name: 'One' }),
+      makeWorkspace({ id: 'ws-2', name: 'Two', worktreePurgedAt: '2026-01-02T00:00:00Z' }),
+      makeWorkspace({ id: 'ws-3', name: 'Three' }),
+    ]
+    useSprintStore().setActive(ALL_SPRINTS)
+    wrapper = mountList()
+    await flushPromises()
+    for (const id of ['ws-1', 'ws-2', 'ws-3'])
+      wrapper!.findAllComponents({ name: 'WorkspaceCard' })[0]!.vm.$emit('toggleSelection', id)
+    await wrapper.vm.$nextTick()
+    return wrapper
+  }
+  const dialog = () => wrapper!.findComponent({ name: 'WorkspaceGroupMessageDialog' })
+
+  it('opens the existing dialog with the receivable selected workspaces and a selection label', async () => {
+    await selectBoth()
+    wrapper!.findComponent({ name: 'WorkspaceBulkActions' }).vm.$emit('message', ['ws-1', 'ws-2', 'ws-3'])
+    await wrapper!.vm.$nextTick()
+    expect(dialog().props('modelValue')).toBe(true)
+    expect(
+      dialog()
+        .props('workspaces')
+        .map((w: Workspace) => w.id),
+    ).toEqual(['ws-1', 'ws-3'])
+    expect(dialog().props('scope')).toBe('Selection (2)')
+    expect(dialog().props('fromSelection')).toBe(true)
+  })
+
+  it('leaves the selection intact when the dialog opens and closes', async () => {
+    await selectBoth()
+    const bulk = () => wrapper!.findComponent({ name: 'WorkspaceBulkActions' })
+    bulk().vm.$emit('message', ['ws-1', 'ws-2', 'ws-3'])
+    await wrapper!.vm.$nextTick()
+    expect(bulk().props('workspaces')).toHaveLength(3)
+    dialog().vm.$emit('update:modelValue', false)
+    await wrapper!.vm.$nextTick()
+    expect(dialog().props('modelValue')).toBe(false)
+    expect(bulk().props('workspaces')).toHaveLength(3)
+  })
+
+  it('keeps the megaphone on the non-archived workspaces of the sprint scope', async () => {
+    await selectBoth()
+    await wrapper!.get('[data-tour="group-message"]').trigger('click')
+    expect(dialog().props('modelValue')).toBe(true)
+    expect(
+      dialog()
+        .props('workspaces')
+        .map((w: Workspace) => w.id),
+    ).toEqual(['ws-1', 'ws-2', 'ws-3'])
+    expect(dialog().props('scope')).toBe(en['sprints.all'])
+    expect(dialog().props('fromSelection')).toBe(false)
+  })
+
+  it('resets the dialog recipients when the opening source changes', async () => {
+    await selectBoth()
+    const key = () => dialog().props('resetKey')
+    const initial = key()
+    wrapper!.findComponent({ name: 'WorkspaceBulkActions' }).vm.$emit('message', ['ws-1'])
+    await wrapper!.vm.$nextTick()
+    expect(key()).not.toBe(initial)
+    const afterSelection = key()
+    await wrapper!.get('[data-tour="group-message"]').trigger('click')
+    expect(key()).not.toBe(afterSelection)
+    const afterMegaphone = key()
+    await wrapper!.get('[data-tour="group-message"]').trigger('click')
+    expect(key()).toBe(afterMegaphone)
+  })
 })

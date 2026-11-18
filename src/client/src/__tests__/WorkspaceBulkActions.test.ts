@@ -2,6 +2,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, expect, it, vi } from 'vitest'
 import { createI18n } from 'vue-i18n'
+import type { WorkspaceNotificationPrefs } from '../../../shared/workspace-notifications'
 import WorkspaceBulkActions from '../components/WorkspaceBulkActions.vue'
 import en from '../i18n/en'
 import { useWorkspaceStore, type Workspace } from '../stores/workspace'
@@ -40,9 +41,10 @@ function setup() {
         QBtn: { template: '<button><slot /></button>' },
         QMenu: { template: '<div><slot /></div>' },
         QList: { template: '<div><slot /></div>' },
-        QItem: { template: '<button class="action"><slot /></button>' },
+        QItem: { props: ['disable'], template: '<button class="action" :disabled="disable"><slot /></button>' },
         QItemSection: { template: '<span><slot /></span>' },
         QIcon: true,
+        QTooltip: true,
       },
     },
   })
@@ -185,3 +187,86 @@ it('cancels the review configuration without sending requests', async () => {
   await flushPromises()
   expect(mocks.request).not.toHaveBeenCalled()
 })
+
+const prefs = (over: Partial<WorkspaceNotificationPrefs> = {}): WorkspaceNotificationPrefs => ({
+  muteBrowser: false,
+  muteSound: false,
+  muteToast: false,
+  muteDrawer: false,
+  keepQuestions: false,
+  ...over,
+})
+it('mutes every selected workspace keeping its own keepQuestions and continues after a failure', async () => {
+  const { wrapper, store } = setup()
+  store.workspaces[0]!.notificationPrefs = prefs({ keepQuestions: true })
+  const save = vi
+    .spyOn(store, 'setNotificationPrefs')
+    .mockRejectedValueOnce(new Error('offline'))
+    .mockResolvedValueOnce(undefined)
+  await wrapper.get('[data-test="bulk-mute"]').trigger('click')
+  await flushPromises()
+  expect(mocks.dialog).toHaveBeenCalledTimes(1)
+  expect(save.mock.calls).toEqual([
+    ['ws-1', prefs({ muteBrowser: true, muteSound: true, muteToast: true, muteDrawer: true, keepQuestions: true })],
+    ['ws-2', prefs({ muteBrowser: true, muteSound: true, muteToast: true, muteDrawer: true })],
+  ])
+  expect(wrapper.emitted('completed')).toEqual([[['ws-2']]])
+  expect(mocks.dialog).toHaveBeenCalledWith(expect.objectContaining({ message: 'Workspace 1: offline' }))
+})
+it('restores notifications without a confirmation, skipping workspaces with nothing muted', async () => {
+  const { wrapper, store } = setup()
+  store.workspaces[0]!.notificationPrefs = prefs({ muteSound: true, muteDrawer: true, keepQuestions: true })
+  const save = vi.spyOn(store, 'setNotificationPrefs').mockResolvedValue(undefined)
+  await wrapper.get('[data-test="bulk-restore"]').trigger('click')
+  await flushPromises()
+  expect(mocks.dialog).not.toHaveBeenCalled()
+  expect(save.mock.calls).toEqual([['ws-1', prefs({ keepQuestions: true })]])
+  expect(wrapper.emitted('completed')).toEqual([[['ws-1', 'ws-2']]])
+})
+it('skips a workspace that is already fully muted', async () => {
+  const { wrapper, store } = setup()
+  store.workspaces[0]!.notificationPrefs = prefs({
+    muteBrowser: true,
+    muteSound: true,
+    muteToast: true,
+    muteDrawer: true,
+  })
+  const save = vi.spyOn(store, 'setNotificationPrefs').mockResolvedValue(undefined)
+  await wrapper.get('[data-test="bulk-mute"]').trigger('click')
+  await flushPromises()
+  expect(save.mock.calls.map((call) => call[0])).toEqual(['ws-2'])
+  expect(wrapper.emitted('completed')).toEqual([[['ws-1', 'ws-2']]])
+})
+it('asks the list to open the group message for the selected ids without running anything', async () => {
+  const { wrapper } = setup()
+  await wrapper.get('[data-test="bulk-message"]').trigger('click')
+  await flushPromises()
+  expect(wrapper.emitted('message')).toEqual([[['ws-1', 'ws-2']]])
+  expect(wrapper.emitted('completed')).toBeUndefined()
+  expect(mocks.dialog).not.toHaveBeenCalled()
+})
+it('disables the group message entry with a visible reason when no selected workspace can receive one', async () => {
+  const { wrapper } = setup()
+  await wrapper.setProps({
+    workspaces: [
+      { ...wrapperWorkspace(1), archivedAt: '2026-01-01T00:00:00Z' },
+      { ...wrapperWorkspace(2), worktreePurgedAt: '2026-01-01T00:00:00Z' },
+    ] as Workspace[],
+  })
+  const entry = wrapper.get('[data-test="bulk-message"]')
+  expect(entry.attributes('disabled')).toBeDefined()
+  expect(wrapper.text()).toContain(en['bulk.groupMessageNone'])
+  expect(wrapper.find('.action-availability[tabindex="0"]').exists()).toBe(true)
+  await entry.trigger('click')
+  expect(wrapper.emitted('message')).toBeUndefined()
+})
+it('keeps the group message entry enabled when at least one selected workspace can receive one', async () => {
+  const { wrapper } = setup()
+  await wrapper.setProps({
+    workspaces: [{ ...wrapperWorkspace(1), archivedAt: 'x' }, wrapperWorkspace(2)] as Workspace[],
+  })
+  expect(wrapper.get('[data-test="bulk-message"]').attributes('disabled')).toBeUndefined()
+})
+function wrapperWorkspace(n: number) {
+  return { id: `ws-${n}`, name: `Workspace ${n}`, workingBranch: `feature/${n}`, sourceBranch: 'main' }
+}

@@ -26,6 +26,7 @@
   >
     <q-icon v-if="multiSelected" name="check_circle" color="primary" class="float-right" />
     <WorkspaceContextMenu
+      ref="contextMenu"
       :workspace="workspace"
       :archived="variant === 'archived'"
       @rename="emit('rename', $event)"
@@ -37,6 +38,7 @@
       @run-setup="emit('runSetup', $event)"
       @toggle-favorite="emit('toggleFavorite', $event)"
       @manage-tags="emit('manageTags', $event)"
+      @notifications="emit('notifications', $event)"
       @duplicate="emit('duplicate', $event)"
       @archive="(ws, ev) => emit('archive', ws, ev)"
       @unarchive="(ws, ev) => emit('unarchive', ws, ev)"
@@ -54,6 +56,22 @@
           {{ workspace.name }}
           <q-tooltip>{{ workspace.name }}</q-tooltip>
         </div>
+        <!-- Touch only: the long press starts the bulk selection and the touch context menu is suppressed, so this is the way in. -->
+        <q-btn
+          v-if="hasTouch && !selectionMode"
+          data-testid="workspace-card-menu-button"
+          class="q-ml-auto text-kobo-3"
+          flat
+          dense
+          round
+          size="sm"
+          icon="more_vert"
+          :aria-label="t('workspaceList.a11y.actions')"
+          @pointerdown.stop
+          @click.stop="openMenu"
+          @keydown.enter.prevent.stop="openMenu"
+          @keydown.space.prevent.stop="openMenu"
+        />
       </div>
       <div
         v-if="workspace.agentDescription || workspace.description"
@@ -66,13 +84,13 @@
       <AutoLoopChip :workspace="workspace" class="q-mt-xs" />
       <!-- The attention group wants every label; the other groups only want an
            in-flight CI recap. Deliberate, documented in WorkspaceAttentionLabels. -->
-      <WorkspaceAttentionLabels :workspace="workspace" :ci-recap-only="variant !== 'attention'" />
+      <WorkspaceAttentionLabels v-if="showsSignals" :workspace="workspace" :ci-recap-only="variant !== 'attention'" />
       <div v-if="variant === 'running'" class="text-caption q-mt-xs">
         <span class="text-green-4">{{ statusLabel }}</span>
         <span class="q-ml-xs text-kobo-3">&middot; {{ timeAgo(workspace.updatedAt) }}</span>
       </div>
       <div v-else-if="variant === 'idle'" class="wl-item-meta text-caption text-kobo-3">
-        {{ timeAgo(workspace.updatedAt) }}
+        <template v-if="showsStatusInIdle">{{ statusLabel }} &middot; </template>{{ timeAgo(workspace.updatedAt) }}
       </div>
       <div v-else-if="variant === 'archived'" class="wl-item-meta text-caption text-kobo-3">
         {{ t('workspaceList.archived') }} {{ timeAgo(workspace.archivedAt!) }}
@@ -101,6 +119,7 @@
 </template>
 
 <script setup lang="ts">
+import { useQuasar } from 'quasar'
 import AutoLoopChip from 'src/components/AutoLoopChip.vue'
 import WorkspaceAttentionLabels from 'src/components/WorkspaceAttentionLabels.vue'
 import WorkspaceContextMenu from 'src/components/WorkspaceContextMenu.vue'
@@ -109,8 +128,9 @@ import type { Workspace } from 'src/stores/workspace'
 import { useTimeAgo } from 'src/utils/formatters'
 import { projectColorFor, projectNameFor, projectTextColorFor } from 'src/utils/project-color'
 import { workspaceStatusKey } from 'src/utils/workspace-status'
-import { computed, onBeforeUnmount } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { showsDrawerSignals } from '../../../shared/workspace-notifications'
 
 const props = defineProps<{
   workspace: Workspace
@@ -137,6 +157,7 @@ const emit = defineEmits<{
   runSetup: [ws: Workspace]
   toggleFavorite: [ws: Workspace]
   manageTags: [ws: Workspace]
+  notifications: [ws: Workspace]
   duplicate: [ws: Workspace]
   archive: [ws: Workspace, event: Event]
   unarchive: [ws: Workspace, event: Event]
@@ -198,6 +219,15 @@ function selectCard(event: MouseEvent | KeyboardEvent) {
 }
 
 const { t } = useI18n()
+const $q = useQuasar()
+const hasTouch = computed(() => $q.platform?.has?.touch ?? false)
+const contextMenu = ref<InstanceType<typeof WorkspaceContextMenu> | null>(null)
+
+// Anchor the shared menu under the button: a keyboard-generated click carries no usable pointer position.
+function openMenu(event: Event) {
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+  contextMenu.value?.show({ clientX: rect.left + rect.width / 2, clientY: rect.bottom })
+}
 const { timeAgo } = useTimeAgo()
 
 const statusLabel = computed(() => {
@@ -207,12 +237,18 @@ const statusLabel = computed(() => {
 
 // The archived variant deliberately drops the unread emphasis: an archived
 // workspace has nothing left to read.
+// A drawer-muted workspace shows no unread emphasis and no attention labels (stored state is untouched).
+const showsSignals = computed(() => showsDrawerSignals(props.workspace.notificationPrefs))
+
+// Only a drawer-muted workspace can sit in the idle group with a non-idle status; its status must stay readable.
+const showsStatusInIdle = computed(() => !['completed', 'idle', 'created'].includes(props.workspace.status))
+
 const nameStyle = computed(() =>
   props.variant === 'archived'
     ? { maxWidth: '400px' }
     : {
-        fontWeight: props.workspace.hasUnread ? 700 : 400,
-        opacity: props.workspace.hasUnread ? 1 : 0.75,
+        fontWeight: showsSignals.value && props.workspace.hasUnread ? 700 : 400,
+        opacity: showsSignals.value && props.workspace.hasUnread ? 1 : 0.75,
         maxWidth: '400px',
       },
 )

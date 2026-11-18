@@ -1,5 +1,6 @@
 import { useQuasar } from 'quasar'
 import { useWorkspaceStore, WorkspaceActionError } from 'src/stores/workspace'
+import { showRestoreWarnings } from 'src/utils/restore-warnings'
 import { useI18n } from 'vue-i18n'
 
 const restoreErrorCodes = new Set([
@@ -24,9 +25,13 @@ export function useWorktreeRestore() {
 
   async function restoreWorktree(id: string) {
     if (store.restoringWorktreeIds.includes(id)) return
+    const workspaceName = [...store.workspaces, ...store.archivedWorkspaces].find((w) => w.id === id)?.name
     try {
-      await store.restoreWorktree(id)
-      $q.notify({ type: 'positive', message: t('workspacePage.worktreeRestoreSuccess'), position: 'top' })
+      const { warnings } = await store.restoreWorktree(id)
+      if (warnings.length === 0) {
+        $q.notify({ type: 'positive', message: t('workspacePage.worktreeRestoreSuccess'), position: 'top' })
+      }
+      showRestoreWarnings($q, t, warnings, { workspaceId: id, workspaceName })
     } catch (error) {
       const code =
         error instanceof WorkspaceActionError && error.code && restoreErrorCodes.has(error.code)

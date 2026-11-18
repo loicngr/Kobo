@@ -36,7 +36,8 @@ export function summarizeCiChecks(checks: CiCheck[]): CiSummary {
       skipped.push(c)
     }
   }
-  const byName = (a: CiCheck, b: CiCheck) => a.name.localeCompare(b.name)
+  // GitHub commit statuses (StatusContext) arrive without a name: never throw while sorting.
+  const byName = (a: CiCheck, b: CiCheck) => (a.name ?? '').localeCompare(b.name ?? '')
   failed.sort(byName)
   pending.sort(byName)
   passed.sort(byName)

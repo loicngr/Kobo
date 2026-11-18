@@ -34,7 +34,7 @@ vi.mock('../server/services/pr-watcher-service.js', () => ({
 }))
 
 import app from '../server/routes/ci-job-logs.js'
-import { githubJobTarget } from '../shared/ci-job-logs.js'
+import { ciDate, githubJobTarget } from '../shared/ci-job-logs.js'
 
 const url = 'https://github.com/org/repo/actions/runs/123/job/456'
 const job = {
@@ -131,4 +131,58 @@ it('falls back only when an older gh rejects the ANSI flag', async () => {
   expect(await (await request()).json()).toMatchObject({ logs: 'old CLI logs', available: true })
   expect(mocks.exec).toHaveBeenCalledTimes(3)
   expect(mocks.exec.mock.calls[2]?.[0]).not.toContain('--allow-escape-sequences')
+})
+
+describe('CI durations', () => {
+  it('returns the job and step dates as received, null when missing, empty or unparseable', async () => {
+    mocks.exec
+      .mockReset()
+      .mockResolvedValueOnce(
+        JSON.stringify({
+          ...job,
+          started_at: '2026-11-18T10:00:00Z',
+          completed_at: '',
+          steps: [
+            {
+              number: 1,
+              name: 'A',
+              status: 'completed',
+              conclusion: 'success',
+              started_at: '2026-11-18T10:00:01Z',
+              completed_at: '2026-11-18T10:00:46Z',
+            },
+            {
+              number: 2,
+              name: 'B',
+              status: 'in_progress',
+              conclusion: null,
+              started_at: 'not a date',
+              completed_at: null,
+            },
+            { number: 3, name: 'C', status: 'pending', conclusion: null },
+          ],
+        }),
+      )
+      .mockResolvedValue('hello')
+    const body = await (await request()).json()
+    expect(body.startedAt).toBe('2026-11-18T10:00:00Z')
+    expect(body.completedAt).toBeNull()
+    expect(body.steps).toEqual([
+      {
+        number: 1,
+        name: 'A',
+        status: 'completed',
+        conclusion: 'success',
+        startedAt: '2026-11-18T10:00:01Z',
+        completedAt: '2026-11-18T10:00:46Z',
+      },
+      { number: 2, name: 'B', status: 'in_progress', conclusion: null, startedAt: null, completedAt: null },
+      { number: 3, name: 'C', status: 'pending', conclusion: null, startedAt: null, completedAt: null },
+    ])
+  })
+  it('ciDate accepts strings that parse as dates only', () => {
+    expect(ciDate('2026-11-18T10:00:00Z')).toBe('2026-11-18T10:00:00Z')
+    for (const value of ['', 'nope', null, undefined, 12, {}, '0001-01-01T00:00:00Z', '1999-12-31T23:59:59Z'])
+      expect(ciDate(value)).toBeNull()
+  })
 })

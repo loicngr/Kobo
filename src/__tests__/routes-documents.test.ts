@@ -232,3 +232,128 @@ it('lists and reads generated session handoffs', async () => {
   expect(result.status).toBe(200)
   expect((await result.json()).content).toBe('# Verified handoff')
 })
+
+describe('purged workspace with a kept .ai folder', () => {
+  let keptRoot = ''
+
+  function purge(recorded: string | null = keptRoot, id = 'ws-1') {
+    fs.rmSync(worktreePath, { recursive: true, force: true })
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      id,
+      worktreePurgedAt: '2026-09-09T00:00:00Z',
+      worktreePurgeRestoreData: JSON.stringify(recorded ? { keptAiPath: recorded } : {}),
+    } as never)
+  }
+
+  beforeEach(() => {
+    keptRoot = path.join(tmpDir, '.kobo-kept', 'ws-1')
+    fs.mkdirSync(path.join(keptRoot, '.ai', 'thoughts'), { recursive: true })
+    fs.mkdirSync(path.join(keptRoot, '.ai', 'handoffs'), { recursive: true })
+    fs.writeFileSync(path.join(keptRoot, '.ai', 'thoughts', 'n.md'), '# Note', 'utf-8')
+    fs.writeFileSync(path.join(keptRoot, '.ai', 'handoffs', 'h.md'), '# Handoff', 'utf-8')
+  })
+
+  it('lists the kept documents and nothing from docs/', async () => {
+    purge()
+    const res = await app.request('/api/workspaces/ws-1/documents')
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.documents.map((d: { path: string }) => d.path).sort()).toEqual([
+      '.ai/handoffs/h.md',
+      '.ai/thoughts/n.md',
+    ])
+  })
+
+  it('reads a kept document', async () => {
+    purge()
+    const note = await app.request('/api/workspaces/ws-1/document?path=.ai/thoughts/n.md')
+    expect(note.status).toBe(200)
+    expect((await note.json()).content).toBe('# Note')
+    const handoff = await app.request('/api/workspaces/ws-1/document?path=.ai/handoffs/h.md')
+    expect(handoff.status).toBe(200)
+    expect((await handoff.json()).content).toBe('# Handoff')
+  })
+
+  it('ignores a recorded path that belongs to another workspace id', async () => {
+    const other = path.join(tmpDir, '.kobo-kept', 'ws-2')
+    fs.mkdirSync(path.join(other, '.ai', 'thoughts'), { recursive: true })
+    fs.writeFileSync(path.join(other, '.ai', 'thoughts', 'n.md'), '# Other', 'utf-8')
+    purge(other)
+    const list = await app.request('/api/workspaces/ws-1/documents')
+    expect((await list.json()).documents).toEqual([])
+    const read = await app.request('/api/workspaces/ws-1/document?path=.ai/thoughts/n.md')
+    expect(read.status).toBe(404)
+  })
+
+  it('answers an empty list and a 404 when the kept folder was deleted by hand', async () => {
+    purge()
+    fs.rmSync(keptRoot, { recursive: true, force: true })
+    const list = await app.request('/api/workspaces/ws-1/documents')
+    expect(list.status).toBe(200)
+    expect((await list.json()).documents).toEqual([])
+    const read = await app.request('/api/workspaces/ws-1/document?path=.ai/thoughts/n.md')
+    expect(read.status).toBe(404)
+  })
+
+  it('behaves as before for a purged workspace with no kept copy', async () => {
+    purge(null)
+    const list = await app.request('/api/workspaces/ws-1/documents')
+    expect(list.status).toBe(200)
+    expect((await list.json()).documents).toEqual([])
+    const read = await app.request('/api/workspaces/ws-1/document?path=.ai/thoughts/n.md')
+    expect(read.status).toBe(404)
+  })
+
+  it('still refuses a symbolic link and a .. path inside the kept root', async () => {
+    const outside = path.join(tmpDir, 'outside.md')
+    fs.writeFileSync(outside, 'outside secret', 'utf-8')
+    fs.symlinkSync(outside, path.join(keptRoot, '.ai', 'thoughts', 'link.md'))
+    purge()
+    const link = await app.request('/api/workspaces/ws-1/document?path=.ai/thoughts/link.md')
+    expect(link.status).toBe(400)
+    expect(await link.text()).not.toContain('outside secret')
+    const list = await app.request('/api/workspaces/ws-1/documents')
+    expect((await list.json()).documents.map((d: { name: string }) => d.name)).not.toContain('link.md')
+    const up = await app.request('/api/workspaces/ws-1/document?path=.ai/../../outside.md')
+    expect(up.status).toBe(400)
+  })
+
+  it.each(['.ai', '.ai/thoughts'])(
+    'serves nothing when %s in the kept root is a symbolic link to an outside folder',
+    async (linked) => {
+      const outside = path.join(tmpDir, 'outside-dir')
+      fs.mkdirSync(path.join(outside, 'thoughts'), { recursive: true })
+      fs.writeFileSync(path.join(outside, 'thoughts', 'n.md'), 'outside secret', 'utf-8')
+      fs.writeFileSync(path.join(outside, 'n.md'), 'outside secret', 'utf-8')
+      fs.rmSync(path.join(keptRoot, '.ai'), { recursive: true, force: true })
+      if (linked === '.ai') {
+        fs.symlinkSync(outside, path.join(keptRoot, '.ai'))
+      } else {
+        fs.mkdirSync(path.join(keptRoot, '.ai'))
+        fs.symlinkSync(outside, path.join(keptRoot, '.ai', 'thoughts'))
+      }
+      purge()
+      const list = await app.request('/api/workspaces/ws-1/documents')
+      expect((await list.json()).documents).toEqual([])
+      const read = await app.request('/api/workspaces/ws-1/document?path=.ai/thoughts/n.md')
+      expect(read.status).toBeGreaterThanOrEqual(400)
+      expect(read.status).toBeLessThan(500)
+      expect(await read.text()).not.toContain('outside secret')
+    },
+  )
+
+  it('still reads from the worktree when the workspace is not purged, even with restore data', async () => {
+    fs.mkdirSync(path.join(worktreePath, '.ai', 'thoughts'), { recursive: true })
+    fs.writeFileSync(path.join(worktreePath, '.ai', 'thoughts', 'n.md'), '# Live', 'utf-8')
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      worktreePurgedAt: null,
+      worktreePurgeRestoreData: JSON.stringify({ keptAiPath: keptRoot }),
+    } as never)
+    const read = await app.request('/api/workspaces/ws-1/document?path=.ai/thoughts/n.md')
+    expect((await read.json()).content).toBe('# Live')
+    const list = await app.request('/api/workspaces/ws-1/documents')
+    expect((await list.json()).documents.map((d: { path: string }) => d.path)).toEqual(['.ai/thoughts/n.md'])
+  })
+})

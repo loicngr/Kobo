@@ -7,6 +7,11 @@ const deletion = { workspace_id: workspaceId, confirm_delete: true, confirmation
 const response = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status })
 
 describe('MCP workspace lifecycle', () => {
+  it('purge tool description says both removal-failed and keep-failed are not success', () => {
+    const purge = WORKSPACE_LIFECYCLE_TOOLS.find((tool) => tool.name === 'purge_workspace_worktree')
+    expect(purge?.description).toContain('removal-failed and keep-failed are not success')
+  })
+
   it.each(['brainstorming', 'executing', 'awaiting-user', 'completed', 'idle', 'error'])(
     'sets business status %s through PATCH with only the status field',
     async (status) => {

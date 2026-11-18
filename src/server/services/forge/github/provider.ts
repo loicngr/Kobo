@@ -1,6 +1,7 @@
 // src/server/services/forge/github/provider.ts
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { ciDate } from '../../../../shared/ci-job-logs.js'
 import { MERGE_METHODS, type MergeMethod } from '../../../../shared/forge-merge.js'
 import { parseCliJson } from '../parse-cli-json.js'
 import type {
@@ -63,7 +64,14 @@ interface RawGhPr {
   latestReviews?: Array<{ author: { login: string }; state: string }>
   reviewRequests?: Array<{ login: string }>
   reviewThreads?: Array<{ isResolved: boolean }>
-  statusCheckRollup?: Array<{ name: string; conclusion: string | null; status: string; detailsUrl: string | null }>
+  statusCheckRollup?: Array<{
+    name: string
+    conclusion: string | null
+    status: string
+    detailsUrl: string | null
+    startedAt?: string | null
+    completedAt?: string | null
+  }>
   mergeable?: string
   updatedAt?: string
 }
@@ -87,6 +95,8 @@ function mapGhPrToSnapshot(raw: RawGhPr): PrSnapshot {
     conclusion: c.conclusion ?? null,
     status: c.status,
     detailsUrl: c.detailsUrl ?? null,
+    startedAt: ciDate(c.startedAt),
+    completedAt: ciDate(c.completedAt),
   }))
   let rollup: PrSnapshot['ci']['rollup'] = null
   if (checks.length > 0) {

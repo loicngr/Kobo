@@ -1,6 +1,7 @@
 // src/server/services/forge/gitlab/provider.ts
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { ciDate } from '../../../../shared/ci-job-logs.js'
 import { parseCliJson } from '../parse-cli-json.js'
 import type {
   CreatePrOptions,
@@ -93,6 +94,8 @@ interface RawGlabJob {
   name?: string
   status?: string
   web_url?: string
+  started_at?: string | null
+  finished_at?: string | null
 }
 
 /**
@@ -130,7 +133,14 @@ function mapGlabJobToCheck(job: RawGlabJob): PrCiCheck {
       // waiting_for_resource / unknown — still in flight.
       break
   }
-  return { name: job.name ?? '', conclusion, status, detailsUrl: job.web_url ?? null }
+  return {
+    name: job.name ?? '',
+    conclusion,
+    status,
+    detailsUrl: job.web_url ?? null,
+    startedAt: ciDate(job.started_at),
+    completedAt: ciDate(job.finished_at),
+  }
 }
 
 /**

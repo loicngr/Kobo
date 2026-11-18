@@ -1,9 +1,10 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { Dialog, Notify } from 'quasar'
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import createKoboRouter from '../router'
+import { useSprintStore } from '../stores/sprints'
 import { useWorkspaceStore, type Workspace } from '../stores/workspace'
-import { markInternalSprintTarget } from '../utils/sprint-navigation'
+import { markInternalSprintTarget, navigateToWorkspaceTarget } from '../utils/sprint-navigation'
 import { _clearUnsavedScopesForTest, registerUnsavedScope } from '../utils/unsaved-guard'
 
 vi.mock('quasar', async (original) => ({
@@ -195,6 +196,91 @@ it('ignore un avertissement issu d’une résolution dépassée', async () => {
   await slow
   expect(router.currentRoute.value.params.id).toBe('fast')
   expect(Notify.create).not.toHaveBeenCalled()
+})
+
+describe('raccourcis qui gardent l’onglet actif', () => {
+  // A route is already open and the history state is clean, so the guard cannot take the first-load shortcut.
+  async function startedRouter() {
+    window.history.replaceState({}, '', '#/')
+    const router = await createKoboRouter({} as never)
+    await router.push('/workspace?sprint=sprint-a')
+    return router
+  }
+
+  function stubWorkspaceInSprintB() {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) =>
+        Promise.resolve(Response.json(String(url).endsWith('/sessions') ? [] : { sprintId: 'sprint-b' })),
+      ),
+    )
+  }
+
+  it.each([
+    ['présent dans le store', true],
+    ['absent du store', false],
+  ])('ne redirige pas vers le sprint du workspace (%s)', async (_label, inStore) => {
+    setActivePinia(createPinia())
+    useSprintStore().setActive('sprint-a')
+    if (inStore) useWorkspaceStore().workspaces = [{ id: 'w1', sprintId: 'sprint-b' } as Workspace]
+    stubWorkspaceInSprintB()
+    const router = await startedRouter()
+    expect(await navigateToWorkspaceTarget(router, { workspaceId: 'w1' })).toBe(true)
+    expect(router.currentRoute.value.params.id).toBe('w1')
+    expect(router.currentRoute.value.query.sprint).toBe('sprint-a')
+    expect(useSprintStore().active).toBe('sprint-a')
+  })
+
+  it('garde un workspace sans sprint dans l’onglet actif et la valeur Tous', async () => {
+    setActivePinia(createPinia())
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.resolve(Response.json({ sprintId: null }))),
+    )
+    const router = await startedRouter()
+    for (const active of ['sprint-a', '__all__']) {
+      useSprintStore().setActive(active)
+      await navigateToWorkspaceTarget(router, { workspaceId: `w-${active}` })
+      expect(router.currentRoute.value.query.sprint).toBe(active)
+    }
+  })
+
+  it('conserve l’onglet de chaque entrée au retour et à l’avance', async () => {
+    setActivePinia(createPinia())
+    stubWorkspaceInSprintB()
+    const router = await startedRouter()
+    useSprintStore().setActive('sprint-a')
+    await navigateToWorkspaceTarget(router, { workspaceId: 'left' })
+    useSprintStore().setActive('sprint-c')
+    await navigateToWorkspaceTarget(router, { workspaceId: 'right' })
+    router.back()
+    await vi.waitFor(() => expect(router.currentRoute.value.params.id).toBe('left'))
+    expect(router.currentRoute.value.query.sprint).toBe('sprint-a')
+    router.forward()
+    await vi.waitFor(() => expect(router.currentRoute.value.params.id).toBe('right'))
+    expect(router.currentRoute.value.query.sprint).toBe('sprint-c')
+  })
+
+  it('garde l’onglet d’une première charge dont l’état d’historique est interne (rechargement)', async () => {
+    setActivePinia(createPinia())
+    stubWorkspaceInSprintB()
+    window.history.replaceState({ koboSprintContext: true }, '', '#/workspace/w1?sprint=sprint-a')
+    const router = await createKoboRouter({} as never)
+    await router.push('/workspace/w1?sprint=sprint-a')
+    expect(router.currentRoute.value.query.sprint).toBe('sprint-a')
+    window.history.replaceState({}, '', '#/')
+  })
+
+  it('résout encore le sprint du workspace pour une navigation non interne', async () => {
+    setActivePinia(createPinia())
+    useSprintStore().setActive('sprint-a')
+    stubWorkspaceInSprintB()
+    const router = await startedRouter()
+    await router.push('/workspace/w1')
+    expect(router.currentRoute.value.query.sprint).toBe('sprint-b')
+    await router.push('/workspace/w2?sprint=sprint-a')
+    expect(router.currentRoute.value.query.sprint).toBe('sprint-b')
+  })
 })
 
 afterEach(() => {

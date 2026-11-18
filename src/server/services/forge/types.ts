@@ -16,6 +16,9 @@ export interface PrCiCheck {
   conclusion: string | null
   status: string
   detailsUrl: string | null
+  /** ISO dates as the forge reported them; absent from older snapshots, null when unknown. */
+  startedAt?: string | null
+  completedAt?: string | null
 }
 
 /** Rich snapshot of a pull/merge request, normalised across forges. */

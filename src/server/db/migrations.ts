@@ -14,6 +14,7 @@ import { initSearchSchema } from './search-schema.js'
 import { initSessionHandoffSchema } from './session-handoff-schema.js'
 import { initSlackButtonsSchema, initSlackQuestionsSchema, initSlackSchema } from './slack-schema.js'
 import { initWorkspaceMessageBatchSchema } from './workspace-message-batch-schema.js'
+import { initWorkspaceNotificationPrefsSchema } from './workspace-notification-schema.js'
 
 // ── Migration registry ────────────────────────────────────────────────────────
 // Each entry describes a single schema upgrade step.
@@ -896,6 +897,7 @@ export const migrations: Migration[] = [
   { version: 62, name: 'slack-integration', migrate: initSlackSchema },
   { version: 63, name: 'slack-buttons', migrate: initSlackButtonsSchema },
   { version: 64, name: 'slack-question-mirror', migrate: initSlackQuestionsSchema },
+  { version: 65, name: 'workspace-notification-prefs', migrate: initWorkspaceNotificationPrefsSchema },
 ]
 
 /** Current schema version — always equals the highest migration version. */

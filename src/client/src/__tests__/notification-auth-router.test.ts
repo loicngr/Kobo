@@ -3,6 +3,7 @@ import { Dialog } from 'quasar'
 import { afterEach, expect, it, vi } from 'vitest'
 import bootAuth from '../boot/network-auth'
 import createKoboRouter from '../router'
+import { useSprintStore } from '../stores/sprints'
 import { authenticateBrowser } from '../utils/auth-token'
 import { closeNetworkLogin, networkLoginOpen, openNetworkLogin } from '../utils/network-login-bus'
 import { installNotificationNavigation, openNotificationTarget } from '../utils/notification-navigation'
@@ -52,12 +53,14 @@ it('conserve le lien froid refusé en 401 puis restaure workspace, session et sp
   })
   expect((await authenticateBrowser('token')).ok).toBe(true)
   closeNetworkLogin()
+  // The tab (and its sessionStorage) survives the reload: the replay keeps the tab the operator was on.
+  useSprintStore().setActive('sprint0')
   // The dialog reloads the page; create a fresh router and restore the stored target.
   const reloaded = await createKoboRouter({} as never)
   installNotificationNavigation(reloaded)
   await reloaded.push('/workspace')
   await vi.waitFor(() => expect(reloaded.currentRoute.value.params.id).toBe('w1'))
-  expect(reloaded.currentRoute.value.query).toMatchObject({ session: 's1', sprint: 'sprint1' })
+  expect(reloaded.currentRoute.value.query).toMatchObject({ session: 's1', sprint: 'sprint0' })
 })
 
 it('ne mémorise pas une cible refusée par la garde même si le dialogue de connexion est ouvert', async () => {
@@ -135,7 +138,7 @@ it('mémorise la notification lorsque le garde reçoit un 401 après une préval
   expect(networkLoginOpen.value).toBe(true)
 })
 
-it('mémorise la notification après un changement de sprint puis un 401 sur la redirection', async () => {
+it('mémorise la notification après la disparition de la session puis un 401 sur la redirection', async () => {
   setActivePinia(createPinia())
   sessionStorage.clear()
   let destinationReads = 0
@@ -144,9 +147,11 @@ it('mémorise la notification après un changement de sprint puis un 401 sur la 
     if (url.includes('/destination')) {
       destinationReads++
       if (destinationReads === 7) return new Response('{}', { status: 401 })
-      if (url.endsWith('/sessions')) return Response.json([{ id: 's1', workspaceId: 'destination' }])
+      // The session disappears between the pre-validation and the guard, which then redirects without it.
+      if (url.endsWith('/sessions'))
+        return Response.json(destinationReads >= 4 ? [] : [{ id: 's1', workspaceId: 'destination' }])
     }
-    return Response.json({ sprintId: destinationReads >= 4 ? 'sprint2' : 'sprint1' })
+    return Response.json({ sprintId: 'sprint1' })
   })
   await (bootAuth as () => Promise<void>)()
   const router = await createKoboRouter({} as never)

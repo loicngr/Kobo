@@ -109,6 +109,7 @@
             <span>{{ $t('git.pr.ci.skippedCount', { n: ciGroups.skipped.length }) }}</span>
           </span>
         </div>
+        <CiDuration :items="snapshot.ci.checks" :live="prOpen" total class="pr-panel__ci-total" />
       </div>
 
       <!-- Failed checks: always visible -->
@@ -117,6 +118,7 @@
             <component :is="c.detailsUrl ? 'a' : 'span'" :href="c.detailsUrl ?? undefined" target="_blank" rel="noopener noreferrer" class="col row items-center no-wrap q-gutter-xs" style="color: inherit; text-decoration: none; min-width: 0;">
               <q-icon name="cancel" size="14px" />
               <span class="ellipsis">{{ c.name }}</span>
+              <CiDuration :item="c" :live="prOpen" prefix="· " />
             </component>
             <q-btn v-if="workspaceId && c.detailsUrl && githubJobTarget(c.detailsUrl)" flat dense round size="sm" icon="article" :aria-label="t('git.ciLogs.open', { name: c.name })" @click="selectedJob = c">
               <q-tooltip>{{ t('git.ciLogs.open', { name: c.name }) }}</q-tooltip>
@@ -130,6 +132,7 @@
             <component :is="c.detailsUrl ? 'a' : 'span'" :href="c.detailsUrl ?? undefined" target="_blank" rel="noopener noreferrer" class="col row items-center no-wrap q-gutter-xs" style="color: inherit; text-decoration: none; min-width: 0;">
               <q-icon name="hourglass_top" size="14px" />
               <span class="ellipsis">{{ c.name }}</span>
+              <CiDuration :item="c" :live="prOpen" prefix="· " />
             </component>
             <q-btn v-if="workspaceId && c.detailsUrl && githubJobTarget(c.detailsUrl)" flat dense round size="sm" icon="article" :aria-label="t('git.ciLogs.open', { name: c.name })" @click="selectedJob = c">
               <q-tooltip>{{ t('git.ciLogs.open', { name: c.name }) }}</q-tooltip>
@@ -151,6 +154,7 @@
             <component :is="c.detailsUrl ? 'a' : 'span'" :href="c.detailsUrl ?? undefined" target="_blank" rel="noopener noreferrer" class="col row items-center no-wrap q-gutter-xs" style="color: inherit; text-decoration: none; min-width: 0;">
               <q-icon name="check_circle" size="14px" />
               <span class="ellipsis">{{ c.name }}</span>
+              <CiDuration :item="c" :live="prOpen" prefix="· " />
             </component>
             <q-btn v-if="workspaceId && c.detailsUrl && githubJobTarget(c.detailsUrl)" flat dense round size="sm" icon="article" :aria-label="t('git.ciLogs.open', { name: c.name })" @click="selectedJob = c">
               <q-tooltip>{{ t('git.ciLogs.open', { name: c.name }) }}</q-tooltip>
@@ -160,6 +164,7 @@
             <component :is="c.detailsUrl ? 'a' : 'span'" :href="c.detailsUrl ?? undefined" target="_blank" rel="noopener noreferrer" class="col row items-center no-wrap q-gutter-xs" style="color: inherit; text-decoration: none; min-width: 0;">
               <q-icon name="remove_circle_outline" size="14px" />
               <span class="ellipsis">{{ c.name }}</span>
+              <CiDuration :item="c" :live="prOpen" prefix="· " />
             </component>
             <q-btn v-if="workspaceId && c.detailsUrl && githubJobTarget(c.detailsUrl)" flat dense round size="sm" icon="article" :aria-label="t('git.ciLogs.open', { name: c.name })" @click="selectedJob = c">
               <q-tooltip>{{ t('git.ciLogs.open', { name: c.name }) }}</q-tooltip>
@@ -180,6 +185,7 @@ import { isChangesRequestedBlocking, isMergeabilityPending } from 'src/utils/pr-
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { githubJobTarget } from '../../../shared/ci-job-logs'
+import CiDuration from './CiDuration.vue'
 import CiJobLogsDialog from './CiJobLogsDialog.vue'
 
 type Check = PrSnapshot['ci']['checks'][number]
@@ -213,6 +219,10 @@ const ciGroups = computed(() =>
     ),
   ),
 )
+
+// A closed/merged PR is no longer refreshed: its running checks have an unknown end, so nothing ticks.
+// Durations and the clock live in CiDuration, so a tick never re-renders this panel.
+const prOpen = computed(() => props.snapshot.state === 'OPEN')
 
 const ciIcon = computed(() => {
   switch (props.snapshot.ci.rollup) {

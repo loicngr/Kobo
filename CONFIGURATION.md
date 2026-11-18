@@ -14,9 +14,13 @@ Reference for Kōbō configuration and external integrations. The tables cover t
 - [Custom change-source-branch script](#custom-change-source-branch-script)
 - [Lifecycle hooks](#lifecycle-hooks)
 - [Unanswered question reminder](#unanswered-question-reminder)
+- [Mute notifications for a workspace](#mute-notifications-for-a-workspace)
 - [Imported notification sounds](#imported-notification-sounds)
+- [Files Kōbō hides from Git](#files-kōbō-hides-from-git)
 - [Workspace templates and duplication](#workspace-templates-and-duplication)
 - [Auto-purge worktree on PR merged](#auto-purge-worktree-on-pr-merged)
+  - [Keeping the `.ai` folder of a purged worktree](#keeping-the-ai-folder-of-a-purged-worktree)
+  - [Restoring a purged workspace](#restoring-a-purged-workspace)
 - [Conversation history retention](#conversation-history-retention-opt-in)
 - [Concurrent agents](#concurrent-agents)
 - [Network access](#network-access)
@@ -205,6 +209,7 @@ settings exports.
 | `worktreesPath` | `string` | Root directory where new worktrees are created. Defaults to `.worktrees` (resolved relative to the project). Absolute, `$HOME`, `~`, and `%USERPROFILE%` are accepted; `..` and drive-relative Windows paths (`C:foo`) are rejected. |
 | `worktreesPrefixByProject` | `boolean` | Nest each worktree under a project-named subfolder, preventing collisions when multiple projects share the same `worktreesPath`. |
 | `autoPurgeOnPrMerged` | `boolean` | When a PR transitions to MERGED, also remove the worktree from disk (in addition to archiving). Chat history and PR metadata are preserved. Default `false`. See [Auto-purge worktree on PR merged](#auto-purge-worktree-on-pr-merged). |
+| `keepAiFolderOnPurge` | `boolean` | Global, default `true`. When a worktree is purged, keep its `.ai` folder next to the worktrees instead of deleting it. See [Keeping the `.ai` folder of a purged worktree](#keeping-the-ai-folder-of-a-purged-worktree). |
 | `voiceEnabled` | `boolean` | Enable local push-to-talk transcription. |
 | `voicePttKey` | `'alt' \| 'ctrl+space'` | Hotkey held to record. |
 | `voiceLanguage` | `string` | `auto` or a 2-letter language code. |
@@ -551,6 +556,45 @@ Two consequences worth knowing:
 - However far behind the loop falls (a laptop waking from sleep, say), it sends
   **one** reminder per pass, not one per missed interval.
 
+## Mute notifications for a workspace
+
+Some workspaces run in the background (a Slack-linked workspace, a watcher) and should not interrupt you. Each workspace can have its own notification settings, without touching **Settings → Notifications**.
+
+Open the workspace's context menu in the left drawer and choose **Notifications...** (archived workspaces have it too). The dialog is titled "Notifications: <workspace name>". Each change is saved at once, there is no Save button.
+
+| Setting | What it mutes |
+|---|---|
+| **Browser notifications** | The system notification for this workspace. |
+| **Sounds** | The sound for this workspace. |
+| **Toasts** (on-screen messages) | The messages that pop up on screen for this workspace: the unanswered-question reminder, a changed PR base branch, the PR events (CI failed or recovered, merge conflict, merged, changes requested, approved, ready to merge) and "waiting for a free slot". The message that answers your own rejected chat send is never muted. |
+| **Drawer signals** | The attention signals of the workspace card, described below. |
+| **Keep questions audible and visible** | An exception: question alerts keep their sound even when **Sounds** is muted, and the one question alert that has an on-screen message keeps it even when **Toasts** is muted. See below. |
+
+**Mute all** ticks the four mute boxes and **Restore all** clears them. Neither changes the "keep questions" box.
+
+**Keep questions audible and visible.** A question alert is a question from the agent, a permission request, the unanswered-question reminder, or an auto-loop stopped because it needs a clarification. This setting restores the sound of these four alerts, and the on-screen message of the unanswered-question reminder, which is the only one of them that has one. It only applies to those alerts. It never restores the browser notification and never restores the drawer signals. It is greyed out while neither **Sounds** nor **Toasts** is muted.
+
+**Drawer signals.** When muted, the workspace:
+
+- no longer appears under the "Needs Attention" group. It is listed under "Running" while it is busy, and under "Idle" otherwise;
+- has no bold text for unread, no attention colour, no attention labels and no CI recap on its card;
+- is not counted in the sprint tab counters, and, when sorting by "Attention priority", is sorted as having no attention.
+
+Its card still shows its status as plain text (for example an error or a pending question) and its auto-loop chip. The Dashboard page ignores this setting and keeps showing the real state.
+
+Things to know:
+
+- Global settings come first. A channel turned off in **Settings → Notifications** stays off whatever the workspace says.
+- Muting never discards information. Unread and attention states keep being recorded, so restoring shows the real state at once.
+- Settings are stored on the server: they apply on every device and tab. They are kept through archive and worktree purge, removed with the workspace, and not copied by duplication or workspace templates.
+- A small bell-off icon on the workspace card shows that something is muted. Its tooltip lists what. "Keep questions" alone shows no icon.
+
+**Several workspaces at once.** Select workspaces in the drawer and open **Bulk actions**. **Mute notifications** turns the four mute boxes on for each of them, **Restore notifications** turns them off. Each workspace keeps its own "keep questions" choice. There is no confirmation, because the action is reversible.
+
+Not covered: Slack question mirroring, lifecycle hooks and the activity digest are not affected. There is no temporary muting or schedule, and no per-device setting. Agents cannot change these settings: no MCP tool exists for it.
+
+Known limit: if you change the same workspace's settings from two tabs at the same instant, one tab can briefly show the other tab's value. It corrects itself at the next refresh: the workspace list is refreshed every 15 seconds while the tab is visible. An archived workspace is corrected at the next page reload.
+
 ## Sprints
 
 Browser notifications remain independent of the selected sprint. Clicking a notification opens its workspace and, when known, the exact session. Existing application windows use the normal navigation confirmation for unsaved edits; cancelling stays in place. On supported PWA installations notifications use the service worker. They still require an open Kōbō application to receive events; this does not enable Web Push delivery while the application is closed.
@@ -562,6 +606,8 @@ Managed agent sessions can list sprint IDs and names and inspect their own assig
 ## Group workspace messages
 
 Use **Group message** in the workspace drawer to send the same instruction to several workspaces. Combine tags and workspace statuses, review the named recipient list, and deselect individual workspaces before sending. Selected tags match any tag; selected statuses match any status; both filter groups must match. Enable **Only workspaces with a running development server** to further restrict the list to server status `running`; starting, stopping, stopped, unknown and failed servers are excluded. This filter updates with received server status changes. Empty filters include all non-archived, non-purged workspaces. Both the group-message tag selector and the sidebar tag filter include the saved global tag catalogue plus tags already assigned to workspaces. Unused catalogue tags remain visible (with a zero count in the sidebar); assign a tag through a workspace menu before using it to target that workspace.
+
+You can also start from a selection: select several workspaces in the drawer, open **Bulk actions** and choose **Group message**. The same dialog opens with the selected workspaces as recipients, all ticked. Archived workspaces and purged worktrees are left out, and the entry is disabled with an explanation when none of the selected workspaces can receive a message. The selection is kept. If an earlier group message is still displayed (a finished receipt you have not dismissed, or a send in progress), the dialog shows that message with the note "An earlier group message is still displayed. Your selection will be used once it is finished or dismissed." Nothing is sent or replaced meanwhile.
 
 Auto-loop recipients receive a durable instruction for their next iteration, without stopping the loop. Other recipients use normal chat delivery, which can resume an inactive agent. Normal chat restrictions still apply: pending human questions, compaction and lifecycle operations are not bypassed. The delivery mode is fixed when submitted; a subsequent auto-loop mode change rejects that recipient rather than silently switching modes.
 
@@ -627,8 +673,53 @@ draft and its attachment badges in the original workspace without replacing
 another workspace's draft. Navigation during an unfinished upload requires
 confirmation; leaving cancels that draft attachment and cleans up any late upload
 receipt in its original workspace. Ready, queued and sent attachments are preserved.
-Documents stored in `.ai/attachments/` are added to the worktree's `.gitignore`,
-including workspaces created before this feature.
+Git ignores documents stored in `.ai/attachments/` through the repository's local
+exclude file, including in workspaces created before this feature (see
+[Files Kōbō hides from Git](#files-kōbō-hides-from-git)).
+
+## Files Kōbō hides from Git
+
+Kōbō does not add lines to a project's `.gitignore`. The files it creates in a
+checkout are hidden through the repository's local exclude file instead:
+`.git/info/exclude` of the main repository (the common Git directory), which every
+worktree of that repository shares and which is never committed. These patterns
+are written there, each only if it is not already present:
+
+```text
+.ai/.git-conventions.md
+.ai/thoughts/
+.ai/images/
+.ai/attachments/
+.ai/.setup-script.tmp
+.ai/.cleanup-script.tmp
+.ai/.archive-script.tmp
+.ai/.hook-*.tmp
+.ai/.script-*/
+.mcp.json
+```
+
+They are written when a workspace is created, and when a document is uploaded to
+a workspace (once per upload batch, before the files are written, and only when
+the batch contains a document). After the first success for a repository, Kōbō
+remembers it until the process stops. On each later call for that repository it
+only reads the exclude file (no lock, no Git process) and rewrites any missing
+pattern, so lines you removed by hand, or a repository re-created at the same
+path, are repaired on the next workspace creation or document upload. If the
+exclude file cannot be written (the folder is not a Git repository, or the file
+is read-only), Kōbō logs a warning and carries on.
+
+Lines that Kōbō added to a project's `.gitignore` in earlier versions are left
+where they are, in every branch and worktree. Remove them by hand if you want.
+
+One consequence: Git ignores these files as before, but tools that only read
+`.gitignore` (formatters and linters configured that way) no longer skip them in
+new workspaces. Add the folder to that tool's own ignore file if needed. The
+patterns apply to the whole repository, the main checkout included. Files that are
+already tracked are not affected, but a new file matching a pattern (a new
+`.mcp.json` or `.ai/...` file, for example) needs `git add -f` to be committed. A clone
+made elsewhere does not get the exclusion either, which only matters for files
+Kōbō creates locally. The `.gitignore` that Kōbō writes inside `.ai/handoffs/` is
+not part of the project's file and still exists.
 
 ## Choosing an LLM for code review
 
@@ -765,7 +856,10 @@ saving templates or changing the tag catalogue.
 Purging a worktree frees its disk space (often hundreds of MB or GB worth of
 `node_modules`, `vendor`, build artefacts, etc.) while keeping the workspace
 discoverable: chat history and PR metadata are retained in the database, the
-workspace is archived, and the worktree folder is removed from disk.
+workspace is archived, and the worktree folder is removed from disk. By default
+the worktree's `.ai` folder (notes, handoffs, images, attachments) is moved aside
+first and kept; see
+[Keeping the `.ai` folder of a purged worktree](#keeping-the-ai-folder-of-a-purged-worktree).
 
 **Manual trigger**: workspace context menu → **Free disk space (delete worktree)**.
 A confirmation dialog warns you before any destructive action.
@@ -775,13 +869,127 @@ merged**. When enabled, the pr-watcher fires `purgeWorktree(id)` on the
 OPEN → MERGED transition, in addition to the existing auto-archive. Disabled by
 default; opt in once you trust the restore flow on your machine.
 
+### Keeping the `.ai` folder of a purged worktree
+
+The `.ai` folder of a worktree holds files that Git does not track: the agent's
+notes (`.ai/thoughts/`), handoff reports, the images and attachments of the chat,
+and the Git conventions file. Removing the worktree used to delete them. By
+default, a purge now moves the whole `.ai` folder aside before it removes the
+worktree. Kōbō's temporary script folders (`.ai/.script-*`) are not kept, and
+neither are untracked plans and specs under `docs/`.
+
+**Where.** `<worktrees folder>/.kobo-kept/<workspace id>/.ai`. The worktrees folder
+is the one set in Settings → Worktrees when the worktree is inside it. Otherwise
+(the setting changed since the workspace was created) it is the worktree's
+recorded path with its branch folders removed, which can leave a per-project
+folder in the path, or the worktree's parent folder as a last resort. The purged banner of the workspace page
+shows the exact path, with a copy button.
+
+**Setting.** Settings → Worktrees → **Keep the .ai folder when purging a
+worktree**, on by default (`keepAiFolderOnPurge`). It is read at each purge.
+Turning it off does not remove copies that were already kept; they stay until the
+workspace is restored or deleted.
+
+**While the workspace is purged.** The kept files stay readable: the Documents tab
+lists the notes and handoffs, document links in the chat open, and chat images
+load. Plans and specs under `docs/` are not kept, so they are not listed.
+Non-image attachments are kept on disk and come back at restore, but Kōbō does not
+display them, purged or not. Uploading or deleting images and attachments is
+refused until the worktree is restored.
+
+**Restore.** The **Restore worktree** action, and the automatic detection of a
+worktree you recreated by hand, both put `.ai` back into the worktree first. When
+a file exists both in the kept copy and in the worktree, identical content drops
+the duplicate. With different content, the file that Git checked out stays, the
+kept file is left in the kept folder and a warning names it. The kept folder is
+removed once everything is back; if something stays, it is not removed. If putting
+the files back fails, the restore still completes and a warning gives the path of
+the kept folder. An entry that cannot be placed (a file where the kept copy has a
+folder, or the reverse) stays in the kept folder too, named in the warning. Each
+warning is one toast, prefixed with the workspace name, that stays until closed
+and has a copy button. It is sent to every open tab, whether or not that
+workspace is open there, for the Restore action (and the MCP tool) and for the
+automatic detection alike. An identical warning is shown only once within 10
+seconds (the tab that clicked Restore receives it twice). It is shown even for a
+workspace whose on-screen messages are muted: it says where the notes are and is
+not an activity notification.
+
+**If keeping fails.** When `.ai` cannot be moved (for example because some files
+belong to another user), the purge stops with a message. The worktree stays on
+disk, and anything already moved is put back. As when the folder removal fails,
+the workspace is already archived and its agent and dev server are already
+stopped. Fix the ownership, or turn the setting off, then purge again. An
+automatic purge after a merged PR behaves the same, but shows nothing in the
+interface: the reason is in the server log, and the workspace stays archived
+with its worktree on disk. In the bulk purge action, such a workspace is counted
+as processed and its warning appears in the warnings list.
+
+**If the worktree folder cannot be removed.** The `.ai` folder was already moved
+to the kept folder. Two cases, told apart by the warning you see:
+
+- (a) The folder is no longer a registered checkout of the workspace. This is the
+  usual case: Git de-registers the worktree even when deleting its files fails.
+  `.ai` stays in the kept folder and the warning says `The .ai folder was kept in
+  '<kept folder>'. It will be recorded when you purge again after cleaning the
+  folder up.` Deleting the leftover worktree folder is safe here, as the failure
+  message suggests: the notes are in the kept folder. Once it is cleaned up, purge
+  again and Kōbō records the kept copy.
+- (b) The folder is still a valid, registered checkout. `.ai` was put back into it
+  and the warning says `The .ai folder was put back into '<worktree>'. Do not
+  delete that folder by hand: purge again instead, so the notes are kept.` Do NOT
+  delete it by hand in this case: purge again.
+
+The "safe to delete" advice applies to case (a) only. (When the move itself fails, see "If keeping
+fails" above: the worktree is intact and what was moved is put back.)
+
+**If a purge meets an older kept copy.** When a regular file exists both in the
+live `.ai` and in an existing kept copy (a leftover), identical content drops the
+duplicate. With different content the live file keeps the name and the older kept
+file is renamed beside it as `<name>.kept-<timestamp>`. Nothing is deleted.
+
+**Delete.** For a purged workspace, the recorded kept folder is removed. For a
+workspace that is not purged and whose worktree the delete removes, a leftover
+kept folder at the computed location (for example from a failed put-back,
+including entries that could not be placed) is removed after the worktree removal
+succeeded, not when it failed. When the worktree is kept (an external or reused
+worktree, or a delete that keeps it), nothing is removed, and if a leftover exists
+the answer carries a warning naming it. When the worktree removal fails, nothing is
+removed either, and a leftover gets a second warning ("left in place because the
+worktree could not be removed"): remove it by hand once the worktree is cleaned
+up. A folder that cannot be removed produces a
+warning and does not block the deletion.
+
+**Git.** When the `.kobo-kept` folder is inside the project, Kōbō adds it to the
+repository's local exclude file, so it does not show up in `git status`.
+
+Limits:
+
+- `git clean -fdx`, or any manual clean-up of the worktrees folder, deletes the
+  kept copies. The exclusion hides the folder from `git status`; it does not
+  protect it.
+- A `.ai` folder that Kōbō cannot move stops the purge (see above).
+- A kept copy with files owned by another user may fail to be removed when the
+  workspace is deleted. Kōbō reports a warning; remove the folder by hand.
+- After a failed put-back (entries that could not be placed included), the copy
+  stays on disk, and the restored workspace no longer records it. Deleting the
+  workspace removes it, and a later purge merges it with the new content (see
+  above). Kōbō looks for it at a location derived from the workspace's own worktree
+  path when the setting no longer contains it, so it is usually still found after
+  the setting changes; it can be missed when the new worktrees folder contains that
+  path and so moves the location.
+- Worktrees purged before this version have no kept copy.
+- Kept copies live outside Kōbō's data folder, so they are not part of the data
+  folder or of the VPS updater's backups.
+
 ### Restoring a purged workspace
 
 Click **Restore worktree** in the workspace context menu or in the purged-worktree
 banner. Kōbō recreates the checkout at its recorded path, then unarchives the same
 workspace. Its conversation, tasks, sessions and lifecycle status are retained.
 Restoration does not start an agent or dev server, run setup scripts, reinstall
-dependencies, or re-enable auto-loop or cancelled schedules.
+dependencies, or re-enable auto-loop or cancelled schedules. If the `.ai` folder
+was kept at purge time, it is put back into the recreated checkout (see
+[Keeping the `.ai` folder of a purged worktree](#keeping-the-ai-folder-of-a-purged-worktree)).
 
 Recovery uses the first available source:
 
@@ -797,8 +1005,9 @@ If no recovery source remains, the workspace stays purged and the UI explains
 how to proceed. If Git still registers the missing worktree, repair that stale
 registration manually before retrying.
 
-**This is not a filesystem backup:** discarded uncommitted changes, ignored files,
-local secrets and installed dependencies are not recovered. Git objects are not
+**This is not a filesystem backup:** discarded uncommitted changes, ignored files
+other than a kept `.ai` folder, local secrets and installed dependencies are not
+recovered. Git objects are not
 pinned against garbage collection; restoration cannot recover deleted history
 that no longer exists locally or remotely. `mergeCommitSha` is historical metadata
 and is not currently populated; `headCommitSha` is optional and best-effort.
@@ -814,7 +1023,8 @@ git worktree add "<original-worktree-path>" "<branch-name>"
 
 Use the appropriate provider's recovery flow for a GitLab MR. Once the expected
 worktree is recreated, the PR watcher detects it on its next 30 s tick. It verifies
-the exact root, repository and working branch before clearing both purge fields
+the exact root, repository and working branch, puts a kept `.ai` folder back
+(warnings are logged and shown as toasts, see above), then clears both purge fields
 and `archived_at`, and emits `workspace:worktree-restored` to refresh the client.
 Unrelated directories and checkouts are never automatically adopted.
 

@@ -8,10 +8,11 @@ import { getForgeProvider } from './forge/registry.js'
 import { resolveForge } from './forge/resolve.js'
 import { deriveReadyToMerge, type PrSnapshot } from './forge/types.js'
 import { computeGitStats, type GitStatsResult } from './git-stats-service.js'
+import { putBackKeptAiFor } from './kept-ai-service.js'
 import * as lifecycleHookService from './lifecycle-hook-service.js'
 import { getGlobalSettings } from './settings-service.js'
 import { destroyTerminal } from './terminal-service.js'
-import { emitEphemeral } from './websocket-service.js'
+import { broadcastAll, emitEphemeral } from './websocket-service.js'
 import {
   archiveWorkspace,
   getWorkspace,
@@ -152,9 +153,25 @@ async function autoRestoreManuallyRecreatedWorktrees(): Promise<void> {
         const current = getWorkspace(ws.id)
         if (!current?.worktreePurgedAt || !current.worktreeOwned) return
         if (!(await isMatchingWorkspaceWorktree(current))) return
+        const warnings = await putBackKeptAiFor(current)
+        for (const warning of warnings) {
+          console.warn(`[pr-watcher] auto-restore of '${ws.name}': ${warning}`)
+        }
         const restored = restoreWorktreeFromDisk(ws.id)
         invalidateWorkspacePrCaches(ws.id)
         emitEphemeral(ws.id, 'workspace:worktree-restored', { workspace: restored })
+        if (warnings.length > 0) {
+          // Global: a purged workspace is archived, so a tab is usually not subscribed to it.
+          try {
+            broadcastAll('workspace:restore-warnings', {
+              workspaceId: ws.id,
+              workspaceName: ws.name,
+              warnings,
+            })
+          } catch (err) {
+            console.error(`[pr-watcher] restore-warnings broadcast failed for '${ws.name}':`, err)
+          }
+        }
         console.log(`[pr-watcher] auto-restored worktree for workspace '${ws.name}' (manual restore detected)`)
       })
     } catch (err) {

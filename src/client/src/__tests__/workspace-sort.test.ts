@@ -39,6 +39,32 @@ describe('workspace sorting', () => {
     const items = [ws('ten', { name: 'Mission 10' }), ws('two', { name: 'mission 2' })]
     expect(ids(sortWorkspaces(items, { field: 'name', direction: 'asc' }, { locale: 'fr' }))).toEqual(['two', 'ten'])
   })
+  it('ranks a drawer-muted workspace as having no attention', () => {
+    const prefs = { muteBrowser: false, muteSound: false, muteToast: false, muteDrawer: true, keepQuestions: false }
+    const items = [
+      ws('a-idle'),
+      ws('b-question', { status: 'awaiting-user', notificationPrefs: prefs }),
+      ws('c-error', { status: 'error' }),
+    ]
+    expect(ids(sortWorkspaces(items, { field: 'attention', direction: 'desc' }))).toEqual([
+      'c-error',
+      'a-idle',
+      'b-question',
+    ])
+  })
+  it('ranks a drawer-muted error workspace as having no attention', () => {
+    const prefs = { muteBrowser: false, muteSound: false, muteToast: false, muteDrawer: true, keepQuestions: false }
+    const items = [
+      ws('a-idle'),
+      ws('b-error', { status: 'error', notificationPrefs: prefs }),
+      ws('c-quota', { status: 'quota' }),
+    ]
+    expect(ids(sortWorkspaces(items, { field: 'attention', direction: 'desc' }))).toEqual([
+      'c-quota',
+      'a-idle',
+      'b-error',
+    ])
+  })
   it('prioritizes questions, failures, review, quotas and ready PRs', () => {
     const items = [
       ws('idle'),

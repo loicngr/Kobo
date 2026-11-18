@@ -29,6 +29,14 @@ vi.mock('../server/services/image-service.js', () => ({
 
 import * as imageService from '../server/services/image-service.js'
 
+vi.mock('../server/services/kept-ai-service.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../server/services/kept-ai-service.js')>()),
+  removeKeptAiFor: vi.fn(async () => [] as string[]),
+  computedKeptRootIfExists: vi.fn((_workspace: unknown) => null as string | null),
+}))
+
+import * as keptAiService from '../server/services/kept-ai-service.js'
+
 vi.mock('../server/services/worktree-restore-service.js', () => ({
   restorePurgedWorktree: vi.fn(),
   WorktreeRestoreError: class extends Error {
@@ -110,6 +118,7 @@ vi.mock('../server/services/workspace-service.js', () => ({
   setPrWatchDisabled: vi.fn(),
   setPrWatchEnabled: vi.fn(),
   setWorkspaceTags: vi.fn(),
+  setWorkspaceNotificationPrefs: vi.fn(),
   updateWorkspaceSourceBranch: vi.fn(),
   setInitialPrompt: vi.fn(),
   clearInitialPrompt: vi.fn(),
@@ -120,6 +129,7 @@ vi.mock('../server/services/worktree-service.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../server/services/worktree-service.js')>()),
   createWorktreeUnlocked: vi.fn(),
   removeWorktree: vi.fn(),
+  ensureKoboGitExcludes: vi.fn().mockResolvedValue(undefined),
 }))
 
 vi.mock('../server/services/agent/orchestrator.js', () => ({
@@ -534,6 +544,7 @@ describe('POST /api/workspaces/:id/restore-worktree', () => {
       workspace: fakeWorkspace,
       outcome: 'restored',
       source: 'local-branch',
+      warnings: [],
     })
     const res = await app.request(`/api/workspaces/${fakeWorkspace.id}/restore-worktree`, { method: 'POST' })
     expect(res.status).toBe(200)
@@ -698,11 +709,9 @@ describe('POST /api/workspaces', () => {
     form.append('images', new File(['pixels'], 'screen.png', { type: 'image/png' }))
     form.append('attachments', new File(['# Brief'], 'brief.md'))
     const directory = vi.spyOn(safePath, 'ensureDirectoryInside').mockReturnValue('/tmp/worktree/.ai/attachments')
-    const ignorePath = vi.spyOn(safePath, 'resolvePathInside').mockReturnValue('/tmp/worktree/.gitignore')
 
     const response = await app.request('/api/workspaces', { method: 'POST', body: form })
     directory.mockRestore()
-    ignorePath.mockRestore()
     const documentWrite = vi.mocked(fs.writeFileSync).mock.calls.find(([p]) => p === 101)
     expect(documentWrite?.[1]).toEqual(Buffer.from('# Brief'))
     expect(workspaceService.setInitialPrompt).toHaveBeenCalledWith(
@@ -778,6 +787,33 @@ describe('POST /api/workspaces', () => {
     expect((await response.json()).error).toContain('Image disk full')
     expect(agentManager.startAgent).not.toHaveBeenCalled()
     expect(workspaceService.deleteWorkspace).toHaveBeenCalled()
+  })
+
+  it('excludes Kobo files through the local git exclude file and never writes a .gitignore', async () => {
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
+      worktreePath: '/tmp/worktree',
+      base: 'origin',
+      branchCreated: true,
+    })
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+    const response = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+      }),
+    })
+    expect(response.status).toBe(201)
+    expect(worktreeService.ensureKoboGitExcludes).toHaveBeenCalledWith('/tmp/worktree')
+    const touched = [...vi.mocked(fs.appendFileSync).mock.calls, ...vi.mocked(fs.writeFileSync).mock.calls].map(
+      ([target]) => String(target),
+    )
+    expect(touched.some((target) => target.endsWith('.gitignore'))).toBe(false)
   })
 
   it('creates workspace without Notion URL', async () => {
@@ -1794,10 +1830,8 @@ describe('POST /api/workspaces', () => {
     form.append('images', new File(['pixels'], 'screen.png', { type: 'image/png' }))
     form.append('attachments', new File(['# Brief'], 'brief.md'))
     const directory = vi.spyOn(safePath, 'ensureDirectoryInside').mockReturnValue('/tmp/worktree/.ai/attachments')
-    const ignorePath = vi.spyOn(safePath, 'resolvePathInside').mockReturnValue('/tmp/worktree/.gitignore')
     const res = await app.request('/api/workspaces', { method: 'POST', body: form })
     directory.mockRestore()
-    ignorePath.mockRestore()
     const documentWrite = vi.mocked(fs.writeFileSync).mock.calls.find(([p]) => p === 101)
     expect(documentWrite?.[1]).toEqual(Buffer.from('# Brief'))
     expect(workspaceService.setInitialPrompt).toHaveBeenCalledWith(
@@ -3771,6 +3805,114 @@ describe('DELETE /api/workspaces/:id', () => {
     expect(wsService.broadcastAll).toHaveBeenCalledWith('pins:changed', { workspaceId: 'ws-1' })
   })
 
+  it('removes the kept .ai folder of a purged workspace before deleting its row', async () => {
+    const purged = { ...fakeWorkspace, worktreePurgedAt: '2026-01-02T00:00:00.000Z' }
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(purged)
+    const order: string[] = []
+    vi.mocked(keptAiService.removeKeptAiFor).mockImplementationOnce(async () => {
+      order.push('removeKeptAiFor')
+      return []
+    })
+    vi.mocked(workspaceService.deleteWorkspace).mockImplementationOnce(() => {
+      order.push('deleteWorkspace')
+    })
+
+    const res = await app.request('/api/workspaces/ws-1', { method: 'DELETE' })
+
+    expect(res.status).toBe(204)
+    expect(keptAiService.removeKeptAiFor).toHaveBeenCalledWith(purged)
+    expect(order).toEqual(['removeKeptAiFor', 'deleteWorkspace'])
+  })
+
+  it('removes a leftover kept folder of a non-purged workspace only after its worktree was removed', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    const order: string[] = []
+    vi.mocked(worktreeService.removeWorktree).mockImplementationOnce(async () => {
+      order.push('removeWorktree')
+    })
+    vi.mocked(keptAiService.removeKeptAiFor).mockImplementationOnce(async () => {
+      order.push('removeKeptAiFor')
+      return ["Could not remove the kept .ai folder '/k'."]
+    })
+
+    const res = await app.request('/api/workspaces/ws-1', { method: 'DELETE' })
+
+    expect(order).toEqual(['removeWorktree', 'removeKeptAiFor'])
+    expect(keptAiService.removeKeptAiFor).toHaveBeenCalledTimes(1)
+    const body = (await res.json()) as { warnings: string[] }
+    expect(body.warnings).toContain("Could not remove the kept .ai folder '/k'.")
+  })
+
+  it('leaves the leftover and names it after the removal warning when the worktree removal failed', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.removeWorktree).mockRejectedValueOnce(new Error('EACCES'))
+    vi.mocked(keptAiService.computedKeptRootIfExists).mockReturnValueOnce('/base/.kobo-kept/ws-1')
+
+    const res = await app.request('/api/workspaces/ws-1', { method: 'DELETE' })
+
+    expect(keptAiService.removeKeptAiFor).not.toHaveBeenCalled()
+    const { warnings } = (await res.json()) as { warnings: string[] }
+    expect(warnings).toHaveLength(2)
+    expect(warnings[0]).toContain('Failed to remove worktree directory')
+    expect(warnings[1]).toBe(
+      "The kept .ai folder '/base/.kobo-kept/ws-1' was left in place because the worktree could not be removed. Remove it by hand once the worktree is cleaned up.",
+    )
+  })
+
+  it('adds only the removal warning when the worktree removal failed and there is no leftover', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.removeWorktree).mockRejectedValueOnce(new Error('EACCES'))
+
+    const res = await app.request('/api/workspaces/ws-1', { method: 'DELETE' })
+
+    expect(keptAiService.removeKeptAiFor).not.toHaveBeenCalled()
+    const { warnings } = (await res.json()) as { warnings: string[] }
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain('Failed to remove worktree directory')
+  })
+
+  it.each([
+    ['removeWorktree: false', { worktreeOwned: true }, { removeWorktree: false }],
+    ['an externally managed worktree', { worktreeOwned: false }, {}],
+  ])('keeps the leftover and warns about it when the worktree is kept (%s)', async (_label, overrides, body) => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ ...fakeWorkspace, ...overrides })
+    vi.mocked(keptAiService.computedKeptRootIfExists).mockReturnValueOnce('/base/.kobo-kept/ws-1')
+
+    const res = await app.request('/api/workspaces/ws-1', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+
+    expect(keptAiService.removeKeptAiFor).not.toHaveBeenCalled()
+    const json = (await res.json()) as { warnings: string[] }
+    expect(json.warnings).toContain(
+      "The kept .ai folder '/base/.kobo-kept/ws-1' was left in place because the worktree was kept. Move its content by hand or remove it.",
+    )
+  })
+
+  it('adds no warning when the worktree is kept and there is no leftover', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ ...fakeWorkspace, worktreeOwned: false })
+    const res = await app.request('/api/workspaces/ws-1', { method: 'DELETE' })
+    expect(keptAiService.removeKeptAiFor).not.toHaveBeenCalled()
+    expect(res.status).toBe(204)
+  })
+
+  it('returns the kept-folder warnings without failing the deletion', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      worktreePurgedAt: '2026-01-02T00:00:00.000Z',
+    })
+    vi.mocked(keptAiService.removeKeptAiFor).mockResolvedValueOnce(["Could not remove the kept .ai folder '/k'."])
+
+    const res = await app.request('/api/workspaces/ws-1', { method: 'DELETE' })
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { ok: boolean; warnings: string[] }
+    expect(body.warnings).toContain("Could not remove the kept .ai folder '/k'.")
+    expect(workspaceService.deleteWorkspace).toHaveBeenCalledWith('ws-1')
+  })
+
   it('waits for the agent to actually stop before removing the worktree', async () => {
     const callOrder: string[] = []
     let releaseStop: (() => void) | undefined
@@ -3898,6 +4040,20 @@ describe('DELETE /api/workspaces/archived', () => {
     expect(workspaceService.deleteWorkspace).toHaveBeenCalledWith('ws-arch-2')
     expect(gitOps.deleteLocalBranchAsync).toHaveBeenCalledWith('/tmp/project', 'feature/a')
     expect(gitOps.deleteRemoteBranchAsync).toHaveBeenCalledWith('/tmp/project', 'feature/b')
+  })
+
+  it('removes the kept .ai folder of each deleted archived workspace (purged, or non-purged after its worktree)', async () => {
+    const purgedA = { ...archivedA, worktreePurgedAt: '2026-04-06T00:00:00.000Z' }
+    vi.mocked(workspaceService.getWorkspace).mockImplementation(
+      (id) => [purgedA, archivedB].find((workspace) => workspace.id === id) ?? null,
+    )
+    vi.mocked(workspaceService.listArchivedWorkspaces).mockReturnValue([purgedA, archivedB])
+
+    const res = await app.request('/api/workspaces/archived', { method: 'DELETE' })
+
+    expect(res.status).toBe(200)
+    expect(keptAiService.removeKeptAiFor).toHaveBeenCalledWith(purgedA)
+    expect(keptAiService.removeKeptAiFor).toHaveBeenCalledWith(archivedB)
   })
 
   it('does not touch branches when no options are passed', async () => {
@@ -5344,6 +5500,85 @@ describe('POST /api/workspaces/:id/start avec agentSessionId', () => {
       undefined,
       { persistInitialPrompt: false },
     )
+  })
+})
+
+describe('PUT /:id/notification-prefs', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  const prefs = { muteBrowser: true, muteSound: false, muteToast: true, muteDrawer: false, keepQuestions: true }
+  const put = (id: string, body: unknown) =>
+    app.request(`/api/workspaces/${id}/notification-prefs`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+
+  it('saves, answers 200 and broadcasts once after a real change', async () => {
+    vi.mocked(workspaceService.setWorkspaceNotificationPrefs).mockReturnValue({
+      workspace: { ...fakeWorkspace, notificationPrefs: prefs } as any,
+      changed: true,
+    })
+    const res = await put('ws-1', { ...prefs, extra: 'ignored' })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ notificationPrefs: prefs })
+    expect(workspaceService.setWorkspaceNotificationPrefs).toHaveBeenCalledWith('ws-1', prefs)
+    expect(wsService.broadcastAll).toHaveBeenCalledTimes(1)
+    expect(wsService.broadcastAll).toHaveBeenCalledWith('workspace:notification-prefs', {
+      workspaceId: 'ws-1',
+      prefs,
+    })
+  })
+
+  it('does not broadcast for a no-op', async () => {
+    vi.mocked(workspaceService.setWorkspaceNotificationPrefs).mockReturnValue({
+      workspace: { ...fakeWorkspace, notificationPrefs: prefs } as any,
+      changed: false,
+    })
+    expect((await put('ws-1', prefs)).status).toBe(200)
+    expect(wsService.broadcastAll).not.toHaveBeenCalled()
+  })
+
+  it('answers 400 for a missing or non-boolean key', async () => {
+    const { keepQuestions: _omitted, ...missing } = prefs
+    expect((await put('ws-1', missing)).status).toBe(400)
+    expect((await put('ws-1', { ...prefs, muteSound: 'yes' })).status).toBe(400)
+    expect((await put('ws-1', [])).status).toBe(400)
+    expect(workspaceService.setWorkspaceNotificationPrefs).not.toHaveBeenCalled()
+  })
+
+  it('still answers 200 when the broadcast throws after the write', async () => {
+    vi.mocked(workspaceService.setWorkspaceNotificationPrefs).mockReturnValue({
+      workspace: { ...fakeWorkspace, notificationPrefs: prefs } as any,
+      changed: true,
+    })
+    vi.mocked(wsService.broadcastAll).mockImplementationOnce(() => {
+      throw new Error('socket gone')
+    })
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const res = await put('ws-1', prefs)
+    spy.mockRestore()
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ notificationPrefs: prefs })
+  })
+
+  it('answers 400 for an invalid JSON body', async () => {
+    const res = await app.request('/api/workspaces/ws-1/notification-prefs', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{bad',
+    })
+    expect(res.status).toBe(400)
+    expect(workspaceService.setWorkspaceNotificationPrefs).not.toHaveBeenCalled()
+  })
+
+  it('answers 404 for an unknown workspace', async () => {
+    vi.mocked(workspaceService.setWorkspaceNotificationPrefs).mockImplementation(() => {
+      throw new Error("Workspace 'ws-x' not found")
+    })
+    const res = await put('ws-x', prefs)
+    expect(res.status).toBe(404)
+    expect(wsService.broadcastAll).not.toHaveBeenCalled()
   })
 })
 
@@ -9222,6 +9457,31 @@ describe('audit remediation 2026-11: workspace routes', () => {
       const res = await app.request(`/api/workspaces/ws-1/${route}`, { method: 'POST' })
       expect(res.status).toBe(200)
       expect(mutation).toHaveBeenCalled()
+    } finally {
+      reservation.release()
+    }
+  })
+
+  it('keeps notification-prefs reachable while a session transfer is pending, but not another mutation', async () => {
+    const prefs = { muteBrowser: true, muteSound: false, muteToast: false, muteDrawer: false, keepQuestions: false }
+    vi.mocked(workspaceService.setWorkspaceNotificationPrefs).mockReturnValue({
+      workspace: { ...fakeWorkspace, notificationPrefs: prefs } as any,
+      changed: true,
+    })
+    const reservation = reserveWorkspaceLifecycle('ws-1', 'session-handoff')
+    try {
+      const ok = await app.request('/api/workspaces/ws-1/notification-prefs', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(prefs),
+      })
+      expect(ok.status).toBe(200)
+      const blocked = await app.request('/api/workspaces/ws-1/tags', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tags: [] }),
+      })
+      expect(blocked.status).toBe(409)
     } finally {
       reservation.release()
     }

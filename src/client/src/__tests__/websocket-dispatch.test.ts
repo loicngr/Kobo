@@ -343,6 +343,7 @@ describe('websocket dispatch — AgentEvent side-effects to workspace store', ()
       expect.anything(),
       expect.anything(),
       { workspaceId: 'w1', sessionId: 'session-exact' },
+      { question: true },
     )
   })
 

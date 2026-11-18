@@ -1,6 +1,6 @@
 import { Notify } from 'quasar'
 import i18n from 'src/i18n'
-import { NO_SPRINT } from 'src/stores/sprints'
+import { NO_SPRINT, useSprintStore } from 'src/stores/sprints'
 import type { AgentSession, Workspace } from 'src/stores/workspace'
 import { apiFetchResponse } from 'src/utils/api'
 import { getAuthenticationEpoch } from 'src/utils/auth-token'
@@ -104,7 +104,11 @@ export async function resolveWorkspaceRoute(target: WorkspaceTarget, query: Loca
   return { missing: false as const, query: nextQuery, needsRedirect, sessionMissing: resolved.sessionMissing }
 }
 
-/** Resolve membership at navigation time; caller-supplied sprint data is never used. */
+/**
+ * Validate the target at navigation time (existence, session); caller-supplied sprint data is never used.
+ * The route keeps the active sprint tab as an internal navigation, so the workspace may be absent from the
+ * drawer's list: only non-internal navigations resolve the workspace's own sprint.
+ */
 export async function navigateToWorkspaceTarget(
   router: Router,
   target: WorkspaceTarget,
@@ -129,15 +133,20 @@ export async function navigateToWorkspaceTarget(
       ? markNotificationNavigation(resolvedTarget, onAuthenticationRequired)
       : undefined
     let failure: Awaited<ReturnType<Router['push']>>
+    // The shortcut keeps the operator's tab: the workspace's own sprint is deliberately not used here.
+    // Read at push time so a tab change made while the target resolved is respected.
+    const sprint = useSprintStore().active
+    const clearInternal = markInternalSprintTarget(target.workspaceId, sprint)
     try {
       failure = await router.push({
         name: 'workspace',
         state: { koboSprintContext: true },
         params: { id: target.workspaceId },
-        query: { ...query, sprint: resolved.sprintId, ...(resolved.sessionId ? { session: resolved.sessionId } : {}) },
+        query: { ...query, sprint, ...(resolved.sessionId ? { session: resolved.sessionId } : {}) },
       })
     } finally {
       clearMarker?.()
+      clearInternal()
     }
     if (!failure && resolved.sessionMissing)
       Notify.create({ type: 'warning', message: i18n.global.t('sprints.sessionMissing'), position: 'top' })

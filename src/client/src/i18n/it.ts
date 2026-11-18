@@ -12,6 +12,11 @@ export default {
   'bulk.branches': 'Inserisci i rami indicati sopra, uno per riga',
   'bulk.changed': 'Il workspace o i suoi rami sono cambiati. Selezionalo nuovamente.',
   'bulk.result': '{done}/{total} azioni riuscite',
+  'bulk.muteNotifications': 'Silenzia le notifiche',
+  'bulk.restoreNotifications': 'Ripristina le notifiche',
+  'bulk.groupMessageScope': 'Selezione ({count})',
+  'bulk.groupMessageNone':
+    'Nessun workspace selezionato può ricevere un messaggio: i workspace archiviati e i worktree eliminati sono esclusi.',
   'tools.group.session': 'Sessione',
   'tools.group.quality': 'Revisione e qualità',
   'tools.group.project': 'Ambiente del progetto',
@@ -26,6 +31,10 @@ export default {
   'git.ciLogs.step': 'Passaggio',
   'git.ciLogs.error': 'Impossibile caricare i log. Verifica l’accesso del server a GitHub e riprova.',
   'git.ciLogs.truncated': 'Visualizzazione limitata: alcuni log sono omessi.',
+  'ciDuration.seconds': '{s} s',
+  'ciDuration.minutes': '{m} min {s} s',
+  'ciDuration.hours': '{h} h {m} min',
+  'ciDuration.total': 'Totale: {duration}',
   'git.ciLogs.follow': 'Segui i nuovi log',
   'git.ciLogs.all': 'Tutti i passaggi',
   'git.ciLogs.unavailable': 'GitHub non ha ancora fornito log per questa selezione.',
@@ -168,6 +177,8 @@ export default {
     'I destinatari e il messaggio originali sono conservati. La verifica riutilizza la stessa richiesta senza duplicare gli invii accettati.',
   'groupMessage.retry': 'Verifica questo invio',
   'groupMessage.newMessage': 'Nuovo messaggio',
+  'groupMessage.selectionPending':
+    'È ancora visualizzato un messaggio di gruppo precedente. La selezione verrà usata quando sarà terminato o chiuso.',
   'groupMessage.send': 'Invia a {count} workspace',
   'groupMessage.state.pending': 'In attesa',
   'groupMessage.state.sending': 'Invio in corso',
@@ -666,6 +677,7 @@ export default {
   'workspaceList.a11y.groupToggle': 'Gruppo {group}, {count} workspace',
   'workspaceList.a11y.list': 'Workspace',
   'workspaceList.a11y.card': '{name}, {status}',
+  'workspaceList.a11y.actions': 'Azioni dello spazio di lavoro',
   'workspaceList.needsAttention': 'Richiede attenzione',
   'workspaceList.running': 'In esecuzione',
   'workspaceList.idle': 'Inattivo',
@@ -735,8 +747,11 @@ export default {
   'contextMenu.restoreWorktree': 'Ripristina worktree',
   'workspacePage.restoringWorktree': 'Ripristino…',
   'workspacePage.worktreeRestoreSuccess': 'Worktree ripristinato',
+  'workspacePage.keptAiFolder': 'Cartella .ai conservata: {path}',
+  'workspacePage.copyKeptAiPath': 'Copia il percorso',
+  'workspacePage.worktreeRestoreWarning': 'Worktree ripristinato, con un avviso: {message}',
   'workspacePage.worktreeRestoreLimitations':
-    'Ricrea i file Git salvati nei commit. Le dipendenze e i file locali eliminati in precedenza non vengono ripristinati.',
+    'Ricrea i file Git salvati nei commit e rimette al suo posto la cartella .ai se è stata conservata. Le dipendenze e gli altri file locali eliminati in precedenza non vengono ripristinati.',
   'workspacePage.restoreError.not-found': 'Questo workspace non esiste più. Aggiorna l’elenco dei workspace.',
   'workspacePage.restoreError.not-purged':
     'Questo workspace non è contrassegnato come ripulito. Aggiornalo e controlla la sua directory di lavoro.',
@@ -757,7 +772,7 @@ export default {
   'workspacePage.archivedBanner': 'Workspace archiviato — sola lettura',
   'workspacePage.worktreePurgedBanner': 'Worktree eliminato — cronologia conservata',
   'workspacePage.worktreePurgedTooltip':
-    'Ripristina worktree ricrea la directory di lavoro e rimuove questo workspace dall’archivio. Conversazione, attività e sessioni vengono conservate. Non viene avviato alcun agente o server di sviluppo.',
+    'Ripristina worktree ricrea la directory di lavoro e rimuove questo workspace dall’archivio. Conversazione, attività e sessioni vengono conservate. La cartella .ai viene conservata se «Conserva la cartella .ai quando si elimina un worktree» era attivo al momento dell’eliminazione. Non viene avviato alcun agente o server di sviluppo.',
   'workspacePage.pendingInitialPromptBanner':
     "C'è un prompt iniziale in attesa — l'agente non l'ha mai ricevuto (lo script di setup è crashato o il workspace non è mai stato avviato). Clicca Avvia per inviarlo ora.",
   'workspacePage.unarchived': 'Workspace ripristinato',
@@ -1496,7 +1511,7 @@ export default {
   'tours.settings.memory.description':
     'Scegli il comportamento manuale, automatico o ibrido, quindi esplora, controlla o svuota i dati esatti degli ambiti. Le operazioni sulla memoria sono immediate; la modalità si applica salvando le impostazioni.',
   'tours.settings.worktrees.description':
-    'Dove vivono i worktree, per quanto tempo conservare quelli già uniti, e la pulizia automatica.',
+    'Dove vivono i worktree, per quanto tempo conservare quelli già uniti, e la pulizia automatica (la cartella .ai può essere conservata).',
   'tours.settings.projects.title': 'Progetti',
   'tours.settings.projects.description': 'I progetti registrati e le loro impostazioni specifiche per progetto.',
   'tours.settings.misc.title': 'Generale, voce, notifiche, esportazione',
@@ -1613,7 +1628,8 @@ export default {
     'Credenziali Bitbucket. GitHub e GitLab usano la CLI gh/glab autenticata; scegli la forge per progetto.',
   'settings.help.voice': 'Dettatura e push-to-talk.',
   'settings.help.notifications': 'Suoni, notifiche del browser e promemoria delle domande senza risposta.',
-  'settings.help.worktrees': 'Dove vengono creati i worktree, conservazione ed eliminazione automatica.',
+  'settings.help.worktrees':
+    'Dove vengono creati i worktree, conservazione ed eliminazione automatica (la cartella .ai può essere conservata).',
   'settings.help.projects': 'Progetti registrati e le loro impostazioni specifiche per progetto.',
   'settings.help.templates': 'Template di prompt espansi nella casella di input della chat.',
   'settings.help.workspaceTemplates': 'Preset salvati del modulo di creazione.',
@@ -2179,15 +2195,18 @@ export default {
     'Ripristina prima il worktree con Ripristina worktree oppure ricrealo manualmente. Kōbō rileva automaticamente i worktree corrispondenti.',
   'contextMenu.purgeWorktree': 'Libera spazio su disco (elimina worktree)',
   'contextMenu.purgeWorktreeTooltip':
-    'Elimina il worktree dal disco per recuperare spazio — la cronologia di chat e sessioni viene conservata. Archivia automaticamente il workspace.',
+    'Elimina il worktree dal disco per recuperare spazio - la cronologia di chat e sessioni viene conservata, come la cartella .ai se «Conserva la cartella .ai quando si elimina un worktree» è attivo. Archivia automaticamente il workspace.',
   'contextMenu.purgeWorktreeDialogTitle': 'Liberare spazio su disco?',
   'contextMenu.purgeWorktreeDialogMessage':
-    'La cartella worktree di «{name}» verrà eliminata dal disco. La cronologia di chat e sessioni viene conservata. Il workspace verrà archiviato automaticamente. Nella versione attuale non è possibile annullare.',
+    'La cartella worktree di «{name}» verrà eliminata dal disco. La cronologia di chat e sessioni viene conservata, come la cartella .ai (note, immagini, allegati) se «Conserva la cartella .ai quando si elimina un worktree» è attivo. Il workspace verrà archiviato automaticamente. Nella versione attuale non è possibile annullare.',
   'contextMenu.purgeWorktreeDialogConfirm': 'Elimina il worktree',
   'contextMenu.purgeWorktreeSuccess': 'Worktree eliminato — spazio su disco recuperato.',
   'settings.autoPurgeOnPrMerged': 'Elimina worktree al merge della PR',
   'settings.autoPurgeOnPrMergedHint':
-    "Se abilitato, il worktree viene eliminato dal disco non appena la PR viene mergiata (oltre all'archiviazione automatica). La cronologia delle chat viene conservata.",
+    "Se abilitato, il worktree viene eliminato dal disco non appena la PR viene mergiata (oltre all'archiviazione automatica). La cronologia delle chat viene conservata, come la cartella .ai se «Conserva la cartella .ai quando si elimina un worktree» è attivo.",
+  'settings.keepAiFolderOnPurge': 'Conserva la cartella .ai quando si elimina un worktree',
+  'settings.keepAiFolderOnPurgeHint':
+    'Note, handoff, immagini e allegati vengono spostati in una cartella .kobo-kept accanto ai worktree, restano leggibili qui, tornano quando il worktree viene ripristinato e vengono rimossi insieme al workspace. Una pulizia manuale di quella cartella (anche git clean -fdx) li elimina.',
   'settings.forceImmediateMessages': 'Forza l’invio immediato dei messaggi',
   'settings.forceImmediateMessagesHint':
     'Disattivato per impostazione predefinita. Invia nuovi messaggi mentre l’agente lavora, come Ctrl+Invio, senza metterli in coda. In auto-loop, invia subito e sospende il ciclo. I messaggi già in coda restano invariati; i blocchi di compattazione e autorizzazione rimangono attivi.',
@@ -2252,7 +2271,7 @@ export default {
   'settings.purgeDocsRestoreCommands':
     '# GitHub (con CLI gh):\n  gh pr checkout [numero-pr] --recurse-submodules\n\n# Oppure direttamente con git (funziona su GitHub anche dopo eliminazione del branch):\n  git fetch origin pull/[numero-pr]/head:[nome-branch]\n  git worktree add [percorso] [nome-branch]',
   'settings.purgeDocsRestoreFootnote':
-    "GitHub mantiene il ref HEAD della PR accessibile a lungo dopo l'eliminazione del branch sorgente (mesi / anni). Il rilevamento automatico gira nel watcher 30 s — nessuna azione UI necessaria una volta che la cartella riappare.",
+    "GitHub mantiene il ref HEAD della PR accessibile a lungo dopo l'eliminazione del branch sorgente (mesi / anni). Il rilevamento automatico gira nel watcher 30 s - nessuna azione UI necessaria una volta che la cartella riappare. Se la sua cartella .ai è stata conservata, viene prima rimessa nel worktree ricreato (un file già estratto da Git resta com'è).",
   'settings.purgeDocsPermissionsTitle': 'Evitare errori di permessi durante la pulizia',
   'settings.purgeDocsPermissionsIntro':
     'Docker spesso lascia file root-owned in node_modules / vendor dentro il worktree. Quando Kōbō prova a rimuoverli, ricevi EACCES / EPERM e la pulizia fallisce. Due modi per prevenirlo:',
@@ -2654,6 +2673,25 @@ export default {
   // Workspace list drawer indicators
   'workspaceList.prOpen': '#{n} — Pull request aperta',
   'workspaceList.prWatchDisabledIndicator': 'Controlli PR ignorati per questo workspace',
+  'workspaceNotifications.indicator.label': 'Notifiche silenziate per questo workspace',
+  'workspaceNotifications.indicator.browser': 'Notifiche del browser',
+  'workspaceNotifications.indicator.sound': 'Suoni',
+  'workspaceNotifications.indicator.toast': 'Toast',
+  'workspaceNotifications.indicator.drawer': 'Segnali del pannello laterale',
+  'workspaceNotifications.title': 'Notifiche: {name}',
+  'workspaceNotifications.menu': 'Notifiche...',
+  'workspaceNotifications.intro':
+    'Scegli quali segnali può produrre questo workspace. Le modifiche si applicano subito.',
+  'workspaceNotifications.muteHeading': 'Silenzia per questo workspace',
+  'workspaceNotifications.drawerHint':
+    'Questo workspace non comparirà più nel gruppo di attenzione. La Dashboard mostra comunque il suo stato reale.',
+  'workspaceNotifications.keepQuestions': 'Mantieni domande udibili e visibili',
+  'workspaceNotifications.keepQuestionsHint':
+    "L'eccezione riguarda solo il suono e il messaggio a schermo, mai la notifica del browser né i segnali del pannello laterale.",
+  'workspaceNotifications.keepQuestionsDisabled': 'Disponibile quando suoni o toast sono silenziati.',
+  'workspaceNotifications.muteAll': 'Silenzia tutto',
+  'workspaceNotifications.restoreAll': 'Ripristina tutto',
+  'workspaceNotifications.error': 'Impossibile salvare la modifica. Riprova.',
   'workspaceList.prChangesRequested': '#{n} — Modifiche richieste',
   'workspaceList.attentionCiFailed': 'CI fallita',
   'workspaceList.attentionChangesRequested': 'Modifiche richieste',

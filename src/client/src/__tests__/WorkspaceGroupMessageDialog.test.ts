@@ -139,3 +139,169 @@ it('sends only checked recipients and displays individual outcomes', async () =>
   expect(wrapper.findAll('[data-result]')).toHaveLength(2)
   wrapper.unmount()
 })
+
+it('shows a selection scope label and ticks every recipient again when the reset key changes', async () => {
+  const wrapper = setup()
+  await wrapper.setProps({ scope: 'Selection (3)' })
+  expect(wrapper.text()).toContain('Selection (3)')
+  await wrapper.get('[data-recipient="one"] input').setValue(false)
+  await wrapper.get('[data-test="tags"]').setValue(['ui'])
+  expect(wrapper.findAll('[data-recipient]')).toHaveLength(1)
+  await wrapper.setProps({ resetKey: 1 })
+  expect(wrapper.findAll('[data-recipient]')).toHaveLength(3)
+  expect(wrapper.findAll('[data-recipient] input').every((input) => (input.element as HTMLInputElement).checked)).toBe(
+    true,
+  )
+  wrapper.unmount()
+})
+it('does not show the scope label over a recovered request receipt', async () => {
+  sessionStorage.setItem(
+    'kobo:group-message-request',
+    JSON.stringify({ requestId: 'r-1', workspaceIds: ['one'], content: 'hello' }),
+  )
+  vi.mocked(apiFetch).mockResolvedValue({ id: 'r-1', createdAt: '', complete: true, recipients: [] })
+  const wrapper = setup()
+  await wrapper.setProps({ scope: 'Selection (3)' })
+  await flushPromises()
+  expect(wrapper.find('[data-recipient]').exists()).toBe(false)
+  expect(wrapper.text()).not.toContain('Selection (3)')
+  expect(apiFetch).not.toHaveBeenCalledWith('/api/workspace-messages', expect.objectContaining({ method: 'POST' }))
+  wrapper.unmount()
+})
+
+const STORED = JSON.stringify({ requestId: 'r-1', workspaceIds: ['one'], content: 'hello' })
+const caption = en['groupMessage.selectionPending']
+it('explains that a stored completed receipt hides the selection, then shows the selection once dismissed', async () => {
+  sessionStorage.setItem('kobo:group-message-request', STORED)
+  vi.mocked(apiFetch).mockResolvedValue({ id: 'r-1', createdAt: '', complete: true, recipients: [] })
+  const wrapper = setup()
+  await wrapper.setProps({ scope: 'Selection (3)', fromSelection: true })
+  await flushPromises()
+  expect(wrapper.text()).toContain(caption)
+  expect(wrapper.find('[data-recipient]').exists()).toBe(false)
+  expect(wrapper.find('textarea').exists()).toBe(false)
+  const dismiss = wrapper.findAll('button').find((b) => b.text() === en['groupMessage.newMessage'])!
+  await dismiss.trigger('click')
+  await flushPromises()
+  expect(wrapper.text()).not.toContain(caption)
+  expect(wrapper.text()).toContain('Selection (3)')
+  expect(wrapper.findAll('[data-recipient]')).toHaveLength(3)
+  expect(wrapper.findAll('[data-recipient] input').every((i) => (i.element as HTMLInputElement).checked)).toBe(true)
+  wrapper.unmount()
+})
+it('keeps an unfinished stored request untouched when opened from a selection', async () => {
+  sessionStorage.setItem('kobo:group-message-request', STORED)
+  vi.mocked(apiFetch).mockResolvedValue({ id: 'r-1', createdAt: '', complete: false, recipients: [] })
+  const wrapper = setup()
+  await wrapper.setProps({ scope: 'Selection (3)', fromSelection: true })
+  await flushPromises()
+  expect(wrapper.text()).toContain(caption)
+  expect(wrapper.find('[data-recipient]').exists()).toBe(false)
+  expect(wrapper.findAll('button').some((b) => b.text() === en['groupMessage.newMessage'])).toBe(false)
+  expect(sessionStorage.getItem('kobo:group-message-request')).toBe(STORED)
+  expect(apiFetch).not.toHaveBeenCalledWith('/api/workspace-messages', expect.objectContaining({ method: 'POST' }))
+  wrapper.unmount()
+})
+it('shows no caption over a stored receipt for a megaphone opening', async () => {
+  sessionStorage.setItem('kobo:group-message-request', STORED)
+  vi.mocked(apiFetch).mockResolvedValue({ id: 'r-1', createdAt: '', complete: true, recipients: [] })
+  const wrapper = setup()
+  await flushPromises()
+  expect(wrapper.text()).not.toContain(caption)
+  wrapper.unmount()
+})
+it('keeps the typed draft when the reset key changes', async () => {
+  const wrapper = setup()
+  await wrapper.get('textarea').setValue('my draft')
+  await wrapper.setProps({ resetKey: 1, fromSelection: true })
+  expect((wrapper.get('textarea').element as HTMLTextAreaElement).value).toBe('my draft')
+  wrapper.unmount()
+})
+it('retains ticks and filters across openings that do not bump the reset key', async () => {
+  const wrapper = setup()
+  await wrapper.get('[data-recipient="one"] input').setValue(false)
+  await wrapper.get('[data-test="tags"]').setValue(['api'])
+  await wrapper.setProps({ modelValue: false })
+  await wrapper.setProps({ modelValue: true, workspaces: [...workspaces], scope: 'All' })
+  expect(wrapper.findAll('[data-recipient]').map((r) => r.attributes('data-recipient'))).toEqual(['one', 'three'])
+  expect((wrapper.get('[data-recipient="one"] input').element as HTMLInputElement).checked).toBe(false)
+  wrapper.unmount()
+})
+
+function receiptOf(ids: string[]) {
+  return async (_url: string, options?: { body?: unknown }) => {
+    const body = (options?.body ?? { requestId: 'r-1' }) as { requestId: string }
+    return {
+      id: body.requestId,
+      createdAt: '',
+      complete: true,
+      recipients: ids.map((workspaceId) => ({
+        workspaceId,
+        name: workspaceId,
+        delivery: 'immediate',
+        state: 'queued',
+      })),
+    }
+  }
+}
+async function sendFrom(wrapper: ReturnType<typeof setup>) {
+  await wrapper.get('textarea').setValue('go')
+  await wrapper.get('[data-test="send"]').trigger('click')
+  await flushPromises()
+}
+it('shows no caption on the receipt of a message sent from a selection without any stored request', async () => {
+  vi.mocked(apiFetch).mockImplementation(receiptOf(['one', 'two', 'three']) as never)
+  const wrapper = setup()
+  await wrapper.setProps({ scope: 'Selection (3)', fromSelection: true, resetKey: 1 })
+  expect(wrapper.text()).not.toContain(caption)
+  await sendFrom(wrapper)
+  expect(wrapper.find('[data-result]').exists()).toBe(true)
+  expect(wrapper.text()).not.toContain(caption)
+  wrapper.unmount()
+})
+it('shows the caption only on the receipt that was pending at opening, not after dismissing and sending', async () => {
+  sessionStorage.setItem('kobo:group-message-request', STORED)
+  vi.mocked(apiFetch).mockImplementation(receiptOf(['one']) as never)
+  const wrapper = setup()
+  await wrapper.setProps({ scope: 'Selection (3)', fromSelection: true })
+  await flushPromises()
+  expect(wrapper.text()).toContain(caption)
+  await wrapper
+    .findAll('button')
+    .find((b) => b.text() === en['groupMessage.newMessage'])!
+    .trigger('click')
+  await flushPromises()
+  expect(wrapper.text()).not.toContain(caption)
+  await sendFrom(wrapper)
+  expect(wrapper.find('[data-result]').exists()).toBe(true)
+  expect(wrapper.text()).not.toContain(caption)
+  wrapper.unmount()
+})
+it('follows the source of each opening when a stored request is left undismissed', async () => {
+  sessionStorage.setItem('kobo:group-message-request', STORED)
+  vi.mocked(apiFetch).mockImplementation(receiptOf(['one']) as never)
+  const wrapper = setup()
+  await wrapper.setProps({ scope: 'Selection (3)', fromSelection: true, resetKey: 1 })
+  await flushPromises()
+  expect(wrapper.text()).toContain(caption)
+  await wrapper.setProps({ modelValue: false })
+  await wrapper.setProps({ modelValue: true, fromSelection: false, scope: 'All' })
+  await flushPromises()
+  expect(wrapper.text()).not.toContain(caption)
+  await wrapper.setProps({ modelValue: false })
+  await wrapper.setProps({ modelValue: true, fromSelection: true, scope: 'Selection (3)', resetKey: 2 })
+  await flushPromises()
+  expect(wrapper.text()).toContain(caption)
+  wrapper.unmount()
+})
+it('evaluates the caption from the request restored at mount', async () => {
+  sessionStorage.setItem('kobo:group-message-request', STORED)
+  vi.mocked(apiFetch).mockImplementation(receiptOf(['one']) as never)
+  const fromSelection = mount(WorkspaceGroupMessageDialog, {
+    props: { modelValue: true, workspaces, scope: 'Selection (3)', fromSelection: true },
+    global: { stubs, plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })] },
+  })
+  await flushPromises()
+  expect(fromSelection.text()).toContain(caption)
+  fromSelection.unmount()
+})

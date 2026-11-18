@@ -47,6 +47,10 @@ import { bodyLimit } from 'hono/body-limit'
 import { MAX_ATTACHMENT_REQUEST_BYTES } from '../../shared/attachments.js'
 import { AUTO_LOOP_HARD_RULES, buildAutoLoopGroomingSteps, buildGroomingIntro } from '../../shared/auto-loop-prompts.js'
 import { parseQuestionSelections } from '../../shared/question-selections.js'
+import {
+  DEFAULT_WORKSPACE_NOTIFICATION_PREFS,
+  type WorkspaceNotificationPrefs,
+} from '../../shared/workspace-notifications.js'
 import { getDb } from '../db/index.js'
 import { migrationGuard } from '../middleware/migration-guard.js'
 import { workspaceCreationMaintenance } from '../middleware/workspace-creation-maintenance.js'
@@ -80,6 +84,7 @@ import {
   renderNotionInitialPrompt,
   renderSentryInitialPrompt,
 } from '../services/initial-prompt-template-service.js'
+import { computedKeptRootIfExists, removeKeptAiFor } from '../services/kept-ai-service.js'
 import * as notionService from '../services/notion-service.js'
 import { renderPrTemplate } from '../services/pr-template-service.js'
 import {
@@ -147,6 +152,8 @@ app.use('/:id/*', async (c, next) => {
       'stop',
       'mark-read',
       'chat-history',
+      // A display preference, harmless during a transfer.
+      'notification-prefs',
       'deferred-tool-use/answer',
       'deferred-tool-use/cancel',
       'deferred-permission/decision',
@@ -667,7 +674,8 @@ app.post('/', workspaceCreationMaintenance, migrationGuard, creationBodyLimit, a
   // creation that broke on a step with no handler of its own. Only `name` ever
   // changes afterwards (Notion / Sentry title), and the rollback uses it for
   // log text alone — every field it acts on is fixed at creation time.
-  let createdWorkspace: WorkspaceRow | null = null
+  // Assigned inside the repository-lock callback, which TypeScript's flow analysis does not follow.
+  let createdWorkspace = null as WorkspaceRow | null
   // Set only once WE created the worktree, which is also what created the
   // branch. A failure before that point must not delete a branch we never made.
   let createdBranch = false
@@ -1330,49 +1338,9 @@ app.post('/', workspaceCreationMaintenance, migrationGuard, creationBodyLimit, a
 
     currentStep = 'write-conventions'
     emitCreateProgress(creationId, currentStep)
-    // Ensure Kobo-generated files are gitignored. Check both the root
-    // .gitignore and .ai/.gitignore to avoid duplicate entries.
-    try {
-      const rootGitignorePath = path.join(worktreePath, '.gitignore')
-      const aiGitignorePath = path.join(worktreePath, '.ai', '.gitignore')
-
-      const rootContent = fs.existsSync(rootGitignorePath) ? fs.readFileSync(rootGitignorePath, 'utf-8') : ''
-      const rootLines = rootContent.split('\n').map((l: string) => l.trim())
-      const aiContent = fs.existsSync(aiGitignorePath) ? fs.readFileSync(aiGitignorePath, 'utf-8') : ''
-      const aiLines = aiContent.split('\n').map((l: string) => l.trim())
-
-      // Each entry: [pattern for root .gitignore, equivalent pattern in .ai/.gitignore]
-      const entries: [string, string][] = [
-        ['.ai/.git-conventions.md', '.git-conventions.md'],
-        ['.ai/thoughts/', 'thoughts/'],
-        ['.ai/images/', 'images/'],
-        ['.ai/attachments/', 'attachments/'],
-        ['.ai/.setup-script.tmp', '.setup-script.tmp'],
-        ['.ai/.cleanup-script.tmp', '.cleanup-script.tmp'],
-        ['.ai/.archive-script.tmp', '.archive-script.tmp'],
-        // A crash mid-hook leaves the temp script behind; the next agent
-        // would otherwise happily commit it.
-        ['.ai/.hook-*.tmp', '.hook-*.tmp'],
-        ['.mcp.json', ''],
-      ]
-
-      const toAdd: string[] = []
-      for (const [rootPattern, aiPattern] of entries) {
-        const inRoot = rootLines.includes(rootPattern)
-        const inAi = aiPattern && aiLines.includes(aiPattern)
-        if (!inRoot && !inAi) toAdd.push(rootPattern)
-      }
-
-      if (toAdd.length > 0) {
-        const separator = rootContent.length > 0 && !rootContent.endsWith('\n') ? '\n' : ''
-        fs.appendFileSync(rootGitignorePath, `${separator}${toAdd.join('\n')}\n`, 'utf-8')
-      }
-    } catch (err) {
-      logError('workspaces', 'Failed to update .gitignore', {
-        workspaceId: workspace.id,
-        error: err instanceof Error ? err.message : String(err),
-      })
-    }
+    // Kobo-generated files are excluded through the repository's local exclude file,
+    // never through the project's tracked .gitignore. Never rejects.
+    await worktreeService.ensureKoboGitExcludes(worktreePath)
 
     // Write git conventions to the worktree if configured
     const effectiveSettings = settingsService.getEffectiveSettings(body.projectPath)
@@ -3268,6 +3236,41 @@ app.delete('/:id/favorite', (c) => {
   }
 })
 
+// PUT /api/workspaces/:id/notification-prefs - replace the workspace's notification muting.
+// Body: exactly the five booleans (unknown keys ignored). Broadcast only when the stored value changed.
+app.put('/:id/notification-prefs', async (c) => {
+  const { id } = c.req.param()
+  try {
+    const body = await c.req.json<unknown>().catch(() => null)
+    const record =
+      typeof body === 'object' && body !== null && !Array.isArray(body) ? (body as Record<string, unknown>) : {}
+    const prefs = {} as Record<string, boolean>
+    for (const key of Object.keys(DEFAULT_WORKSPACE_NOTIFICATION_PREFS)) {
+      if (typeof record[key] !== 'boolean') {
+        return c.json({ error: `${key} must be a boolean` }, 400)
+      }
+      prefs[key] = record[key]
+    }
+    const { workspace, changed } = workspaceService.setWorkspaceNotificationPrefs(
+      id,
+      prefs as unknown as WorkspaceNotificationPrefs,
+    )
+    if (changed) {
+      // The value is stored: a failed notification must not turn the save into an error.
+      try {
+        wsService.broadcastAll('workspace:notification-prefs', { workspaceId: id, prefs: workspace.notificationPrefs })
+      } catch (err) {
+        console.error(`[workspaces] notification-prefs broadcast failed for '${id}':`, err)
+      }
+    }
+    return c.json({ notificationPrefs: workspace.notificationPrefs })
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Unknown error'
+    const status = msg.includes('not found') ? 404 : 500
+    return c.json({ error: msg }, status)
+  }
+})
+
 // POST /api/workspaces/:id/pr-watch-disabled — skip PR-watcher forge polling for this workspace
 app.post('/:id/pr-watch-disabled', (c) => {
   const { id } = c.req.param()
@@ -3905,9 +3908,13 @@ async function deleteWorkspaceWithSideEffectsUnlocked(
   const worktreePath = workspace.worktreePath
   if (workspace.worktreePurgedAt) {
     console.log(`[workspaces] skipping worktree removal on delete (already purged): ${worktreePath}`)
+    // The kept copy of `.ai` goes with the purged workspace.
+    warnings.push(...(await removeKeptAiFor(workspace)))
   } else if (workspace.worktreeOwned && opts.removeWorktree !== false) {
     try {
       await worktreeService.removeWorktree(workspace.projectPath, worktreePath)
+      // A leftover kept folder goes only once the worktree really went.
+      warnings.push(...(await removeKeptAiFor(workspace)))
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       console.error(`[workspaces] Failed to remove worktree: ${message}`)
@@ -3918,9 +3925,21 @@ async function deleteWorkspaceWithSideEffectsUnlocked(
           `  cd '${workspace.projectPath}' && git worktree prune\n` +
           `Reason: ${message}`,
       )
+      const leftover = computedKeptRootIfExists(workspace)
+      if (leftover) {
+        warnings.push(
+          `The kept .ai folder '${leftover}' was left in place because the worktree could not be removed. Remove it by hand once the worktree is cleaned up.`,
+        )
+      }
     }
   } else {
     console.log(`[workspaces] keeping reused worktree on delete: ${worktreePath}`)
+    const leftover = computedKeptRootIfExists(workspace)
+    if (leftover) {
+      warnings.push(
+        `The kept .ai folder '${leftover}' was left in place because the worktree was kept. Move its content by hand or remove it.`,
+      )
+    }
   }
 
   // Delete local branch if requested

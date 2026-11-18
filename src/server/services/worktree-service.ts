@@ -5,6 +5,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { runBoundedProcess } from '../utils/bounded-process.js'
 import { isGitBranchExistsError } from '../utils/git-ops.js'
 import { withGitRepoLock } from '../utils/git-repo-lock.js'
+import { logWarn } from '../utils/logger.js'
 import { resolveWorkspaceWorktreePath, resolveWorktreesRoot } from '../utils/worktree-paths.js'
 
 /** Parsed information about a single git worktree. */
@@ -150,6 +151,90 @@ async function addToExclude(
   if (!current.split('\n').includes(entry)) {
     const newContent = current.endsWith('\n') || current === '' ? `${current}${entry}\n` : `${current}\n${entry}\n`
     await fs.writeFile(excludeFile, newContent, 'utf-8')
+  }
+}
+
+/** Adds `absolutePath` to `<common git dir>/info/exclude` when it is inside the project; no-op otherwise. */
+export async function excludeFromProjectGit(projectPath: string, absolutePath: string): Promise<void> {
+  // Same lock as every other writer of info/exclude, so concurrent purges cannot lose a line.
+  await withGitRepoLock(projectPath, async () => {
+    await addToExclude(projectPath, absolutePath, path.join(await commonGitDirectory(projectPath), 'info', 'exclude'))
+  })
+}
+
+/** Patterns of the files Kōbō creates in a checkout and that must never be committed. */
+export const KOBO_GIT_EXCLUDE_PATTERNS: readonly string[] = [
+  '.ai/.git-conventions.md',
+  '.ai/thoughts/',
+  '.ai/images/',
+  '.ai/attachments/',
+  '.ai/.setup-script.tmp',
+  '.ai/.cleanup-script.tmp',
+  '.ai/.archive-script.tmp',
+  '.ai/.hook-*.tmp',
+  '.ai/.script-*/',
+  '.mcp.json',
+]
+
+// Repositories whose exclude file this process already completed, and the common dir of each cwd seen.
+// A cache hit still re-reads the small exclude file (no lock, no git), so a repository re-created at
+// the same path, or lines removed by hand, are written again on the next call.
+const excludesDone = new Set<string>()
+const commonDirByCwd = new Map<string, string>()
+
+async function excludeFileIsComplete(commonDir: string): Promise<boolean> {
+  try {
+    const present = new Set(
+      (await fs.readFile(path.join(commonDir, 'info', 'exclude'), 'utf-8')).split('\n').map((l) => l.trim()),
+    )
+    return KOBO_GIT_EXCLUDE_PATTERNS.every((pattern) => present.has(pattern))
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Ensures every Kōbō pattern is in `<common git dir>/info/exclude` of the repository containing `cwd`
+ * (a project or a worktree path), so the project's tracked `.gitignore` is never touched.
+ * Never rejects: failures are logged and retried on the next call. Takes the repository lock only when
+ * the exclude file lacks a pattern: callers must not already hold it.
+ */
+export async function ensureKoboGitExcludes(cwd: string): Promise<void> {
+  try {
+    let known = commonDirByCwd.get(cwd)
+    if (known && excludesDone.has(known)) {
+      if (await excludeFileIsComplete(known)) return
+      excludesDone.delete(known)
+      commonDirByCwd.delete(cwd)
+      known = undefined
+    }
+    const commonDir = known ?? (await commonGitDirectory(cwd))
+    if (excludesDone.has(commonDir) && (await excludeFileIsComplete(commonDir))) {
+      commonDirByCwd.set(cwd, commonDir)
+      return
+    }
+    await withGitRepoLock(cwd, async () => {
+      const excludeFile = path.join(commonDir, 'info', 'exclude')
+      let current = ''
+      try {
+        current = await fs.readFile(excludeFile, 'utf-8')
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+      }
+      const present = new Set(current.split('\n').map((line) => line.trim()))
+      const missing = KOBO_GIT_EXCLUDE_PATTERNS.filter((pattern) => !present.has(pattern))
+      if (missing.length > 0) {
+        await fs.mkdir(path.dirname(excludeFile), { recursive: true })
+        const separator = current === '' || current.endsWith('\n') ? '' : '\n'
+        await fs.writeFile(excludeFile, `${current}${separator}${missing.join('\n')}\n`, 'utf-8')
+      }
+    })
+    excludesDone.add(commonDir)
+    commonDirByCwd.set(cwd, commonDir)
+  } catch (err) {
+    logWarn('worktree', 'Could not update the local git exclude file', {
+      error: err instanceof Error ? err.message : String(err),
+    })
   }
 }
 

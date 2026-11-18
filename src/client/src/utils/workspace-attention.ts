@@ -1,4 +1,5 @@
 import type { PrSnapshot, Workspace } from 'src/stores/workspace'
+import { showsDrawerSignals } from '../../../shared/workspace-notifications'
 import { isChangesRequestedBlocking, isCiFailed, isMergeabilityPending } from './pr-status'
 import { isBusyStatus } from './workspace-status'
 
@@ -60,6 +61,17 @@ export function getAttentionReasons(
     reasons.push({ kind: 'ready-to-merge', icon: 'check_circle', color: 'green-5' })
   }
   return reasons
+}
+
+/** Drawer-only view of `getAttentionReasons`: a drawer-muted workspace shows none. The Dashboard keeps the true state. */
+export function getDrawerAttentionReasons(
+  workspace: Workspace,
+  snapshot: PrSnapshot | undefined,
+  quotaBackoffReason?: 'quota' | 'transient',
+): AttentionReason[] {
+  return showsDrawerSignals(workspace.notificationPrefs)
+    ? getAttentionReasons(workspace, snapshot, quotaBackoffReason)
+    : []
 }
 
 /** True when the user dismissed this attention reason and the PR has had

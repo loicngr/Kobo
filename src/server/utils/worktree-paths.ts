@@ -166,3 +166,31 @@ export function resolveSiblingWorkspaceWorktreePath(
     : resolveWorktreesRoot(projectPath)
   return flavor.join(root, ...slugSegment, ...branchPathSegments(nextBranch))
 }
+
+/**
+ * Folder that receives `.kobo-kept` for this worktree: the worktrees root when
+ * the worktree sits inside it, else the folder above the branch segments of the
+ * recorded path, else the worktree's parent folder.
+ */
+export function resolveKeptAiBase(
+  projectPath: string,
+  worktreePath: string,
+  workingBranch: string,
+  configuredPath?: string | null,
+): string {
+  const root = resolveWorktreesRoot(projectPath, configuredPath)
+  const flavor = pathFlavor(projectPath, worktreePath, root)
+  const worktree = flavor.normalize(worktreePath)
+  const relative = flavor.relative(root, worktree)
+  if (relative && relative !== '..' && !relative.startsWith(`..${flavor.sep}`) && !flavor.isAbsolute(relative)) {
+    return root
+  }
+  const suffix = `${flavor.sep}${flavor.join(...branchPathSegments(workingBranch))}`
+  const comparable = flavor === path.win32 ? worktree.toLowerCase() : worktree
+  const comparableSuffix = flavor === path.win32 ? suffix.toLowerCase() : suffix
+  if (suffix.length > 1 && comparable.endsWith(comparableSuffix)) {
+    const stripped = worktree.slice(0, -suffix.length)
+    if (stripped && flavor.isAbsolute(stripped)) return stripped
+  }
+  return flavor.dirname(worktree)
+}

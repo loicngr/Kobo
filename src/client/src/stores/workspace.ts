@@ -12,12 +12,19 @@ import {
   apiResponseError,
 } from 'src/utils/api'
 import { isAbortError } from 'src/utils/latest-request'
+import { effectScope, watch } from 'vue'
 import type { AutoLoopFinalReviewStatus, AutoLoopReviewConfiguration } from '../../../shared/auto-loop-review'
 import type { AutoLoopRuntime, QueuedAutoLoopMessage } from '../../../shared/auto-loop-types'
 import type { MergeMethod } from '../../../shared/forge-merge'
 import type { SlackQuestionMirror } from '../../../shared/slack-question-mirror'
 import { isSubagentTask } from '../../../shared/subagent-classification'
 import type { WorkflowPolicy } from '../../../shared/workflow-policy'
+import {
+  DEFAULT_WORKSPACE_NOTIFICATION_PREFS,
+  normalizeWorkspaceNotificationPrefs,
+  showsDrawerSignals,
+  type WorkspaceNotificationPrefs,
+} from '../../../shared/workspace-notifications'
 import type { ProviderId, UsageSnapshot } from '../types/usage'
 import { getCurrentSession } from '../utils/current-session'
 import { hasPrAttention, isMergeabilityPending } from '../utils/pr-status'
@@ -33,6 +40,8 @@ export interface Workspace {
   name: string
   sprintId: string | null
   slackChannelId: string | null
+  /** Absent on older payloads: treated as nothing muted. */
+  notificationPrefs?: WorkspaceNotificationPrefs
   /** Absent on payloads older than the setting: treated as 'never'. */
   slackQuestionMirror?: SlackQuestionMirror
   projectPath: string
@@ -366,6 +375,9 @@ export interface PrCiCheck {
   conclusion: string | null
   status: string
   detailsUrl: string | null
+  /** ISO dates from the forge; absent when the server predates them. */
+  startedAt?: string | null
+  completedAt?: string | null
 }
 
 export interface PrSnapshot {
@@ -427,6 +439,23 @@ let _workspacesInfoRequestToken = 0
 let _prSnapshotsRequestToken = 0
 const _workspaceEventVersions = new Map<string, number>()
 const _prSnapshotVersions = new Map<string, number>()
+// Pending notification-prefs saves per workspace: bookkeeping for overlapping calls.
+interface PrefsSave {
+  /** Last value the server is known to hold. */
+  confirmed: WorkspaceNotificationPrefs | undefined
+  /** Latest value asked for. */
+  wanted: WorkspaceNotificationPrefs
+  /** Outcome shared by every caller of the run. */
+  done: Promise<void>
+}
+const _prefsSaves = new Map<string, PrefsSave>()
+// Per store: the ids it has a pending save for, and its single state subscription (alive only while non-empty).
+const _prefsGuards = new WeakMap<object, { ids: Set<string>; stop: () => void }>()
+function sameNotificationPrefs(a: WorkspaceNotificationPrefs, b: WorkspaceNotificationPrefs): boolean {
+  return (Object.keys(DEFAULT_WORKSPACE_NOTIFICATION_PREFS) as (keyof WorkspaceNotificationPrefs)[]).every(
+    (key) => a[key] === b[key],
+  )
+}
 const _sessionsRequestVersions = new Map<string, number>()
 const _sessionReads = new WeakMap<object, Map<string, AbortController>>()
 function sessionReads(store: object): Map<string, AbortController> {
@@ -439,7 +468,7 @@ function sessionReads(store: object): Map<string, AbortController> {
 }
 const _workspaceDetailsRequestVersions = new Map<string, number>()
 const _pendingInputVersions = new Map<string, number>()
-const _worktreeRestorations = new WeakMap<object, Map<string, Promise<Workspace>>>()
+const _worktreeRestorations = new WeakMap<object, Map<string, Promise<{ warnings: string[] }>>>()
 
 function markPrSnapshotChanged(workspaceId: string): void {
   _prSnapshotVersions.set(workspaceId, (_prSnapshotVersions.get(workspaceId) ?? 0) + 1)
@@ -558,32 +587,45 @@ export const useWorkspaceStore = defineStore('workspace', {
   }),
 
   getters: {
+    notificationPrefsOf:
+      (state) =>
+      (id: string): WorkspaceNotificationPrefs | undefined =>
+        (state.workspaces.find((w) => w.id === id) ?? state.archivedWorkspaces.find((w) => w.id === id))
+          ?.notificationPrefs,
+
     selectedWorkspace: (state) =>
       state.workspaces.find((w) => w.id === state.selectedWorkspaceId) ??
       state.archivedWorkspaces.find((w) => w.id === state.selectedWorkspaceId) ??
       null,
 
+    // A drawer-muted workspace is grouped by activity alone (running / idle), never as needing attention.
     needsAttention(state): Workspace[] {
       return state.workspaces.filter(
         (w) =>
-          ['error', 'quota', 'awaiting-user'].includes(w.status) ||
-          hasPrAttention(state.prSnapshots[w.id]) ||
-          (!isBusyStatus(w.status) &&
-            (!!state.prSnapshots[w.id]?.readyToMerge || isMergeabilityPending(state.prSnapshots[w.id]))),
+          showsDrawerSignals(w.notificationPrefs) &&
+          (['error', 'quota', 'awaiting-user'].includes(w.status) ||
+            hasPrAttention(state.prSnapshots[w.id]) ||
+            (!isBusyStatus(w.status) &&
+              (!!state.prSnapshots[w.id]?.readyToMerge || isMergeabilityPending(state.prSnapshots[w.id])))),
       )
     },
 
     running(state): Workspace[] {
-      return state.workspaces.filter((w) => isBusyStatus(w.status) && !hasPrAttention(state.prSnapshots[w.id]))
+      return state.workspaces.filter(
+        (w) =>
+          isBusyStatus(w.status) &&
+          (!showsDrawerSignals(w.notificationPrefs) || !hasPrAttention(state.prSnapshots[w.id])),
+      )
     },
 
     idle(state): Workspace[] {
-      return state.workspaces.filter(
-        (w) =>
-          ['completed', 'idle', 'created'].includes(w.status) &&
-          !hasPrAttention(state.prSnapshots[w.id]) &&
-          !state.prSnapshots[w.id]?.readyToMerge &&
-          !isMergeabilityPending(state.prSnapshots[w.id]),
+      return state.workspaces.filter((w) =>
+        !showsDrawerSignals(w.notificationPrefs)
+          ? !isBusyStatus(w.status)
+          : ['completed', 'idle', 'created'].includes(w.status) &&
+            !hasPrAttention(state.prSnapshots[w.id]) &&
+            !state.prSnapshots[w.id]?.readyToMerge &&
+            !isMergeabilityPending(state.prSnapshots[w.id]),
       )
     },
 
@@ -696,6 +738,136 @@ export const useWorkspaceStore = defineStore('workspace', {
 
     clearCreationProgress() {
       this.creationProgress = null
+    },
+
+    _writeNotificationPrefs(id: string, value: WorkspaceNotificationPrefs | undefined) {
+      this.updateWorkspaceFromEvent(id, { notificationPrefs: value })
+      this.archivedWorkspaces = this.archivedWorkspaces.map((w) =>
+        w.id === id ? { ...w, notificationPrefs: value } : w,
+      )
+    },
+
+    /** Event from the server: while a save is pending it only refreshes the confirmed value. */
+    applyNotificationPrefsEvent(id: string, prefs: WorkspaceNotificationPrefs) {
+      const save = _prefsSaves.get(id)
+      if (save) save.confirmed = prefs
+      else this._writeNotificationPrefs(id, prefs)
+    },
+
+    /**
+     * Optimistic, and serialised per workspace: never two PUTs in flight for one workspace, so replies
+     * cannot arrive out of order. Calls made meanwhile coalesce into the latest wanted value and share
+     * one outcome (resolved if the final value was saved, rejected if the final request failed).
+     */
+    setNotificationPrefs(id: string, prefs: WorkspaceNotificationPrefs): Promise<void> {
+      const existing = _prefsSaves.get(id)
+      // Clone: every call gets a distinct `wanted` (the runner compares references) and the caller cannot mutate it.
+      prefs = { ...prefs }
+      if (existing) {
+        existing.wanted = prefs
+        this._writeNotificationPrefs(id, prefs)
+        return existing.done
+      }
+      const save = { confirmed: this.notificationPrefsOf(id), wanted: prefs } as PrefsSave
+      _prefsSaves.set(id, save)
+      this._guardPendingPrefs(id)
+      this._writeNotificationPrefs(id, prefs)
+      save.done = this._runNotificationPrefsSaves(id, save)
+      return save.done
+    },
+
+    /**
+     * The single enforcement point: while a save is pending, any mutation of the lists (whatever the writer)
+     * puts the wanted value back on that workspace's rows. Synchronous, so no reader sees the stale value.
+     */
+    _guardPendingPrefs(id: string) {
+      let guard = _prefsGuards.get(this)
+      if (!guard) {
+        const ids = new Set<string>()
+        const reapply = () => {
+          for (const pending of ids) {
+            const wanted = _prefsSaves.get(pending)?.wanted
+            if (!wanted) continue
+            for (const list of [this.workspaces, this.archivedWorkspaces]) {
+              const i = list.findIndex((w) => w.id === pending)
+              const shown = i >= 0 ? list[i].notificationPrefs : undefined
+              if (i >= 0 && !(shown && sameNotificationPrefs(shown, wanted))) {
+                // An unknown starting value is learned from what the server answered: keep it for a rollback.
+                const save = _prefsSaves.get(pending)
+                if (save && !save.confirmed && shown) save.confirmed = { ...shown }
+                list[i] = { ...list[i], notificationPrefs: wanted }
+              }
+            }
+          }
+        }
+        // Only the two lists, rows included (depth 3: array, list, row keys): not the rest of the state.
+        const scope = effectScope(true)
+        scope.run(() => watch(() => [this.workspaces, this.archivedWorkspaces], reapply, { flush: 'sync', deep: 3 }))
+        guard = { ids, stop: () => scope.stop() }
+        _prefsGuards.set(this, guard)
+      }
+      guard.ids.add(id)
+    },
+
+    /** Ends the pending record (and the subscription with the last one) before the final writes. */
+    _releasePendingPrefs(id: string) {
+      _prefsSaves.delete(id)
+      const guard = _prefsGuards.get(this)
+      if (!guard) return
+      guard.ids.delete(id)
+      if (guard.ids.size === 0) {
+        guard.stop()
+        _prefsGuards.delete(this)
+      }
+    },
+
+    async _runNotificationPrefsSaves(id: string, save: PrefsSave): Promise<void> {
+      let failure: unknown
+      let failed = false
+      try {
+        for (;;) {
+          const sent = save.wanted
+          failed = false
+          try {
+            const res = await apiFetchResponse(`/api/workspaces/${id}/notification-prefs`, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(sent),
+            })
+            if (!res.ok) throw await apiResponseError(res)
+            // A 2xx means the server accepted the value: an unreadable reply keeps what was sent.
+            let value = sent
+            try {
+              const body = (await res.json()) as { notificationPrefs?: unknown } | null
+              if (typeof body?.notificationPrefs === 'object' && body.notificationPrefs !== null)
+                value = normalizeWorkspaceNotificationPrefs(body.notificationPrefs)
+            } catch {
+              /* keep the sent value */
+            }
+            save.confirmed = value
+          } catch (err) {
+            failed = true
+            failure = err
+          }
+          // A newer value arrived meanwhile: it supersedes whatever just happened.
+          if (save.wanted === sent) break
+        }
+        // Released first: the writes below (rollback or confirmed value) must not be overwritten by `wanted`.
+        this._releasePendingPrefs(id)
+        if (failed) {
+          // Row unknown when the save began: only undo our own optimistic value, with the defaults.
+          const shown = this.notificationPrefsOf(id)
+          if (save.confirmed) this._writeNotificationPrefs(id, save.confirmed)
+          else if (shown && sameNotificationPrefs(shown, save.wanted))
+            this._writeNotificationPrefs(id, { ...DEFAULT_WORKSPACE_NOTIFICATION_PREFS })
+          throw failure
+        }
+        if (this.notificationPrefsOf(id) !== save.confirmed && save.confirmed) {
+          this._writeNotificationPrefs(id, save.confirmed)
+        }
+      } finally {
+        this._releasePendingPrefs(id)
+      }
     },
 
     async toggleFavorite(id: string) {
@@ -1481,7 +1653,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.archivedWorkspaces = this.archivedWorkspaces.filter((w) => w.id !== workspace.id)
     },
 
-    restoreWorktree(id: string): Promise<Workspace> {
+    restoreWorktree(id: string): Promise<{ warnings: string[] }> {
       let pending = _worktreeRestorations.get(this)
       if (!pending) {
         pending = new Map()
@@ -1498,13 +1670,14 @@ export const useWorkspaceStore = defineStore('workspace', {
             const body = (await res.json().catch(() => ({}))) as { code?: string; error?: string }
             throw new WorkspaceActionError(body.error ?? `HTTP ${res.status}`, body.code)
           }
-          const { workspace } = (await res.json()) as { workspace: Workspace }
+          const { workspace, warnings } = (await res.json()) as { workspace: Workspace; warnings?: unknown }
           // The restored event may already have applied this response, followed
           // by a newer archive/purge/delete. Never undo that later operation.
           if (lifecycleVersion === (this.workspaceLifecycleVersions[id] ?? 0)) {
             this.applyRestoredWorkspace(workspace)
           }
-          return workspace
+          // An older server omits the field; never trust anything but an array of strings.
+          return { warnings: Array.isArray(warnings) ? warnings.filter((w): w is string => typeof w === 'string') : [] }
         } finally {
           this.restoringWorktreeIds = this.restoringWorktreeIds.filter((wid) => wid !== id)
           pending.delete(id)

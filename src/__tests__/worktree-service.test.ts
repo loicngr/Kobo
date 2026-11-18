@@ -6,7 +6,10 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import {
   buildDockerChownArgs,
   createWorktree,
+  ensureKoboGitExcludes,
+  excludeFromProjectGit,
   isPermissionError,
+  KOBO_GIT_EXCLUDE_PATTERNS,
   listOrphanWorktrees,
   listWorktrees,
   removeWorktree,
@@ -444,4 +447,226 @@ it('does not claim a checkout already present before a failed creation attempt',
   const existing = await createWorktree(repoDir, branchName, 'main')
   await expect(createWorktree(repoDir, branchName, 'main')).rejects.not.toMatchObject({ name: 'WorktreeCreationError' })
   expect(fs.existsSync(existing.worktreePath)).toBe(true)
+})
+
+describe('ensureKoboGitExcludes(cwd)', () => {
+  const dirs: string[] = []
+  function tmp(prefix: string): string {
+    const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)))
+    dirs.push(dir)
+    return dir
+  }
+  function initRepo(): string {
+    const dir = tmp('at-wt-excl-')
+    gitSetup(dir, ['init', '-q'])
+    gitSetup(dir, ['config', 'user.email', 'test@test.com'])
+    gitSetup(dir, ['config', 'user.name', 'Test'])
+    fs.writeFileSync(path.join(dir, 'readme.txt'), 'hello')
+    gitSetup(dir, ['add', '.'])
+    gitSetup(dir, ['commit', '-q', '-m', 'init'])
+    return dir
+  }
+  const excludeOf = (repo: string) => path.join(repo, '.git', 'info', 'exclude')
+  const countLine = (content: string, line: string) => content.split('\n').filter((l) => l === line).length
+
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('writes every pattern once and keeps the existing lines', async () => {
+    const repo = initRepo()
+    const before = fs.readFileSync(excludeOf(repo), 'utf-8')
+    fs.writeFileSync(excludeOf(repo), `${before}/my-own-line\n`)
+    await ensureKoboGitExcludes(repo)
+    const content = fs.readFileSync(excludeOf(repo), 'utf-8')
+    expect(content.startsWith(`${before}/my-own-line\n`)).toBe(true)
+    for (const pattern of KOBO_GIT_EXCLUDE_PATTERNS) expect(countLine(content, pattern)).toBe(1)
+    expect(content.endsWith('\n')).toBe(true)
+  })
+
+  it('leaves the file byte-identical on a second call and does not duplicate a present pattern', async () => {
+    const repo = initRepo()
+    fs.writeFileSync(excludeOf(repo), '  .mcp.json  \n')
+    await ensureKoboGitExcludes(repo)
+    const first = fs.readFileSync(excludeOf(repo), 'utf-8')
+    await ensureKoboGitExcludes(repo)
+    expect(fs.readFileSync(excludeOf(repo), 'utf-8')).toBe(first)
+    expect(first.split('\n').filter((l) => l.trim() === '.mcp.json')).toHaveLength(1)
+  })
+
+  it('adds a newline before appending to a file that lacks one', async () => {
+    const repo = initRepo()
+    fs.writeFileSync(excludeOf(repo), '/no-newline')
+    await ensureKoboGitExcludes(repo)
+    expect(fs.readFileSync(excludeOf(repo), 'utf-8').startsWith('/no-newline\n.ai/')).toBe(true)
+  })
+
+  it('creates the info folder when it is missing', async () => {
+    const repo = initRepo()
+    fs.rmSync(path.join(repo, '.git', 'info'), { recursive: true, force: true })
+    await ensureKoboGitExcludes(repo)
+    expect(countLine(fs.readFileSync(excludeOf(repo), 'utf-8'), '.mcp.json')).toBe(1)
+  })
+
+  it('writes to the main repository exclude file when given a linked worktree', async () => {
+    const repo = initRepo()
+    const linked = path.join(tmp('at-wt-excl-linked-'), 'wt')
+    gitSetup(repo, ['worktree', 'add', '-q', '-b', 'feature/x', linked])
+    await ensureKoboGitExcludes(linked)
+    const content = fs.readFileSync(excludeOf(repo), 'utf-8')
+    for (const pattern of KOBO_GIT_EXCLUDE_PATTERNS) expect(countLine(content, pattern)).toBe(1)
+    expect(fs.statSync(path.join(linked, '.git')).isFile()).toBe(true)
+  })
+
+  it('makes git ignore Kobo files without creating or modifying a .gitignore', async () => {
+    const repo = initRepo()
+    await ensureKoboGitExcludes(repo)
+    fs.mkdirSync(path.join(repo, '.ai', 'thoughts'), { recursive: true })
+    fs.writeFileSync(path.join(repo, '.ai', 'thoughts', 'x.md'), 'note')
+    fs.writeFileSync(path.join(repo, '.mcp.json'), '{}')
+    const status = execFileSync('git', ['status', '--porcelain', '--ignored'], { cwd: repo, encoding: 'utf-8' })
+    expect(status).toContain('!! .ai/')
+    expect(status).toContain('!! .mcp.json')
+    expect(status).not.toContain('?? ')
+    gitSetup(repo, ['check-ignore', '-q', '.ai/thoughts/x.md'])
+    expect(fs.existsSync(path.join(repo, '.gitignore'))).toBe(false)
+  })
+
+  it('resolves without throwing and writes nothing outside a git repository', async () => {
+    const dir = tmp('at-wt-excl-plain-')
+    await expect(ensureKoboGitExcludes(dir)).resolves.toBeUndefined()
+    expect(fs.readdirSync(dir)).toEqual([])
+  })
+
+  it('resolves when the exclude file cannot be written', async () => {
+    const repo = initRepo()
+    fs.rmSync(path.join(repo, '.git', 'info'), { recursive: true, force: true })
+    fs.writeFileSync(path.join(repo, '.git', 'info'), 'a file where the folder should be')
+    await expect(ensureKoboGitExcludes(repo)).resolves.toBeUndefined()
+  })
+
+  it('returns at once on a repeated call, without waiting for the repository lock', async () => {
+    const repo = initRepo()
+    await ensureKoboGitExcludes(repo)
+    const first = fs.readFileSync(excludeOf(repo), 'utf-8')
+    let release!: () => void
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const { withGitRepoLock } = await import('../server/utils/git-repo-lock.js')
+    const holder = withGitRepoLock(repo, () => held)
+    try {
+      const outcome = await Promise.race([
+        ensureKoboGitExcludes(repo).then(() => 'done'),
+        new Promise((resolve) => setTimeout(() => resolve('blocked'), 1500)),
+      ])
+      expect(outcome).toBe('done')
+    } finally {
+      release()
+      await holder
+    }
+    expect(fs.readFileSync(excludeOf(repo), 'utf-8')).toBe(first)
+  })
+
+  // Resolves 'done' when the call completes while someone else holds the repository lock.
+  async function callWhileLockHeld(repo: string): Promise<string> {
+    const { withGitRepoLock } = await import('../server/utils/git-repo-lock.js')
+    let release!: () => void
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const holder = withGitRepoLock(repo, () => held)
+    try {
+      return (await Promise.race([
+        ensureKoboGitExcludes(repo).then(() => 'done'),
+        new Promise((resolve) => setTimeout(() => resolve('blocked'), 1000)),
+      ])) as string
+    } finally {
+      release()
+      await holder
+    }
+  }
+
+  it('restores a deleted exclude file or a removed line, then is a cache hit again', async () => {
+    const repo = initRepo()
+    await ensureKoboGitExcludes(repo)
+    fs.rmSync(excludeOf(repo))
+    await ensureKoboGitExcludes(repo)
+    expect(countLine(fs.readFileSync(excludeOf(repo), 'utf-8'), '.mcp.json')).toBe(1)
+    expect(await callWhileLockHeld(repo)).toBe('done')
+    const without = fs
+      .readFileSync(excludeOf(repo), 'utf-8')
+      .split('\n')
+      .filter((line) => line !== '.ai/thoughts/')
+      .join('\n')
+    fs.writeFileSync(excludeOf(repo), without)
+    await ensureKoboGitExcludes(repo)
+    for (const pattern of KOBO_GIT_EXCLUDE_PATTERNS) {
+      expect(countLine(fs.readFileSync(excludeOf(repo), 'utf-8'), pattern)).toBe(1)
+    }
+    expect(await callWhileLockHeld(repo)).toBe('done')
+  })
+
+  it('writes the patterns again when the repository is removed and re-created at the same path', async () => {
+    const repo = initRepo()
+    await ensureKoboGitExcludes(repo)
+    fs.rmSync(repo, { recursive: true, force: true })
+    fs.mkdirSync(repo)
+    gitSetup(repo, ['init', '-q'])
+    await ensureKoboGitExcludes(repo)
+    const content = fs.readFileSync(excludeOf(repo), 'utf-8')
+    for (const pattern of KOBO_GIT_EXCLUDE_PATTERNS) expect(countLine(content, pattern)).toBe(1)
+  })
+
+  it('retries after a failed call', async () => {
+    const dir = tmp('at-wt-excl-retry-')
+    await ensureKoboGitExcludes(dir)
+    gitSetup(dir, ['init', '-q'])
+    await ensureKoboGitExcludes(dir)
+    const content = fs.readFileSync(excludeOf(dir), 'utf-8')
+    for (const pattern of KOBO_GIT_EXCLUDE_PATTERNS) expect(countLine(content, pattern)).toBe(1)
+  })
+
+  it('tracks two repositories separately', async () => {
+    const a = initRepo()
+    const b = initRepo()
+    await ensureKoboGitExcludes(a)
+    await ensureKoboGitExcludes(b)
+    for (const repo of [a, b]) {
+      expect(countLine(fs.readFileSync(excludeOf(repo), 'utf-8'), '.mcp.json')).toBe(1)
+    }
+  })
+
+  it('keeps each pattern once when two calls run concurrently', async () => {
+    const repo = initRepo()
+    const linked = path.join(tmp('at-wt-excl-conc-'), 'wt')
+    gitSetup(repo, ['worktree', 'add', '-q', '-b', 'feature/y', linked])
+    await Promise.all([ensureKoboGitExcludes(repo), ensureKoboGitExcludes(linked), ensureKoboGitExcludes(repo)])
+    const content = fs.readFileSync(excludeOf(repo), 'utf-8')
+    for (const pattern of KOBO_GIT_EXCLUDE_PATTERNS) expect(countLine(content, pattern)).toBe(1)
+  })
+})
+
+describe('excludeFromProjectGit - repository lock', () => {
+  it('concurrent writers of info/exclude leave every expected line exactly once', async () => {
+    const repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'at-wt-exclude-')))
+    try {
+      gitSetup(repo, ['init'])
+      const entries = ['a', 'b', 'c', 'd', 'e', 'f'].map((n) => path.join(repo, `.wt-${n}`, '.kobo-kept'))
+      await Promise.all([
+        ...entries.map((entry) => excludeFromProjectGit(repo, entry)),
+        ensureKoboGitExcludes(repo),
+        ensureKoboGitExcludes(repo),
+      ])
+      const lines = fs.readFileSync(path.join(repo, '.git', 'info', 'exclude'), 'utf8').split('\n')
+      for (const n of ['a', 'b', 'c', 'd', 'e', 'f']) {
+        expect(lines.filter((line) => line === `/.wt-${n}/.kobo-kept`)).toHaveLength(1)
+      }
+      for (const pattern of KOBO_GIT_EXCLUDE_PATTERNS) {
+        expect(lines.filter((line) => line.trim() === pattern)).toHaveLength(1)
+      }
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true })
+    }
+  })
 })

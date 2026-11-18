@@ -12,6 +12,11 @@ export default {
   'bulk.branches': 'Saisissez les branches ci-dessus, une par ligne',
   'bulk.changed': 'Le workspace ou ses branches ont changé. Sélectionnez-le à nouveau.',
   'bulk.result': '{done}/{total} actions réussies',
+  'bulk.muteNotifications': 'Couper les notifications',
+  'bulk.restoreNotifications': 'Rétablir les notifications',
+  'bulk.groupMessageScope': 'Sélection ({count})',
+  'bulk.groupMessageNone':
+    'Aucun workspace sélectionné ne peut recevoir de message : les workspaces archivés et les worktrees purgés sont exclus.',
 
   'tools.group.session': 'Session',
   'tools.group.quality': 'Revue et qualité',
@@ -28,6 +33,10 @@ export default {
   'git.ciLogs.step': 'Étape',
   'git.ciLogs.error': 'Impossible de charger les logs. Vérifiez l’accès GitHub du serveur, puis réessayez.',
   'git.ciLogs.truncated': 'Affichage limité : une partie des logs est omise.',
+  'ciDuration.seconds': '{s} s',
+  'ciDuration.minutes': '{m} min {s} s',
+  'ciDuration.hours': '{h} h {m} min',
+  'ciDuration.total': 'Total : {duration}',
   'git.ciLogs.follow': 'Suivre les nouveaux logs',
   'git.ciLogs.all': 'Toutes les étapes',
   'git.ciLogs.unavailable': 'GitHub ne fournit pas encore de logs pour cette sélection.',
@@ -169,6 +178,8 @@ export default {
     'Les destinataires et le message initiaux sont conservés. Vérifier reprend cette même demande sans dupliquer les envois acceptés.',
   'groupMessage.retry': 'Vérifier cet envoi',
   'groupMessage.newMessage': 'Nouveau message',
+  'groupMessage.selectionPending':
+    'Un message groupé précédent est toujours affiché. Votre sélection sera utilisée une fois celui-ci terminé ou fermé.',
   'groupMessage.send': 'Envoyer à {count} workspaces',
   'groupMessage.state.pending': 'À envoyer',
   'groupMessage.state.sending': 'Envoi en cours',
@@ -671,6 +682,7 @@ export default {
   'workspaceList.a11y.groupToggle': 'Groupe {group}, {count} workspaces',
   'workspaceList.a11y.list': 'Workspaces',
   'workspaceList.a11y.card': '{name}, {status}',
+  'workspaceList.a11y.actions': "Actions de l'espace de travail",
   'workspaceList.needsAttention': 'Attention requise',
   'workspaceList.running': 'En cours',
   'workspaceList.idle': 'Inactif',
@@ -740,8 +752,11 @@ export default {
   'contextMenu.restoreWorktree': 'Restaurer le worktree',
   'workspacePage.restoringWorktree': 'Restauration…',
   'workspacePage.worktreeRestoreSuccess': 'Worktree restauré',
+  'workspacePage.keptAiFolder': 'Dossier .ai conservé : {path}',
+  'workspacePage.copyKeptAiPath': 'Copier le chemin',
+  'workspacePage.worktreeRestoreWarning': 'Worktree restauré, avec un avertissement : {message}',
   'workspacePage.worktreeRestoreLimitations':
-    'Recrée les fichiers Git commités. Les dépendances et les fichiers locaux supprimés précédemment ne sont pas restaurés.',
+    "Recrée les fichiers Git commités, et remet en place le dossier .ai s'il a été conservé. Les dépendances et les autres fichiers locaux supprimés précédemment ne sont pas restaurés.",
   'workspacePage.restoreError.not-found': 'Ce workspace n’existe plus. Actualisez la liste des workspaces.',
   'workspacePage.restoreError.not-purged':
     'Ce workspace n’est pas marqué comme purgé. Actualisez-le et vérifiez son répertoire de travail.',
@@ -762,7 +777,7 @@ export default {
   'workspacePage.archivedBanner': 'Workspace archivé — lecture seule',
   'workspacePage.worktreePurgedBanner': 'Worktree supprimé — historique conservé',
   'workspacePage.worktreePurgedTooltip':
-    'Restaurer le worktree recrée le répertoire de travail et désarchive ce workspace. La conversation, les tâches et les sessions sont conservées. Aucun agent ni serveur de développement ne démarre.',
+    "Restaurer le worktree recrée le répertoire de travail et désarchive ce workspace. La conversation, les tâches et les sessions sont conservées. Le dossier .ai est conservé si « Conserver le dossier .ai lors de la purge d'un worktree » était activé lors de la purge. Aucun agent ni serveur de développement ne démarre.",
   'workspacePage.pendingInitialPromptBanner':
     "Un prompt initial est en attente — l'agent ne l'a jamais reçu (le script de setup a planté ou le workspace n'a jamais été démarré). Cliquez sur Démarrer pour l'envoyer.",
   'workspacePage.unarchived': 'Workspace désarchivé',
@@ -1506,7 +1521,7 @@ export default {
   'tours.settings.memory.description':
     'Choisissez le mode manuel, automatique ou hybride, puis parcourez les portées et vérifiez ou effacez leurs données mémoire exactes. Les opérations mémoire sont immédiates ; le changement de mode passe par Enregistrer.',
   'tours.settings.worktrees.description':
-    'Où vivent les worktrees, combien de temps garder ceux qui sont mergés, et la purge automatique.',
+    'Où vivent les worktrees, combien de temps garder ceux qui sont mergés, et la purge automatique (le dossier .ai peut être conservé).',
   'tours.settings.projects.title': 'Projets',
   'tours.settings.projects.description': 'Les projets enregistrés et leurs surcharges par projet.',
   'tours.settings.misc.title': 'Général, voix, notifications, export',
@@ -1625,7 +1640,8 @@ export default {
     'Identifiants Bitbucket. GitHub et GitLab utilisent vos CLI gh/glab authentifiées ; choisissez la forge par projet.',
   'settings.help.voice': 'Dictée et push-to-talk.',
   'settings.help.notifications': 'Sons, notifications navigateur et rappel des questions sans réponse.',
-  'settings.help.worktrees': 'Où les worktrees sont créés, rétention et purge automatique.',
+  'settings.help.worktrees':
+    'Où les worktrees sont créés, rétention et purge automatique (le dossier .ai peut être conservé).',
   'settings.help.projects': 'Projets enregistrés et leurs surcharges par projet.',
   'settings.help.templates': 'Templates de prompt développés dans la zone de saisie du chat.',
   'settings.help.workspaceTemplates': 'Presets enregistrés du formulaire de création.',
@@ -2194,15 +2210,18 @@ export default {
     'Restaurez d’abord le worktree avec Restaurer le worktree, ou recréez-le manuellement. Kōbō détecte automatiquement les worktrees correspondants.',
   'contextMenu.purgeWorktree': "Libérer l'espace disque (supprimer le worktree)",
   'contextMenu.purgeWorktreeTooltip':
-    "Supprime le worktree du disque pour récupérer de l'espace — l'historique des messages et sessions est conservé. Archive automatiquement le workspace.",
+    "Supprime le worktree du disque pour récupérer de l'espace - l'historique des messages et sessions est conservé, ainsi que le dossier .ai si « Conserver le dossier .ai lors de la purge d'un worktree » est activé. Archive automatiquement le workspace.",
   'contextMenu.purgeWorktreeDialogTitle': "Libérer l'espace disque ?",
   'contextMenu.purgeWorktreeDialogMessage':
-    "Le dossier worktree de « {name} » va être supprimé du disque. L'historique des messages et sessions est conservé. Le workspace sera archivé automatiquement. Cette action ne peut pas être annulée dans la version actuelle.",
+    "Le dossier worktree de « {name} » va être supprimé du disque. L'historique des messages et sessions est conservé, ainsi que le dossier .ai (notes, images, pièces jointes) si « Conserver le dossier .ai lors de la purge d'un worktree » est activé. Le workspace sera archivé automatiquement. Cette action ne peut pas être annulée dans la version actuelle.",
   'contextMenu.purgeWorktreeDialogConfirm': 'Supprimer le worktree',
   'contextMenu.purgeWorktreeSuccess': 'Worktree supprimé — espace disque récupéré.',
   'settings.autoPurgeOnPrMerged': 'Purger le worktree quand la PR est mergée',
   'settings.autoPurgeOnPrMergedHint':
-    "Quand activé, le worktree est supprimé du disque dès que la PR est mergée (en plus de l'archivage auto). L'historique des messages est conservé.",
+    "Quand activé, le worktree est supprimé du disque dès que la PR est mergée (en plus de l'archivage auto). L'historique des messages est conservé, ainsi que le dossier .ai si « Conserver le dossier .ai lors de la purge d'un worktree » est activé.",
+  'settings.keepAiFolderOnPurge': "Conserver le dossier .ai lors de la purge d'un worktree",
+  'settings.keepAiFolderOnPurgeHint':
+    'Les notes, handoffs, images et pièces jointes sont déplacés dans un dossier .kobo-kept à côté des worktrees, restent lisibles ici, reviennent quand le worktree est restauré et sont supprimés avec le workspace. Un nettoyage manuel de ce dossier (y compris git clean -fdx) les supprime.',
   'settings.forceImmediateMessages': 'Forcer l’envoi immédiat des messages',
   'settings.forceImmediateMessagesHint':
     'Désactivé par défaut. Envoie les nouveaux messages pendant que l’agent travaille, comme Ctrl+Entrée, sans les mettre en file d’attente. En auto-loop, envoie maintenant et met la boucle en pause. Les messages déjà en attente restent inchangés ; les blocages de compaction et d’autorisation restent actifs.',
@@ -2267,7 +2286,7 @@ export default {
   'settings.purgeDocsRestoreCommands':
     '# GitHub (via le CLI gh) :\n  gh pr checkout [numéro-pr] --recurse-submodules\n\n# Ou directement via git (fonctionne sur GitHub même après suppression de la branche) :\n  git fetch origin pull/[numéro-pr]/head:[nom-branche]\n  git worktree add [chemin] [nom-branche]',
   'settings.purgeDocsRestoreFootnote':
-    "GitHub conserve la ref HEAD de la PR bien après la suppression de la branche source (mois / années). L'auto-détection tourne dans le watcher 30s — pas besoin d'action dans l'UI une fois le dossier recréé.",
+    "GitHub conserve la ref HEAD de la PR bien après la suppression de la branche source (mois / années). L'auto-détection tourne dans le watcher 30s - pas besoin d'action dans l'UI une fois le dossier recréé. Si son dossier .ai a été conservé, il est d'abord remis dans le worktree recréé (un fichier déjà extrait par Git reste tel quel).",
   'settings.purgeDocsPermissionsTitle': 'Éviter les erreurs de permissions pendant la suppression',
   'settings.purgeDocsPermissionsIntro':
     "Docker laisse souvent des fichiers root-owned dans node_modules / vendor à l'intérieur du worktree. Quand Kōbō essaie de les supprimer, tu tombes sur EACCES / EPERM et la purge échoue. Deux moyens de prévenir :",
@@ -2669,6 +2688,25 @@ export default {
   // Workspace list drawer indicators
   'workspaceList.prOpen': '#{n} — Pull request ouverte',
   'workspaceList.prWatchDisabledIndicator': 'Checks PR ignorés pour ce workspace',
+  'workspaceNotifications.indicator.label': 'Notifications coupées pour ce workspace',
+  'workspaceNotifications.indicator.browser': 'Notifications du navigateur',
+  'workspaceNotifications.indicator.sound': 'Sons',
+  'workspaceNotifications.indicator.toast': 'Toasts',
+  'workspaceNotifications.indicator.drawer': 'Signaux du tiroir',
+  'workspaceNotifications.title': 'Notifications : {name}',
+  'workspaceNotifications.menu': 'Notifications...',
+  'workspaceNotifications.intro':
+    "Choisissez les signaux que ce workspace peut produire. Les changements s'appliquent immédiatement.",
+  'workspaceNotifications.muteHeading': 'Couper pour ce workspace',
+  'workspaceNotifications.drawerHint':
+    "Ce workspace n'apparaîtra plus dans le groupe d'attention. Le Dashboard affiche toujours son état réel.",
+  'workspaceNotifications.keepQuestions': 'Garder les questions audibles et visibles',
+  'workspaceNotifications.keepQuestionsHint':
+    "L'exception couvre uniquement le son et le message à l'écran, jamais la notification du navigateur ni les signaux du tiroir.",
+  'workspaceNotifications.keepQuestionsDisabled': 'Disponible lorsque les sons ou les toasts sont coupés.',
+  'workspaceNotifications.muteAll': 'Tout couper',
+  'workspaceNotifications.restoreAll': 'Tout rétablir',
+  'workspaceNotifications.error': "La modification n'a pas pu être enregistrée. Veuillez réessayer.",
   'workspaceList.prChangesRequested': '#{n} — Modifications demandées',
   'workspaceList.attentionCiFailed': 'CI en échec',
   'workspaceList.attentionChangesRequested': 'Modifications demandées',

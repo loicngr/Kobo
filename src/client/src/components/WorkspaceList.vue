@@ -154,7 +154,7 @@
 
     <q-separator dark />
 
-    <WorkspaceBulkActions :workspaces="bulkSelection" @clear="selectedIds = []" @completed="removeBulkSelection" />
+    <WorkspaceBulkActions :workspaces="bulkSelection" @clear="selectedIds = []" @completed="removeBulkSelection" @message="openGroupMessageFromSelection" />
     <!-- Scrollable groups -->
     <div
       class="col overflow-auto"
@@ -224,6 +224,7 @@
                 @run-setup="runSetupScript"
                 @toggle-favorite="onToggleFavorite"
                 @manage-tags="onManageTags"
+                @notifications="onNotifications"
                 @duplicate="onDuplicate"
                 @archive="onArchiveClick"
                 @unarchive="onUnarchiveClick"
@@ -255,6 +256,7 @@
               @run-setup="runSetupScript"
               @toggle-favorite="onToggleFavorite"
               @manage-tags="onManageTags"
+              @notifications="onNotifications"
               @duplicate="onDuplicate"
               @archive="onArchiveClick"
               @unarchive="onUnarchiveClick"
@@ -326,6 +328,7 @@
                 @run-setup="runSetupScript"
                 @toggle-favorite="onToggleFavorite"
                 @manage-tags="onManageTags"
+                @notifications="onNotifications"
                 @duplicate="onDuplicate"
                 @archive="onArchiveClick"
                 @unarchive="onUnarchiveClick"
@@ -357,6 +360,7 @@
               @run-setup="runSetupScript"
               @toggle-favorite="onToggleFavorite"
               @manage-tags="onManageTags"
+              @notifications="onNotifications"
               @duplicate="onDuplicate"
               @archive="onArchiveClick"
               @unarchive="onUnarchiveClick"
@@ -428,6 +432,7 @@
                 @run-setup="runSetupScript"
                 @toggle-favorite="onToggleFavorite"
                 @manage-tags="onManageTags"
+                @notifications="onNotifications"
                 @duplicate="onDuplicate"
                 @archive="onArchiveClick"
                 @unarchive="onUnarchiveClick"
@@ -459,6 +464,7 @@
               @run-setup="runSetupScript"
               @toggle-favorite="onToggleFavorite"
               @manage-tags="onManageTags"
+              @notifications="onNotifications"
               @duplicate="onDuplicate"
               @archive="onArchiveClick"
               @unarchive="onUnarchiveClick"
@@ -537,6 +543,7 @@
             @run-setup="runSetupScript"
             @toggle-favorite="onToggleFavorite"
             @manage-tags="onManageTags"
+            @notifications="onNotifications"
             @duplicate="onDuplicate"
             @archive="onArchiveClick"
             @unarchive="onUnarchiveClick"
@@ -772,13 +779,15 @@
     </q-card>
   </q-dialog>
 
-  <WorkspaceGroupMessageDialog v-model="groupMessageOpen" :workspaces="groupMessageTargets" :scope="groupMessageScope" />
+  <WorkspaceGroupMessageDialog v-model="groupMessageOpen" :workspaces="groupMessageTargets" :scope="groupMessageScope" :reset-key="groupMessageResetKey" :from-selection="groupMessageFromSelection" />
 
   <ManageTagsDialog
     v-if="tagsDialogWorkspace"
     v-model="tagsDialogOpen"
     :workspace="tagsDialogWorkspace"
   />
+
+  <WorkspaceNotificationsDialog v-model="notificationsDialogOpen" :workspace-id="notificationsDialogWorkspaceId" />
 </template>
 
 <script setup lang="ts">
@@ -789,6 +798,7 @@ import ManageTagsDialog from 'src/components/ManageTagsDialog.vue'
 import WorkspaceBulkActions from 'src/components/WorkspaceBulkActions.vue'
 import WorkspaceCard from 'src/components/WorkspaceCard.vue'
 import WorkspaceGroupMessageDialog from 'src/components/WorkspaceGroupMessageDialog.vue'
+import WorkspaceNotificationsDialog from 'src/components/WorkspaceNotificationsDialog.vue'
 import WorkspaceSortMenu from 'src/components/WorkspaceSortMenu.vue'
 import WorkspaceTagFilterMenu from 'src/components/WorkspaceTagFilterMenu.vue'
 import { useIsMobile } from 'src/composables/use-is-mobile'
@@ -801,12 +811,13 @@ import { useWebSocketStore } from 'src/stores/websocket'
 import type { Workspace } from 'src/stores/workspace'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { apiFetchOk, apiFetchResponse, apiFetchResponseForStatus, apiResponseError } from 'src/utils/api'
+import { canReceiveGroupMessage } from 'src/utils/group-message-recipients'
 import { DEFAULT_TOAST_TIMEOUT_MS } from 'src/utils/notification-timeout'
 import type { ProjectColor } from 'src/utils/project-color'
 import { projectNameForPath } from 'src/utils/project-color'
 import { isWorkspacePane } from 'src/utils/split-workspace'
 import { markInternalSprintTarget } from 'src/utils/sprint-navigation'
-import { getAttentionReasons } from 'src/utils/workspace-attention'
+import { getDrawerAttentionReasons } from 'src/utils/workspace-attention'
 import { parseWorkspaceSort, sortWorkspaces, WORKSPACE_SORT_KEY } from 'src/utils/workspace-sort'
 import { isBusyStatus } from 'src/utils/workspace-status'
 import { collectTags, matchesTags, parseTagFilter } from 'src/utils/workspace-tag-filter'
@@ -878,29 +889,32 @@ watch(
   },
   { immediate: true },
 )
+// Follow only a reassignment of the SAME open workspace that was in the active tab. A workspace opened from a
+// shortcut may legitimately be outside the tab, and a plain change of selection must not move the tab.
 watch(
-  () => store.selectedWorkspace?.sprintId,
-  (current, previous) => {
+  () => [store.selectedWorkspaceId, store.selectedWorkspace?.sprintId] as const,
+  ([id, current], [previousId, previous]) => {
     if (
+      id !== previousId ||
       current === undefined ||
+      previous === undefined ||
       current === previous ||
       sprints.active === ALL_SPRINTS ||
+      (previous ?? NO_SPRINT) !== sprints.active ||
       router.currentRoute?.value.name !== 'workspace' ||
-      router.currentRoute.value.params.id !== store.selectedWorkspaceId ||
-      (previous === undefined && (current ?? NO_SPRINT) === sprints.active)
+      router.currentRoute.value.params.id !== id
     )
       return
-    const clearMarker = markInternalSprintTarget(store.selectedWorkspaceId!, current ?? NO_SPRINT)
+    const clearMarker = markInternalSprintTarget(id!, current ?? NO_SPRINT)
     void router
       .replace({
         name: 'workspace',
         state: { koboSprintContext: true },
-        params: { id: store.selectedWorkspaceId! },
+        params: { id: id! },
         query: { ...router.currentRoute.value.query, sprint: current ?? NO_SPRINT },
       })
       .finally(clearMarker)
   },
-  { immediate: true },
 )
 const checkingMissingSprints = new Set<string>()
 watch(
@@ -935,7 +949,7 @@ function tabLabel(id: string, name: string) {
   const count = store.workspaces.filter(
     (workspace) =>
       (id === ALL_SPRINTS || (workspace.sprintId ?? NO_SPRINT) === id) &&
-      getAttentionReasons(
+      getDrawerAttentionReasons(
         workspace,
         store.prSnapshots[workspace.id],
         store.pendingQuotaBackoffs[workspace.id]?.reason === 'transient' ? 'transient' : 'quota',
@@ -945,7 +959,7 @@ function tabLabel(id: string, name: string) {
 }
 
 function attentionBorderColor(ws: Workspace): string {
-  const reasons = getAttentionReasons(
+  const reasons = getDrawerAttentionReasons(
     ws,
     store.prSnapshots[ws.id],
     store.pendingQuotaBackoffs[ws.id]?.reason === 'transient' ? 'transient' : 'quota',
@@ -1034,7 +1048,12 @@ watch(searchArchived, (v) => localStorage.setItem('kobo:search-archived', v ? '1
 const groupMessageOpen = ref(false)
 const groupMessageTargets = ref<Workspace[]>([])
 const groupMessageScope = ref('')
+const groupMessageResetKey = ref(0)
+const groupMessageFromSelection = ref(false)
 function openGroupMessage() {
+  // Leaving a selection-based list resets the dialog; consecutive megaphone openings keep its state.
+  if (groupMessageFromSelection.value) groupMessageResetKey.value++
+  groupMessageFromSelection.value = false
   groupMessageScope.value =
     sprints.active === ALL_SPRINTS
       ? t('sprints.all')
@@ -1044,11 +1063,29 @@ function openGroupMessage() {
   groupMessageTargets.value = store.workspaces.filter(inSprint).map((workspace) => ({ ...workspace }))
   groupMessageOpen.value = true
 }
+// The selection is left untouched: it is read here and never cleared by the dialog.
+function openGroupMessageFromSelection(ids: string[]) {
+  const targets = bulkSelection.value.filter(
+    (workspace) => ids.includes(workspace.id) && canReceiveGroupMessage(workspace),
+  )
+  if (!targets.length) return
+  groupMessageFromSelection.value = true
+  groupMessageResetKey.value++
+  groupMessageScope.value = t('bulk.groupMessageScope', { count: targets.length })
+  groupMessageTargets.value = targets.map((workspace) => ({ ...workspace }))
+  groupMessageOpen.value = true
+}
 const tagsDialogOpen = ref(false)
 const tagsDialogWorkspace = ref<Workspace | null>(null)
 function onManageTags(ws: Workspace) {
   tagsDialogWorkspace.value = ws
   tagsDialogOpen.value = true
+}
+const notificationsDialogOpen = ref(false)
+const notificationsDialogWorkspaceId = ref<string | null>(null)
+function onNotifications(ws: Workspace) {
+  notificationsDialogWorkspaceId.value = ws.id
+  notificationsDialogOpen.value = true
 }
 
 /** Duplicate = the create form prefilled from this workspace; nothing is created here. */
