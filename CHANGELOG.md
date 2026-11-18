@@ -4,6 +4,10 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads released version sections.
 
+## 2.1.48
+
+- feat: mute workspaces, keep .ai on purge and show ci durations
+
 ## 2.1.47
 
 - feat(update): require host opt-in for risky interface update options
