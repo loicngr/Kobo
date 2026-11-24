@@ -5,7 +5,7 @@ const web = vi.hoisted(() => ({
   auth: { test: vi.fn() },
   chat: { postMessage: vi.fn(), update: vi.fn() },
   reactions: { add: vi.fn(), remove: vi.fn() },
-  users: { conversations: vi.fn(), info: vi.fn() },
+  users: { list: vi.fn(), conversations: vi.fn(), info: vi.fn() },
   conversations: { replies: vi.fn() },
   filesUploadV2: vi.fn(),
 }))
@@ -244,6 +244,19 @@ describe('messages and reactions', () => {
     await expect(api.removeReaction('C1', '1.1', 'eyes')).resolves.toBeUndefined()
     web.reactions.add.mockRejectedValue(platformError('missing_scope'))
     await expect(api.addReaction('C1', '1.1', 'eyes')).rejects.toMatchObject({ code: 'missing_scope' })
+  })
+
+  it('lists active people across directory pages and returns only names and IDs', async () => {
+    web.users.list
+      .mockResolvedValueOnce({
+        members: [{ id: 'USLACKBOT' }, { id: 'UBOT', is_bot: true }, { id: 'UOLD', deleted: true }],
+        response_metadata: { next_cursor: 'more' },
+      })
+      .mockResolvedValueOnce({
+        members: [{ id: 'UMEMBER', profile: { display_name: 'Alice', email: 'private' } }],
+      })
+    await expect(createSlackApi(creds).listMembers()).resolves.toEqual([{ id: 'UMEMBER', name: 'Alice' }])
+    expect(web.users.list).toHaveBeenNthCalledWith(2, { cursor: 'more', limit: 200 })
   })
 
   it('listChannels follows next_cursor across pages', async () => {

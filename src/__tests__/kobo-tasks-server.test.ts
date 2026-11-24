@@ -24,6 +24,7 @@ vi.mock('../server/services/websocket-service.js', () => ({
 vi.mock('../server/services/agent/orchestrator.js', () => ({
   startAgent: vi.fn(),
   hasController: vi.fn(() => false),
+  getRunningLlms: vi.fn(() => []),
 }))
 
 import {
@@ -267,11 +268,36 @@ describe('MCP tasks server handlers', () => {
       const info = getWorkspaceInfoHandler(db, workspaceId)
       expect(info.id).toBe(workspaceId)
       expect(info.name).toBe('Test WS')
+      expect(info.engine).toBe('claude-code')
+      expect(info.reasoningEffort).toBe('auto')
       expect(info.projectPath).toBe('/tmp')
       expect(info.sourceBranch).toBe('main')
       expect(info.workingBranch).toBe('feature/test')
       expect(info.status).toBe('idle')
       expect(info.devServerStatus).toBe('stopped')
+    })
+
+    it('reports the configured LLM even when no agent is running', async () => {
+      db.prepare('UPDATE workspaces SET engine = ?, model = ?, reasoning_effort = ? WHERE id = ?').run(
+        'claude-code',
+        'claude-sonnet-5-5',
+        'high',
+        workspaceId,
+      )
+      const dispatcher = createManagedMcpDispatcher({
+        db,
+        workspaceId,
+        backendUrl: 'http://localhost',
+        env: {},
+        backendRequest: vi.fn(),
+      })
+      const result = (await dispatcher.callTool('get_workspace_info', {})) as { content: [{ text: string }] }
+      expect(JSON.parse(result.content[0].text)).toMatchObject({
+        engine: 'claude-code',
+        model: 'claude-sonnet-5-5',
+        reasoningEffort: 'high',
+        runningLlms: [],
+      })
     })
 
     it('construit worktreePath depuis projectPath + workingBranch', () => {

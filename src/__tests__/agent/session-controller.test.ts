@@ -69,6 +69,23 @@ const BASE_OPTS: StartOptions = {
 }
 
 describe('SessionController', () => {
+  it('reports launch effort and the model identified by the live engine', async () => {
+    const { SessionController } = await import('../../server/services/agent/session-controller.js')
+    const { engine, emit } = fakeEngine()
+    const controller = new SessionController('w1', 'session', engine, () => {})
+    expect(controller.runningLlm).toBeNull()
+    await controller.start({ ...BASE_OPTS, model: 'auto', effort: 'high' })
+    emit({ kind: 'session:started', engineSessionId: 'native', model: 'claude-sonnet-5-5' })
+    expect(controller.runningLlm).toEqual({
+      sessionId: 'session',
+      engine: 'claude-code',
+      model: 'claude-sonnet-5-5',
+      reasoningEffort: 'high',
+    })
+    await controller.stop()
+    expect(controller.runningLlm).toBeNull()
+  })
+
   it('retains ownership when asynchronous setup fails and native shutdown is unconfirmed', async () => {
     const { SessionController } = await import('../../server/services/agent/session-controller.js')
     const { engine, process } = fakeEngine()

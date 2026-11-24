@@ -40,6 +40,9 @@ export const useSlackStore = defineStore('slack', {
     async saveCredentials(value: { botToken: string; appToken: string } | null) {
       this.status = await apiFetch<SlackStatus>('/api/slack/credentials', { method: 'PUT', body: value ?? 'null' })
     },
+    async fetchMembers() {
+      return (await apiFetch<{ members: { id: string; name: string }[] }>('/api/slack/members')).members
+    },
     async fetchChannels(): Promise<SlackChannel[]> {
       return (await apiFetch<{ channels: SlackChannel[] }>('/api/slack/channels')).channels
     },

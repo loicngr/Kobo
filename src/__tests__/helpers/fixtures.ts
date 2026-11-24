@@ -179,6 +179,8 @@ export function makeGlobalSettings(overrides: Partial<GlobalSettings> = {}): Glo
     showProgressBars: true,
     agentWorkspaceLifecycleEnabled: false,
     slackEnabled: false,
+    slackNotifyCompaction: false,
+    slackNotifyErrors: false,
     slackAllowedUserIds: [],
     stopDevServersOnShutdown: true,
     keepAiFolderOnPurge: true,

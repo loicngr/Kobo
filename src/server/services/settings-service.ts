@@ -332,6 +332,8 @@ export interface GlobalSettings {
   /** Lets managed agents call the workspace lifecycle MCP tools (create, delete, archive, purge...). Off by default. */
   agentWorkspaceLifecycleEnabled: boolean
   slackEnabled: boolean
+  slackNotifyCompaction: boolean
+  slackNotifyErrors: boolean
   /** Slack member IDs allowed to talk to agents. */
   slackAllowedUserIds: string[]
   /** Prefills "Additional instructions" each time the manual review dialog opens. */
@@ -1436,6 +1438,14 @@ const settingsMigrations: SettingsMigration[] = [
       if (typeof global.keepAiFolderOnPurge !== 'boolean') global.keepAiFolderOnPurge = true
     },
   },
+  {
+    version: 76,
+    name: 'slack-workspace-status-notices',
+    migrate: ({ global }) => {
+      global.slackNotifyCompaction = global.slackNotifyCompaction === true
+      global.slackNotifyErrors = global.slackNotifyErrors === true
+    },
+  },
 ]
 
 const SLACK_MEMBER_ID = /^[UW][A-Z0-9]{2,}$/
@@ -1562,6 +1572,8 @@ function defaultSettings(): Settings {
       autoExitPlanMode: false,
       agentWorkspaceLifecycleEnabled: false,
       slackEnabled: false,
+      slackNotifyCompaction: false,
+      slackNotifyErrors: false,
       slackAllowedUserIds: [],
       reviewDefaultInstructions: '',
       showProgressBars: true,
@@ -1729,6 +1741,8 @@ export function runSettingsMigrations(raw: Record<string, unknown>): Settings {
   current.global.autoExitPlanMode = current.global.autoExitPlanMode === true
   current.global.agentWorkspaceLifecycleEnabled = current.global.agentWorkspaceLifecycleEnabled === true
   current.global.slackEnabled = current.global.slackEnabled === true
+  current.global.slackNotifyCompaction = current.global.slackNotifyCompaction === true
+  current.global.slackNotifyErrors = current.global.slackNotifyErrors === true
   current.global.slackAllowedUserIds = normalizeSlackUserIds(current.global.slackAllowedUserIds)
   current.global.memoryLimits = resolveMemoryLimits(current.global.memoryLimits)
   if (typeof current.global.forceImmediateMessages !== 'boolean') current.global.forceImmediateMessages = false
@@ -2177,6 +2191,9 @@ export function updateGlobalSettings(input: Partial<GlobalSettings>): GlobalSett
   if ('slackEnabled' in data && typeof data.slackEnabled !== 'boolean') {
     delete (data as Record<string, unknown>).slackEnabled
   }
+  if ('slackNotifyCompaction' in data && typeof data.slackNotifyCompaction !== 'boolean')
+    delete data.slackNotifyCompaction
+  if ('slackNotifyErrors' in data && typeof data.slackNotifyErrors !== 'boolean') delete data.slackNotifyErrors
   if ('slackAllowedUserIds' in data) data.slackAllowedUserIds = parseSlackUserIds(data.slackAllowedUserIds)
   if ('agentWorkspaceLifecycleEnabled' in data && typeof data.agentWorkspaceLifecycleEnabled !== 'boolean') {
     delete (data as Record<string, unknown>).agentWorkspaceLifecycleEnabled
@@ -2259,6 +2276,8 @@ export function updateGlobalSettings(input: Partial<GlobalSettings>): GlobalSett
     'autoExitPlanMode',
     'agentWorkspaceLifecycleEnabled',
     'slackEnabled',
+    'slackNotifyCompaction',
+    'slackNotifyErrors',
     'slackAllowedUserIds',
     'reviewDefaultInstructions',
     'showProgressBars',

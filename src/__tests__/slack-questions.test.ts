@@ -58,6 +58,7 @@ function fakeApi(over: Partial<Record<keyof SlackApi, (...args: never[]) => unkn
     replaceButtons: async () => undefined,
     addReaction: async () => undefined,
     removeReaction: async () => undefined,
+    listMembers: async () => [],
     listChannels: async () => [{ id: 'C1', name: 'general' }],
     threadReplies: async () => [],
     userName: async (id: string) => (id === 'U1' ? 'alice' : id),

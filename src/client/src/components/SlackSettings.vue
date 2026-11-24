@@ -9,8 +9,28 @@
         dense
         color="primary"
         data-test="slack-enabled"
-        @update:model-value="toggleEnabled"
+        @update:model-value="setToggle('slackEnabled', $event)"
       />
+      <div v-if="settings.global.slackEnabled" class="q-mt-sm">
+        <q-toggle
+          :model-value="settings.global.slackNotifyCompaction"
+          :label="$t('slack.notifyCompaction')"
+          :disable="busy"
+          dark dense color="primary"
+          data-test="slack-notify-compaction"
+          @update:model-value="setToggle('slackNotifyCompaction', $event)"
+        />
+      </div>
+      <div v-if="settings.global.slackEnabled" class="q-mt-sm">
+        <q-toggle
+          :model-value="settings.global.slackNotifyErrors"
+          :label="$t('slack.notifyErrors')"
+          :disable="busy"
+          dark dense color="primary"
+          data-test="slack-notify-errors"
+          @update:model-value="setToggle('slackNotifyErrors', $event)"
+        />
+      </div>
       <div class="row items-center no-wrap q-gutter-x-xs q-mt-sm">
         <div class="text-caption" role="status" data-test="slack-status">{{ statusLine }}</div>
         <q-btn
@@ -36,7 +56,8 @@
       </div>
     </div>
 
-    <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+    <form class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md" @submit.prevent="saveCredentials">
+      <input type="text" name="username" autocomplete="username" value="Slack" hidden />
       <div v-if="slack.status?.configured" class="text-caption text-kobo-3 q-mb-sm">
         <span class="text-weight-medium text-kobo-1">{{ $t('slack.tokensConfigured') }}</span>
         {{ $t('slack.tokensReplaceHint') }}
@@ -74,7 +95,7 @@
           :label="$t('slack.saveCredentials')"
           :disable="busy || !botToken.trim() || !appToken.trim()"
           data-test="slack-save-credentials"
-          @click="saveCredentials"
+          type="submit"
         />
         <q-btn
           v-if="slack.status?.configured"
@@ -84,11 +105,12 @@
           :label="$t('slack.removeCredentials')"
           :disable="busy"
           data-test="slack-remove-credentials"
+          type="button"
           @click="confirmRemove"
         />
       </div>
       <div v-if="credentialsError" class="text-negative text-caption q-mb-sm" role="alert">{{ credentialsError }}</div>
-    </div>
+    </form>
 
     <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
       <q-select
@@ -96,13 +118,16 @@
         multiple
         use-chips
         use-input
-        hide-dropdown-icon
-        new-value-mode="add-unique"
+        :options="memberOptions"
+        :option-label="memberLabel"
+        :loading="membersLoading"
+        input-debounce="0"
+        @filter="filterMembers"
         dense
         dark
         outlined
         :label="$t('slack.allowedUsers')"
-        :hint="$t('slack.allowedUsersHint')"
+        :hint="!slack.status?.connected || membersUnavailable ? $t('slack.membersUnavailable') : $t('slack.allowedUsersHint')"
         :error="!!allowedError"
         :error-message="allowedError"
         class="q-mb-sm settings-input"
@@ -171,6 +196,53 @@ const botToken = ref('')
 const appToken = ref('')
 const allowedUserIds = ref<string[]>([...(settings.global.slackAllowedUserIds ?? [])])
 const allowedError = ref('')
+const members = ref(new Map<string, string>())
+const membersLoading = ref(false)
+const membersUnavailable = ref(false)
+const memberQuery = ref('')
+
+function memberLabel(id: string) {
+  const name = members.value.get(id)
+  return name && name !== id ? `${name} (${id})` : id
+}
+
+const memberOptions = computed(() => {
+  const query = memberQuery.value.trim().toLowerCase()
+  const ids = [...members.value.keys()].filter((id) => memberLabel(id).toLowerCase().includes(query))
+  const manualId = memberQuery.value.trim()
+  if (/^[UW][A-Z0-9]{2,}$/.test(manualId) && !members.value.has(manualId)) ids.push(manualId)
+  return ids
+})
+
+function filterMembers(query: string, update: (apply: () => void) => void) {
+  update(() => {
+    memberQuery.value = query
+  })
+}
+
+watch(
+  () => slack.status,
+  async (status, _, onCleanup) => {
+    let current = true
+    onCleanup(() => {
+      current = false
+    })
+    members.value.clear()
+    membersUnavailable.value = false
+    membersLoading.value = !!status?.connected
+    if (!status?.connected) return
+    try {
+      const directory = await slack.fetchMembers()
+      if (current) members.value = new Map(directory.map(({ id, name }) => [id, name]))
+    } catch {
+      if (current) membersUnavailable.value = true
+    } finally {
+      if (current) membersLoading.value = false
+    }
+  },
+  { immediate: true },
+)
+
 const credentialsError = ref('')
 const busy = ref(false)
 
@@ -226,19 +298,20 @@ function errorMessage(err: unknown): string {
   return err instanceof ApiError ? err.message : t('slack.saveFailed')
 }
 
-async function toggleEnabled(value: boolean) {
+async function setToggle(key: 'slackEnabled' | 'slackNotifyCompaction' | 'slackNotifyErrors', value: boolean) {
   busy.value = true
   try {
-    await settings.updateGlobal({ slackEnabled: value })
+    await settings.updateGlobal({ [key]: value })
   } catch (err) {
     $q.notify({ type: 'negative', message: errorMessage(err), position: 'top' })
   } finally {
     busy.value = false
   }
-  await refreshStatus()
+  if (key === 'slackEnabled') await refreshStatus()
 }
 
 async function saveCredentials() {
+  if (busy.value || !botToken.value.trim() || !appToken.value.trim()) return
   busy.value = true
   credentialsError.value = ''
   try {

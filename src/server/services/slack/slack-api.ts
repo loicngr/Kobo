@@ -70,6 +70,7 @@ export interface SlackApi {
   replaceButtons(channelId: string, ts: string, text: string, line: string): Promise<void>
   addReaction(channelId: string, ts: string, name: string): Promise<void>
   removeReaction(channelId: string, ts: string, name: string): Promise<void>
+  listMembers(): Promise<{ id: string; name: string }[]>
   listChannels(): Promise<{ id: string; name: string }[]>
   threadReplies(channelId: string, threadTs: string, limit: number): Promise<InboundEvent[]>
   userName(userId: string): Promise<string>
@@ -448,6 +449,20 @@ export function createSlackApi(credentials: SlackCredentials): SlackApi {
       } catch (err) {
         if (slackCode(err) !== 'no_reaction') throw toApiError(err)
       }
+    },
+
+    async listMembers() {
+      const members: { id: string; name: string }[] = []
+      let cursor: string | undefined
+      do {
+        const page = await call(() => web.users.list({ limit: 200, cursor }))
+        for (const user of page.members ?? []) {
+          if (!user.id || user.deleted || user.is_bot || user.is_app_user || user.id === 'USLACKBOT') continue
+          members.push({ id: user.id, name: user.profile?.display_name || user.real_name || user.name || user.id })
+        }
+        cursor = page.response_metadata?.next_cursor || undefined
+      } while (cursor)
+      return members.sort((a, b) => a.name.localeCompare(b.name))
     },
 
     async listChannels() {

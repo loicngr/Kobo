@@ -5,7 +5,7 @@ import { validateDialogueArguments } from '../../shared/workspace-dialogue-tools
 import { type MessageSource, parseMessageSource } from '../../shared/workspace-message-types.js'
 import { getDb } from '../db/index.js'
 import { assertWorkspaceLifecycleAvailable } from '../utils/workspace-lifecycle-guard.js'
-import { answerPendingQuestion, getPendingInputs } from './agent/orchestrator.js'
+import { answerPendingQuestion, getPendingInputs, getRunningLlms } from './agent/orchestrator.js'
 import { createMcpClientContext } from './mcp-client-context.js'
 import { deliverKeyedMcpMessage } from './mcp-message-delivery-service.js'
 import { deliverWorkspaceMessage } from './workspace-message-service.js'
@@ -74,7 +74,12 @@ export async function executeWorkspaceDialogueTool(
   const workspace = getWorkspace(workspaceId)
   if (!workspace) throw new Error(`Workspace '${workspaceId}' not found`)
   if (name === 'get_workspace')
-    return { workspace, tasks: listTasks(workspaceId), activeSession: getActiveSession(workspaceId) }
+    return {
+      workspace,
+      tasks: listTasks(workspaceId),
+      activeSession: getActiveSession(workspaceId),
+      runningLlms: getRunningLlms(workspaceId),
+    }
   if (name === 'list_workspace_sessions') return listSessions(workspaceId)
   if (name === 'get_workspace_questions') {
     const pending = getPendingInputs(workspaceId)

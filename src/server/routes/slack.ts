@@ -6,6 +6,7 @@ import {
   getSlackStatus,
   linkSlackChannel,
   listSlackChannels,
+  listSlackMembers,
   restartSlack,
   setSlackQuestionMirror,
 } from '../services/slack/slack-service.js'
@@ -38,6 +39,14 @@ app.put('/credentials', async (c) => {
   }
   await restartSlack().catch(() => undefined)
   return statusResponse(c)
+})
+
+app.get('/members', async (c) => {
+  try {
+    return c.json({ members: await listSlackMembers() })
+  } catch {
+    return c.json({ error: 'Slack members are unavailable' }, 503)
+  }
 })
 
 app.get('/channels', async (c) => {

@@ -29,6 +29,12 @@ export class SessionController {
    * is awaiting the engine.
    */
   private _stopRequested = false
+  private launchLlm?: { model: string; reasoningEffort: string }
+  get runningLlm() {
+    if (this._status !== 'running' || this._sessionEnded || this._isClosed || !this.launchLlm) return null
+    return { sessionId: this.agentSessionId, engine: this.engineId, ...this.launchLlm }
+  }
+
   private _sessionEnded = false
   private _isClosed = false
   private resolveClosed!: () => void
@@ -91,6 +97,7 @@ export class SessionController {
 
   async start(options: StartOptions): Promise<void> {
     if (this._startPromise) throw new Error('SessionController already started')
+    this.launchLlm = { model: options.model ?? 'auto', reasoningEffort: options.effort ?? 'auto' }
     this._startPromise = this.startEngine(options)
     await this._startPromise
   }
@@ -215,6 +222,7 @@ export class SessionController {
 
   private handle(ev: AgentEvent): void {
     this._lastEventAt = Date.now()
+    if (ev.kind === 'session:started' && ev.model && this.launchLlm) this.launchLlm.model = ev.model
     if (ev.kind === 'session:ended') {
       this._sessionEnded = true
       if (this._engineProcess && !this._engineProcess.closed) this.confirmClosed()

@@ -51,6 +51,18 @@ export async function executeWorkspaceLifecycleTool(name: string, raw: unknown, 
       operation: name === 'add_workspace_tags' ? 'add' : 'remove',
       tags: input.tags,
     })
+  if (name === 'set_workspace_llm') {
+    const updated = (await request(dispatch, path, 'set-llm', 'PATCH', {
+      model: typeof input.model === 'string' ? input.model.trim() : undefined,
+      reasoningEffort: typeof input.reasoning_effort === 'string' ? input.reasoning_effort.trim() : undefined,
+    })) as { id: string; engine: string; model: string; reasoningEffort: string }
+    return {
+      workspaceId: updated.id,
+      engine: updated.engine,
+      model: updated.model,
+      reasoningEffort: updated.reasoningEffort,
+    }
+  }
   if (name === 'run_setup_script') return request(dispatch, `${path}/run-setup-script`, 'setup', 'POST')
   if (name === 'set_workspace_status') return request(dispatch, path, 'set-status', 'PATCH', { status: input.status })
   if (name === 'archive_workspace') return request(dispatch, `${path}/archive`, 'archive', 'POST')

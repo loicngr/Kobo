@@ -2648,6 +2648,8 @@ Links a Slack channel to a workspace so a person can drive its agent from Slack.
 
 Enable it in **Settings → Slack**. The same tab holds a setup guide that follows the steps below. Disabling the integration keeps the stored tokens, the allow-list and existing channel links, but disconnects from Slack and ignores inbound messages. Kōbō uses the official `@slack/socket-mode` and `@slack/web-api` packages.
 
+In **Settings → Integrations → Slack**, enable compaction notices to post one message in the linked channel when its workspace starts compacting context. A separate toggle posts a notice when a workspace enters the error or quota state. Both global preferences default to off. Notices are sent only while Slack is connected.
+
 ### Setup
 
 1. **Create the app.** Open <https://api.slack.com/apps>, click **Create new app**, choose **From scratch**, then **Paste a manifest**, pick your Slack workspace, select the JSON tab and paste the manifest below:
@@ -2705,7 +2707,7 @@ Enable it in **Settings → Slack**. The same tab holds a setup guide that follo
    For an app created before agents could send files, add the bot scope `files:write` under **OAuth & Permissions** and reinstall the app (the reinstall may need an admin's approval).
 3. **Install the app.** In **Install App**, install it to the workspace. If installs need approval, wait for an admin. Copy the **Bot User OAuth Token** (`xoxb-…`). Leave token rotation and PKCE off.
 4. **Paste both tokens** in **Settings → Slack**, save them and enable the integration. The status line shows the bot and team names once connected.
-5. **Allow yourself.** Copy your member ID (Slack profile, then **...**, then **Copy member ID**; the format is `U…`) into **Allowed Slack member IDs** and save.
+5. **Allow yourself.** Select your name under **Allowed Slack members** and save. You can also enter your Slack member ID if the directory is unavailable.
 6. **Invite the bot and link a channel.** Run `/invite @Kobo` in each channel to listen to, then pick that channel in the workspace configuration menu. A channel belongs to at most one workspace.
 
 ### Tokens and settings

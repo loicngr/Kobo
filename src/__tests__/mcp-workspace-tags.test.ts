@@ -58,6 +58,41 @@ async function httpClient(grants = tools) {
   )
   return { client, key }
 }
+it('updates workspace LLM defaults atomically over MCP and broadcasts the saved configuration', async () => {
+  const name = 'set_workspace_llm'
+  const { client } = await httpClient([name])
+  const call = (args: Record<string, unknown>) => client.callTool({ name, arguments: { workspace_id: 'own', ...args } })
+  try {
+    const result = await call({ model: 'claude-sonnet-5-5', reasoning_effort: 'high' })
+    expect(result.structuredContent).toMatchObject({
+      workspaceId: 'own',
+      engine: 'claude-code',
+      model: 'claude-sonnet-5-5',
+      reasoningEffort: 'high',
+    })
+    expect(emitEphemeral).toHaveBeenCalledWith(
+      'own',
+      'workspace:configuration',
+      expect.objectContaining({ model: 'claude-sonnet-5-5', reasoningEffort: 'high' }),
+    )
+    expect((await call({ reasoning_effort: 'medium' })).isError).not.toBe(true)
+    expect((await call({ model: 'auto' })).structuredContent).toMatchObject({
+      model: 'auto',
+      reasoningEffort: 'medium',
+    })
+    for (const args of [
+      {},
+      { model: 'gpt-6.2-sol' },
+      { model: 'claude-sonnet-5-5', reasoning_effort: 'unknown' },
+      { model: 'auto', engine: 'codex' },
+      { workspace_id: 'other', model: 'auto' },
+    ])
+      expect((await call(args)).isError).toBe(true)
+    expect(getWorkspace('own')).toMatchObject({ engine: 'claude-code', model: 'auto', reasoningEffort: 'medium' })
+  } finally {
+    await client.close()
+  }
+})
 it('adds/removes only the requested tags, handles repeats and publishes the saved state', async () => {
   const { client } = await httpClient()
   try {
@@ -128,7 +163,11 @@ it('enforces independent tool grants, workspace scope, unknown fields and revoca
 it.each(['external', 'internal', 'read-only'] as const)(
   'supports %s stdio and binds managed calls to their workspace',
   async (mode) => {
-    const key = createExternalMcpCredential({ name: 'Stdio', workspaceIds: ['own'], tools })
+    const key = createExternalMcpCredential({
+      name: 'Stdio',
+      workspaceIds: ['own'],
+      tools: [...tools, 'set_workspace_llm'],
+    })
     const cap = createInternalMcpCapability({
       workspaceId: 'own',
       sessionId: 'source',
@@ -156,6 +195,18 @@ it.each(['external', 'internal', 'read-only'] as const)(
         }),
       )
       const names = (await client.listTools()).tools.map((tool) => tool.name)
+      expect(names.includes('set_workspace_llm')).toBe(mode !== 'read-only')
+      const llmChange = await client.callTool({
+        name: 'set_workspace_llm',
+        arguments: { reasoning_effort: 'high', ...(mode === 'external' ? { workspace_id: 'own' } : {}) },
+      })
+      expect(llmChange.isError === true).toBe(mode === 'read-only')
+      expect(getWorkspace('own')?.reasoningEffort).toBe(mode === 'read-only' ? 'auto' : 'high')
+      if (mode !== 'external')
+        expect(
+          (await client.callTool({ name: 'set_workspace_llm', arguments: { workspace_id: 'other', model: 'auto' } }))
+            .isError,
+        ).toBe(true)
       for (const name of tools) {
         expect(names.includes(name)).toBe(mode !== 'read-only')
         const result = await client.callTool({

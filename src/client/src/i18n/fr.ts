@@ -2945,6 +2945,8 @@ export default {
   'tours.workspace.progress.description':
     'Les agents et leurs sous-agents signalent les tâches longues au-dessus du champ de message. Trois activités sont visibles ; dépliez pour voir les autres. Les valeurs sont déclarées par les agents et ne constituent pas une vérification. Un succès disparaît après cinq secondes ; un échec reste visible. Fermer masque uniquement cette activité sans annuler le travail.',
   'settings.nav.slack': 'Slack',
+  'slack.notifyCompaction': 'Prévenir le canal lié au workspace au début d’une compaction du contexte',
+  'slack.notifyErrors': 'Prévenir le canal lié au workspace en cas d’erreur ou de quota atteint',
   'slack.enabled': "Activer l'intégration Slack",
   'slack.botToken': 'Bot User OAuth Token',
   'slack.appToken': 'App-Level Token',
@@ -2958,9 +2960,9 @@ export default {
   'slack.credentialsSaved': 'Tokens Slack enregistrés',
   'slack.credentialsRemoved': 'Tokens Slack supprimés',
   'slack.saveFailed': "Impossible d'enregistrer les réglages Slack.",
-  'slack.allowedUsers': 'IDs de membres Slack autorisés',
-  'slack.allowedUsersHint':
-    'Seuls ces membres peuvent piloter les agents depuis Slack. Saisissez un ID puis appuyez sur Entrée.',
+  'slack.allowedUsers': 'Membres Slack autorisés',
+  'slack.allowedUsersHint': 'Recherchez un membre par nom ou par ID Slack.',
+  'slack.membersUnavailable': 'Liste des membres indisponible. Vous pouvez saisir un ID Slack.',
   'slack.saveAllowed': 'Enregistrer la liste',
   'slack.allowedSaved': 'Liste enregistrée',
   'slack.status.connected': 'Connecté en tant que {bot} dans {team}',
@@ -3004,8 +3006,7 @@ export default {
   'slack.guideStep4Title': '4. Coller les tokens',
   'slack.guideStep4Body': "Collez les deux tokens dans les champs ci-dessus, enregistrez-les et activez l'intégration.",
   'slack.guideStep5Title': '5. Vous autoriser',
-  'slack.guideStep5Body':
-    'Trouvez votre ID de membre : profil Slack, puis "...", puis "Copy member ID". Ajoutez-le à la liste autorisée ci-dessus.',
+  'slack.guideStep5Body': 'Sélectionnez votre nom dans la liste des membres autorisés puis enregistrez.',
   'slack.guideStep6Title': '6. Inviter le bot et lier un canal',
   'slack.guideStep6Body':
     "Dans Slack, lancez /invite {'@'}Kobo dans chaque canal à écouter, puis choisissez ce canal dans le menu de configuration du workspace.",

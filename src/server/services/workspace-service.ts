@@ -445,6 +445,13 @@ export function listArchivedWorkspaces(): Workspace[] {
   return rows.map(mapWorkspace)
 }
 
+const statusListeners = new Set<(workspace: Workspace) => void>()
+
+export function onWorkspaceStatusChanged(listener: (workspace: Workspace) => void): () => void {
+  statusListeners.add(listener)
+  return () => statusListeners.delete(listener)
+}
+
 /** Transition a workspace to a new status, validating against VALID_TRANSITIONS. */
 export function updateWorkspaceStatus(id: string, status: WorkspaceStatus): Workspace {
   const db = getDb()
@@ -474,7 +481,9 @@ export function updateWorkspaceStatus(id: string, status: WorkspaceStatus): Work
   if (status === 'compacting' || workspace.status === 'compacting') {
     emitEphemeral(id, 'workspace:status', { status })
   }
-  return getWorkspace(id) as Workspace
+  const updated = getWorkspace(id) as Workspace
+  for (const listener of statusListeners) listener(updated)
+  return updated
 }
 
 const WORKSPACE_NAME_MAX_LENGTH = 200
@@ -749,7 +758,9 @@ export function updateWorkspaceFields(id: string, fields: WorkspaceFieldUpdates)
     .run(...values)
   if (result.changes === 0) throw new Error(`Workspace '${id}' not found`)
   if (hasDescription) emitEphemeral(id, 'workspace:description-updated', { description: storedDescription ?? null })
-  return getWorkspace(id) as Workspace
+  const updated = getWorkspace(id) as Workspace
+  if (updated.status !== workspace.status) for (const listener of statusListeners) listener(updated)
+  return updated
 }
 
 /**

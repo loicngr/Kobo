@@ -309,7 +309,9 @@ export interface WorkspaceInfoDto {
   workingBranch: string
   worktreePath: string
   status: string
+  engine: string
   model: string
+  reasoningEffort: string
   notionUrl: string | null
   notionPageId: string | null
   description: string | null
@@ -335,7 +337,9 @@ interface WorkspaceRow {
   notion_page_id: string | null
   description: string | null
   agent_description: string | null
+  engine: string
   model: string
+  reasoning_effort: string
   dev_server_status: string
   has_unread: number
   auto_loop: number
@@ -349,7 +353,7 @@ interface WorkspaceRow {
 export function getWorkspaceInfoHandler(db: Database.Database, workspaceId: string): WorkspaceInfoDto {
   const row = db
     .prepare(
-      'SELECT id, name, project_path, source_branch, working_branch, worktree_path, status, notion_url, notion_page_id, description, agent_description, model, dev_server_status, has_unread, auto_loop, auto_loop_ready, sprint_id, created_at, updated_at FROM workspaces WHERE id = ?',
+      'SELECT id, name, project_path, source_branch, working_branch, worktree_path, status, notion_url, notion_page_id, description, agent_description, engine, model, reasoning_effort, dev_server_status, has_unread, auto_loop, auto_loop_ready, sprint_id, created_at, updated_at FROM workspaces WHERE id = ?',
     )
     .get(workspaceId) as WorkspaceRow | undefined
 
@@ -372,7 +376,9 @@ export function getWorkspaceInfoHandler(db: Database.Database, workspaceId: stri
       )
     })(),
     status: row.status,
+    engine: row.engine ?? 'claude-code',
     model: row.model,
+    reasoningEffort: row.reasoning_effort ?? 'auto',
     notionUrl: row.notion_url,
     notionPageId: row.notion_page_id,
     description: row.description ?? null,

@@ -35,9 +35,12 @@ export const WORKSPACE_DISCOVERY_TOOL = tool(
 )
 
 export const WORKSPACE_DIALOGUE_TOOLS: Tool[] = [
-  tool('get_workspace', 'Read workspace metadata, tasks and current agent session.', { workspace_id: workspace }, [
-    'workspace_id',
-  ]),
+  tool(
+    'get_workspace',
+    'Read workspace metadata, configured engine/model/reasoningEffort, runningLlms for live sessions, tasks and current agent session.',
+    { workspace_id: workspace },
+    ['workspace_id'],
+  ),
   tool(
     'list_workspace_sessions',
     'List the sessions of a workspace to select a conversation.',

@@ -2952,6 +2952,8 @@ export default {
   'tours.workspace.progress.description':
     'Agenten und ihre Unteragenten melden lange Aufgaben über dem Nachrichtenfeld. Zunächst sind drei Aktivitäten sichtbar; weitere lassen sich einblenden. Die Werte werden von Agenten gemeldet und sind kein Prüfnachweis. Erfolge verschwinden nach fünf Sekunden; Fehler bleiben sichtbar. Schließen blendet nur diese Aktivität aus, ohne die Arbeit abzubrechen.',
   'settings.nav.slack': 'Slack',
+  'slack.notifyCompaction': 'Beim Start der Kontextkomprimierung den verknüpften Workspace-Kanal benachrichtigen',
+  'slack.notifyErrors': 'Den verknüpften Workspace-Kanal bei Fehlern oder erreichtem Kontingent benachrichtigen',
   'slack.enabled': 'Slack-Integration aktivieren',
   'slack.botToken': 'Bot User OAuth Token',
   'slack.appToken': 'App-Level Token',
@@ -2965,9 +2967,9 @@ export default {
   'slack.credentialsSaved': 'Slack-Tokens gespeichert',
   'slack.credentialsRemoved': 'Slack-Tokens entfernt',
   'slack.saveFailed': 'Die Slack-Einstellungen konnten nicht gespeichert werden.',
-  'slack.allowedUsers': 'Erlaubte Slack-Mitglieds-IDs',
-  'slack.allowedUsersHint':
-    'Nur diese Mitglieder können Agenten über Slack steuern. ID eingeben und Eingabetaste drücken.',
+  'slack.allowedUsers': 'Erlaubte Slack-Mitglieder',
+  'slack.allowedUsersHint': 'Suchen Sie nach Namen oder Slack-ID.',
+  'slack.membersUnavailable': 'Mitgliederliste nicht verfügbar. Sie können eine Slack-ID eingeben.',
   'slack.saveAllowed': 'Liste speichern',
   'slack.allowedSaved': 'Liste gespeichert',
   'slack.status.connected': 'Verbunden als {bot} in {team}',
@@ -3014,8 +3016,7 @@ export default {
   'slack.guideStep4Body':
     'Fügen Sie beide Tokens in die Felder oben ein, speichern Sie sie und aktivieren Sie die Integration.',
   'slack.guideStep5Title': '5. Sich selbst erlauben',
-  'slack.guideStep5Body':
-    'Ihre Mitglieds-ID finden Sie so: Slack-Profil, dann "...", dann "Copy member ID". Fügen Sie sie der Liste oben hinzu.',
+  'slack.guideStep5Body': 'Wählen Sie Ihren Namen in der Mitgliederliste und speichern Sie die Auswahl.',
   'slack.guideStep6Title': '6. Bot einladen und Kanal verknüpfen',
   'slack.guideStep6Body':
     "Führen Sie in Slack in jedem zu überwachenden Kanal /invite {'@'}Kobo aus und wählen Sie den Kanal dann im Konfigurationsmenü des Workspace.",

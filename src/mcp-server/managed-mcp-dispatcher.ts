@@ -14,6 +14,7 @@ import {
   INTERNAL_WORKSPACE_TAG_TOOLS,
   isWorkspaceLifecycleTool,
   isWorkspaceTagTool,
+  SET_WORKSPACE_LLM_TOOL,
   SET_WORKSPACE_STATUS_TOOL,
   validateWorkspaceLifecycleArguments,
   WORKSPACE_LIFECYCLE_TOOLS,
@@ -290,7 +291,7 @@ export function createManagedMcpDispatcher(context: ManagedMcpContext) {
     {
       name: 'get_workspace_info',
       description:
-        'CALL EARLY in a session to confirm project path, working/source branch, worktree path, model, and notion link. Cheap read — useful when the user refers to "this workspace" or when you need the worktree path to locate files.',
+        'CALL EARLY in a session to confirm project path, working/source branch, worktree path, configured engine/model/reasoningEffort, runningLlms for live sessions, and notion link. Cheap read — useful when the user refers to "this workspace" or when you need the worktree path to locate files.',
       inputSchema: { type: 'object', properties: {}, required: [] },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -596,6 +597,11 @@ export function createManagedMcpDispatcher(context: ManagedMcpContext) {
     INTERNAL_START_CODE_REVIEW_TOOL,
     ...INTERNAL_WORKSPACE_OBSERVATION_TOOLS,
     INTERNAL_RUN_SETUP_SCRIPT_TOOL,
+    {
+      ...SET_WORKSPACE_LLM_TOOL,
+      description: `${SET_WORKSPACE_LLM_TOOL.description} Bound to this workspace; omit workspace_id.`,
+      inputSchema: { ...SET_WORKSPACE_LLM_TOOL.inputSchema, required: [] },
+    },
     ...INTERNAL_WORKSPACE_TAG_TOOLS,
     ...SLACK_TOOLS,
   ]
@@ -674,6 +680,7 @@ export function createManagedMcpDispatcher(context: ManagedMcpContext) {
               tool.name !== 'set_workspace_status' &&
               tool.name !== 'start_code_review' &&
               !isWorkspaceObservationTool(tool.name) &&
+              tool.name !== 'set_workspace_llm' &&
               tool.name !== 'run_setup_script' &&
               !isWorkspaceTagTool(tool.name),
           ),
@@ -808,6 +815,7 @@ export function createManagedMcpDispatcher(context: ManagedMcpContext) {
       if (
         isWorkspaceObservationTool(name) ||
         name === 'start_code_review' ||
+        name === 'set_workspace_llm' ||
         name === 'run_setup_script' ||
         isWorkspaceTagTool(name)
       ) {
@@ -901,7 +909,8 @@ export function createManagedMcpDispatcher(context: ManagedMcpContext) {
       }
 
       if (name === 'get_workspace_info') {
-        return ok(getWorkspaceInfoHandler(db, workspaceId!))
+        const { getRunningLlms } = await import('../server/services/agent/orchestrator.js')
+        return ok({ ...getWorkspaceInfoHandler(db, workspaceId!), runningLlms: getRunningLlms(workspaceId!) })
       }
 
       if (name === 'set_auto_loop') {

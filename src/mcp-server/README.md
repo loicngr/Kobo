@@ -55,7 +55,7 @@ Leave `KOBO_WORKSPACE_ID` unset or empty for an external client. Set `KOBO_MCP_T
 
 | Tool | Arguments | Result |
 |---|---|---|
-| `get_workspace` | `workspace_id` | Workspace metadata, tasks and active/latest session. |
+| `get_workspace` | `workspace_id` | Workspace metadata (including configured engine, model and reasoningEffort), tasks, active/latest session and runningLlms. |
 | `list_workspace_sessions` | `workspace_id` | Workspace sessions with their IDs, status and role (`primary` or `parallel-review`). |
 | `read_workspace_messages` | `workspace_id`, optional `session_id`, `after_cursor`, `limit` | Chronological conversation fragments, `nextCursor`, `hasMore`, `workspaceStatus`, `activeSessionId`. |
 | `send_workspace_message` | `workspace_id`, `content` and/or `attachments`, optional `session_id`, `idempotency_key` | `{ accepted: true, sessionId }`; keyed sends also return `requestId`, `eventId`, and `replayed` on a successful retry. |
@@ -299,6 +299,10 @@ Delete a task from the current workspace permanently.
 
 ### Workspace
 
+Use `set_workspace_llm` to update the model, reasoning effort, or both for future launches. For example, an external client can send `{"workspace_id":"abc","model":"claude-sonnet-5-5","reasoning_effort":"high"}`. Managed agents omit `workspace_id` and can only update their own workspace in a writable launch. External keys need the tool grant and access to the target workspace. Omitted fields retain their settings. Supply both when the previous effort is incompatible with the new model. The change is visible immediately and leaves live sessions running with their launch settings.
+
+Both `get_workspace` and `get_workspace_info` return a top-level `runningLlms` array. Each entry identifies a live launch by `sessionId`, `role` (primary or parallel-review), `engine`, `model` and `reasoningEffort`. The model uses the engine-reported ID when available. Effort is the launch setting; `auto` leaves the choice to the engine. An empty array means there is no live launch. Editing workspace defaults does not change a running launch.
+
 #### `get_workspace_info`
 Get all metadata about the current workspace in a single call: name, project path, branches, model, Notion URL, worktree path, status, timestamps.
 
@@ -307,7 +311,7 @@ Get all metadata about the current workspace in a single call: name, project pat
 ```ts
 {
   id, name, projectPath, sourceBranch, workingBranch,
-  worktreePath, status, model, notionUrl, notionPageId,
+  worktreePath, status, engine, model, reasoningEffort, runningLlms, notionUrl, notionPageId,
   devServerStatus, createdAt, updatedAt
 }
 ```

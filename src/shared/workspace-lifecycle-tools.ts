@@ -16,6 +16,23 @@ const branch = {
     'Current exact working branch name, from get_workspace. Required for every deletion, like the UI confirmation.',
 }
 
+export const SET_WORKSPACE_LLM_TOOL: Tool = {
+  name: 'set_workspace_llm',
+  description:
+    'Change the model and/or reasoning effort for future launches of the current workspace engine. Omitted fields keep their values. Use auto for the engine default. Read get_workspace to inspect configured values and runningLlms.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      workspace_id: workspaceId,
+      model: { type: 'string', minLength: 1, maxLength: 200 },
+      reasoning_effort: { type: 'string', minLength: 1, maxLength: 200 },
+    },
+    required: ['workspace_id'],
+    additionalProperties: false,
+  },
+  annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+}
+
 export const SET_WORKSPACE_STATUS_TOOL: Tool = {
   name: 'set_workspace_status',
   description:
@@ -149,6 +166,7 @@ export const WORKSPACE_LIFECYCLE_TOOLS: Tool[] = [
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
   },
   SET_WORKSPACE_STATUS_TOOL,
+  SET_WORKSPACE_LLM_TOOL,
 ]
 
 export function isWorkspaceLifecycleTool(name: string): boolean {
@@ -184,6 +202,8 @@ export function validateWorkspaceLifecycleArguments(name: string, raw: unknown):
     )
       throw new Error(`Invalid ${key}`)
   }
+  if (name === 'set_workspace_llm' && input.model === undefined && input.reasoning_effort === undefined)
+    throw new Error('Provide model or reasoning_effort')
   const id = input.workspace_id as string
   if (!/^[A-Za-z0-9_-]+$/.test(id) || id === 'archived')
     throw new Error('Invalid workspace_id: use a single workspace ID, never a path or bulk endpoint')

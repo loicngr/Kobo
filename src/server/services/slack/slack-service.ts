@@ -27,7 +27,7 @@ import { getReviewReturn } from '../review-return-service.js'
 import { getGlobalSettings } from '../settings-service.js'
 import { broadcastAll, broadcastPersistedEvent, persistWorkspaceEvent } from '../websocket-service.js'
 import { deliverWorkspaceMessage } from '../workspace-message-service.js'
-import { getWorkspace } from '../workspace-service.js'
+import { getWorkspace, onWorkspaceStatusChanged, type WorkspaceStatus } from '../workspace-service.js'
 import {
   createSlackApi,
   type SlackApi,
@@ -114,6 +114,25 @@ const NOTICE = {
   uncertain: 'Kōbō restarted while delivering this message. Delivery is uncertain and it was not retried.',
   unlinkedQueued: 'This channel was unlinked from its Kōbō workspace before this message was delivered.',
 }
+const STATUS_NOTICES: Partial<
+  Record<
+    WorkspaceStatus,
+    {
+      setting: 'slackNotifyCompaction' | 'slackNotifyErrors'
+      text: string
+    }
+  >
+> = {
+  compacting: {
+    setting: 'slackNotifyCompaction',
+    text: 'Kōbō is compacting the conversation context for this workspace.',
+  },
+  quota: {
+    setting: 'slackNotifyErrors',
+    text: 'This workspace has reached its agent usage quota. Check Kōbō for retry details.',
+  },
+  error: { setting: 'slackNotifyErrors', text: 'This workspace encountered an error. Open it in Kōbō for details.' },
+}
 const MAX_QUEUED = 50
 const CONTEXT_LIMIT = 100
 const TICK_MS = 15_000
@@ -147,6 +166,7 @@ const downloadFailures = new Map<string, Map<string, number>>()
 const rowKey = (row: { channelId: string; ts: string }) => `${row.channelId}:${row.ts}`
 /** One question-mirror pass per workspace at a time; a change during a pass schedules one more. */
 const mirrorRuns = new Map<string, { again: boolean }>()
+let unsubscribeStatus: (() => void) | null = null
 let unsubscribePending: (() => void) | null = null
 let lastInbound: SlackInboundOutcome | undefined
 /** Private: the stored row `lastInbound` describes, so its later transitions update it. Never exposed. */
@@ -276,6 +296,18 @@ async function doStart(createApi: typeof createSlackApi, gen: number): Promise<v
     for (const row of closeStaleSlackQuestions()) await replaceControls(row, QUESTION_TEXT.restarted)
   }
   unsubscribePending ??= onPendingInputsChanged((workspaceId) => void scheduleQuestionMirror(workspaceId))
+  unsubscribeStatus ??= onWorkspaceStatusChanged((ws) => {
+    const channel = ws.slackChannelId
+    if (stopping || !connected || !channel || ws.archivedAt || ws.worktreePurgedAt) return
+    const notice = STATUS_NOTICES[ws.status]
+    if (!notice) return
+    void track(
+      bestEffort('workspace status notice', async (a) => {
+        const settings = getGlobalSettings()
+        if (settings.slackEnabled && settings[notice.setting]) await a.postMessage(channel, notice.text)
+      }),
+    )
+  })
   await connect()
   timer = setInterval(() => void track(runSlackTick()), TICK_MS)
   timer.unref?.()
@@ -285,6 +317,8 @@ async function doStop(): Promise<void> {
   stopping = true
   if (timer) clearInterval(timer)
   timer = null
+  unsubscribeStatus?.()
+  unsubscribeStatus = null
   unsubscribePending?.()
   unsubscribePending = null
   while (active.size) await Promise.allSettled([...active])
@@ -806,6 +840,11 @@ async function settleWorkingReactions(): Promise<void> {
       await react(r.channelId, r.ts, final)
     }
   }
+}
+
+export async function listSlackMembers() {
+  if (!api || !connected) throw new Error('Slack is not connected')
+  return api.listMembers()
 }
 
 export async function listSlackChannels(): Promise<{ id: string; name: string; workspaceId: string | null }[]> {

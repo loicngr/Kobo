@@ -2890,6 +2890,8 @@ export default {
   'tours.workspace.progress.description':
     'Agents and their delegates report long-running work above the message field. Three activities are shown initially; expand to see the others. Values are agent-reported, not verification. Success disappears after five seconds; failures stay visible. Closing hides only that activity without cancelling work.',
   'settings.nav.slack': 'Slack',
+  'slack.notifyCompaction': 'Notify the linked workspace channel when context compaction starts',
+  'slack.notifyErrors': 'Notify the linked workspace channel on errors or quota limits',
   'slack.enabled': 'Enable the Slack integration',
   'slack.botToken': 'Bot User OAuth Token',
   'slack.appToken': 'App-Level Token',
@@ -2903,8 +2905,9 @@ export default {
   'slack.credentialsSaved': 'Slack tokens saved',
   'slack.credentialsRemoved': 'Slack tokens removed',
   'slack.saveFailed': 'Could not save the Slack settings.',
-  'slack.allowedUsers': 'Allowed Slack member IDs',
-  'slack.allowedUsersHint': 'Only these members can drive agents from Slack. Type an ID and press Enter.',
+  'slack.allowedUsers': 'Allowed Slack members',
+  'slack.allowedUsersHint': 'Search for a member by name or Slack ID.',
+  'slack.membersUnavailable': 'Member list unavailable. You can enter a Slack ID.',
   'slack.saveAllowed': 'Save allow-list',
   'slack.allowedSaved': 'Allow-list saved',
   'slack.status.connected': 'Connected as {bot} in {team}',
@@ -2948,8 +2951,7 @@ export default {
   'slack.guideStep4Title': '4. Paste the tokens',
   'slack.guideStep4Body': 'Paste both tokens in the fields above, save them and enable the integration.',
   'slack.guideStep5Title': '5. Allow yourself',
-  'slack.guideStep5Body':
-    'Find your member ID: Slack profile, then "...", then "Copy member ID". Add it to the allow-list above.',
+  'slack.guideStep5Body': 'Select your name in the allowed members list and save.',
   'slack.guideStep6Title': '6. Invite the bot and link a channel',
   'slack.guideStep6Body':
     "In Slack, run /invite {'@'}Kobo in each channel to listen to, then pick that channel in the workspace configuration menu.",

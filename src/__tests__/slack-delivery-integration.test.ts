@@ -56,6 +56,7 @@ function fakeApi(): { api: SlackApi; reactions: string[][] } {
       reactions.push([channel, ts, name])
     },
     removeReaction: async () => undefined,
+    listMembers: async () => [],
     listChannels: async () => [{ id: 'C1', name: 'general' }],
     threadReplies: async () => [],
     userName: async () => 'alice',

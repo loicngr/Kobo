@@ -124,6 +124,8 @@ interface GlobalSettings {
   autoExitPlanMode?: boolean
   agentWorkspaceLifecycleEnabled: boolean
   slackEnabled: boolean
+  slackNotifyCompaction: boolean
+  slackNotifyErrors: boolean
   slackAllowedUserIds: string[]
   reviewDefaultInstructions?: string
   showProgressBars: boolean
@@ -286,6 +288,8 @@ export const useSettingsStore = defineStore('settings', {
       autoExitPlanMode: false,
       agentWorkspaceLifecycleEnabled: false,
       slackEnabled: false,
+      slackNotifyCompaction: false,
+      slackNotifyErrors: false,
       slackAllowedUserIds: [],
       reviewDefaultInstructions: '',
       showProgressBars: true,

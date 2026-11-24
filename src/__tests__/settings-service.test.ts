@@ -3413,7 +3413,7 @@ it('stores default review instructions as a string and migrates older settings t
 it('migrates v72 settings to v73 with Slack defaults', () => {
   const migrated = runSettingsMigrations({ schemaVersion: 72, global: { editorCommand: 'keep' }, projects: [] })
   expect(migrated.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
-  expect(SETTINGS_SCHEMA_VERSION).toBe(75)
+  expect(SETTINGS_SCHEMA_VERSION).toBe(76)
   expect(migrated.global.slackEnabled).toBe(false)
   expect(migrated.global.slackAllowedUserIds).toEqual([])
   expect(migrated.global.editorCommand).toBe('keep')
@@ -3438,6 +3438,14 @@ it.each([undefined, false, true, 'true', 1])('migration v74 turns the lifecycle 
   expect(migrated.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
   expect(migrated.global.agentWorkspaceLifecycleEnabled).toBe(false)
   expect(migrated.global.editorCommand).toBe('keep')
+})
+
+it('defaults Slack compaction notices to off and persists an explicit opt-in', () => {
+  const migrated = runSettingsMigrations({ schemaVersion: 75, global: { slackEnabled: true }, projects: [] })
+  expect(migrated.global).toMatchObject({ slackEnabled: true, slackNotifyCompaction: false, slackNotifyErrors: false })
+  updateGlobalSettings({ slackNotifyCompaction: true })
+  updateGlobalSettings({ slackNotifyErrors: true })
+  expect(getGlobalSettings()).toMatchObject({ slackNotifyCompaction: true, slackNotifyErrors: true })
 })
 
 it('validates and deduplicates slackAllowedUserIds on update', () => {

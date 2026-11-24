@@ -95,7 +95,9 @@ async function dispatchWorkspaceRequest(pathname: string, init: RequestInit): Pr
       /^\/api\/workspaces\/[^/]+$/.test(pathname))
   if (isWorkspaceOperation) {
     const { default: routes } = await import('./workspaces.js')
-    return routes.request(`http://kobo.internal${pathname.slice('/api/workspaces'.length) || '/'}`, init)
+    return routes.request(`http://kobo.internal${pathname.slice('/api/workspaces'.length) || '/'}`, init, {
+      workspaceMcp: true,
+    })
   }
   if (
     init.method === 'POST' &&

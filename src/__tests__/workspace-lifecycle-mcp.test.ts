@@ -265,6 +265,7 @@ describe('MCP workspace lifecycle', () => {
       'unarchive_workspace',
       'restore_workspace',
       'set_workspace_status',
+      'set_workspace_llm',
     ])
     expect(WORKSPACE_LIFECYCLE_TOOLS.every((tool) => tool.inputSchema.additionalProperties === false)).toBe(true)
     expect(() => validateWorkspaceLifecycleArguments('delete_all_workspaces', {})).toThrow('Unknown')

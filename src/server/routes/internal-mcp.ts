@@ -53,7 +53,7 @@ app.post('/', async (c) => {
       // traversal before URL normalization, including caller-supplied IDs.
       const requestPath = pathname.split('?')[0]
       if (requestPath.includes('..') || /[%\\#]/.test(requestPath)) throw new Error('Invalid managed request path')
-      let routes: Hono
+      let routes: { request(path: string, init: RequestInit): Response | Promise<Response> }
       let prefix: string
       if (pathname.startsWith('/api/workspaces/')) {
         routes = (await import('./workspaces.js')).default

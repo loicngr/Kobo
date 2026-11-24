@@ -84,7 +84,11 @@ const externalTools = new Set([
   ...EXTERNAL_MCP_TOOLS.map((t) => t.name),
   ...WORKSPACE_CREATION_TOOLS.map((t) => t.name),
   ...WORKSPACE_LIFECYCLE_TOOLS.filter(
-    (t) => t.name !== 'set_workspace_status' && t.name !== 'run_setup_script' && !isWorkspaceTagTool(t.name),
+    (t) =>
+      t.name !== 'set_workspace_status' &&
+      t.name !== 'run_setup_script' &&
+      t.name !== 'set_workspace_llm' &&
+      !isWorkspaceTagTool(t.name),
   ).map((t) => t.name),
   ...WORKSPACE_GROUP_MESSAGE_TOOLS.map((t) => t.name),
   'stop_workspace',

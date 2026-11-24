@@ -2597,6 +2597,15 @@ export async function stopAllAgents(timeoutMs = 3_000): Promise<void> {
   await Promise.all([...agentWorkspaceIds()].map((workspaceId) => stopAgentAndWait(workspaceId, timeoutMs, 'shutdown')))
 }
 
+export function getRunningLlms(workspaceId: string) {
+  const primary = controllers.get(workspaceId)?.runningLlm
+  const review = parallelReviewControllers.get(workspaceId)?.runningLlm
+  return [
+    ...(primary ? [{ role: 'primary', ...primary }] : []),
+    ...(review ? [{ role: 'parallel-review', ...review }] : []),
+  ]
+}
+
 /** All three maps are keyed by workspace id: a primary and its parallel reviewer count once. */
 function agentWorkspaceIds(): Set<string> {
   return new Set([...controllers.keys(), ...pendingStarts.keys(), ...parallelReviewControllers.keys()])

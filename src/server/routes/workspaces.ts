@@ -2,6 +2,7 @@ import { execFile as execFileCb, execFileSync, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import { nanoid } from 'nanoid'
 import type { AutoLoopReviewConfiguration } from '../../shared/auto-loop-review.js'
+import { codexEffortAllowed } from '../../shared/codex-models.js'
 import { isMergeMethod } from '../../shared/forge-merge.js'
 import type { HandoffDecision } from '../../shared/session-handoff.js'
 import {
@@ -138,7 +139,7 @@ function workspaceErrorStatus(err: unknown): 409 | 500 {
 }
 
 /** Hono sub-router for workspace CRUD, tasks, agents, Git and PR creation. */
-const app = new Hono()
+const app = new Hono<{ Bindings: { workspaceMcp?: boolean } }>()
 
 // Transfers reserve the writer across multiple HTTP requests and engine invocations.
 app.use('/:id/*', async (c, next) => {
@@ -3419,6 +3420,21 @@ app.patch('/:id', migrationGuard, async (c) => {
       }
     }
     const selectedEngine = listEngines().find((engine) => engine.id === workspace.engine)
+    const mcpLlmUpdate = c.env?.workspaceMcp && (body.model !== undefined || body.reasoningEffort !== undefined)
+    if (mcpLlmUpdate && selectedEngine?.id !== 'mistral-vibe') {
+      const model = (body.model ?? workspace.model) as string
+      const effort = (body.reasoningEffort ?? workspace.reasoningEffort) as string
+      if (
+        !selectedEngine ||
+        (model !== workspace.model && !selectedEngine.capabilities.models.some((m) => m.id === model))
+      )
+        return c.json({ error: 'Unsupported model for this workspace engine' }, 400)
+      if (
+        !selectedEngine.capabilities.effortLevels?.some((level) => level.id === effort) ||
+        (selectedEngine.id === 'codex' && !codexEffortAllowed(model, effort))
+      )
+        return c.json({ error: 'Unsupported reasoning effort for this model' }, 400)
+    }
     if (
       selectedEngine &&
       (body.model !== undefined || body.reasoningEffort !== undefined || body.agentPermissionMode !== undefined)
@@ -3483,7 +3499,26 @@ app.patch('/:id', migrationGuard, async (c) => {
       )
     }
 
+    if (mcpLlmUpdate) {
+      const current = workspaceService.getWorkspace(id)
+      if (
+        !current ||
+        current.engine !== workspace.engine ||
+        current.model !== workspace.model ||
+        current.reasoningEffort !== workspace.reasoningEffort ||
+        current.agentPermissionMode !== workspace.agentPermissionMode ||
+        workspaceLifecycleReason(id) === 'session-handoff'
+      )
+        return c.json({ error: 'Workspace configuration changed; read it again before retrying' }, 409)
+    }
     const updated = workspaceService.updateWorkspaceFields(id, body as workspaceService.WorkspaceFieldUpdates)
+    if (updated.model !== workspace.model || updated.reasoningEffort !== workspace.reasoningEffort)
+      wsService.emitEphemeral(id, 'workspace:configuration', {
+        engine: updated.engine,
+        model: updated.model,
+        reasoningEffort: updated.reasoningEffort,
+        agentPermissionMode: updated.agentPermissionMode,
+      })
     if (body.status !== undefined && updated.status !== workspace.status)
       wsService.emitEphemeral(id, 'workspace:status', { status: updated.status })
     return c.json(updated)

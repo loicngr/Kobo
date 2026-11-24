@@ -47,6 +47,7 @@ function fakeApi(over: Partial<Record<keyof SlackApi, (...args: never[]) => unkn
     replaceButtons: async () => undefined,
     addReaction: async () => undefined,
     removeReaction: async () => undefined,
+    listMembers: async () => [],
     listChannels: async () => [
       { id: 'C1', name: 'general' },
       { id: 'C2', name: 'other' },
@@ -150,6 +151,50 @@ afterEach(async () => {
   const { closeDb } = await import('../server/db/index.js')
   closeDb()
   fs.rmSync(tmpDir, { recursive: true, force: true })
+})
+
+it('announces compaction once per transition, only in the linked channel while enabled', async () => {
+  const { updateWorkspaceStatus } = await import('../server/services/workspace-service.js')
+  const { api, calls } = fakeApi()
+  await start(api)
+  const compact = (id: string) => {
+    updateWorkspaceStatus(id, 'brainstorming')
+    updateWorkspaceStatus(id, 'compacting')
+    updateWorkspaceStatus(id, 'compacting')
+  }
+  compact('wsA')
+  settings.slackNotifyCompaction = true
+  compact('wsB')
+  expect(posts(calls)).toEqual([])
+  compact('wsA')
+  expect(posts(calls)).toEqual([['C1', expect.stringContaining('compacting')]])
+  settings.slackNotifyCompaction = false
+  compact('wsA')
+  expect(posts(calls)).toHaveLength(1)
+})
+
+it('announces quota and error independently of compaction, once per transition', async () => {
+  const { updateWorkspaceStatus, updateWorkspaceFields } = await import('../server/services/workspace-service.js')
+  const { api, calls } = fakeApi()
+  await start(api)
+  settings.slackNotifyCompaction = true
+  updateWorkspaceStatus('wsA', 'brainstorming')
+  updateWorkspaceStatus('wsA', 'quota')
+  expect(posts(calls)).toEqual([])
+  settings.slackNotifyErrors = true
+  settings.slackNotifyCompaction = false
+  updateWorkspaceStatus('wsA', 'executing')
+  updateWorkspaceStatus('wsA', 'compacting')
+  updateWorkspaceStatus('wsA', 'quota')
+  updateWorkspaceStatus('wsA', 'quota')
+  updateWorkspaceStatus('wsA', 'executing')
+  updateWorkspaceFields('wsA', { status: 'error' })
+  updateWorkspaceFields('wsA', { status: 'error' })
+  updateWorkspaceStatus('wsB', 'error')
+  expect(posts(calls)).toEqual([
+    ['C1', expect.stringContaining('quota')],
+    ['C1', expect.stringContaining('error')],
+  ])
 })
 
 describe('slack service inbound delivery', () => {

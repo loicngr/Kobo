@@ -22,6 +22,7 @@ import { executeWorkspaceDialogueTool } from '../server/services/workspace-dialo
 
 vi.mock('../server/services/agent/orchestrator.js', () => ({
   assertImmediateMessageSupported: vi.fn(),
+  getRunningLlms: vi.fn(() => []),
   getPendingInputs: vi.fn(() => []),
   answerPendingQuestion: vi.fn(),
 }))
@@ -574,6 +575,10 @@ it('enforces a dedicated workspace-scoped key against real persisted workspaces 
     expect(JSON.parse((list.content as { text: string }[])[0].text)).toEqual([expect.objectContaining({ id: 'a' })])
     const allowed = await client.callTool({ name: 'get_workspace', arguments: { workspace_id: 'a' } })
     expect(allowed.isError).not.toBe(true)
+    expect(JSON.parse((allowed.content as { text: string }[])[0].text)).toMatchObject({
+      workspace: { model: expect.any(String), reasoningEffort: expect.any(String) },
+      runningLlms: [],
+    })
     const denied = await client.callTool({ name: 'get_workspace', arguments: { workspace_id: 'b' } })
     const absent = await client.callTool({ name: 'get_workspace', arguments: { workspace_id: 'does-not-exist' } })
     expect(denied.isError).toBe(true)
