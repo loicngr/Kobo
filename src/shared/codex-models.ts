@@ -18,6 +18,18 @@ export const CODEX_MODELS: readonly AgentModel[] = [
     i18nDescriptionKey: 'model.autoDescription',
   },
   {
+    id: 'gpt-6.2-sol',
+    label: 'GPT-6.2 Sol',
+    i18nLabelKey: 'model.gpt62sol',
+    i18nDescriptionKey: 'model.gpt62solDescription',
+  },
+  {
+    id: 'gpt-6.2-astra',
+    label: 'GPT-6.2 Astra',
+    i18nLabelKey: 'model.gpt62astra',
+    i18nDescriptionKey: 'model.gpt62astraDescription',
+  },
+  {
     id: 'gpt-6.1-sol',
     label: 'GPT-6.1 Sol',
     i18nLabelKey: 'model.gpt61sol',
@@ -72,3 +84,11 @@ export const CODEX_MODELS: readonly AgentModel[] = [
     i18nDescriptionKey: 'model.gpt55Description',
   },
 ] as const
+
+/** Known model-specific restrictions. Leave custom model IDs to the CLI. */
+export function codexEffortAllowed(model: string | undefined, effort: string): boolean {
+  if (model === 'gpt-6.2-sol' || model === 'gpt-6.2-astra') {
+    return ['auto', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(effort)
+  }
+  return effort !== 'ultra' || !['gpt-6-luna', 'gpt-5.6-luna', 'gpt-5.5'].includes(model ?? '')
+}

@@ -11,6 +11,7 @@ export const CODEX_CAPABILITIES: EngineCapabilities = {
     { id: 'high', label: 'High' },
     { id: 'xhigh', label: 'Extra High' },
     { id: 'max', label: 'Maximum' },
+    { id: 'ultra', label: 'Ultra' },
   ],
   permissionModes: ['plan', 'bypass', 'strict', 'interactive'],
   supportsResume: true,

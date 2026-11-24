@@ -1,3 +1,5 @@
+import { codexEffortAllowed } from '../../../shared/codex-models'
+
 /**
  * Per-engine reasoning effort catalogues. Mirrors what each engine declares
  * in its backend `capabilities.effortLevels` (see
@@ -46,6 +48,7 @@ export const CODEX_EFFORT_OPTION_DEFS: readonly EffortDef[] = [
   effort('high'),
   effort('xhigh'),
   effort('max'),
+  effort('ultra'),
 ]
 
 /** Lookup by engine id. Unknown engines fall back to Claude's list. */
@@ -53,4 +56,9 @@ export const EFFORT_OPTION_DEFS_BY_ENGINE: Record<string, readonly EffortDef[]> 
   'claude-code': CLAUDE_EFFORT_OPTION_DEFS,
   codex: CODEX_EFFORT_OPTION_DEFS,
   'mistral-vibe': [effort('auto')],
+}
+
+export function effortOptionsForModel(engine: string, model: string) {
+  const defs = EFFORT_OPTION_DEFS_BY_ENGINE[engine] ?? CLAUDE_EFFORT_OPTION_DEFS
+  return engine === 'codex' ? defs.filter((option) => codexEffortAllowed(model, option.value)) : defs
 }

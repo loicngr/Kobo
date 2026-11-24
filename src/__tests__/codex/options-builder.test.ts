@@ -77,6 +77,13 @@ describe('buildCodexOptions — effort', () => {
     expect(threadParams.modelReasoningEffort).toBeUndefined()
   })
 
+  it.each(['gpt-6.2-sol', 'gpt-6.2-astra'])('passes ultra and omits a stale unsupported effort for %s', (model) => {
+    expect(buildCodexOptions({ ...BASE_INPUT, model, effort: 'ultra' }).threadParams.modelReasoningEffort).toBe('ultra')
+    expect(
+      buildCodexOptions({ ...BASE_INPUT, model, effort: 'none' }).threadParams.modelReasoningEffort,
+    ).toBeUndefined()
+  })
+
   it('effort undefined is omitted from threadParams', () => {
     const { threadParams } = buildCodexOptions({ ...BASE_INPUT })
     expect(threadParams.modelReasoningEffort).toBeUndefined()

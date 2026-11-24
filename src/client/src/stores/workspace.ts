@@ -12,9 +12,11 @@ import {
   apiResponseError,
 } from 'src/utils/api'
 import { isAbortError } from 'src/utils/latest-request'
+import { isWorkspacePane } from 'src/utils/split-workspace'
 import { effectScope, watch } from 'vue'
 import type { AutoLoopFinalReviewStatus, AutoLoopReviewConfiguration } from '../../../shared/auto-loop-review'
 import type { AutoLoopRuntime, QueuedAutoLoopMessage } from '../../../shared/auto-loop-types'
+import { codexEffortAllowed } from '../../../shared/codex-models'
 import type { MergeMethod } from '../../../shared/forge-merge'
 import type { SlackQuestionMirror } from '../../../shared/slack-question-mirror'
 import { isSubagentTask } from '../../../shared/subagent-classification'
@@ -1417,11 +1419,13 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
 
     async updateModel(id: string, model: string) {
+      const ws = this.workspaces.find((workspace) => workspace.id === id)
+      const resetEffort = ws?.engine === 'codex' && !codexEffortAllowed(model, ws.reasoningEffort)
       try {
         const res = await apiFetchResponse(`/api/workspaces/${id}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model }),
+          body: JSON.stringify({ model, ...(resetEffort && { reasoningEffort: 'auto' }) }),
         })
         if (!res.ok) throw await apiResponseError(res)
         const updated = (await res.json()) as Workspace
@@ -1781,7 +1785,9 @@ export const useWorkspaceStore = defineStore('workspace', {
         // surface its own error if the user opens it later.
       })
       // Re-subscribe to replay events if the feed is empty (e.g. after unarchive)
-      if (!this.activityFeeds[id]?.length) {
+      if (isWorkspacePane) {
+        useWebSocketStore().reconcileWorkspaceSubscriptions()
+      } else if (!this.activityFeeds[id]?.length) {
         useWebSocketStore().subscribe(id)
       }
       const [details] = await Promise.all([detailsLoaded, sessionsLoaded])

@@ -155,6 +155,10 @@ export function handleConnection(ws: WebSocket): void {
     const { type, payload } = msg
 
     switch (type) {
+      case 'connection:ping':
+        sendFrame(ws, JSON.stringify({ type: 'connection:pong', payload: {} }))
+        break
+
       case 'subscribe': {
         const workspaceId = (payload as { workspaceId?: string })?.workspaceId
         if (!workspaceId) {

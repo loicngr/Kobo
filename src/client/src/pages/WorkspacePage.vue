@@ -345,7 +345,7 @@ import { useMistralOptions } from 'src/composables/use-mistral-options'
 import { useSessionHandoff } from 'src/composables/use-session-handoff'
 import { useTours } from 'src/composables/use-tours'
 import { useWorktreeRestore } from 'src/composables/use-worktree-restore'
-import { EFFORT_OPTION_DEFS_BY_ENGINE } from 'src/constants/efforts'
+import { effortOptionsForModel } from 'src/constants/efforts'
 import { MODEL_OPTION_DEFS, MODEL_OPTION_DEFS_BY_ENGINE } from 'src/constants/models'
 import { PERMISSION_MODES_BY_ENGINE } from 'src/constants/permissionModes'
 import { useDevServerStore } from 'src/stores/dev-server'
@@ -740,7 +740,7 @@ const modelOptions = computed(() => {
 
 const reasoningOptions = computed(() => {
   if (currentEngineId.value === 'mistral-vibe') return nativeOptions.efforts
-  const defs = EFFORT_OPTION_DEFS_BY_ENGINE[currentEngineId.value] ?? EFFORT_OPTION_DEFS_BY_ENGINE['claude-code']
+  const defs = effortOptionsForModel(currentEngineId.value, store.selectedWorkspace?.model ?? 'auto')
   return defs.map((d) => ({
     label: formatReasoningLabel(t(d.i18nLabelKey)),
     value: d.value,
@@ -768,7 +768,12 @@ const currentModel = computed({
 })
 
 const currentReasoningEffort = computed({
-  get: () => store.selectedWorkspace?.reasoningEffort ?? 'auto',
+  get: () => {
+    const effort = store.selectedWorkspace?.reasoningEffort ?? 'auto'
+    if (currentEngineId.value === 'codex' && !reasoningOptions.value.some((option) => option.value === effort))
+      return 'auto'
+    return effort
+  },
   set: (val: string) => {
     if (store.selectedWorkspaceId) {
       markSpawnFieldPending('reasoningEffort')

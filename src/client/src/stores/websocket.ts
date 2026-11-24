@@ -145,6 +145,12 @@ let _connectionTimer: ReturnType<typeof setTimeout> | null = null
 let _resumeTimer: ReturnType<typeof setTimeout> | null = null
 let _reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let _reconnectAttempt = 0
+function subscribedWorkspaceIds(): string[] {
+  const store = useWorkspaceStore()
+  if (isWorkspacePane) return store.selectedWorkspaceId ? [store.selectedWorkspaceId] : []
+  return store.workspaces.map((workspace) => workspace.id)
+}
+
 let _shouldReconnect = false
 let _networkListenersBound = false
 // Suppress notifications when the dispatcher is invoked during sync:response
@@ -559,6 +565,7 @@ export const useWebSocketStore = defineStore('websocket', {
     reconnecting: false,
     reconnectAttempt: 0,
     lastEventId: null as string | null,
+    lastEventWorkspaceId: null as string | null,
     // The server handles sync requests synchronously on one ordered WebSocket.
     // Each terminal sync response therefore belongs to the oldest sent request,
     // including empty responses which contain no workspace ids of their own.
@@ -585,14 +592,18 @@ export const useWebSocketStore = defineStore('websocket', {
           if (!force && _ws?.readyState === WebSocket.OPEN) {
             if (_resumeTimer) return
             // Probe the existing connection before interrupting in-flight deliveries.
-            _resumeTimer = setTimeout(() => recover(true), 10_000)
-            if (this._send({ type: 'sync:request', payload: { lastEventId: this.lastEventId ?? undefined } })) return
+            _resumeTimer = setTimeout(() => recover(true), 5_000)
+            if (this._send({ type: 'connection:ping', payload: {} })) return
           }
           this._resetConnection()
           _reconnectAttempt = 0
           this.reconnecting = true
           void this.connect()
         }
+        document.addEventListener('resume', () => recover())
+        window.addEventListener('focus', () => {
+          if (document.visibilityState === 'visible' && !_connecting && !_connectionTimer) recover()
+        })
         window.addEventListener('online', () => recover())
         window.addEventListener('kobo:auth-token-changed', () => recover(true))
         document.addEventListener('visibilitychange', () => {
@@ -651,7 +662,7 @@ export const useWebSocketStore = defineStore('websocket', {
         void useSprintStore()
           .fetchSprints()
           .catch((err) => console.error('[sprints]', err))
-        const allIds = workspaceStore.workspaces.map((w) => w.id)
+        const allIds = subscribedWorkspaceIds()
         void workspaceStore.fetchWorkspaces().then(() => {
           if (_ws !== ws || epoch !== _connectionEpoch) return
           this.reconcileWorkspaceSubscriptions()
@@ -669,7 +680,10 @@ export const useWebSocketStore = defineStore('websocket', {
 
         this._refreshAfterSync = true
         // Request sync to catch up on missed events
-        if (this.lastEventId) {
+        const paneId = isWorkspacePane && allIds[0]
+        if (paneId && (this.lastEventWorkspaceId !== paneId || !workspaceStore.activityFeeds[paneId]?.length)) {
+          this._send({ type: 'sync:request', payload: { workspaceIds: allIds } })
+        } else if (this.lastEventId) {
           this._send({
             type: 'sync:request',
             payload: { lastEventId: this.lastEventId, workspaceIds: allIds },
@@ -684,8 +698,11 @@ export const useWebSocketStore = defineStore('websocket', {
         if (_ws !== ws) return
         try {
           const msg = JSON.parse(event.data)
-          if (_resumeTimer) clearTimeout(_resumeTimer)
-          _resumeTimer = null
+          if (msg.type === 'connection:pong') {
+            if (_resumeTimer) clearTimeout(_resumeTimer)
+            _resumeTimer = null
+            return
+          }
           this._routeMessage(msg)
         } catch {
           // Ignore unparseable messages
@@ -703,13 +720,13 @@ export const useWebSocketStore = defineStore('websocket', {
 
     async refreshLiveState(): Promise<void> {
       const workspaceStore = useWorkspaceStore()
-      const previousIds = new Set(workspaceStore.workspaces.map((workspace) => workspace.id))
+      const previousIds = new Set(subscribedWorkspaceIds())
       await workspaceStore.fetchWorkspacesInfo()
       if (!this.connected) return
-      for (const workspace of workspaceStore.workspaces) {
-        if (!previousIds.has(workspace.id)) {
+      for (const id of subscribedWorkspaceIds()) {
+        if (!previousIds.has(id) && !_subscribedWorkspaces.has(id)) {
           this._refreshAfterSync = true
-          this.subscribe(workspace.id)
+          this.subscribe(id)
         }
       }
       const devServers = useDevServerStore()
@@ -763,8 +780,12 @@ export const useWebSocketStore = defineStore('websocket', {
 
     reconcileWorkspaceSubscriptions() {
       if (!this.connected || !_ws || _ws.readyState !== WebSocket.OPEN) return
-      for (const workspace of useWorkspaceStore().workspaces) {
-        if (!_subscribedWorkspaces.has(workspace.id)) this.subscribe(workspace.id)
+      const ids = subscribedWorkspaceIds()
+      if (isWorkspacePane) {
+        for (const id of _subscribedWorkspaces) if (!ids.includes(id)) this.unsubscribe(id)
+      }
+      for (const id of ids) {
+        if (!_subscribedWorkspaces.has(id)) this.subscribe(id)
       }
     },
 
@@ -880,7 +901,7 @@ export const useWebSocketStore = defineStore('websocket', {
         }
         if (data.type === 'sync:request') {
           const payload = data.payload as { workspaceIds?: string[] } | undefined
-          this.pendingSyncRequests.push([...(payload?.workspaceIds ?? useWorkspaceStore().workspaces.map((w) => w.id))])
+          this.pendingSyncRequests.push([...(payload?.workspaceIds ?? subscribedWorkspaceIds())])
         }
         return true
       }
@@ -934,10 +955,10 @@ export const useWebSocketStore = defineStore('websocket', {
       const workspaceStore = useWorkspaceStore()
 
       // Track event ID for sync — server sends WsEvent with 'id' field
-      if (msg.replayable !== false && msg.id) {
-        this.lastEventId = msg.id
-      } else if (msg.replayable !== false && msg.eventId) {
-        this.lastEventId = msg.eventId
+      const eventId = msg.id ?? msg.eventId
+      if (msg.replayable !== false && eventId) {
+        this.lastEventId = eventId
+        this.lastEventWorkspaceId = msg.workspaceId ?? null
       }
 
       const payload = msg.payload ?? {}
@@ -1350,19 +1371,27 @@ export const useWebSocketStore = defineStore('websocket', {
             const newestReplayable = events.findLast(
               (event) => event.replayable !== false && typeof event.id === 'string',
             )
-            if (newestReplayable) this.lastEventId = newestReplayable.id
+            if (newestReplayable) {
+              this.lastEventId = newestReplayable.id
+              this.lastEventWorkspaceId = newestReplayable.workspaceId
+            }
             // The server hard-caps one replay message (MAX_REPLAY_EVENTS) and
             // sets `truncated` when the backlog continues past it. Ask again
             // from the advanced cursor until the backlog is fully drained.
             // Guard on actual cursor PROGRESS (not just a non-empty frame) so
             // a malformed or repeating truncated response can't loop forever.
-            if (payload.truncated === true && newestReplayable && this.lastEventId !== previousCursor) {
+            if (
+              payload.truncated === true &&
+              newestReplayable &&
+              this.lastEventId !== previousCursor &&
+              (!isWorkspacePane || newestReplayable.workspaceId === workspaceStore.selectedWorkspaceId)
+            ) {
               this._drainInProgress = true
               this._send({
                 type: 'sync:request',
                 payload: {
                   lastEventId: this.lastEventId,
-                  workspaceIds: workspaceStore.workspaces.map((w) => w.id),
+                  workspaceIds: subscribedWorkspaceIds(),
                 },
               })
             } else if (this._drainInProgress) {
@@ -1375,12 +1404,21 @@ export const useWebSocketStore = defineStore('websocket', {
               // cost.
               this._drainInProgress = false
               if (this._workspacesToRefreshAfterDrain.size > 0) {
-                const toRefresh = [...this._workspacesToRefreshAfterDrain]
+                const toRefresh = [...this._workspacesToRefreshAfterDrain].filter(
+                  (id) => !isWorkspacePane || id === workspaceStore.selectedWorkspaceId,
+                )
                 this._workspacesToRefreshAfterDrain.clear()
-                this._send({
-                  type: 'sync:request',
-                  payload: { lastEventId: this.lastEventId, workspaceIds: toRefresh },
-                })
+                if (toRefresh.length)
+                  this._send({
+                    type: 'sync:request',
+                    payload: {
+                      lastEventId:
+                        isWorkspacePane && this.lastEventWorkspaceId !== workspaceStore.selectedWorkspaceId
+                          ? undefined
+                          : this.lastEventId,
+                      workspaceIds: toRefresh,
+                    },
+                  })
               }
             }
           } finally {

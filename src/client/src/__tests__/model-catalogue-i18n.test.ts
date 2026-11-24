@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { CODEX_MODELS } from '../../../shared/codex-models'
 import { MISTRAL_MODELS } from '../../../shared/mistral-models'
 import { CLAUDE_MODELS } from '../../../shared/models'
+import { effortOptionsForModel } from '../constants/efforts'
 import de from '../i18n/de'
 import en from '../i18n/en'
 import es from '../i18n/es'
@@ -18,6 +19,8 @@ describe('Codex model catalogue', () => {
     const ids = CODEX_MODELS.map((m) => m.id)
     expect(ids).toEqual([
       'auto',
+      'gpt-6.2-sol',
+      'gpt-6.2-astra',
       'gpt-6.1-sol',
       'gpt-6.1-terra',
       'gpt-6-astra',
@@ -68,4 +71,16 @@ describe('model i18n keys', () => {
 
 it('keeps native Vibe auto copy separate from Claude auto', () => {
   expect(MISTRAL_MODELS[0]?.i18nDescriptionKey).toBe('model.mistralAutoDescription')
+})
+
+it.each(['gpt-6.2-sol', 'gpt-6.2-astra'])('offers the CLI reasoning levels for %s', (model) => {
+  expect(effortOptionsForModel('codex', model).map((option) => option.value)).toEqual([
+    'auto',
+    'low',
+    'medium',
+    'high',
+    'xhigh',
+    'max',
+    'ultra',
+  ])
 })

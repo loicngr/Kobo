@@ -103,6 +103,7 @@ async function setup(status: Workspace['status'] = 'idle') {
       '<textarea ref="el" :value="modelValue" :disabled="disable" :readonly="readonly" @input="$emit(\'update:modelValue\', $event.target.value)" />',
   })
   const wrapper = mount(ChatInput, {
+    attachTo: document.body,
     props: { workspaceId: 'a' },
     global: {
       plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })],
@@ -148,6 +149,34 @@ it.each([
   focus.mockClear()
   ;(wrapper.vm as unknown as { focus: () => void }).focus()
   expect(focus).toHaveBeenCalledOnce()
+})
+
+it.each(['Enter', 'button'])('keeps the composer focused when sending via %s', async (method) => {
+  const { wrapper, store } = await setup()
+  let finish!: () => void
+  vi.mocked(store.startWorkspace).mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = () => resolve(undefined as never)
+      }),
+  )
+  const input = wrapper.get('textarea')
+  await input.setValue('Hello')
+  if (method === 'Enter') {
+    input.element.focus()
+    await input.trigger('keydown', { key: 'Enter' })
+  } else {
+    const button = wrapper.get<HTMLButtonElement>('button[data-icon="send"]')
+    button.element.focus()
+    await button.trigger('click')
+  }
+  expect(input.element.disabled).toBe(false)
+  expect(input.element.readOnly).toBe(true)
+  expect(document.activeElement).toBe(input.element)
+  finish()
+  await flushPromises()
+  expect(input.element.readOnly).toBe(false)
+  expect(document.activeElement).toBe(input.element)
 })
 
 async function attach(wrapper: VueWrapper) {

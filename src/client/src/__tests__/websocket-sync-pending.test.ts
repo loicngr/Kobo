@@ -1,3 +1,11 @@
+const pane = vi.hoisted(() => ({ active: false }))
+vi.mock('../utils/split-workspace', async (original) => ({
+  ...(await original<typeof import('../utils/split-workspace')>()),
+  get isWorkspacePane() {
+    return pane.active
+  },
+}))
+
 vi.mock('../utils/auth-token', () => ({
   authenticatedWebSocketUrl: vi.fn(async (path: string) => `ws://localhost${path}?ticket=test`),
 }))
@@ -72,6 +80,7 @@ describe('websocket sync request loading', () => {
   })
 
   afterEach(() => {
+    pane.active = false
     useWebSocketStore().disconnect()
     vi.restoreAllMocks()
     vi.useRealTimers()
@@ -85,6 +94,44 @@ describe('websocket sync request loading', () => {
     socket.open()
     return { store, socket }
   }
+
+  it('limits split pane subscriptions and history to the selected workspace across navigation', async () => {
+    pane.active = true
+    const workspaces = useWorkspaceStore()
+    workspaces.workspaces = ['left', 'right', 'other'].map((id) => ({ id }) as Workspace)
+    workspaces.selectedWorkspaceId = 'right'
+    const { store, socket } = await connect()
+    expect(socket.send.mock.calls.map(([message]) => JSON.parse(message))).toEqual([
+      { type: 'subscribe', payload: { workspaceId: 'right' } },
+      { type: 'sync:request', payload: { workspaceIds: ['right'] } },
+    ])
+    socket.send.mockClear()
+    workspaces.selectedWorkspaceId = 'left'
+    store.reconcileWorkspaceSubscriptions()
+    expect(socket.send.mock.calls.map(([message]) => JSON.parse(message))).toEqual([
+      { type: 'unsubscribe', payload: { workspaceId: 'right' } },
+      { type: 'subscribe', payload: { workspaceId: 'left' } },
+      { type: 'sync:request', payload: { workspaceIds: ['left'] } },
+    ])
+  })
+
+  it.each(['left', 'right'])('reuses a cached pane cursor only for its workspace (%s)', async (previousWorkspace) => {
+    pane.active = true
+    const workspaces = useWorkspaceStore()
+    workspaces.activityFeeds.right = [{ id: 'cached', type: 'text', content: 'Earlier', timestamp: '2026-11-24' }]
+    workspaces.selectedWorkspaceId = previousWorkspace
+    const { store, socket } = await connect()
+    socket.respond({ events: [{ id: 'cursor', workspaceId: previousWorkspace, type: 'subscribed', payload: {} }] })
+    store.disconnect()
+    workspaces.selectedWorkspaceId = 'right'
+    const resumed = await connect()
+    expect(resumed.socket.send).toHaveBeenCalledWith(
+      JSON.stringify({
+        type: 'sync:request',
+        payload: { lastEventId: previousWorkspace === 'right' ? 'cursor' : undefined, workspaceIds: ['right'] },
+      }),
+    )
+  })
 
   it('subscribes workspaces discovered by the reconnect list before live refresh finishes', async () => {
     const workspaces = useWorkspaceStore()
@@ -363,7 +410,7 @@ describe('websocket sync request loading', () => {
     vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
     document.dispatchEvent(new Event('visibilitychange'))
     expect(FakeWebSocket.instances).toHaveLength(1)
-    await vi.advanceTimersByTimeAsync(10_000)
+    await vi.advanceTimersByTimeAsync(5_000)
     const resumed = FakeWebSocket.instances.at(-1)!
     expect(resumed).not.toBe(socket)
     resumed.open()
@@ -372,6 +419,18 @@ describe('websocket sync request loading', () => {
     expect(authenticatedWebSocketUrl).toHaveBeenLastCalledWith('/ws')
     socket.dispatchEvent(new Event('error'))
     expect(store.connected).toBe(true)
+  })
+
+  it.each(['resume', 'focus'])('replaces a stale mobile socket on %s despite queued traffic', async (event) => {
+    vi.useFakeTimers()
+    const { socket } = await connect()
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+    const target = event === 'resume' ? document : window
+    target.dispatchEvent(new Event(event))
+    socket.respond()
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(FakeWebSocket.instances).toHaveLength(2)
+    expect(socket.readyState).toBe(3)
   })
 
   it('preserves pending deliveries when a healthy socket answers the foreground probe', async () => {
@@ -384,9 +443,11 @@ describe('websocket sync request loading', () => {
     vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
     document.dispatchEvent(new Event('visibilitychange'))
     window.dispatchEvent(new Event('online'))
-    expect(JSON.parse(socket.send.mock.calls.at(-1)![0])).toEqual({ type: 'sync:request', payload: {} })
-    socket.respond()
-    await vi.advanceTimersByTimeAsync(10_000)
+    expect(JSON.parse(socket.send.mock.calls.at(-1)![0])).toEqual({ type: 'connection:ping', payload: {} })
+    socket.dispatchEvent(
+      new MessageEvent('message', { data: JSON.stringify({ type: 'connection:pong', payload: {} }) }),
+    )
+    await vi.advanceTimersByTimeAsync(5_000)
     expect(FakeWebSocket.instances).toHaveLength(1)
     expect(socket.readyState).toBe(FakeWebSocket.OPEN)
     expect(settled).not.toHaveBeenCalled()
@@ -408,7 +469,7 @@ describe('websocket sync request loading', () => {
     vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
     document.dispatchEvent(new Event('visibilitychange'))
     store.disconnect()
-    await vi.advanceTimersByTimeAsync(10_000)
+    await vi.advanceTimersByTimeAsync(5_000)
     expect(FakeWebSocket.instances).toHaveLength(1)
   })
 

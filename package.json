@@ -91,20 +91,20 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "2.5.0",
-    "@anthropic-ai/claude-agent-sdk": "^0.3.322",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.331",
     "@emnapi/core": "^1.11.3",
     "@emnapi/runtime": "^1.11.3",
-    "@hono/node-server": "^2.1.6",
+    "@hono/node-server": "^2.1.11",
     "@modelcontextprotocol/sdk": "^1.32.2",
-    "@openai/codex": "^0.167.0",
+    "@openai/codex": "^0.172.0",
     "@slack/socket-mode": "^3.2.0",
-    "@slack/web-api": "^8.4.0",
-    "better-sqlite3": "^13.0.3",
-    "cron-parser": "^5.10.4",
-    "hono": "^4.13.17",
+    "@slack/web-api": "^8.5.0",
+    "better-sqlite3": "^13.2.0",
+    "cron-parser": "^5.10.6",
+    "hono": "^4.13.21",
     "nanoid": "^6.0.2",
     "node-pty": "^1.1.0",
-    "ws": "^8.22.2"
+    "ws": "^8.23.0"
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.6",
@@ -115,14 +115,14 @@
     "concurrently": "^10.0.7",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
-    "vitest": "^5.1.0"
+    "vitest": "^5.1.1"
   },
   "overrides": {
-    "@hono/node-server": "^2.1.6",
+    "@hono/node-server": "^2.1.11",
     "shell-quote": "^1.12.0"
   },
   "allowScripts": {
-    "better-sqlite3@13.0.3": true,
+    "better-sqlite3@13.2.0": true,
     "esbuild@0.28.2": true,
     "node-pty@1.1.0": true
   }

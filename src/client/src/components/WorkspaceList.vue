@@ -1743,7 +1743,9 @@ onMounted(async () => {
   const settingsReady = settingsStore.fetchSettings()
   await store.fetchWorkspaces()
   if (listUnmounted) return
-  for (const ws of store.workspaces) wsStore.subscribe(ws.id)
+  if (!isWorkspacePane) {
+    for (const ws of store.workspaces) wsStore.subscribe(ws.id)
+  }
   void store.fetchWorkspacesInfo()
   workspaceInfoInterval = setInterval(pollWorkspacesInfoIfVisible, WORKSPACE_INFO_POLL_MS)
   document.addEventListener('visibilitychange', onVisibilityChange)

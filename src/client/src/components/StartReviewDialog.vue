@@ -80,7 +80,7 @@
 
 <script setup lang="ts">
 import { useMistralOptions } from 'src/composables/use-mistral-options'
-import { EFFORT_OPTION_DEFS_BY_ENGINE } from 'src/constants/efforts'
+import { effortOptionsForModel } from 'src/constants/efforts'
 import { MODEL_OPTION_DEFS_BY_ENGINE } from 'src/constants/models'
 import { PERMISSION_MODES_BY_ENGINE } from 'src/constants/permissionModes'
 import { useSettingsStore } from 'src/stores/settings'
@@ -179,8 +179,12 @@ const modelOptions = computed(() => {
 const effortOptions = computed(() =>
   nativeReview.value
     ? nativeOptions.efforts
-    : (EFFORT_OPTION_DEFS_BY_ENGINE[engine.value] ?? []).map((d) => ({ value: d.value, label: t(d.i18nLabelKey) })),
+    : effortOptionsForModel(engine.value, model.value).map((d) => ({ value: d.value, label: t(d.i18nLabelKey) })),
 )
+watch([model, engine, reasoningEffort], () => {
+  if (engine.value === 'codex' && !effortOptions.value.some((option) => option.value === reasoningEffort.value))
+    reasoningEffort.value = 'auto'
+})
 const permissionOptions = computed(() =>
   (PERMISSION_MODES_BY_ENGINE[engine.value] ?? []).map((value) => ({
     value,

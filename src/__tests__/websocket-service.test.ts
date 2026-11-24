@@ -79,6 +79,15 @@ afterEach(async () => {
 })
 
 describe('handleConnection()', () => {
+  it('answers the foreground probe on the requesting socket', async () => {
+    const { handleConnection } = await import('../server/services/websocket-service.js')
+    const ws = new MockWebSocket()
+    handleConnection(ws as unknown as import('ws').WebSocket)
+    ws.simulateMessage({ type: 'connection:ping', payload: {} })
+    expect(JSON.parse(ws.sentMessages.at(-1)!)).toEqual({ type: 'connection:pong', payload: {} })
+    ws.close()
+  })
+
   it('enregistre le client dans la map', async () => {
     const { handleConnection, getClientCount } = await import('../server/services/websocket-service.js')
     const ws = new MockWebSocket()

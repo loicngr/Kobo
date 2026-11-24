@@ -921,7 +921,7 @@ import WorkflowPolicyEditor from 'src/components/WorkflowPolicyEditor.vue'
 import { useMistralOptions } from 'src/composables/use-mistral-options'
 import { type SlashDropdownItem, useSlashAutocomplete } from 'src/composables/use-slash-autocomplete'
 import { useTours } from 'src/composables/use-tours'
-import { EFFORT_OPTION_DEFS_BY_ENGINE } from 'src/constants/efforts'
+import { effortOptionsForModel } from 'src/constants/efforts'
 import { supportsSkills } from 'src/constants/engineFeatures'
 import { MODEL_OPTION_DEFS, MODEL_OPTION_DEFS_BY_ENGINE } from 'src/constants/models'
 import { PERMISSION_MODES_BY_ENGINE } from 'src/constants/permissionModes'
@@ -1345,7 +1345,9 @@ const brainstormModelOptions = computed(() =>
   selectedEngineId.value === 'mistral-vibe' ? nativeBrainstormOptions.models : modelOptions.value,
 )
 const brainstormReasoningOptions = computed(() =>
-  selectedEngineId.value === 'mistral-vibe' ? nativeBrainstormOptions.efforts : reasoningOptions.value,
+  selectedEngineId.value === 'mistral-vibe'
+    ? nativeBrainstormOptions.efforts
+    : staticReasoningOptions(brainstormModel.value),
 )
 
 const modelOptions = computed(() => {
@@ -1399,7 +1401,7 @@ function normaliseForEngine(preferGlobalDefault = false): void {
   }
   // Reasoning effort: drop a value that isn't supported by the new engine
   // (e.g. 'max' under Codex, or 'minimal' under Claude). Falls back to 'auto'.
-  const supportedEfforts = (EFFORT_OPTION_DEFS_BY_ENGINE[selectedEngineId.value] ?? []).map((e) => e.value)
+  const supportedEfforts = effortOptionsForModel(selectedEngineId.value, model.value).map((e) => e.value)
   if (supportedEfforts.length > 0 && !supportedEfforts.includes(reasoningEffort.value)) {
     reasoningEffort.value = supportedEfforts.includes('auto') ? 'auto' : (supportedEfforts[0] ?? 'auto')
   }
@@ -1420,14 +1422,31 @@ function formatReasoningLabel(label: string): string {
 // Using local constants avoids a render flicker while `/api/engines` is in
 // flight. Labels/descriptions stay engine-agnostic via the shared i18n keys
 // `reasoning.<id>` / `reasoning.<id>Description`.
-const reasoningOptions = computed(() => {
-  if (selectedEngineId.value === 'mistral-vibe') return nativeOptions.efforts
-  const defs = EFFORT_OPTION_DEFS_BY_ENGINE[selectedEngineId.value] ?? EFFORT_OPTION_DEFS_BY_ENGINE['claude-code']
+function staticReasoningOptions(modelId: string) {
+  const defs = effortOptionsForModel(selectedEngineId.value, modelId)
   return defs.map((d) => ({
     value: d.value,
     label: formatReasoningLabel(t(d.i18nLabelKey)),
     description: t(d.i18nDescriptionKey),
   }))
+}
+const reasoningOptions = computed(() =>
+  selectedEngineId.value === 'mistral-vibe' ? nativeOptions.efforts : staticReasoningOptions(model.value),
+)
+
+watch([reasoningOptions, reasoningEffort], () => {
+  if (
+    selectedEngineId.value === 'codex' &&
+    !reasoningOptions.value.some((entry) => entry.value === reasoningEffort.value)
+  )
+    reasoningEffort.value = 'auto'
+})
+watch([brainstormReasoningOptions, brainstormReasoningEffort], () => {
+  if (
+    selectedEngineId.value === 'codex' &&
+    !brainstormReasoningOptions.value.some((entry) => entry.value === brainstormReasoningEffort.value)
+  )
+    brainstormReasoningEffort.value = 'auto'
 })
 
 watch(model, (selectedModel) => {

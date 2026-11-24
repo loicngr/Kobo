@@ -113,11 +113,11 @@
         dark
         borderless
         autogrow
-        :readonly="isQueued"
+        :readonly="isQueued || sendingMessage"
         :placeholder="$t('chatInput.placeholder')"
         :input-style="{ maxHeight: '200px', overflowY: 'auto' }"
         class="chat-input col rounded-borders"
-        :disable="isDisabled || sendingMessage"
+        :disable="isDisabled"
         @keydown="onKeydown"
         @paste="onPaste"
       />
@@ -593,6 +593,7 @@ function cancelQueue() {
 function forceQueuedMessage() {
   const queued = queuedMessage.value
   if (!queued || !canForceQueuedMessage.value) return
+  focus()
   forcingQueue.value = true
   if (!wsStore.sendChatMessage(props.workspaceId, queued.content, queued.sessionId, undefined, true)) {
     forcingQueue.value = false
@@ -830,6 +831,7 @@ watch(() => props.workspaceId, loadHistory)
 
 async function sendMessage() {
   if (sendingMessage.value || isQueued.value) return
+  focus()
   sendingMessage.value = true
   try {
     await sendMessageNow()
@@ -1148,6 +1150,7 @@ function onVisibilityChange() {
 }
 
 function onKeydown(event: KeyboardEvent) {
+  if (sendingMessage.value) return
   if (event.ctrlKey && event.key === 'Enter' && isQueued.value && canForceQueuedMessage.value) {
     event.preventDefault()
     forceQueuedMessage()

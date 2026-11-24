@@ -35,7 +35,7 @@
 
 <script setup lang="ts">
 import { useMistralOptions } from 'src/composables/use-mistral-options'
-import { EFFORT_OPTION_DEFS_BY_ENGINE } from 'src/constants/efforts'
+import { effortOptionsForModel } from 'src/constants/efforts'
 import { supportsReadOnly } from 'src/constants/engineFeatures'
 import { MODEL_OPTION_DEFS_BY_ENGINE } from 'src/constants/models'
 import { PERMISSION_MODES_BY_ENGINE } from 'src/constants/permissionModes'
@@ -93,11 +93,15 @@ const modelOptions = computed(() => {
 const effortOptions = computed(() =>
   engine.value === 'mistral-vibe'
     ? nativeOptions.efforts
-    : (EFFORT_OPTION_DEFS_BY_ENGINE[engine.value] ?? []).map((entry) => ({
+    : effortOptionsForModel(engine.value, model.value).map((entry) => ({
         value: entry.value,
         label: t(entry.i18nLabelKey),
       })),
 )
+watch([model, engine, reasoningEffort], () => {
+  if (engine.value === 'codex' && !effortOptions.value.some((option) => option.value === reasoningEffort.value))
+    reasoningEffort.value = 'auto'
+})
 const permissionOptions = computed(() =>
   (PERMISSION_MODES_BY_ENGINE[engine.value] ?? []).map((value) => ({
     value,

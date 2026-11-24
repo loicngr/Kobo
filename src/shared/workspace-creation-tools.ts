@@ -24,7 +24,7 @@ const object = (properties: Record<string, Schema>, required: string[] = []): Sc
   required,
   additionalProperties: false,
 })
-const effort = choice('auto', 'off', 'none', 'low', 'medium', 'high', 'xhigh', 'max')
+const effort = choice('auto', 'off', 'none', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra')
 const engine = choice('claude-code', 'codex', 'mistral-vibe')
 const path = string(4096)
 const url = string(4096)
@@ -174,6 +174,12 @@ export function validateWorkspaceCreationArguments(name: string, input: unknown)
     const review = value.auto_loop_final_review as Record<string, unknown> | null | undefined
     if (review && review.engine !== 'mistral-vibe' && review.reasoning_effort === 'off')
       throw new Error('off is a native Mistral Vibe thinking value')
+    if (
+      (value.engine !== 'codex' &&
+        (value.reasoning_effort === 'ultra' || value.brainstorm_reasoning_effort === 'ultra')) ||
+      (review && review.engine !== 'codex' && review.reasoning_effort === 'ultra')
+    )
+      throw new Error('ultra is a Codex reasoning effort')
     const { attachments: _attachments, ...metadataFields } = value
     // Keep room for multipart file headers within the downstream 1 MiB allowance.
     if (new TextEncoder().encode(JSON.stringify(metadataFields)).byteLength > 960 * 1024)

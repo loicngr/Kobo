@@ -1,3 +1,4 @@
+import { codexEffortAllowed } from '../../../../../shared/codex-models.js'
 import {
   buildKoboLaunchInstructions,
   getKoboPromptCapabilities,
@@ -75,7 +76,7 @@ export function buildCodexOptions(input: BuildCodexOptionsInput): BuildCodexOpti
   // Effort: omit when undefined or 'auto'. `minimal` was emitted by older
   // Kōbō versions; Codex 5.6 rejects it, so preserve old workspaces by
   // translating it to the closest current setting instead of failing a turn.
-  if (input.effort && input.effort !== 'auto') {
+  if (input.effort && input.effort !== 'auto' && codexEffortAllowed(input.model, input.effort)) {
     threadParams.modelReasoningEffort = (input.effort === 'minimal' ? 'none' : input.effort) as ModelReasoningEffort
   }
 
