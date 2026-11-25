@@ -57,6 +57,7 @@ export interface ManagedMcpContext {
   backendRequest: (method: 'GET' | 'POST' | 'PATCH' | 'DELETE', pathname: string, body?: unknown) => Promise<unknown>
   fetcher?: typeof fetch
   dialogueTool?: (...args: Parameters<typeof callWorkspaceDialogueTool>) => Promise<unknown>
+  askUserQuestion?: (input: Record<string, unknown>) => Promise<unknown>
   /** Backend-owned Slack dispatch bound to the launch capability's workspace. */
   slackTool?: (name: string, args: Record<string, unknown>) => Promise<CallToolResult>
 }
@@ -158,6 +159,26 @@ export function createManagedMcpDispatcher(context: ManagedMcpContext) {
   }
 
   const WORKSPACE_SCOPED_TOOLS: Tool[] = [
+    {
+      name: 'ask_user_question',
+      description:
+        'Ask the operator a question in this workspace and wait for their answer. Omit options for a text response. Do not request passwords or secrets.',
+      inputSchema: {
+        type: 'object',
+        required: ['question'],
+        additionalProperties: false,
+        properties: {
+          question: { type: 'string', minLength: 1, maxLength: 2000 },
+          options: {
+            type: 'array',
+            maxItems: 10,
+            uniqueItems: true,
+            items: { type: 'string', minLength: 1, maxLength: 120 },
+          },
+          multi_select: { type: 'boolean', description: 'Allow several options to be selected.' },
+        },
+      },
+    },
     ...MANAGED_SPRINT_TOOLS,
     {
       name: 'submit_final_review',
@@ -774,6 +795,10 @@ export function createManagedMcpDispatcher(context: ManagedMcpContext) {
               : {}),
           }),
         )
+      }
+      if (name === 'ask_user_question') {
+        if (!context.askUserQuestion) return fail('A managed workspace session is required')
+        return ok(await context.askUserQuestion(a))
       }
       if (isSlackTool(name)) {
         if (!context.slackTool) return fail('Slack tools require the current workspace launch capability.')

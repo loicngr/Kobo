@@ -163,7 +163,7 @@ Vibe is optional and is not supplied by Kōbō's Claude/Codex runtimes. Follow
 inside the container as the agent user, using the launcher shell above. Ensure
 `vibe-acp` is on the **server process PATH**, then run `vibe` to authenticate
 (`vibe --setup` repeats native setup). See the
-[3.0.1 ACP instructions](https://github.com/mistralai/mistral-vibe/blob/v3.0.1/docs/acp-setup.md).
+[3.1.5 ACP instructions](https://github.com/mistralai/mistral-vibe/blob/v3.1.5/docs/acp-setup.md).
 An installation or login on your PC/VPS host is not inherited by the container.
 
 Persist Vibe's native state in the home volume (or its configured `VIBE_HOME`)

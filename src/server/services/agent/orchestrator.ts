@@ -27,6 +27,7 @@ import * as cronService from '../cron-service.js'
 import { resolveForge } from '../forge/resolve.js'
 import {
   createInternalMcpCapability,
+  type InternalMcpCapability,
   resolveInternalMcpCapability,
   revokeInternalMcpCapability,
 } from '../internal-mcp-capability-service.js'
@@ -1745,6 +1746,7 @@ const memoryCompactionStates = new WeakMap<
 >()
 
 function revokeControllerCapabilities(controller: SessionController): void {
+  mcpQuestions.get(controller)?.reject(new Error('Workspace session ended'))
   const internalToken = controllerInternalMcpCapabilities.get(controller)
   if (internalToken) revokeInternalMcpCapability(internalToken)
   controllerInternalMcpCapabilities.delete(controller)
@@ -3186,6 +3188,102 @@ function formatDeferredAnswerForChat(questions: unknown, answers: Record<string,
   return lines.length > 0 ? lines.join('\n') : ''
 }
 
+interface McpAnswer {
+  answer: string
+  selections?: string[]
+}
+
+const mcpQuestions = new WeakMap<
+  SessionController,
+  {
+    id: string
+    resolve: (answer: McpAnswer) => void
+    reject: (error: Error) => void
+  }
+>()
+
+export async function askWorkspaceUser(
+  { workspaceId, sessionId, token }: InternalMcpCapability,
+  args: Record<string, unknown>,
+  signal: AbortSignal,
+): Promise<McpAnswer> {
+  const { question, options = [], multi_select = false } = args
+  if (
+    Object.keys(args).some((key) => !['question', 'options', 'multi_select'].includes(key)) ||
+    typeof question !== 'string' ||
+    !question.trim() ||
+    question.length > 2000 ||
+    !Array.isArray(options) ||
+    options.length > 10 ||
+    options.some(
+      (label) => typeof label !== 'string' || !label.trim() || label.length > 120 || label === '__KOBO_OTHER__',
+    ) ||
+    new Set(options).size !== options.length ||
+    typeof multi_select !== 'boolean' ||
+    (multi_select && !options.length)
+  )
+    throw new Error('Invalid question, options or multi_select')
+  const ctrl = controllers.get(workspaceId)
+  if (
+    !ctrl?.engineProcess ||
+    ctrl.agentSessionId !== sessionId ||
+    !ctrl.runningLlm ||
+    controllerInternalMcpCapabilities.get(ctrl) !== token
+  )
+    throw new Error('Workspace session is no longer active')
+  if (peekPending(workspaceId) || mcpQuestions.has(ctrl)) throw new Error('Workspace already has pending user input')
+  signal.throwIfAborted()
+  const id = nanoid()
+  const engineProcess = ctrl.engineProcess
+  const abort = () => mcpQuestions.get(ctrl)?.reject(new Error('Question request disconnected'))
+  try {
+    return await new Promise<McpAnswer>((resolve, reject) => {
+      mcpQuestions.set(ctrl, { id, resolve, reject })
+      engineProcess.setMcpQuestionPending?.(true)
+      signal.addEventListener('abort', abort, { once: true })
+      handleEvent(workspaceId, sessionId, ctrl, {
+        kind: 'session:user-input-requested',
+        requestKind: 'question',
+        toolCallId: id,
+        toolName: 'ask_user_question',
+        payload: {
+          questions: [
+            {
+              id: 'answer',
+              question,
+              options: options.map((label) => ({ label })),
+              multiSelect: multi_select,
+              ...(!options.length ? { freeText: true, minLength: 1, isOther: false } : {}),
+            },
+          ],
+        },
+      })
+    })
+  } finally {
+    signal.removeEventListener('abort', abort)
+    mcpQuestions.delete(ctrl)
+    engineProcess.setMcpQuestionPending?.(false)
+    if (controllers.get(workspaceId) === ctrl && peekPending(workspaceId)?.toolCallId === id) {
+      finishPendingInput(workspaceId, ctrl, id)
+    }
+    emitEphemeral(workspaceId, 'workspace:question-closed', { toolCallId: id }, sessionId)
+  }
+}
+
+/** Remove the answered or withdrawn head and restore its workspace phase. */
+function finishPendingInput(workspaceId: string, ctrl: SessionController, id: string) {
+  dequeuePending(workspaceId)
+  purgePersistedUserInputRequest(workspaceId, id, ctrl.agentSessionId)
+  const restoreTo = peekPending(workspaceId) ? 'awaiting-user' : consumePreAwaitStatus(workspaceId)
+  try {
+    if (getWs(workspaceId)?.status === 'compacting') preCompactionStatus.set(ctrl, restoreTo)
+    else updateWorkspaceStatus(workspaceId, restoreTo)
+  } catch (err) {
+    console.warn(`[orchestrator] Failed to transition awaiting-user → ${restoreTo}:`, err)
+  }
+  dispatchParallelReviewReturnInBackground(workspaceId)
+}
+
 /**
  * Answer a pending AskUserQuestion by resolving the engine's `canUseTool`
  * callback with the user's answers. The SDK iterator continues on its own
@@ -3259,27 +3357,22 @@ export async function answerPendingQuestion(
     throw new Error(`Pending question session '${head.agentSessionId}' is no longer active`)
   }
   const selections = parseQuestionSelections(opts?.selections)
-  const resolved = engineProcess.resolvePendingUserInput(head.toolCallId, {
-    kind: 'question',
-    answers,
-    ...(opts?.response !== undefined ? { response: opts.response } : {}),
-    ...(selections !== undefined ? { selections } : {}),
-  })
-  if (!resolved) {
+  const mcp = mcpQuestions.get(ctrl)
+  if (mcp?.id === head.toolCallId) {
+    if (typeof answers.answer !== 'string' || !answers.answer.trim()) throw new Error('A text answer is required')
+    mcp.resolve({ answer: answers.answer, ...(selections?.answer ? { selections: selections.answer } : {}) })
+  } else if (
+    !engineProcess.resolvePendingUserInput(head.toolCallId, {
+      kind: 'question',
+      answers,
+      ...(opts?.response !== undefined ? { response: opts.response } : {}),
+      ...(selections !== undefined ? { selections } : {}),
+    })
+  ) {
     throw new Error(`No pending callback for toolCallId '${head.toolCallId}'`)
   }
 
-  dequeuePending(workspaceId)
-  purgePersistedUserInputRequest(workspaceId, head.toolCallId, head.agentSessionId)
-  const restoreTo = peekPending(workspaceId) ? 'awaiting-user' : consumePreAwaitStatus(workspaceId)
-  try {
-    if (getWs(workspaceId)?.status === 'compacting') preCompactionStatus.set(ctrl, restoreTo)
-    else updateWorkspaceStatus(workspaceId, restoreTo)
-  } catch (err) {
-    console.warn(`[orchestrator] Failed to transition awaiting-user → ${restoreTo}:`, err)
-  }
-
-  dispatchParallelReviewReturnInBackground(workspaceId)
+  finishPendingInput(workspaceId, ctrl, head.toolCallId)
 
   // "Other" means the user owes a free-form clarification in their next chat
   // message. If auto-loop is active, the agent finishing its turn would
@@ -3414,16 +3507,7 @@ export async function answerPendingPermission(
     throw new Error(`No pending callback for toolCallId '${decision.toolCallId}'`)
   }
 
-  dequeuePending(workspaceId)
-  purgePersistedUserInputRequest(workspaceId, head.toolCallId, head.agentSessionId)
-  const restoreTo = peekPending(workspaceId) ? 'awaiting-user' : consumePreAwaitStatus(workspaceId)
-  try {
-    if (getWs(workspaceId)?.status === 'compacting') preCompactionStatus.set(ctrl, restoreTo)
-    else updateWorkspaceStatus(workspaceId, restoreTo)
-  } catch (err) {
-    console.warn(`[orchestrator] Failed to transition awaiting-user → ${restoreTo}:`, err)
-  }
-  dispatchParallelReviewReturnInBackground(workspaceId)
+  finishPendingInput(workspaceId, ctrl, head.toolCallId)
 }
 
 /**
@@ -3462,15 +3546,7 @@ export async function cancelPendingQuestion(
   if (head.kind !== 'question') {
     throw new Error(`Expected a deferred question at the head of the queue, got '${head.kind}'`)
   }
-  // toolCallId mismatch on cancel is logged but NOT fatal: the user clicked
-  // Cancel on whatever was visible. Worst case is a benign deny on a question
-  // the agent was about to ask anyway. (Mismatch on submit IS fatal — wrong
-  // answers would be applied to the wrong question.)
-  if (expectedToolCallId && head.toolCallId !== expectedToolCallId) {
-    console.warn(
-      `[orchestrator] cancel toolCallId mismatch — expected '${expectedToolCallId}', head is '${head.toolCallId}'. Cancelling head anyway.`,
-    )
-  }
+  if (expectedToolCallId && head.toolCallId !== expectedToolCallId) throw new Error('Pending question changed')
   const ctrl = controllers.get(workspaceId)
   if (!ctrl) {
     throw new Error(`No agent running for workspace '${workspaceId}'`)
@@ -3480,24 +3556,14 @@ export async function cancelPendingQuestion(
     throw new Error(`Agent for workspace '${workspaceId}' has no active engine process`)
   }
 
-  const resolved = engineProcess.resolvePendingUserInput(head.toolCallId, {
-    kind: 'question-cancel',
-    reason,
-  })
-  if (!resolved) {
+  const mcp = mcpQuestions.get(ctrl)
+  if (mcp?.id === head.toolCallId) {
+    mcp.reject(new Error(reason || 'Question cancelled by user'))
+  } else if (!engineProcess.resolvePendingUserInput(head.toolCallId, { kind: 'question-cancel', reason })) {
     throw new Error(`No pending callback for toolCallId '${head.toolCallId}'`)
   }
 
-  dequeuePending(workspaceId)
-  purgePersistedUserInputRequest(workspaceId, head.toolCallId, head.agentSessionId)
-  const restoreTo = peekPending(workspaceId) ? 'awaiting-user' : consumePreAwaitStatus(workspaceId)
-  try {
-    if (getWs(workspaceId)?.status === 'compacting') preCompactionStatus.set(ctrl, restoreTo)
-    else updateWorkspaceStatus(workspaceId, restoreTo)
-  } catch (err) {
-    console.warn(`[orchestrator] Failed to transition awaiting-user → ${restoreTo}:`, err)
-  }
-  dispatchParallelReviewReturnInBackground(workspaceId)
+  finishPendingInput(workspaceId, ctrl, head.toolCallId)
 }
 
 /** @deprecated use `answerPendingQuestion` instead. Kept for legacy callers/tests. */

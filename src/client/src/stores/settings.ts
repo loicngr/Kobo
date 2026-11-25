@@ -6,6 +6,7 @@ import { DEFAULT_WHIP_SHORTCUT } from 'src/utils/whip-shortcut'
 import { WORKTREES_PATH } from '../../../shared/consts'
 import type { MemoryMode } from '../../../shared/memory'
 import { DEFAULT_MEMORY_LIMITS, type MemoryLimits } from '../../../shared/memory-limits'
+import { FRESH_MODEL_BY_ENGINE } from '../../../shared/models'
 import type { SkillSuite } from '../../../shared/skill-suite-prompts'
 import { MANUAL_WORKFLOW_POLICY, type WorkflowPolicy } from '../../../shared/workflow-policy'
 
@@ -265,10 +266,7 @@ export const useSettingsStore = defineStore('settings', {
       memoryMode: 'hybrid' as MemoryMode,
       memoryLimits: { ...DEFAULT_MEMORY_LIMITS } as MemoryLimits,
       onboardingComplete: false,
-      defaultModelByEngine: { 'claude-code': 'claude-sonnet-5-5', codex: 'auto', 'mistral-vibe': 'auto' } as Record<
-        string,
-        string
-      >,
+      defaultModelByEngine: { ...FRESH_MODEL_BY_ENGINE },
       dangerouslySkipPermissions: true,
       prPromptTemplate: '',
       reviewPromptTemplate: '',

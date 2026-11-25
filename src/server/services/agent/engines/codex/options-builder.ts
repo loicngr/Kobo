@@ -88,6 +88,7 @@ export function buildCodexOptions(input: BuildCodexOptionsInput): BuildCodexOpti
       command: string
       args: string[]
       env: Record<string, string>
+      tool_timeout_sec?: number
       default_tools_approval_mode: string
     }
     const mcpServersConfig: Record<string, McpServerEntry> = {}
@@ -97,6 +98,8 @@ export function buildCodexOptions(input: BuildCodexOptionsInput): BuildCodexOpti
         command: srv.command,
         args: srv.args,
         env: srv.env,
+        // Codex applies this deadline per server; human questions may stay open overnight.
+        ...(srv.name === 'kobo-tasks' ? { tool_timeout_sec: 24 * 60 * 60 } : {}),
         default_tools_approval_mode: 'auto',
       }
     }

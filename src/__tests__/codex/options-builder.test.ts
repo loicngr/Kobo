@@ -115,6 +115,7 @@ describe('buildCodexOptions — MCP servers', () => {
       command: 'node',
       args: ['/path/to/server.js'],
       env: { KEY: 'VALUE' },
+      tool_timeout_sec: 86400,
       default_tools_approval_mode: 'auto',
     })
   })
@@ -126,6 +127,7 @@ describe('buildCodexOptions — MCP servers', () => {
     })
     const config = threadParams.config as { mcp_servers: Record<string, unknown> }
     expect(config.mcp_servers['my-server']).toBeDefined()
+    expect(config.mcp_servers['my-server']).not.toHaveProperty('tool_timeout_sec')
   })
 
   it('does not set config when mcpServers is empty', () => {

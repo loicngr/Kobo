@@ -11,14 +11,14 @@ const backendUrl = process.env.KOBO_BACKEND_URL ?? 'http://localhost:3000'
 const server = new Server({ name: 'kobo-tasks', version: '1.0.0' }, { capabilities: { tools: {} } })
 
 /** Managed processes never open SQLite or possess the administrator token. */
-async function managedRequest(body: Record<string, unknown>) {
+async function managedRequest(body: Record<string, unknown>, signal?: AbortSignal) {
   if (!capability) throw new Error('Workspace tools require a current managed MCP launch capability')
   const response = await fetch(`${backendUrl.replace(/\/$/, '')}/api/internal-mcp`, {
     method: 'POST',
     redirect: 'error',
     headers: { 'Content-Type': 'application/json', 'X-Kobo-Mcp-Session': capability },
     body: JSON.stringify({ ...body, clientName: process.env.KOBO_MCP_CLIENT_NAME ?? server.getClientVersion()?.name }),
-    signal: AbortSignal.timeout(15 * 60_000),
+    signal: signal ?? AbortSignal.timeout(15 * 60_000),
   })
   if (response.ok) return response.json()
   if (body.method === 'list') throw new Error('Managed MCP capability rejected')
@@ -41,14 +41,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     process.env.KOBO_MCP_CLIENT_NAME ?? server.getClientVersion()?.name,
   )
 })
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
+server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
   try {
     if (workspaceId)
-      return await managedRequest({
-        method: 'call',
-        name: request.params.name,
-        arguments: request.params.arguments ?? {},
-      })
+      return await managedRequest(
+        {
+          method: 'call',
+          name: request.params.name,
+          arguments: request.params.arguments ?? {},
+        },
+        request.params.name === 'ask_user_question' ? extra.signal : undefined,
+      )
     return await callWorkspaceDialogueTool(
       backendUrl,
       request.params.name,

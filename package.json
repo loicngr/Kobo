@@ -90,8 +90,8 @@
     "security:scan": "node scripts/scan-secrets.mjs"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "2.5.0",
-    "@anthropic-ai/claude-agent-sdk": "^0.3.331",
+    "@agentclientprotocol/sdk": "2.12.0",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.332",
     "@emnapi/core": "^1.11.3",
     "@emnapi/runtime": "^1.11.3",
     "@hono/node-server": "^2.1.11",
@@ -101,15 +101,15 @@
     "@slack/web-api": "^8.5.0",
     "better-sqlite3": "^13.2.0",
     "cron-parser": "^5.10.6",
-    "hono": "^4.13.21",
+    "hono": "^4.13.22",
     "nanoid": "^6.0.2",
     "node-pty": "^1.1.0",
     "ws": "^8.23.0"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.6.6",
+    "@biomejs/biome": "2.6.9",
     "@types/better-sqlite3": "^9.6.0",
-    "@types/node": "^26.6.6",
+    "@types/node": "^26.6.10",
     "@types/ws": "^8.18.2",
     "@vitest/runner": "^4.1.11",
     "concurrently": "^10.0.7",

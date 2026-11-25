@@ -79,6 +79,8 @@ export interface EngineProcess {
    * Invalid answers may throw without consuming the existing callback.
    */
   resolvePendingUserInput(toolCallId: string, response: PendingUserInputResponse): boolean
+  /** Pause engine idle detection while a managed tool awaits the operator. */
+  setMcpQuestionPending?(pending: boolean): void
   /**
    * Optional liveness probe used by the orchestrator watchdog. Engines that
    * don't expose a `pid` (e.g. SDK in-process engines) can implement this so

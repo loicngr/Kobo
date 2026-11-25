@@ -1057,6 +1057,10 @@ export const useWebSocketStore = defineStore('websocket', {
           })
           break
         }
+        case 'workspace:question-closed':
+          if (wid && msg.sessionId && typeof payload.toolCallId === 'string')
+            workspaceStore.dequeuePending(wid, payload.toolCallId, msg.sessionId)
+          break
         case 'workspace:status': {
           if (!wid || this._replaying || typeof payload.status !== 'string') break
           if (workspaceStore.isParallelReviewSession(wid, msg.sessionId ?? (payload.sessionId as string | undefined)))

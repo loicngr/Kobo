@@ -1,5 +1,6 @@
+import { json } from 'node:stream/consumers'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AgentEvent } from '../server/services/agent/engines/types.js'
+import type { AgentEvent, StartOptions } from '../server/services/agent/engines/types.js'
 import { DEFAULT_MEMORY_LIMITS } from '../shared/memory-limits.js'
 import { resetDb } from './helpers/reset-db.js'
 
@@ -25,7 +26,7 @@ vi.mock('../server/services/settings-service.js', () => ({
 }))
 
 interface CapturedStart {
-  options: { resumeFromEngineSessionId?: string }
+  options: StartOptions
   onEvent: (ev: AgentEvent) => void
   resolvePendingUserInput: ReturnType<typeof vi.fn>
 }
@@ -54,7 +55,7 @@ describe('Orchestrator — pending question (canUseTool)', () => {
       },
       async start(opts, onEvent) {
         const resolvePendingUserInput = vi.fn().mockReturnValue(true)
-        captured.push({ options: opts as CapturedStart['options'], onEvent, resolvePendingUserInput })
+        captured.push({ options: opts, onEvent, resolvePendingUserInput })
         return {
           pid: 4242,
           engineSessionId: 'engine-sess-1',
@@ -65,6 +66,116 @@ describe('Orchestrator — pending question (canUseTool)', () => {
         }
       },
     })
+  })
+
+  it('delivers a managed MCP question through the pending panel and settles answers and cancellations', async () => {
+    const { createWorkspace, updateWorkspaceStatus, getWorkspace } = await import(
+      '../server/services/workspace-service.js'
+    )
+    const ws = createWorkspace({
+      name: 'MCP question',
+      projectPath: '/tmp',
+      sourceBranch: 'develop',
+      workingBranch: 'feature/question',
+    })
+    updateWorkspaceStatus(ws.id, 'brainstorming')
+    const orch = await import('../server/services/agent/orchestrator.js')
+    const { agentSessionId } = orch.startAgent(ws.id, '/tmp', 'hi')
+    const api = (await import('../server/routes/internal-mcp.js')).default
+    const token = captured[0]?.options.mcpServers?.find((server) => server.name === 'kobo-tasks')?.env
+      .KOBO_MCP_SESSION_TOKEN
+    if (!token) throw new Error('Missing managed launch token')
+    const request = (body: unknown, signal?: AbortSignal) =>
+      api.request('/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Kobo-Mcp-Session': token },
+        body: JSON.stringify(body),
+        signal,
+      })
+    expect((await (await request({ method: 'list' })).json()).tools).toContainEqual(
+      expect.objectContaining({ name: 'ask_user_question' }),
+    )
+    const ask = (args: unknown, signal?: AbortSignal) =>
+      request({ method: 'call', name: 'ask_user_question', arguments: args }, signal)
+    expect((await (await ask({ question: '' })).json()).isError).toBe(true)
+    const result = ask({ question: 'Where?', options: ['Linux', 'Android'], multi_select: true })
+    await vi.waitFor(() => expect(orch.getPendingInputs(ws.id)).toHaveLength(1))
+    const [item] = orch.getPendingInputs(ws.id)
+    expect(item).toMatchObject({
+      kind: 'question',
+      agentSessionId,
+      input: {
+        questions: [
+          { id: 'answer', question: 'Where?', multiSelect: true, options: [{ label: 'Linux' }, { label: 'Android' }] },
+        ],
+      },
+    })
+    expect(getWorkspace(ws.id)?.status).toBe('awaiting-user')
+    await orch.answerPendingQuestion(ws.id, { answer: 'Linux, Android' }, item!.toolCallId, {
+      sessionId: agentSessionId,
+      selections: { answer: ['Linux', 'Android'] },
+    })
+    expect(JSON.parse((await (await result).json()).content[0].text)).toEqual({
+      answer: 'Linux, Android',
+      selections: ['Linux', 'Android'],
+    })
+    expect(captured[0]?.resolvePendingUserInput).not.toHaveBeenCalled()
+    captured[0]!.onEvent({
+      kind: 'session:user-input-requested',
+      requestKind: 'question',
+      toolName: 'AskUserQuestion',
+      toolCallId: 'native',
+      payload: { questions: [{ question: 'Next?' }] },
+    })
+    await expect(orch.cancelPendingQuestion(ws.id, 'Old tab', item!.toolCallId, agentSessionId)).rejects.toThrow(
+      'Pending question changed',
+    )
+    expect(orch.getPendingInputs(ws.id)[0]?.toolCallId).toBe('native')
+    expect(captured[0]?.resolvePendingUserInput).not.toHaveBeenCalled()
+    await orch.cancelPendingQuestion(ws.id, undefined, 'native', agentSessionId)
+    const { serve } = await import('@hono/node-server')
+    const connection = new AbortController()
+    const listener = serve({ fetch: api.fetch, hostname: '127.0.0.1', port: 0 })
+    try {
+      await new Promise<void>((resolve) => listener.once('listening', resolve))
+      const { port } = listener.address() as import('node:net').AddressInfo
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+      const response = await fetch(`http://127.0.0.1:${port}/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Kobo-Mcp-Session': token },
+        body: JSON.stringify({ method: 'call', name: 'ask_user_question', arguments: { question: 'Long wait?' } }),
+        signal: connection.signal,
+      })
+      const reader = response.body!.getReader()
+      expect(new TextDecoder().decode((await reader.read()).value)).toBe('\n')
+      for (let elapsed = 0; elapsed < 360_000; elapsed += 30_000) {
+        await vi.advanceTimersByTimeAsync(30_000)
+        expect(new TextDecoder().decode((await reader.read()).value)).toBe('\n')
+      }
+      await orch.answerPendingQuestion(ws.id, { answer: 'Still here' }, orch.getPendingInputs(ws.id)[0]!.toolCallId)
+      reader.releaseLock()
+      expect(await json(response.body!)).toMatchObject({ content: [{ text: expect.stringContaining('Still here') }] })
+    } finally {
+      vi.useRealTimers()
+      connection.abort()
+      await new Promise<void>((resolve) => listener.close(() => resolve()))
+    }
+    for (const close of ['cancel', 'disconnect']) {
+      const ac = new AbortController()
+      const pending = ask({ question: 'Explain?' }, ac.signal)
+      await vi.waitFor(() => expect(orch.getPendingInputs(ws.id)).toHaveLength(1))
+      if (close === 'cancel')
+        await orch.cancelPendingQuestion(
+          ws.id,
+          'Cancelled',
+          orch.getPendingInputs(ws.id)[0]!.toolCallId,
+          agentSessionId,
+        )
+      else ac.abort()
+      expect((await (await pending).json()).isError).toBe(true)
+      expect(orch.getPendingInputs(ws.id)).toEqual([])
+      expect(getWorkspace(ws.id)?.status).toBe('brainstorming')
+    }
   })
 
   it('transitions to awaiting-user and stores pending entry on session:user-input-requested', async () => {

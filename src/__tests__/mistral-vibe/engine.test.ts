@@ -418,6 +418,10 @@ describe('Mistral Vibe engine lifecycle', () => {
     vi.useFakeTimers()
     const process = await launch({ watchdogEnabled: true })
     const sdkClose = mocks.connect.mock.results[0]!.value.close
+    process.setMcpQuestionPending!(true)
+    await vi.advanceTimersByTimeAsync(31 * 60_000)
+    expect(stop).not.toHaveBeenCalled()
+    process.setMcpQuestionPending!(false)
     await vi.advanceTimersByTimeAsync(119_999)
     expect(stop).not.toHaveBeenCalled()
     await vi.advanceTimersByTimeAsync(1)

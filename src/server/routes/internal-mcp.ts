@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
+import { stream } from 'hono/streaming'
 import { createManagedMcpDispatcher } from '../../mcp-server/managed-mcp-dispatcher.js'
 import { MAX_MCP_ATTACHMENT_REQUEST_BYTES } from '../../shared/mcp-attachments.js'
 import { normalizeClientName } from '../../shared/workspace-message-types.js'
@@ -85,6 +86,7 @@ app.post('/', async (c) => {
       const text = await response.text()
       return text ? JSON.parse(text) : null
     }
+    const questionReader = input.method === 'call' && name === 'ask_user_question' ? new AbortController() : undefined
     const dispatcher = createManagedMcpDispatcher({
       workspaceId: capability.workspaceId,
       db: getDb(),
@@ -104,6 +106,11 @@ app.post('/', async (c) => {
           transport: 'stdio',
         })
       },
+      askUserQuestion: async (args) => {
+        const { askWorkspaceUser } = await import('../services/agent/orchestrator.js')
+        check()
+        return askWorkspaceUser(capability, args, AbortSignal.any([c.req.raw.signal, questionReader!.signal]))
+      },
       slackTool: async (tool, arguments_) => {
         const { executeSlackTool } = await import('../services/slack/slack-mcp-service.js')
         check()
@@ -122,7 +129,22 @@ app.post('/', async (c) => {
         }),
       })
     check()
-    return c.json(await dispatcher.callTool(name, args as Record<string, unknown>))
+    const call = () => dispatcher.callTool(name, args as Record<string, unknown>)
+    if (questionReader) {
+      c.header('Content-Type', 'application/json')
+      return stream(c, async (output) => {
+        output.onAbort(() => questionReader.abort())
+        // JSON whitespace flushes headers and keeps fetch's body timeout from expiring during human input.
+        void output.write('\n')
+        const heartbeat = setInterval(() => void output.write('\n'), 30_000)
+        try {
+          await output.write(JSON.stringify(await call()))
+        } finally {
+          clearInterval(heartbeat)
+        }
+      })
+    }
+    return c.json(await call())
   } catch (error) {
     return c.json(
       {

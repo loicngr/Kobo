@@ -3,6 +3,7 @@ import path from 'node:path'
 import { MASK_CHARACTER, MASKED_SECRET, SECRET_GLOBAL_KEYS, WORKTREES_PATH } from '../../shared/consts.js'
 import { isMemoryMode, type MemoryMode } from '../../shared/memory.js'
 import { DEFAULT_MEMORY_LIMITS, type MemoryLimits, resolveMemoryLimits } from '../../shared/memory-limits.js'
+import { FRESH_MODEL_BY_ENGINE } from '../../shared/models.js'
 import { normalizePublicSounds } from '../../shared/notification-assets.js'
 import { isValidProjectColor, type ProjectColor } from '../../shared/project-colors.js'
 import { isValidSkillSuite, type SkillSuite } from '../../shared/skill-suite-prompts.js'
@@ -34,11 +35,7 @@ import {
 } from './legacy-public-prompts.js'
 import { revokeNetworkSessions } from './network-session-service.js'
 import { DEFAULT_REVIEW_PROMPT_TEMPLATE } from './review-template-service.js'
-import {
-  DEFAULT_CHANGE_SOURCE_BRANCH_SCRIPT,
-  DEFAULT_MODEL_BY_ENGINE,
-  FRESH_MODEL_BY_ENGINE,
-} from './settings-defaults.js'
+import { DEFAULT_CHANGE_SOURCE_BRANCH_SCRIPT, DEFAULT_MODEL_BY_ENGINE } from './settings-defaults.js'
 import { AGNOSTIC_PROMPTS } from './skill-suite-prompts.js'
 import { pruneWorkspaceTemplateTags } from './workspace-template-service.js'
 
@@ -1444,6 +1441,20 @@ const settingsMigrations: SettingsMigration[] = [
     migrate: ({ global }) => {
       global.slackNotifyCompaction = global.slackNotifyCompaction === true
       global.slackNotifyErrors = global.slackNotifyErrors === true
+    },
+  },
+  {
+    version: 77,
+    name: 'backfill-engine-model-defaults',
+    migrate: ({ global }) => {
+      const saved = global.defaultModelByEngine
+      const models =
+        saved && typeof saved === 'object' && !Array.isArray(saved) ? (saved as Record<string, unknown>) : {}
+      for (const [engine, fallback] of Object.entries(FRESH_MODEL_BY_ENGINE)) {
+        const value = models[engine]
+        if (typeof value !== 'string' || !value.trim()) models[engine] = fallback
+      }
+      global.defaultModelByEngine = models
     },
   },
 ]

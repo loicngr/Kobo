@@ -4,6 +4,14 @@ Standalone MCP (Model Context Protocol) server configured for each Claude Code, 
 
 Kōbō also exposes workspace creation, PR checkout diagnosis, conversation and [session progress tools](#session-progress-tools) to external MCP clients over HTTP and through the global stdio server.
 
+## Ask the workspace operator
+
+A primary workspace agent can call `ask_user_question` during planning or execution. For example,
+`{"question":"Which environments should I test?","options":["Linux","Android"],"multi_select":true}`
+opens the same question panel as Claude’s AskUserQuestion. Omit options for a free-text answer.
+The call waits for the operator and returns `answer` and, when supplied, the individual `selections`.
+Codex allows up to 24 hours for calls to the managed Kōbō MCP server. Cancelling the question returns a tool error. The workspace’s Slack question-mirroring setting applies.
+
 ## Connect an external LLM
 
 **Settings → Global → Network access → External LLM access (MCP)** provides this installation's backend URLs and a local stdio configuration. Create a dedicated MCP key, choose its allowed tools and workspaces, and optionally set an expiry. New keys default to read-only. Copy the new key immediately: it is displayed only once, and only its SHA-256 hash is stored. **Copy with new key** includes that key; previews always use a placeholder. Keys can be revoked independently from this panel. Development configurations use the backend port, independently of the UI port. The JSON examples use a generic `mcpServers` format; adapt the enclosing configuration to your client.

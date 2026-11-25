@@ -148,7 +148,7 @@ settings exports.
 | Key | Type | Purpose |
 |---|---|---|
 | `defaultModel` | `string` | Fallback model when no engine-specific default is set. |
-| `defaultModelByEngine` | `Record<engine, string>` | Per-engine default model (`claude-code` / `codex` / `mistral-vibe`). Fresh installs use Sonnet 5.5 (`claude-sonnet-5-5`) for Claude Code and `auto` for Codex and Mistral Vibe. Historical migrations and existing user choices are preserved. The actual model is reported by the engine when the session starts; an Auto configuration label is not a model name. |
+| `defaultModelByEngine` | `Record<engine, string>` | Per-engine default model (`claude-code` / `codex` / `mistral-vibe`). Fresh installs use Opus 5.5 (`claude-opus-5-5`) for Claude Code, GPT-6.2 Sol (`gpt-6.2-sol`) for Codex and native `auto` for Mistral Vibe. Settings migration v77 fills missing per-engine defaults and retains all saved choices, including Auto. Existing workspace models and project overrides are preserved. The actual model is reported by the engine when the session starts; an Auto configuration label is not a model name. |
 | `workflowPolicy` | `{ commit, push, publish }` | Independent `manual` / `automatic` preferences, snapshotted at workspace creation. Fresh defaults are manual. See [Git preferences](#first-run-defaults-and-git-workflow-preferences). |
 | `skillSuite` | `string` | Standard, an external suite/combination, or custom instructions. Fresh default `standard`; see [Skill suites](#skill-suites). |
 | `defaultPermissionModeByEngine` | `Record<engine, mode>` | Default permission mode per engine. See [Permission modes](#permission-modes). |
@@ -1827,7 +1827,7 @@ claude /login
 
 Kōbō talks to the embedded [`@anthropic-ai/claude-agent-sdk`](https://github.com/anthropics/claude-agent-sdk-typescript), which reuses the same login. The `claude` CLI is **not** required at runtime; you only need it for `/login`, `mcp add`, and other one-off setup commands. As a fallback you can export `ANTHROPIC_API_KEY` instead.
 
-The model selector is populated from [`src/shared/models.ts`](./src/shared/models.ts), also used by backend validation. This checkout includes Fable 5.1, Mythos 5.1/5, Opus 5.5, Sonnet 5.5, Haiku 5.5 (`claude-haiku-5-5`) and older variants. Pick the default in **Settings → Agents**. Catalogue entries describe what Kōbō offers; provider access still depends on your account. `auto` leaves model selection to the runtime.
+The model selector is populated from [`src/shared/models.ts`](./src/shared/models.ts), also used by backend validation. This checkout includes Fable 5.2/5.1, Mythos 5.2/5.1/5, Opus 5.5, Sonnet 5.5, Haiku 5.5 (`claude-haiku-5-5`) and older variants. Pick the default in **Settings → Agents**. Catalogue entries describe what Kōbō offers; provider access still depends on your account. `auto` leaves model selection to the runtime.
 
 #### Immediate chat messages
 
@@ -1951,10 +1951,10 @@ The selector reads [`src/shared/codex-models.ts`](./src/shared/codex-models.ts).
 
 ### Mistral Vibe
 
-> Experimental. Target version: **Vibe 3.0.1**, ACP v1 with SDK 2.5.0.
+> Experimental. Target version: **Vibe 3.1.5**, ACP v1 with SDK 2.12.0.
 
 Follow the official [native Vibe setup](https://docs.mistral.ai/vibe/code/cli/install-setup)
-and [Vibe 3.0.1 ACP instructions](https://github.com/mistralai/mistral-vibe/blob/v3.0.1/docs/acp-setup.md).
+and [Vibe 3.1.5 ACP instructions](https://github.com/mistralai/mistral-vibe/blob/v3.1.5/docs/acp-setup.md).
 Install Vibe separately; run `vibe` for its native authentication wizard (`vibe --setup`
 to repeat it). Run these as the **same OS user and in the same environment as the
 Kōbō server**. `vibe-acp` must be on that user's PATH. Kōbō inherits native provider
@@ -2025,6 +2025,8 @@ Automatic memory mode; final-verdict and progress grants stay scoped. Explicit
 review model/thinking choices use the same native catalogue and persistence rules.
 Other supported engines can also review Vibe's work. Stop/transfer waits for actual
 native exit; an ACP close acknowledgement alone does not release the worktree.
+
+On 2026-11-25, Kōbō successfully discovered model and thinking options and closed the native session with Vibe 3.1.5 and ACP SDK 2.12.0, without sending a provider prompt.
 
 On **2026-10-23, Linux x64, Node 26.12.1**, the installed 3.0.1 passed the real
 Kōbō adapter smoke using an isolated loopback provider and synthetic stdio MCP:

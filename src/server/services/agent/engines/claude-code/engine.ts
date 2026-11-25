@@ -283,6 +283,9 @@ export function createClaudeCodeEngine(): AgentEngine {
       // Pending canUseTool callbacks, keyed by SDK ctx.toolUseID.
       const pendingResolvers = new Map<string, PendingResolver>()
 
+      let mcpQuestionPending = false
+      const waitingForUser = () => mcpQuestionPending || pendingResolvers.size > 0
+
       let isInteractive = options.agentPermissionMode === 'interactive'
       let exitedPlan = false
       const promptCapabilities = getKoboPromptCapabilities(
@@ -598,7 +601,7 @@ export function createClaudeCodeEngine(): AgentEngine {
           completedResponses === 0 ||
           completedResponses === turnCompletedEmittedForResponse ||
           activeSubagentTaskIds.size > 0 ||
-          pendingResolvers.size > 0 ||
+          waitingForUser() ||
           isCompacting ||
           pendingToolCallIds.size > 0 ||
           inputStream.hasUnansweredInput()
@@ -669,9 +672,9 @@ export function createClaudeCodeEngine(): AgentEngine {
       // windows. Every call site that changes one of these three conditions
       // must re-evaluate through this helper, not duplicate the check.
       const reevaluateLivenessPause = (): void => {
-        if (pendingResolvers.size > 0 || activeSubagentTaskIds.size === 0) clearSubagentStallWatchdog()
+        if (waitingForUser() || activeSubagentTaskIds.size === 0) clearSubagentStallWatchdog()
         else if (!subagentStallTimer) armSubagentStallWatchdog()
-        if (activeSubagentTaskIds.size > 0 || pendingResolvers.size > 0 || isCompacting) turnLiveness.pause()
+        if (activeSubagentTaskIds.size > 0 || waitingForUser() || isCompacting) turnLiveness.pause()
         else turnLiveness.resume()
       }
       // Backstop for a compaction that never reports completion (stuck
@@ -750,7 +753,7 @@ export function createClaudeCodeEngine(): AgentEngine {
             completedResponses === 0 ||
             !settlementPending ||
             activeSubagentTaskIds.size > 0 ||
-            pendingResolvers.size > 0 ||
+            waitingForUser() ||
             pendingToolCallIds.size > 0 ||
             isCompacting ||
             inputStream.hasUnansweredInput()
@@ -793,7 +796,7 @@ export function createClaudeCodeEngine(): AgentEngine {
       const armSubagentStallWatchdog = (): void => {
         clearSubagentStallWatchdog()
         if (!options.watchdogEnabled) return
-        if (pendingResolvers.size > 0 || activeSubagentTaskIds.size === 0) return
+        if (waitingForUser() || activeSubagentTaskIds.size === 0) return
         const hasAgent = [...activeSubagentTaskIds].some((id) =>
           isSubagentTask({ taskType: mapperState.taskTypes.get(id) }),
         )
@@ -802,7 +805,7 @@ export function createClaudeCodeEngine(): AgentEngine {
         const timeoutMs = hasAgent ? SUBAGENT_STALL_TIMEOUT_MS : CLAUDE_TOOL_IDLE_TIMEOUT_MS
         subagentStallTimer = setTimeout(() => {
           subagentStallTimer = undefined
-          if (pendingResolvers.size > 0 || activeSubagentTaskIds.size === 0) return
+          if (waitingForUser() || activeSubagentTaskIds.size === 0) return
           console.warn(`[claude-engine] No background activity for ${timeoutMs}ms — forcing session:ended`)
           safeEmit({
             kind: 'error',
@@ -1049,7 +1052,7 @@ export function createClaudeCodeEngine(): AgentEngine {
             !waitingForBackground ||
             activeSubagentTaskIds.size === 0 ||
             pendingToolCallIds.size > 0 ||
-            pendingResolvers.size > 0 ||
+            waitingForUser() ||
             isCompacting ||
             inputStream.hasUnansweredInput()
           )
@@ -1116,6 +1119,10 @@ export function createClaudeCodeEngine(): AgentEngine {
           } catch {
             // swallow — best effort
           }
+        },
+        setMcpQuestionPending(pending) {
+          mcpQuestionPending = pending
+          if (iteratorRunning && !abortController.signal.aborted) reevaluateLivenessPause()
         },
         hasPendingUserInput(toolCallId): boolean {
           return pendingResolvers.has(toolCallId)

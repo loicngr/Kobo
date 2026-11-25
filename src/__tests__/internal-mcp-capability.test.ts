@@ -130,7 +130,17 @@ describe('managed MCP launch authorization', () => {
     // Handoff and final-review dispatcher lists keep only read-only tools (plus their own report tool).
     expect(close?.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false })
   })
-  it('the Plan exception covers slack_post_message only', () => {
+  it('allows workspace questions in Plan and keeps them out of restricted launches and external MCP', async () => {
+    const { EXTERNAL_TOOL_CATALOGUE } = await import('../server/services/external-mcp-credentials-service.js')
+    expect(EXTERNAL_TOOL_CATALOGUE.map((t) => t.name)).not.toContain('ask_user_question')
+    for (const restricted of [true, false]) {
+      const cap = createInternalMcpCapability({ workspaceId: 'own', sessionId: 's', readOnly: true, restricted })
+      const ask = () => authorizeInternalMcpTool(cap.token, 'ask_user_question', {})
+      if (restricted) expect(ask).toThrow(/read-only/)
+      else expect(ask).not.toThrow()
+    }
+  })
+  it('Plan operator interactions do not grant unrelated writes', () => {
     const plan = createInternalMcpCapability({
       workspaceId: 'own',
       sessionId: 'session',

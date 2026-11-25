@@ -102,6 +102,13 @@ export function createMistralVibeEngine(): AgentEngine {
             message: 'Mistral Vibe stopped reporting foreground activity for this turn.',
           }),
       })
+      let mcpQuestionPending = false
+      let nativePending = 0
+      const updateInputWatchdog = () => {
+        if (ended) return
+        if (mcpQuestionPending || nativePending) liveness.pause()
+        else liveness.resume()
+      }
       // A throwing handler must neither skip shutdown() nor escape as an uncaught exception.
       const deliver = (event: AgentEvent) => {
         try {
@@ -271,8 +278,8 @@ export function createMistralVibeEngine(): AgentEngine {
             autoApprove: (toolName, payload) =>
               isWorkspacePermissionAllowed(options.workspaceId, { engine: 'mistral-vibe', toolName, payload }),
             onPendingChange: (count) => {
-              if (count > 0) liveness.pause()
-              else if (!ended) liveness.resume()
+              nativePending = count
+              updateInputWatchdog()
             },
           })
           stage = 'configuration'
@@ -360,6 +367,10 @@ export function createMistralVibeEngine(): AgentEngine {
         stop() {
           end('killed')
           return shutdown()
+        },
+        setMcpQuestionPending(pending) {
+          mcpQuestionPending = pending
+          updateInputWatchdog()
         },
         hasPendingUserInput: (id) => requests?.hasPendingUserInput(id) ?? false,
         resolvePendingUserInput: (id, response) => requests?.resolvePendingUserInput(id, response) ?? false,

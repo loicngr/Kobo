@@ -220,6 +220,8 @@ export function createCodexEngine(): AgentEngine {
       let resolveTurnDone!: () => void
       let rejectTurnDone!: (err: Error) => void
       const activeSubagentThreads = new Map<string, { toolCallId: string; description?: string; taskType?: string }>()
+      let mcpQuestionPending = false
+      const waitingForUser = () => mcpQuestionPending || pendingByCallId.size > 0
       let waitingForBackgroundSubagents = false
       let watchdogEnded = false
       const turnDonePromise = new Promise<void>((resolve, reject) => {
@@ -237,7 +239,7 @@ export function createCodexEngine(): AgentEngine {
       const armSubagentStallWatchdog = (): void => {
         clearSubagentStallWatchdog()
         if (!options.watchdogEnabled) return
-        if (!waitingForBackgroundSubagents || pendingByCallId.size > 0 || activeSubagentThreads.size === 0) return
+        if (!waitingForBackgroundSubagents || waitingForUser() || activeSubagentThreads.size === 0) return
         subagentStallTimer = setTimeout(() => {
           subagentStallTimer = undefined
           console.warn(
@@ -257,6 +259,13 @@ export function createCodexEngine(): AgentEngine {
           if (waitingForBackgroundSubagents) resolveTurnDone()
         }, CODEX_SUBAGENT_STALL_TIMEOUT_MS)
         subagentStallTimer.unref?.()
+      }
+      const updateInputWatchdogs = () => {
+        if (waitingForUser()) {
+          turnLiveness.pause()
+          clearSubagentStallWatchdog()
+        } else if (waitingForBackgroundSubagents) armSubagentStallWatchdog()
+        else turnLiveness.resume()
       }
       const finishBackgroundSubagent = (threadId: string, alreadyEmittedToolCallId?: string): void => {
         const tracked = activeSubagentThreads.get(threadId)
@@ -516,8 +525,7 @@ export function createCodexEngine(): AgentEngine {
             emit: safeEmit,
             register(callId, pending) {
               pendingByCallId.set(callId, pending)
-              turnLiveness.pause()
-              clearSubagentStallWatchdog()
+              updateInputWatchdogs()
             },
             respondError: (reqId, code, message) => client.peer.respondError(reqId, code, message),
             respond: (reqId, result) => client.peer.respond(reqId, result),
@@ -740,6 +748,10 @@ export function createCodexEngine(): AgentEngine {
           }
           await terminateChild()
         },
+        setMcpQuestionPending(pending) {
+          mcpQuestionPending = pending
+          if (iteratorRunning) updateInputWatchdogs()
+        },
         hasPendingUserInput(callId): boolean {
           return pendingByCallId.has(callId)
         },
@@ -747,13 +759,7 @@ export function createCodexEngine(): AgentEngine {
           const pending = pendingByCallId.get(callId)
           if (!pending) return false
           pendingByCallId.delete(callId)
-          // Only resume the idle-timeout clock once every outstanding
-          // approval has been answered — a sibling request may still be
-          // waiting on a human decision.
-          if (pendingByCallId.size === 0) {
-            if (waitingForBackgroundSubagents) armSubagentStallWatchdog()
-            else turnLiveness.resume()
-          }
+          updateInputWatchdogs()
           const result = buildResponseForResolve(pending, response)
           client.peer.respond(pending.requestId, result)
           return true

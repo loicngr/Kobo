@@ -154,6 +154,26 @@ describe('claude-code engine — shared turn liveness', () => {
     )
   })
 
+  it('suspends the subagent watchdog for a managed question and resumes it after the answer', async () => {
+    vi.useFakeTimers()
+    emitSubagentStart = true
+    try {
+      const events: AgentEvent[] = []
+      const process = await createClaudeCodeEngine().start(BASE_OPTIONS, (event) => events.push(event))
+      await vi.advanceTimersByTimeAsync(1)
+      process.setMcpQuestionPending!(true)
+      await vi.advanceTimersByTimeAsync(SUBAGENT_STALL_TIMEOUT_MS * 2)
+      expect(abortSignal?.aborted).toBe(false)
+      process.setMcpQuestionPending!(false)
+      await vi.advanceTimersByTimeAsync(SUBAGENT_STALL_TIMEOUT_MS + 1)
+      expect(events).toContainEqual({ kind: 'session:ended', reason: 'watchdog', exitCode: null })
+    } finally {
+      emitSubagentStart = false
+      releaseStream?.()
+      vi.useRealTimers()
+    }
+  })
+
   it('does not confirm closure while a watchdog-ended SDK iterator still ignores abort', async () => {
     vi.useFakeTimers()
     ignoreAbort = true

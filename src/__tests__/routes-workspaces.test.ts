@@ -1,4 +1,4 @@
-import { preflightMistralConfiguration } from '../server/services/mistral-options-service.js'
+import { getMistralOptions, preflightMistralConfiguration } from '../server/services/mistral-options-service.js'
 
 vi.mock('../server/services/parallel-review-service.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../server/services/parallel-review-service.js')>()),
@@ -6,6 +6,7 @@ vi.mock('../server/services/parallel-review-service.js', async (importOriginal) 
 }))
 
 vi.mock('../server/services/mistral-options-service.js', () => ({
+  getMistralOptions: vi.fn(),
   preflightMistralConfiguration: vi.fn(async (engine, _context, selection) => {
     if (
       engine === 'mistral-vibe' &&
@@ -840,7 +841,7 @@ describe('POST /api/workspaces', () => {
     expect(res.status).toBe(201)
     const data = await res.json()
     expect(data.id).toBe('ws-1')
-    expect(workspaceService.createWorkspace).toHaveBeenCalledOnce()
+    expect(workspaceService.createWorkspace).toHaveBeenCalledWith(expect.objectContaining({ model: 'claude-opus-5-5' }))
     expect(worktreeService.createWorktreeUnlocked).toHaveBeenCalledWith(
       '/tmp/project',
       'feature/test',
@@ -2283,6 +2284,49 @@ describe('POST /api/workspaces', () => {
     expect(modelArg).toBe('claude-sonnet-4-6')
   })
 
+  it.each([
+    ['mistral-small-4', 'mistral-small-4'],
+    ['claude-sonnet-5-5', 'auto'],
+  ])(
+    'resolves project model %s against native Vibe options when the request omits model',
+    async (projectModel, expectedModel) => {
+      vi.mocked(settingsService.getProjectSettings).mockReturnValueOnce(
+        makeProjectSettings({ defaultModel: projectModel }),
+      )
+      vi.mocked(getMistralOptions).mockResolvedValueOnce({
+        model: { currentValue: 'mistral-large-4', options: [{ value: 'mistral-small-4', name: 'Small' }] },
+        thinking: { currentValue: 'auto', options: [] },
+      })
+      vi.mocked(preflightMistralConfiguration).mockResolvedValueOnce(undefined).mockResolvedValueOnce(undefined)
+      vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+      vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
+        worktreePath: '/tmp/worktree',
+        base: 'origin',
+        branchCreated: true,
+      })
+      vi.mocked(workspaceService.listTasks).mockReturnValue([])
+      vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+      const res = await app.request('/api/workspaces', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Vibe',
+          engine: 'mistral-vibe',
+          agentPermissionMode: 'interactive',
+          projectPath: '/tmp/project',
+          sourceBranch: 'main',
+          workingBranch: 'feature/vibe',
+        }),
+      })
+      expect(res.status).toBe(201)
+      expect(getMistralOptions).toHaveBeenCalledWith({
+        projectPath: '/tmp/project',
+        agentPermissionMode: 'interactive',
+      })
+      expect(workspaceService.createWorkspace).toHaveBeenCalledWith(expect.objectContaining({ model: expectedModel }))
+    },
+  )
+
   it('accepts engine: codex on creation', async () => {
     vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
     vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
@@ -2306,7 +2350,9 @@ describe('POST /api/workspaces', () => {
     })
 
     expect(res.status).toBe(201)
-    expect(workspaceService.createWorkspace).toHaveBeenCalledWith(expect.objectContaining({ engine: 'codex' }))
+    expect(workspaceService.createWorkspace).toHaveBeenCalledWith(
+      expect.objectContaining({ engine: 'codex', model: 'gpt-6.2-sol' }),
+    )
   })
 
   it('rejects unknown engine with 400', async () => {

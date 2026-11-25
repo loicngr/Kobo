@@ -67,7 +67,7 @@ export function buildKoboLaunchInstructions(context: KoboLaunchContext): KoboLau
     )
   } else {
     lines.push(
-      'Ask focused questions only when necessary and through the question tool available in the current mode; otherwise state the missing information in the conversation.',
+      'When clarification is necessary, use the managed ask_user_question tool to ask in the workspace and wait for the answer.',
     )
   }
   lines.push(

@@ -138,7 +138,7 @@ describe('Mistral defaults', () => {
       defaultPermissionModeByEngine: { 'mistral-vibe': mode },
     }
     const migrated = runSettingsMigrations({ schemaVersion: 67, global, projects: [] })
-    expect(migrated.global.defaultModelByEngine).toEqual({ 'mistral-vibe': 'custom-native-model' })
+    expect(migrated.global.defaultModelByEngine['mistral-vibe']).toBe('custom-native-model')
     expect(migrated.global.defaultPermissionModeByEngine['mistral-vibe']).toBe(mode)
   })
 })
@@ -334,8 +334,8 @@ describe('getSettings()', () => {
     expect(fs.existsSync(settingsPath)).toBe(false)
     const settings = getSettings()
     expect(fs.existsSync(settingsPath)).toBe(true)
-    expect(settings.global.defaultModelByEngine['claude-code']).toBe('claude-sonnet-5-5')
-    expect(settings.global.defaultModelByEngine.codex).toBe('auto')
+    expect(settings.global.defaultModelByEngine['claude-code']).toBe('claude-opus-5-5')
+    expect(settings.global.defaultModelByEngine.codex).toBe('gpt-6.2-sol')
     expect(settings.global.worktreesPath).toBe('.worktrees')
     expect(settings.global.notionEnabled).toBe(false)
     expect(settings.global.sentryEnabled).toBe(false)
@@ -383,7 +383,7 @@ describe('getSettings()', () => {
     expect(backups.length).toBe(1)
     // The new settings.json should contain valid defaults
     const written = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'))
-    expect(written.global.defaultModelByEngine?.['claude-code']).toBe('claude-sonnet-5-5')
+    expect(written.global.defaultModelByEngine?.['claude-code']).toBe('claude-opus-5-5')
   })
 
   it('restores missing global fields to defaults when schemaVersion is current', () => {
@@ -411,7 +411,7 @@ describe('getSettings()', () => {
     const settings = getSettings()
 
     // Missing fields must be restored to their defaults
-    expect(settings.global.defaultModelByEngine['claude-code']).toBe('claude-sonnet-5-5')
+    expect(settings.global.defaultModelByEngine['claude-code']).toBe('claude-opus-5-5')
     expect(typeof settings.global.prPromptTemplate).toBe('string')
     expect(settings.global.prPromptTemplate.length).toBeGreaterThan(0)
     // Existing custom values must be preserved
@@ -547,7 +547,7 @@ describe('updateGlobalSettings()', () => {
     updateGlobalSettings({ prPromptTemplate: 'new template' })
 
     const global = getGlobalSettings()
-    expect(global.defaultModelByEngine['claude-code']).toBe('claude-sonnet-5-5') // unchanged
+    expect(global.defaultModelByEngine['claude-code']).toBe('claude-opus-5-5') // unchanged
     expect(global.prPromptTemplate).toBe('new template') // updated
   })
 
@@ -1132,6 +1132,33 @@ describe('runSettingsMigrations()', () => {
       'claude-code': 'claude-opus-4-7',
       codex: 'gpt-5.6-terra',
       'mistral-vibe': 'auto',
+    })
+  })
+
+  it('preserves saved choices even when they match old defaults and fills only missing models', () => {
+    const project = { path: '/project', defaultModel: 'claude-sonnet-5-5' }
+    const migrate = (claude?: string, codex?: string) =>
+      runSettingsMigrations({
+        schemaVersion: 76,
+        global: { defaultModelByEngine: { 'claude-code': claude, codex, 'mistral-vibe': 'native-alias' } },
+        projects: [project],
+      })
+    const upgraded = migrate('claude-sonnet-5-5', 'auto')
+    expect(upgraded.global.defaultModelByEngine).toEqual({
+      'claude-code': 'claude-sonnet-5-5',
+      codex: 'auto',
+      'mistral-vibe': 'native-alias',
+    })
+    expect(migrate().global.defaultModelByEngine).toEqual({
+      'claude-code': 'claude-opus-5-5',
+      codex: 'gpt-6.2-sol',
+      'mistral-vibe': 'native-alias',
+    })
+    expect(upgraded.projects[0]?.defaultModel).toBe('claude-sonnet-5-5')
+    expect(migrate('auto', 'gpt-6.2-astra').global.defaultModelByEngine).toEqual({
+      'claude-code': 'auto',
+      codex: 'gpt-6.2-astra',
+      'mistral-vibe': 'native-alias',
     })
   })
 
@@ -3413,7 +3440,7 @@ it('stores default review instructions as a string and migrates older settings t
 it('migrates v72 settings to v73 with Slack defaults', () => {
   const migrated = runSettingsMigrations({ schemaVersion: 72, global: { editorCommand: 'keep' }, projects: [] })
   expect(migrated.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
-  expect(SETTINGS_SCHEMA_VERSION).toBe(76)
+  expect(SETTINGS_SCHEMA_VERSION).toBe(77)
   expect(migrated.global.slackEnabled).toBe(false)
   expect(migrated.global.slackAllowedUserIds).toEqual([])
   expect(migrated.global.editorCommand).toBe('keep')

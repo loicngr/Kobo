@@ -20,6 +20,13 @@ export interface AgentModel {
   i18nDescriptionKey: string
 }
 
+/** Defaults for a new workspace without a saved model preference. Vibe resolves Auto in its native profile. */
+export const FRESH_MODEL_BY_ENGINE: Readonly<Record<string, string>> = {
+  'claude-code': 'claude-opus-5-5',
+  codex: 'gpt-6.2-sol',
+  'mistral-vibe': 'auto',
+}
+
 /** @deprecated Use AgentModel instead */
 export type ClaudeModel = AgentModel
 

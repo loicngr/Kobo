@@ -4,6 +4,7 @@ import { nanoid } from 'nanoid'
 import type { AutoLoopReviewConfiguration } from '../../shared/auto-loop-review.js'
 import { codexEffortAllowed } from '../../shared/codex-models.js'
 import { isMergeMethod } from '../../shared/forge-merge.js'
+import { FRESH_MODEL_BY_ENGINE } from '../../shared/models.js'
 import type { HandoffDecision } from '../../shared/session-handoff.js'
 import {
   isWorkflowPolicy,
@@ -12,7 +13,7 @@ import {
   type WorkflowPolicy,
 } from '../../shared/workflow-policy.js'
 import * as finalReviewService from '../services/auto-loop-final-review-service.js'
-import { preflightMistralConfiguration } from '../services/mistral-options-service.js'
+import { getMistralOptions, preflightMistralConfiguration } from '../services/mistral-options-service.js'
 import { getParallelReviewSourceConfiguration } from '../services/parallel-review-service.js'
 import { getReviewReturnStatus } from '../services/review-return-service.js'
 import { getSearchIndexStatus, searchEvents } from '../services/search-service.js'
@@ -769,15 +770,32 @@ app.post('/', workspaceCreationMaintenance, migrationGuard, creationBodyLimit, a
       !isAgentPermissionMode(body.agentPermissionMode)
     )
       return c.json({ error: 'Invalid agentPermissionMode', step: 'validate' }, 400)
+    const globalSettings = settingsService.getGlobalSettings()
+    const projectSettings = settingsService.getProjectSettings(body.projectPath)
     const selectedEngine = listEngines().find((engine) => engine.id === (body.engine ?? 'claude-code'))
     if (selectedEngine) {
       try {
         const mode = resolveCreateAgentPermissionMode(
           body.agentPermissionMode,
           body.projectPath,
-          settingsService.getGlobalSettings(),
+          globalSettings,
           selectedEngine.id,
         )
+        if (body.model === undefined) {
+          const projectModel = projectSettings?.defaultModel
+          let model =
+            globalSettings.defaultModelByEngine?.[selectedEngine.id] ?? FRESH_MODEL_BY_ENGINE[selectedEngine.id]
+          if (projectModel && selectedEngine.capabilities.models.some((entry) => entry.id === projectModel)) {
+            model = projectModel
+          } else if (projectModel && selectedEngine.id === 'mistral-vibe') {
+            const native = await getMistralOptions({
+              projectPath: body.worktreePath ?? body.projectPath,
+              agentPermissionMode: mode,
+            })
+            if (native.model.options.some((entry) => entry.value === projectModel)) model = projectModel
+          }
+          body.model = model
+        }
         assertEngineConfigurationSupported(selectedEngine, {
           model: body.model,
           reasoningEffort: body.reasoningEffort,
@@ -1025,7 +1043,6 @@ app.post('/', workspaceCreationMaintenance, migrationGuard, creationBodyLimit, a
     }
 
     // Create workspace record
-    const globalSettings = settingsService.getGlobalSettings()
     // workingBranch may be updated after Notion extraction to inject the ticket ID,
     // OR overridden by the branch derived from the existing worktree (reuse mode).
     let workingBranch = useReusedWorktree && reusedDerivedBranch ? reusedDerivedBranch : body.workingBranch
@@ -1064,7 +1081,6 @@ app.post('/', workspaceCreationMaintenance, migrationGuard, creationBodyLimit, a
 
     // Compute the project slug once and reuse it for both the prospective
     // path check and the actual worktree creation below.
-    const projectSettings = settingsService.getProjectSettings(body.projectPath)
     const projectSlug = globalSettings.worktreesPrefixByProject
       ? slugifyProjectName(projectSettings?.displayName ?? '', body.projectPath)
       : undefined
