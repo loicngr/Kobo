@@ -4,6 +4,10 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads released version sections.
 
+## 2.1.51
+
+- feat: add workspace questions via MCP and update engine defaults
+
 ## 2.1.50
 
 - feat: manage workspace model and effort via MCP and configure Slack alerts and members
